@@ -1,8 +1,7 @@
 //! IncentiveSwift — Multi-tenant Engagement & Capture Engine
 //!
-//! This is the main entry point for the Axum-based REST API server.
-//! The server provides gamified incentive mechanics, raffle/giveaway system,
-//! long-form qualifier, and an optional loyalty program module.
+//! REST API server providing gamified incentive mechanics, raffle/giveaway system,
+//! long-form qualifier, and loyalty program module.
 
 mod config;
 mod state;
@@ -15,7 +14,7 @@ pub mod access;
 pub mod security;
 
 use axum::{
-    routing::get,
+    routing::{get, post},
     Router,
     middleware,
 };
@@ -28,6 +27,8 @@ use tower_http::{
 };
 use tracing_subscriber::EnvFilter;
 use std::time::Duration;
+use std::sync::Arc;
+use governor::clock::QuantaClock;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -40,36 +41,47 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration
     let config = config::AppConfig::from_env()?;
+    let config = Arc::new(config);
 
     // Build shared state
     let state = state::AppState::new(&config).await?;
 
+    // Shared rate limiter for public endpoints (20 req/min per IP tracked in middleware)
+    let public_limiter = Arc::new(governor::RateLimiter::direct(
+        governor::Quota::per_minute(
+            std::num::NonZeroU32::new(20).unwrap(),
+        ),
+    ));
+
     // Build router
     let app = Router::new()
+        // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
         .route("/api/v1/campaigns/{slug}", get(handlers::campaigns::get_campaign))
-        .route("/api/v1/entries", get(handlers::entries::create_entry).post(handlers::entries::create_entry))
-        .route("/api/v1/raffles/{slug}/enter", get(handlers::raffles::enter_raffle).post(handlers::raffles::enter_raffle))
+        .route("/api/v1/entries", post(handlers::entries::create_entry))
+        .route("/api/v1/raffles/{slug}/enter", post(handlers::raffles::enter_raffle))
+        .route("/api/v1/loyalty/checkin", post(handlers::loyalty::checkin))
+        // Authenticated routes
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
-        .route("/api/v1/raffles/{slug}/draw", get(handlers::raffles::draw))
-        .route("/api/v1/raffles/{slug}/redraw", get(handlers::raffles::redraw))
-        .route("/api/v1/loyalty/checkin", get(handlers::loyalty::checkin).post(handlers::loyalty::checkin))
-        .route("/api/v1/loyalty/rewards/{id}/approve", get(handlers::loyalty::approve_reward))
-        .route("/api/v1/loyalty/rewards/{id}/deny", get(handlers::loyalty::deny_reward))
-        .route("/api/v1/delivery/resend", get(handlers::delivery::resend))
+        .route("/api/v1/raffles/{slug}/draw", post(handlers::raffles::draw))
+        .route("/api/v1/raffles/{slug}/redraw", post(handlers::raffles::redraw))
+        .route("/api/v1/loyalty/rewards/{id}/approve", post(handlers::loyalty::approve_reward))
+        .route("/api/v1/loyalty/rewards/{id}/deny", post(handlers::loyalty::deny_reward))
+        .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
         .route("/api/v1/contacts", get(handlers::contacts::list_contacts))
         .route("/api/v1/contacts/{id}", get(handlers::contacts::get_contact))
+        // Middleware — order matters: outer layers wrap inner
+        .layer(middleware::from_fn(security::rate_limit::rate_limit_middleware))
+        .layer(middleware::from_fn(security::headers::add_security_headers))
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
-        .layer(TraceLayer::new_for_http())
-        .layer(CompressionLayer::new())
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        .layer(middleware::from_fn(security::headers::add_security_headers))
-        .layer(middleware::from_fn(security::rate_limit::rate_limit_middleware))
         .with_state(state);
 
     // Start server

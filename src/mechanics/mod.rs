@@ -1,4 +1,6 @@
-//! Mechanics engine — scoring, calculator, raffle draw, loyalty check-in.
+//! IncentiveSwift Mechanics Engine
+//!
+//! Scoring, calculator, raffle draw, and loyalty check-in logic.
 
 pub mod scoring;
 pub mod calculator;
