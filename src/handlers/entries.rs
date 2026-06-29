@@ -2,7 +2,7 @@
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::db::{contacts, entries, campaigns, delivery_log};
+use crate::db::{contacts, entries, campaigns};
 use crate::delivery::{payload::DeliveryPayload, webhook, payload::ContactPayload};
 use axum::{extract::State, Json};
 use serde::Deserialize;
@@ -121,7 +121,7 @@ pub async fn create_entry(
                 }
             }
         }
-        "webhook" | _ => {
+        _ => {
             // Webhook delivery
             let url = campaign.delivery_config.get("webhook_url")
                 .and_then(|v| v.as_str())

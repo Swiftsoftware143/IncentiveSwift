@@ -16,7 +16,6 @@ use serde_json::json;
 /// SMTP.com example:
 ///   EMAIL_API_URL=https://api.smtp.com/v4/messages
 ///   EMAIL_API_KEY=your-smtpcom-key
-
 pub async fn send_reset_email(to: &str, token: &str) -> Result<(), String> {
     let api_url = env::var("EMAIL_API_URL")
         .map_err(|_| "EMAIL_API_URL not set".to_string())?;

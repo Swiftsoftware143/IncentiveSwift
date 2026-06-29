@@ -5,6 +5,7 @@ use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
 use axum::{
     extract::{Path, State},
+    http::HeaderMap,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -190,6 +191,44 @@ pub async fn update_portfolio_company(
     .await?;
 
     Ok(Json(json!({ "company": company })))
+}
+
+/// POST /api/v1/internal/portfolio-companies — internal sync, no JWT
+pub async fn internal_create_portfolio_company(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if key != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized("Invalid internal key".into()));
+    }
+
+    let account_id = body.get("tenant_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| AppError::BadRequest("tenant_id required".into()))?;
+
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
+    let slug = body.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| generate_slug(&name));
+    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = Uuid::new_v4();
+
+    sqlx::query(
+        r#"INSERT INTO portfolio_companies (id, account_id, name, slug, email, description, settings)
+           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb) ON CONFLICT (id) DO NOTHING"#
+    )
+    .bind(id)
+    .bind(account_id)
+    .bind(&name)
+    .bind(&slug)
+    .bind(&email)
+    .bind(&description)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({"status": "synced", "id": id.to_string()})))
 }
 
 /// DELETE /api/v1/portfolio-companies/{id}

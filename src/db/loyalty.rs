@@ -1,10 +1,11 @@
 //! Loyalty database operations — member management, checkins, rewards, thresholds.
 
 use crate::error::AppError;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Find an existing loyalty member or create a new one.
+#[allow(dead_code)]
 pub async fn find_or_create_member(
     pool: &PgPool,
     program_id: &Uuid,
@@ -39,6 +40,7 @@ pub async fn find_or_create_member(
 }
 
 /// Count today's checkins for a member.
+#[allow(dead_code)]
 pub async fn count_daily_checkins(
     pool: &PgPool,
     member_id: &Uuid,
@@ -54,6 +56,7 @@ pub async fn count_daily_checkins(
 }
 
 /// Record a checkin and update points balances.
+#[allow(dead_code)]
 pub async fn record_checkin(
     pool: &PgPool,
     member_id: &Uuid,
@@ -92,6 +95,7 @@ pub async fn record_checkin(
 
 /// Get program config including max_checkins_per_day and points_per_checkin.
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct LoyaltyProgram {
     pub id: uuid::Uuid,
     pub campaign_id: uuid::Uuid,
@@ -136,6 +140,7 @@ pub struct RewardTier {
     pub sort_order: i32,
 }
 
+#[allow(dead_code)]
 pub async fn check_threshold_crossed(
     pool: &PgPool,
     program_id: &Uuid,
@@ -166,6 +171,7 @@ pub async fn check_threshold_crossed(
 }
 
 /// Create a new reward earned record.
+#[allow(dead_code)]
 pub async fn create_reward(
     pool: &PgPool,
     member_id: &Uuid,
@@ -285,6 +291,7 @@ pub async fn get_reward_tier(
 
 /// Get member by ID.
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct LoyaltyMember {
     pub id: uuid::Uuid,
     pub program_id: uuid::Uuid,

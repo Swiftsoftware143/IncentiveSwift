@@ -1,4 +1,5 @@
 //! Accounts database operations.
+#![allow(dead_code)]
 
 use crate::error::AppError;
 use sqlx::{PgPool, Row};

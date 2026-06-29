@@ -52,7 +52,7 @@ pub struct UpdateApiKeyInput {
 /// Returns (full_key, prefix, key_hash)
 fn generate_api_key() -> (String, String, String) {
     use rand::Rng;
-    use sha2::Sha256;
+    
 
     let rng = rand::thread_rng();
     let random_bytes: Vec<u8> = rng

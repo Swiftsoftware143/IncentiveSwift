@@ -3,7 +3,7 @@
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
-use crate::db::{entries, campaigns, questions_answers, delivery_log};
+use crate::db::questions_answers;
 use crate::delivery::{payload::DeliveryPayload, payload::ContactPayload, payload::CampaignPayload, payload::QuestionAnswerPair, webhook};
 use axum::{extract::State, Json};
 use serde::Deserialize;
@@ -48,8 +48,8 @@ pub async fn resend(
     };
 
     use sqlx::Row;
-    let contact_id: Uuid = row.get("contact_id");
-    let campaign_id: Uuid = row.get("campaign_id");
+    let _contact_id: Uuid = row.get("contact_id");
+    let _campaign_id: Uuid = row.get("campaign_id");
     let score: Option<i32> = row.get("score");
     let outcome: Option<String> = row.get("outcome");
     let tags_applied: Option<Vec<String>> = row.get("tags_applied");
@@ -124,7 +124,7 @@ pub async fn resend(
                 }
             }
         }
-        "webhook" | _ => {
+        _ => {
             let url = delivery_config.get("webhook_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");

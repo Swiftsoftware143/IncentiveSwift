@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 /// A delivery log entry.
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct DeliveryLogEntry {
     pub id: uuid::Uuid,
@@ -46,6 +47,7 @@ pub async fn log_delivery(
 }
 
 /// Get delivery log entries for an entry.
+#[allow(dead_code)]
 pub async fn get_delivery_log(
     pool: &PgPool,
     entry_id: &Uuid,

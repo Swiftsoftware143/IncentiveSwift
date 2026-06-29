@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub db_min_connections: u32,
     pub jwt_secret: String,
     pub db_max_connections: u32,
+    pub internal_sync_key: String,
 }
 
 impl AppConfig {
@@ -41,6 +42,9 @@ impl AppConfig {
                 .map_err(|e| ConfigError::InvalidValue(format!("DB_MIN_CONNECTIONS: {}", e)))?,
             jwt_secret: std::env::var("JWT_SECRET")
                 .expect("JWT_SECRET is required"),
+
+            internal_sync_key: std::env::var("INTERNAL_SYNC_KEY")
+                .unwrap_or_else(|_| String::new()),
 
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .unwrap_or_else(|_| "20".to_string())
