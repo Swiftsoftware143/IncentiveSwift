@@ -50,10 +50,10 @@ where
             return Ok(user);
         }
 
-        // Fall back to Supabase JWT validation
+        // Fall back to local JWT validation
         let claims = crate::security::jwt::verify_supabase_jwt(
             token,
-            &app_state.config.supabase_service_key,
+            &app_state.config.jwt_secret,
         )?;
 
         Ok(AuthenticatedUser {

@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IncentiveSwift Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#232736;--border:#2d3248;--text:#e1e4ed;--text2:#8b8fa3;--accent:#a78bfa;--accent2:#c4b5fd;--green:#34d399;--red:#ef4444;--yellow:#fbbf24;--radius:8px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:var(--radius);font-size:14px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+button{cursor:pointer;font-size:14px;border:none;border-radius:var(--radius);padding:10px 20px;transition:all .2s}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent2)}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-sm{padding:6px 12px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
+th{color:var(--text2);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+tr:hover{background:rgba(167,139,250,.04)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+.stat-card{padding:20px;text-align:center}
+.stat-card .num{font-size:28px;font-weight:700;color:var(--accent)}
+.stat-card .label{color:var(--text2);font-size:12px;text-transform:uppercase;margin-top:4px}
+.grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:90%;max-width:500px;max-height:80vh;overflow-y:auto}
+.modal h2{margin-bottom:16px}.modal label{display:block;margin-bottom:4px;color:var(--text2);font-size:12px;margin-top:10px}.modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+#app{display:flex;min-height:100vh}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0}
+.sidebar .logo{padding:0 20px 20px;font-size:18px;font-weight:700;color:var(--accent);border-bottom:1px solid var(--border);margin-bottom:12px}
+.sidebar .user-info{padding:0 20px 16px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);margin-bottom:12px}
+.sidebar nav a{display:flex;align-items:center;gap:10px;padding:10px 20px;color:var(--text2);font-size:13px;transition:all .2s;border-left:3px solid transparent}
+.sidebar nav a:hover,.sidebar nav a.active{color:var(--text);background:rgba(167,139,250,.08);border-left-color:var(--accent)}
+.main{flex:1;padding:24px;overflow-x:auto}
+.main h1{font-size:22px;margin-bottom:20px}
+.main .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.loading{text-align:center;padding:40px;color:var(--text2)}
+.error{color:var(--red);padding:12px;background:rgba(239,68,68,.1);border-radius:var(--radius);margin-bottom:12px;font-size:13px}
+.success{color:var(--green);padding:12px;background:rgba(52,211,153,.1);border-radius:var(--radius);margin-bottom:12px;font-size:13px}
+.empty{text-align:center;padding:40px;color:var(--text2);font-size:14px}
+#login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px;width:100%;max-width:400px}
+.login-box h1{text-align:center;margin-bottom:8px;color:var(--accent);font-size:24px}
+.login-box p{text-align:center;color:var(--text2);margin-bottom:24px;font-size:13px}
+.login-box label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px;margin-top:14px}
+.login-box button{width:100%;margin-top:20px}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-active{background:rgba(52,211,153,.15);color:var(--green)}
+.badge-inactive{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-pending{background:rgba(251,191,36,.15);color:var(--yellow)}
+.pagination{display:flex;gap:8px;justify-content:center;align-items:center;padding:16px 0;font-size:13px}
+.pagination button{background:var(--surface2);color:var(--text);padding:6px 12px;border:1px solid var(--border)}
+.pagination button:disabled{opacity:.4;cursor:default}
+@media(max-width:768px){.sidebar{width:60px;overflow:hidden}.sidebar .logo{font-size:14px;padding:12px 16px}.sidebar nav a{padding:10px 16px;justify-content:center}.sidebar nav a span{display:none}.sidebar .user-info{display:none}.main{padding:16px}}
+</style>
+</head>
+<body>
+<div id="login-page" style="display:none">
+<div class="login-box">
+<h1>🏆 IncentiveSwift</h1>
+<p>Engagement & Rewards Admin</p>
+<div id="login-error" class="error" style="display:none"></div>
+<label>Email</label>
+<input type="email" id="login-email" value="admin@swiftsoftware.com">
+<label>Password</label>
+<input type="password" id="login-password" value="SwiftAdmin2026!">
+<button class="btn-primary" onclick="login()">Sign In</button>
+</div>
+</div>
+<div id="app" style="display:none">
+<div class="sidebar">
+<div class="logo">🏆 IncentSwift</div>
+<div class="user-info" id="user-info">admin@swiftsoftware.com<br>Admin</div>
+<nav>
+<a href="#" onclick="showPage('dashboard')" data-page="dashboard" class="active"><span>📊</span><span>Dashboard</span></a>
+<a href="#" onclick="showPage('campaigns')" data-page="campaigns"><span>📢</span><span>Campaigns</span></a>
+<a href="#" onclick="showPage('loyalty')" data-page="loyalty"><span>⭐</span><span>Loyalty</span></a>
+<a href="#" onclick="showPage('entries')" data-page="entries"><span>📝</span><span>Entries</span></a>
+<a href="#" onclick="showPage('raffles')" data-page="raffles"><span>🎲</span><span>Raffles</span></a>
+<a href="#" onclick="showPage('contacts')" data-page="contacts"><span>👥</span><span>Contacts</span></a>
+<a href="#" onclick="showPage('apikeys')" data-page="apikeys"><span>🔑</span><span>API Keys</span></a>
+<a href="#" onclick="showPage('plans')" data-page="plans"><span>📋</span><span>Plans</span></a>
+<a href="#" onclick="logout()" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px"><span>🚪</span><span>Logout</span></a>
+</nav>
+</div>
+<div class="main" id="main-content"></div>
+</div>
+<script>
+const API = window.location.origin + '/api/v1';
+let token = localStorage.getItem('inc_token');
+let currentUser = null;
+
+function $(id){return document.getElementById(id)}
+function show(el){el.style.display=''}
+function hide(el){el.style.display='none'}
+
+async function api(path, opts={}){
+  const headers={'Content-Type':'application/json'};
+  if(token) headers['Authorization']='Bearer '+token;
+  const res=await fetch(API+path,{...opts,headers});
+  if(res.status===401 && token){token=null;localStorage.removeItem('inc_token');render()}
+  const ct=res.headers.get('content-type')||'';
+  let data;
+  if(ct.includes('json')){data=await res.json()}else{data=await res.text();try{data=JSON.parse(data)}catch(e){}}
+  if(!res.ok) throw new Error(data?.message||data?.error||'Request failed');
+  return data;
+}
+
+async function login(){
+  const email=$('login-email').value;
+  const password=$('login-password').value;
+  hide($('login-error'));
+  try{
+    const res=await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
+    token=res.access_token||res.token;
+    currentUser=res.user;
+    localStorage.setItem('inc_token',token);
+    render();
+  }catch(e){
+    $('login-error').textContent=e.message;
+    show($('login-error'));
+  }
+}
+
+function logout(){
+  token=null;currentUser=null;
+  localStorage.removeItem('inc_token');
+  render();
+}
+
+async function loadUser(){
+  try{
+    const res=await api('/auth/me');
+    currentUser=res;
+    $('user-info').innerHTML=currentUser.email+'<br>'+(currentUser.role||'User');
+  }catch(e){}
+}
+
+function render(){
+  if(token){
+    hide($('login-page'));
+    show($('app'));
+    loadUser();
+    showPage('dashboard');
+  }else{
+    show($('login-page'));
+    hide($('app'));
+  }
+}
+
+let currentPage='';
+
+async function showPage(page){
+  currentPage=page;
+  document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
+  const mc=$('main-content');
+  mc.innerHTML='<div class="loading">Loading...</div>';
+  const renderers={
+    dashboard:renderDashboard,
+    campaigns:renderCampaigns,
+    loyalty:renderLoyalty,
+    entries:renderEntries,
+    raffles:renderRaffles,
+    contacts:renderContacts,
+    apikeys:renderApiKeys,
+    plans:renderPlans,
+  };
+  try{
+    await renderers[page]();
+  }catch(e){
+    mc.innerHTML='<div class="error">Failed to load: '+e.message+'</div>';
+  }
+}
+
+/* ===== DASHBOARD ===== */
+async function renderDashboard(){
+  let stats;
+  try{stats=await api('/dashboard')}catch(e){stats=null}
+  let campaigns, raffles;
+  try{campaigns=await api('/campaigns')}catch(e){campaigns=[]}
+  try{raffles=await api('/raffles')}catch(e){raffles=[]}
+  if(!Array.isArray(campaigns))campaigns=campaigns?.data||[];
+  if(!Array.isArray(raffles))raffles=raffles?.data||[];
+  const mc=$('main-content');
+  mc.innerHTML='<h1>📊 Dashboard</h1>'
+    +'<div class="grid-4">'
+    +  '<div class="card stat-card"><div class="num">'+(campaigns.length||'—')+'</div><div class="label">Campaigns</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+(raffles.length||'—')+'</div><div class="label">Raffles</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+(stats?.entries||stats?.total_entries||'—')+'</div><div class="label">Entries</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+(stats?.reward_claims||0)+'</div><div class="label">Reward Claims</div></div>'
+    +'</div>'
+    +'<div class="card"><h3 style="margin-bottom:12px">Quick Stats</h3><p class="empty">Real-time campaign performance data will appear here</p></div>';
+}
+
+/* ===== CAMPAIGNS ===== */
+let campaigns=[],cmpPage=1,cmpSearch='';
+async function renderCampaigns(){
+  try{campaigns=await api('/campaigns')}catch(e){campaigns=[]}
+  if(!Array.isArray(campaigns))campaigns=campaigns?.data||campaigns?.campaigns||[];
+  renderCampaignsTable();
+}
+function renderCampaignsTable(){
+  const start=(cmpPage-1)*20;
+  const filtered=campaigns.filter(c=>!cmpSearch||(c.name||'').toLowerCase().includes(cmpSearch.toLowerCase()));
+  const page=filtered.slice(start,start+20);
+  const tp=Math.ceil(filtered.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>📢 Campaigns</h1><button class="btn-primary" onclick="showCampaignForm()">+ New Campaign</button></div>'
+    +'<div style="margin-bottom:12px"><input placeholder="Search campaigns..." oninput="cmpSearch=this.value;cmpPage=1;renderCampaignsTable()" style="max-width:300px"></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Slug</th><th>Type</th><th>Status</th><th>Entries</th><th>Actions</th></tr>'
+    +page.map(c=>'<tr><td>'+esc(c.name||'—')+'</td><td>'+esc(c.slug||'—')+'</td><td>'+esc(c.campaign_type||c.type||'—')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td><td>'+(c.entry_count||c.entries||0)+'</td><td><button class="btn-secondary btn-sm" onclick="editCampaign(\''+(c.id||'')+'\')">Edit</button></td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="cmpPage=Math.max(1,cmpPage-1);renderCampaignsTable()" '+(cmpPage<=1?'disabled':'')+'>← Prev</button><span>Page '+cmpPage+' of '+tp+'</span><button onclick="cmpPage=Math.min(tp,cmpPage+1);renderCampaignsTable()" '+(cmpPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+function showCampaignForm(c){showModal('Campaign',c||{});}
+function editCampaign(id){
+  const c=campaigns.find(x=>x.id===id);
+  if(c)showCampaignForm(c);
+}
+
+/* ===== LOYALTY ===== */
+async function renderLoyalty(){
+  let rewards;
+  try{rewards=await api('/loyalty/rewards')}catch(e){rewards=[]}
+  if(!Array.isArray(rewards))rewards=rewards?.data||rewards?.rewards||[];
+  const mc=$('main-content');
+  mc.innerHTML='<h1>⭐ Loyalty Program</h1>'
+    +'<div class="grid-4">'
+    +  '<div class="card stat-card"><div class="num">'+(Array.isArray(rewards)?rewards.length:0)+'</div><div class="label">Reward Claims</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+rewards.filter(r=>r.status==='pending').length+'</div><div class="label">Pending Approval</div></div>'
+    +'</div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Member</th><th>Points</th><th>Reward</th><th>Status</th><th>Actions</th></tr>'
+    +(Array.isArray(rewards)&&rewards.length?rewards.slice(0,50).map(r=>'<tr><td>'+esc(r.member_name||r.member_id?.slice(0,8)||'—')+'</td><td>'+(r.points||0)+'</td><td>'+esc(r.reward_name||r.reward||'—')+'</td><td><span class="badge badge-'+(r.status==='approved'?'active':r.status==='denied'?'inactive':'pending')+'">'+esc(r.status||'pending')+'</span></td><td>'+(r.status==='pending'?'<button class="btn-primary btn-sm" onclick="approveReward(\''+r.id+'\')">Approve</button> <button class="btn-danger btn-sm" onclick="denyReward(\''+r.id+'\')">Deny</button>':'—')+'</td></tr>').join(''):'<tr><td colspan="5" class="empty">No rewards yet</td></tr>')
+    +'</table></div>';
+}
+async function approveReward(id){
+  try{await api('/loyalty/rewards/'+id+'/approve',{method:'POST'});showToast('Approved');renderLoyalty();}
+  catch(e){showToast(e.message,'error')}
+}
+async function denyReward(id){
+  try{await api('/loyalty/rewards/'+id+'/deny',{method:'POST'});showToast('Denied');renderLoyalty();}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== ENTRIES ===== */
+let entries=[],entPage=1;
+async function renderEntries(){
+  try{entries=await api('/entries')}catch(e){entries=[]}
+  if(!Array.isArray(entries))entries=entries?.data||entries?.entries||[];
+  renderEntriesTable();
+}
+function renderEntriesTable(){
+  const start=(entPage-1)*20;
+  const page=entries.slice(start,start+20);
+  const tp=Math.ceil(entries.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>📝 Entries</h1></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>ID</th><th>Campaign</th><th>Contact</th><th>Status</th><th>Date</th></tr>'
+    +page.map(e=>'<tr><td>'+esc(e.id?.slice(0,8)||'—')+'</td><td>'+esc(e.campaign_name||e.campaign?.name||'—')+'</td><td>'+esc(e.contact_name||e.contact?.name||e.email||'—')+'</td><td><span class="badge badge-'+(e.status==='converted'?'active':'pending')+'">'+esc(e.status||'pending')+'</span></td><td>'+(e.created_at?new Date(e.created_at).toLocaleDateString():'—')+'</td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="entPage=Math.max(1,entPage-1);renderEntriesTable()" '+(entPage<=1?'disabled':'')+'>← Prev</button><span>Page '+entPage+' of '+tp+'</span><button onclick="entPage=Math.min(tp,entPage+1);renderEntriesTable()" '+(entPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+/* ===== RAFFLES ===== */
+let raffles=[],rafPage=1;
+async function renderRaffles(){
+  try{raffles=await api('/raffles')}catch(e){raffles=[]}
+  if(!Array.isArray(raffles))raffles=raffles?.data||[];
+  renderRafflesTable();
+}
+function renderRafflesTable(){
+  const start=(rafPage-1)*20;
+  const page=raffles.slice(start,start+20);
+  const tp=Math.ceil(raffles.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>🎲 Raffles / Giveaways</h1></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Slug</th><th>Entries</th><th>Status</th><th>Actions</th></tr>'
+    +page.map(r=>'<tr><td>'+esc(r.name||'—')+'</td><td>'+esc(r.slug||'—')+'</td><td>'+(r.entry_count||0)+'</td><td><span class="badge badge-'+(r.status==='active'?'active':'inactive')+'">'+esc(r.status||'draft')+'</span></td><td><button class="btn-primary btn-sm" onclick="drawRaffle(\''+r.slug+'\')">Draw</button></td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="rafPage=Math.max(1,rafPage-1);renderRafflesTable()" '+(rafPage<=1?'disabled':'')+'>← Prev</button><span>Page '+rafPage+' of '+tp+'</span><button onclick="rafPage=Math.min(tp,rafPage+1);renderRafflesTable()" '+(rafPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+async function drawRaffle(slug){
+  try{const r=await api('/raffles/'+slug+'/draw',{method:'POST'});showToast('Winner drawn: '+(r.winner||'see results'));renderRaffles();}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== CONTACTS ===== */
+let contacts=[],conPage=1,conSearch='';
+async function renderContacts(){
+  try{contacts=await api('/contacts')}catch(e){contacts=[]}
+  if(!Array.isArray(contacts))contacts=contacts?.data||[];
+  renderContactsTable();
+}
+function renderContactsTable(){
+  const start=(conPage-1)*20;
+  const filtered=contacts.filter(c=>!conSearch||(c.name||c.email||'').toLowerCase().includes(conSearch.toLowerCase()));
+  const page=filtered.slice(start,start+20);
+  const tp=Math.ceil(filtered.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>👥 Contacts</h1></div>'
+    +'<div style="margin-bottom:12px"><input placeholder="Search contacts..." oninput="conSearch=this.value;conPage=1;renderContactsTable()" style="max-width:300px"></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Phone</th><th>Source</th></tr>'
+    +page.map(c=>'<tr><td>'+esc(c.name||'—')+'</td><td>'+esc(c.email||'—')+'</td><td>'+esc(c.phone||'—')+'</td><td>'+esc(c.source||'—')+'</td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="conPage=Math.max(1,conPage-1);renderContactsTable()" '+(conPage<=1?'disabled':'')+'>← Prev</button><span>Page '+conPage+' of '+tp+'</span><button onclick="conPage=Math.min(tp,conPage+1);renderContactsTable()" '+(conPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+/* ===== API KEYS ===== */
+let apikeys=[],akPage=1;
+async function renderApiKeys(){
+  try{apikeys=await api('/api-keys')}catch(e){apikeys=[]}
+  if(!Array.isArray(apikeys))apikeys=apikeys?.data||[];
+  renderApiKeysTable();
+}
+function renderApiKeysTable(){
+  const start=(akPage-1)*20;
+  const page=apikeys.slice(start,start+20);
+  const tp=Math.ceil(apikeys.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>🔑 API Keys</h1><button class="btn-primary" onclick="createApiKey()">+ New Key</button></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Key Preview</th><th>Active</th><th>Actions</th></tr>'
+    +page.map(k=>'<tr><td>'+esc(k.name||'—')+'</td><td>'+esc((k.key||k.api_key||'').slice(0,12)+'...')+'</td><td><span class="badge badge-'+(!k.revoked?'active':'inactive')+'">'+(!k.revoked?'Active':'Revoked')+'</span></td><td><button class="btn-danger btn-sm" onclick="deleteApiKey(\''+(k.id||'')+'\')">Revoke</button></td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="akPage=Math.max(1,akPage-1);renderApiKeysTable()" '+(akPage<=1?'disabled':'')+'>← Prev</button><span>Page '+akPage+' of '+tp+'</span><button onclick="akPage=Math.min(tp,akPage+1);renderApiKeysTable()" '+(akPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+async function createApiKey(){
+  const name=prompt('API Key name:');
+  if(!name)return;
+  try{const r=await api('/api-keys',{method:'POST',body:JSON.stringify({name})});showToast('Key created: '+r.key);renderApiKeys();}
+  catch(e){showToast(e.message,'error')}
+}
+async function deleteApiKey(id){
+  if(!confirm('Revoke this API key?'))return;
+  try{await api('/api-keys/'+id,{method:'DELETE'});renderApiKeys();showToast('Revoked');}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== PLANS ===== */
+let plans=[],plPage=1;
+async function renderPlans(){
+  try{plans=await api('/admin/plans')}catch(e){plans=[]}
+  if(!Array.isArray(plans))plans=plans?.data||[];
+  renderPlansTable();
+}
+function renderPlansTable(){
+  const start=(plPage-1)*20;
+  const page=plans.slice(start,start+20);
+  const tp=Math.ceil(plans.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>📋 Plans</h1><button class="btn-primary" onclick="showPlanForm()">+ New Plan</button></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Price</th><th>Features</th><th>Actions</th></tr>'
+    +page.map(p=>'<tr><td>'+esc(p.name||'—')+'</td><td>'+(p.price?'$'+Number(p.price).toFixed(2):'—')+'</td><td>'+(Array.isArray(p.features)?p.features.length+' features':'—')+'</td><td><button class="btn-secondary btn-sm" onclick="editPlan(\''+(p.id||'')+'\')">Edit</button></td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="plPage=Math.max(1,plPage-1);renderPlansTable()" '+(plPage<=1?'disabled':'')+'>← Prev</button><span>Page '+plPage+' of '+tp+'</span><button onclick="plPage=Math.min(tp,plPage+1);renderPlansTable()" '+(plPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+function showPlanForm(p){showModal('Plan',p||{});}
+function editPlan(id){
+  const p=plans.find(x=>x.id===id);
+  if(p)showPlanForm(p);
+}
+
+/* ===== MODAL ===== */
+function showModal(title,data){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  const fields=Object.keys(data).filter(k=>!['id','created_at','updated_at'].includes(k));
+  overlay.innerHTML='<div class="modal"><h2>'+esc(title)+'</h2><form id="modal-form">'
+    +(fields.length?fields.map(k=>'<label>'+esc(k.charAt(0).toUpperCase()+k.slice(1))+'</label><input name="'+k+'" value="'+(data[k]||'')+'">').join('')
+      :'<label>Name</label><input name="name"><label>Description</label><textarea name="description" rows="3"></textarea>')
+    +'</form><div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveModal(this)">Save</button></div></div>';
+  document.body.appendChild(overlay);
+}
+async function saveModal(btn){
+  const form=btn.closest('.modal').querySelector('#modal-form');
+  const data=Object.fromEntries(new FormData(form));
+  btn.textContent='Saving...';btn.disabled=true;
+  setTimeout(()=>{btn.closest('.modal-overlay')?.remove();showToast('Saved (mock)');},500);
+}
+
+/* ===== UTILITIES ===== */
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function showToast(msg,type){
+  const el=document.createElement('div');
+  el.className=type==='error'?'error':'success';
+  el.textContent=msg;
+  el.style.position='fixed';el.style.top='16px';el.style.right='16px';el.style.zIndex='200';el.style.maxWidth='400px';
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),3000);
+}
+
+render();
+</script>
+</body>
+</html>
