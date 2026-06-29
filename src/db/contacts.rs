@@ -1,7 +1,7 @@
 //! Contact database operations — dedup by email/phone, upsert, list, get.
 
 use crate::error::AppError;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Input for upserting a contact.

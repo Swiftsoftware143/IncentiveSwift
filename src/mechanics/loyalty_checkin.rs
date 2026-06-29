@@ -288,7 +288,7 @@ async fn apply_reward_tag(
 }
 
 async fn push_reward_notification(
-    state: &AppState,
+    _state: &AppState,
     _contact_id: &str,
     _reward_name: &str,
 ) -> Result<(), AppError> {

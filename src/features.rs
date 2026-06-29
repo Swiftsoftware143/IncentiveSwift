@@ -6,6 +6,7 @@
 //!   3. Look up limit_value from feature_limits table by plan_tier slug + feature_key
 //!   4. If limit_value == -1, unlimited
 //!   5. Count current usage, compare against limit
+#![allow(dead_code)]
 
 use crate::error::AppError;
 use sqlx::PgPool;
@@ -27,30 +28,40 @@ pub async fn check_feature_limit(
     let plan_tier_slug: Option<String> = sqlx::query_scalar(
         "SELECT pt.slug FROM accounts a
          JOIN plan_tiers pt ON pt.id = a.plan_tier_id
-         WHERE a.id = $1"
+         WHERE a.id = $1",
     )
     .bind(account_id)
     .fetch_optional(db)
     .await?
     .flatten();
 
-    let limit_value = match plan_tier_slug {
-        Some(ref slug) => {
-            let limit: Option<i32> = sqlx::query_scalar(
-                "SELECT limit_value FROM feature_limits WHERE plan_tier = $1 AND feature_key = $2"
-            )
-            .bind(slug)
-            .bind(feature_key)
-            .fetch_optional(db)
-            .await?
-            .flatten();
-            limit.unwrap_or(0) as i64
+    let slug = match plan_tier_slug {
+        Some(s) => s,
+        None => {
+            return Ok(FeatureLimitResult {
+                allowed: false,
+                usage: 0,
+                limit: 0,
+            })
         }
-        None => 0_i64,
     };
 
+    // Look up the limit for this feature on this plan tier
+    let limit_value: Option<i64> = sqlx::query_scalar(
+        "SELECT fl.limit_value FROM feature_limits fl
+         JOIN plan_tier_features ptf ON ptf.feature_id = fl.feature_id
+         WHERE ptf.slug = $1 AND fl.feature_key = $2",
+    )
+    .bind(&slug)
+    .bind(feature_key)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+
+    let limit = limit_value.unwrap_or(0);
+
     // -1 means unlimited
-    if limit_value == -1 {
+    if limit == -1 {
         return Ok(FeatureLimitResult {
             allowed: true,
             usage: 0,
@@ -58,105 +69,81 @@ pub async fn check_feature_limit(
         });
     }
 
-    // Count current usage based on feature_key
     let usage = count_usage(db, account_id, feature_key).await?;
 
     Ok(FeatureLimitResult {
-        allowed: usage < limit_value,
+        allowed: usage < limit,
         usage,
-        limit: limit_value,
+        limit,
     })
 }
 
-/// Enforce a feature limit; returns Forbidden error if over the limit.
+/// Enforce a feature limit — returns an error if limit exceeded.
 pub async fn enforce_feature_limit(
     db: &PgPool,
     account_id: &str,
     feature_key: &str,
-    label: &str,
 ) -> Result<(), AppError> {
     let result = check_feature_limit(db, account_id, feature_key).await?;
-    if !result.allowed {
-        return Err(AppError::Forbidden(format!(
-            "{} limit reached ({} / {})",
-            label, result.usage, result.limit
-        )));
+    if result.allowed {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(
+            format!(
+                "Feature limit reached for '{}': {}/{}",
+                feature_key, result.usage, result.limit
+            ),
+        ))
     }
-    Ok(())
 }
 
-/// Count existing resources for an account based on the feature key.
-async fn count_usage(db: &PgPool, account_id: &str, feature_key: &str) -> Result<i64, AppError> {
-    let count: i64 = match feature_key {
+/// Count current usage for a feature.
+async fn count_usage(
+    db: &PgPool,
+    account_id: &str,
+    feature_key: &str,
+) -> Result<i64, AppError> {
+    // Dynamically count by feature
+    match feature_key {
         "max_campaigns" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM campaigns WHERE account_id = $1"
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM campaigns WHERE account_id = $1 AND deleted_at IS NULL",
             )
             .bind(account_id)
             .fetch_one(db)
-            .await?
-            .unwrap_or(0)
-        }
-        "max_entries_per_month" => {
-            // Count entries created in the current month for all campaigns belonging to this account
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM entries e
-                 JOIN campaigns c ON c.id = e.campaign_id
-                 WHERE c.account_id = $1
-                 AND e.created_at >= date_trunc('month', NOW())"
-            )
-            .bind(account_id)
-            .fetch_one(db)
-            .await?
-            .unwrap_or(0)
-        }
-        "max_leads" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM contacts"
-            )
-            .fetch_one(db)
-            .await?
-            .unwrap_or(0)
-        }
-        "max_api_keys" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1"
-            )
-            .bind(account_id)
-            .fetch_one(db)
-            .await?
-            .unwrap_or(0)
+            .await?;
+            Ok(count)
         }
         "max_entries" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM entries e
-                 JOIN campaigns c ON c.id = e.campaign_id
-                 WHERE c.account_id = $1"
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM entries WHERE campaign_id IN (SELECT id FROM campaigns WHERE account_id = $1)",
             )
             .bind(account_id)
             .fetch_one(db)
-            .await?
-            .unwrap_or(0)
+            .await?;
+            Ok(count)
         }
-        "max_integrations" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM integration_targets WHERE account_id = $1"
+        "max_members" => {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM loyalty_members WHERE program_id IN (SELECT id FROM loyalty_programs WHERE account_id = $1)",
             )
             .bind(account_id)
             .fetch_one(db)
-            .await?
-            .unwrap_or(0)
+            .await?;
+            Ok(count)
         }
-        "max_portfolios" => {
-            sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM portfolio_companies WHERE account_id = $1"
+        _ => {
+            // Generic fallback: try to count from a dynamically named table
+            let count: i64 = sqlx::query_scalar(
+                &format!(
+                    "SELECT COUNT(*) FROM {} WHERE account_id = $1 AND deleted_at IS NULL",
+                    feature_key.trim_start_matches("max_")
+                ),
             )
             .bind(account_id)
             .fetch_one(db)
-            .await?
-            .unwrap_or(0)
+            .await?;
+            Ok(count)
         }
-        _ => 0,
-    };
-    Ok(count)
+    }
 }

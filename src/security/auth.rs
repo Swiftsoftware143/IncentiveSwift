@@ -9,7 +9,6 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts},
     async_trait,
-    RequestPartsExt,
 };
 use axum::extract::FromRef;
 use sqlx::Row;

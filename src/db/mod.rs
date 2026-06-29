@@ -1,4 +1,5 @@
 //! Database connection and query helpers.
+#![allow(dead_code)]
 
 pub mod contacts;
 pub mod campaigns;

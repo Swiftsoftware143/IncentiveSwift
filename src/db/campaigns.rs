@@ -1,7 +1,7 @@
 //! Campaign database operations.
 
 use crate::error::AppError;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 

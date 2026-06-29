@@ -113,7 +113,7 @@ pub async fn redraw(
     let current_winner_id: Option<uuid::Uuid> = sqlx::query_scalar(
         "SELECT id FROM entries WHERE campaign_id = $1 AND outcome = 'winner' LIMIT 1"
     )
-    .bind(&campaign.id)
+    .bind(campaign.id)
     .fetch_optional(&state.db)
     .await?;
 
@@ -129,7 +129,7 @@ pub async fn redraw(
     let seed_value: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT config->>'draw_seed' FROM campaigns WHERE id = $1"
     )
-    .bind(&campaign.id)
+    .bind(campaign.id)
     .fetch_optional(&state.db)
     .await?
     .flatten();

@@ -63,7 +63,7 @@ pub async fn push_to_webhook(
                 )));
 
                 // Don't retry 4xx errors
-                if status_code >= 400 && status_code < 500 {
+                if (400..500).contains(&status_code) {
                     break;
                 }
             }

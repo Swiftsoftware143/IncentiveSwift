@@ -2,7 +2,7 @@
 
 use crate::error::AppError;
 use serde_json::Value as JsonValue;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Input for creating an entry.
