@@ -46,20 +46,32 @@ pub async fn checkin(
     // 3. Process checkin
     let result = loyalty_checkin::process_checkin(
         &state,
-        &program,
-        &contact_id,
+        &program.id.to_string(),
+        &contact_id.to_string(),
+        body.method.as_deref().unwrap_or("web"),
     ).await?;
 
     // 4. Return result
-    Ok(Json(json!({
-        "status": "ok",
-        "member_id": result.member_id,
-        "points_balance": result.points_balance,
-        "points_awarded": result.points_awarded,
-        "lifetime_points": result.lifetime_points,
-        "reward_earned": result.reward_earned,
-        "reward_tag": result.reward_tag,
-    })))
+    match result {
+        loyalty_checkin::CheckinResult::Success { points_awarded, new_balance, rewards_awarded } => {
+            Ok(Json(json!({
+                "status": "ok",
+                "points_awarded": points_awarded,
+                "new_balance": new_balance,
+                "rewards_awarded": rewards_awarded.iter().map(|r| json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "status": r.status,
+                })).collect::<Vec<_>>(),
+            })))
+        }
+        loyalty_checkin::CheckinResult::DailyCapReached { message } => {
+            Ok(Json(json!({
+                "status": "daily_cap_reached",
+                "message": message,
+            })))
+        }
+    }
 }
 
 /// Body for approving a reward.

@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 /// A delivery log entry.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct DeliveryLogEntry {
     pub id: uuid::Uuid,
     pub entry_id: uuid::Uuid,
@@ -50,13 +50,12 @@ pub async fn get_delivery_log(
     pool: &PgPool,
     entry_id: &Uuid,
 ) -> Result<Vec<DeliveryLogEntry>, AppError> {
-    let log = sqlx::query_as!(
-        DeliveryLogEntry,
+    let log = sqlx::query_as::<_, DeliveryLogEntry>(
         r#"SELECT id, entry_id, method, target, success, response_code, response_body, attempted_at
            FROM delivery_log WHERE entry_id = $1
            ORDER BY attempted_at DESC"#,
-        entry_id
     )
+    .bind(entry_id)
     .fetch_all(pool)
     .await?;
 

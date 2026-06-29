@@ -1,0 +1,44 @@
+//! API key handler stubs.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use crate::security::auth::AuthenticatedUser;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use serde_json::{json, Value};
+
+/// GET /api/v1/api-keys
+pub async fn list_api_keys(
+    State(_state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented", "keys": []})))
+}
+
+/// POST /api/v1/api-keys
+pub async fn create_api_key(
+    State(_state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/api-keys/{id}
+pub async fn update_api_key(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// DELETE /api/v1/api-keys/{id}
+pub async fn delete_api_key(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

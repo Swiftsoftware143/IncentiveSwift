@@ -7,11 +7,12 @@
 use crate::error::AppError;
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{request::Parts},
     async_trait,
     RequestPartsExt,
 };
 use axum::extract::FromRef;
+use sqlx::Row;
 
 /// Authenticated user context extracted from request.
 #[derive(Debug, Clone)]
@@ -52,7 +53,7 @@ where
         // Fall back to Supabase JWT validation
         let claims = crate::security::jwt::verify_supabase_jwt(
             token,
-            &app_state.config.supabase_anon_key,
+            &app_state.config.supabase_service_key,
         )?;
 
         Ok(AuthenticatedUser {
@@ -65,9 +66,6 @@ where
 
 /// Validate an API key by extracting its identifier prefix, looking up the hash,
 /// and verifying with bcrypt::verify.
-///
-/// NEVER do: SELECT * FROM api_credentials WHERE key_hash = hash(provided_key)
-/// ALWAYS: extract key_identifier -> load stored hash -> bcrypt::verify
 async fn validate_api_key(
     state: &crate::state::AppState,
     token: &str,
@@ -84,7 +82,7 @@ async fn validate_api_key(
 
     // Look up the stored hash by identifier
     let row = sqlx::query(
-        "SELECT ac.key_hash, ac.account_id, a.email
+        "SELECT ac.key_hash, ac.account_id::text, a.email
          FROM api_credentials ac
          JOIN accounts a ON a.id = ac.account_id
          WHERE ac.key_identifier = $1"

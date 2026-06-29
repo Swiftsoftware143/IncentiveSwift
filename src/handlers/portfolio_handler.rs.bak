@@ -1,0 +1,47 @@
+//! Portfolio company handler stubs.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use serde_json::{json, Value};
+
+/// GET /api/v1/portfolio-companies
+pub async fn list_portfolio_companies(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented", "companies": []})))
+}
+
+/// POST /api/v1/portfolio-companies
+pub async fn create_portfolio_company(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/portfolio-companies/{id}
+pub async fn get_portfolio_company(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/portfolio-companies/{id}
+pub async fn update_portfolio_company(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// DELETE /api/v1/portfolio-companies/{id}
+pub async fn delete_portfolio_company(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

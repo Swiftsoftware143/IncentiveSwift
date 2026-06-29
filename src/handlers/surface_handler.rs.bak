@@ -1,0 +1,122 @@
+//! Surface handler — widget, tablet, play, embed views, and domain management.
+//!
+//! NOTE: These are minimal stubs to allow the build to compile.
+//! Full implementations should be added as the surface feature is developed.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use serde_json::{json, Value};
+
+/// GET /api/v1/widget/{hash}
+pub async fn get_widget_js(
+    State(_state): State<AppState>,
+    Path(_hash): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/widget/{hash}/config
+pub async fn get_widget_config(
+    State(_state): State<AppState>,
+    Path(_hash): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/tablet/{id}
+pub async fn get_tablet_view(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// POST /api/v1/tablet/{id}/interact
+pub async fn tablet_interaction(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/play/{id}
+pub async fn get_play_view(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/play/{id}/dashboard
+pub async fn get_loyalty_dashboard(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/embed/{id}
+pub async fn get_embed_view(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/admin/campaigns/{id}/surface
+pub async fn get_surface_config(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/admin/campaigns/{id}/surface
+pub async fn update_surface_config(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/admin/domains
+pub async fn list_domains(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented", "domains": []})))
+}
+
+/// POST /api/v1/admin/domains
+pub async fn register_domain(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// DELETE /api/v1/admin/domains/{id}
+pub async fn remove_domain(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// POST /api/v1/admin/domains/{id}/verify
+pub async fn verify_domain(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/admin/plans/{id}/domains
+pub async fn check_plan_domains(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

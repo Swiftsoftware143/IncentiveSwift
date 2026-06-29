@@ -279,3 +279,24 @@ create policy "auth_all_loyalty_members" on public.loyalty_members for all using
 create policy "auth_read_loyalty_checkins" on public.loyalty_checkins for select using (auth.role() = 'authenticated');
 create policy "auth_all_reward_tiers" on public.loyalty_reward_tiers for all using (auth.role() = 'authenticated');
 create policy "auth_all_rewards_earned" on public.loyalty_rewards_earned for all using (auth.role() = 'authenticated');
+
+-- ============================================================
+-- API KEYS (for CoreSwift webhook push)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.api_keys (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL DEFAULT 'default',
+    key_hash VARCHAR(255) NOT NULL,
+    prefix VARCHAR(8) NOT NULL,
+    permissions JSONB DEFAULT '[]',
+    target_url TEXT,
+    last_used_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON public.api_keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON public.api_keys(user_id);

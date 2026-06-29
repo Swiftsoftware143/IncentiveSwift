@@ -12,8 +12,6 @@ pub fn calculate_score(campaign_type: &str, answers: &Value) -> i32 {
     match campaign_type {
         "score_reveal" => calculate_score_reveal(answers),
         "calculator" => {
-            // Calculator scores use the calculator module
-            // Return 0 here since calculator has its own evaluation
             0
         }
         "personality" => calculate_personality(answers),
@@ -45,7 +43,6 @@ fn calculate_score_reveal(answers: &Value) -> i32 {
 /// For personality: simple pattern matching to determine personality type.
 /// Returns personality index (0-3) mapped to predefined types.
 fn calculate_personality(answers: &Value) -> i32 {
-    // Simple heuristic: count answer patterns and map to 4 types
     let mut score_a = 0;
     let mut score_b = 0;
 
@@ -57,7 +54,6 @@ fn calculate_personality(answers: &Value) -> i32 {
                 _ => continue,
             };
 
-            // Simple dichotomy scoring
             match val_str.as_str() {
                 "a" | "yes" | "true" | "agree" | "strongly_agree" => score_a += 1,
                 "b" | "no" | "false" | "disagree" | "strongly_disagree" => score_b += 1,
@@ -66,7 +62,6 @@ fn calculate_personality(answers: &Value) -> i32 {
         }
     }
 
-    // Map to 4 personality types based on scores
     if score_a >= 3 && score_b >= 3 {
         0 // "Balanced"
     } else if score_a > score_b {

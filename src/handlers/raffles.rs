@@ -81,7 +81,8 @@ pub async fn draw(
     let entry_strings: Vec<String> = entry_ids.iter().map(|id| id.to_string()).collect();
 
     // Perform seeded shuffle
-    let winner_id = raffle_draw::seeded_fisher_yates(entry_strings.clone(), seed);
+    let winner_id = raffle_draw::seeded_fisher_yates(&entry_strings, seed)
+        .ok_or_else(|| AppError::Internal("No winner found".to_string()))?;
 
     let winner_uuid = uuid::Uuid::parse_str(&winner_id)
         .map_err(|_| AppError::Internal("Invalid winner UUID".to_string()))?;
@@ -143,7 +144,8 @@ pub async fn redraw(
 
     // Perform seeded shuffle
     let entry_strings: Vec<String> = entry_ids.iter().map(|id| id.to_string()).collect();
-    let new_winner_id = raffle_draw::seeded_fisher_yates(entry_strings.clone(), redraw_seed);
+    let new_winner_id = raffle_draw::seeded_fisher_yates(&entry_strings, redraw_seed)
+        .ok_or_else(|| AppError::Internal("No winner found".to_string()))?;
 
     let new_winner_uuid = uuid::Uuid::parse_str(&new_winner_id)
         .map_err(|_| AppError::Internal("Invalid winner UUID".to_string()))?;

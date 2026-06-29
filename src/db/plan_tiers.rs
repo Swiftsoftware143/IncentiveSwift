@@ -1,7 +1,7 @@
 //! Plan tiers database operations.
 
 use crate::error::AppError;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// A plan tier record.
@@ -24,7 +24,6 @@ pub async fn get_plan_tier(
     pool: &PgPool,
     tier_id: &Uuid,
 ) -> Result<PlanTier, AppError> {
-    // Use raw query since Decimal type may not work with query_as directly
     let row = sqlx::query(
         r#"SELECT id, name, slug, price_monthly, price_annual, is_active,
                   sort_order, max_campaigns, max_entries_per_month, created_at
@@ -35,7 +34,6 @@ pub async fn get_plan_tier(
     .await?
     .ok_or_else(|| AppError::NotFound("Plan tier not found".to_string()))?;
 
-    use sqlx::Row;
     Ok(PlanTier {
         id: row.get("id"),
         name: row.get("name"),

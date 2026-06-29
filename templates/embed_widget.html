@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{campaign_name}}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: {{bg_color}};
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: {{text_color}};
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            overflow: hidden;
+        }
+        .logo { max-height: 40px; margin-bottom: 10px; object-fit: contain; }
+        h2 { font-size: 16px; margin-bottom: 8px; text-align: center; }
+        .wheel-container { width: 160px; height: 160px; position: relative; }
+        #wheelCanvas { width: 100%; height: 100%; }
+        .spin-btn {
+            width: 150px; height: 44px; font-size: 16px; font-weight: 600;
+            border-radius: 22px; border: none; background: {{button_color}};
+            color: {{button_text_color}}; cursor: pointer; margin-top: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        .spin-btn:active { transform: scale(0.95); }
+        .spin-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6); display: none;
+            align-items: center; justify-content: center; z-index: 1000; padding: 16px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: white; padding: 24px; border-radius: 12px;
+            text-align: center; max-width: 320px; width: 100%;
+            animation: modalIn 0.2s ease-out; color: #333;
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .modal-content h2 { font-size: 20px; margin-bottom: 8px; }
+        .modal-content p { font-size: 14px; color: #666; margin-bottom: 16px; }
+        .prize-display { font-size: 22px; font-weight: bold; margin: 10px 0; }
+        .email-input {
+            width: 100%; padding: 12px; font-size: 14px; border: 2px solid #ddd;
+            border-radius: 6px; margin: 8px 0 12px; outline: none;
+        }
+        .submit-btn {
+            background: {{button_color}}; color: white; border: none;
+            padding: 12px 30px; font-size: 16px; border-radius: 6px; cursor: pointer; width: 100%;
+        }
+        .submit-btn:disabled { opacity: 0.6; }
+    </style>
+</head>
+<body>
+    {{#if logo_url}}<img class="logo" src="{{logo_url}}" alt="Logo">{{/if}}
+    <h2>{{campaign_name}}</h2>
+    <div class="wheel-container">
+        <canvas id="wheelCanvas" width="160" height="160"></canvas>
+    </div>
+    <button class="spin-btn" id="spinBtn" onclick="spin()">{{button_text}}</button>
+
+    <div class="modal-overlay" id="emailModal">
+        <div class="modal-content">
+            <h2>🎉 {{prize_heading}}</h2>
+            <div class="prize-display" id="prizeDisplay"></div>
+            <input type="email" class="email-input" id="emailInput" placeholder="your@email.com">
+            <button class="submit-btn" id="claimBtn" onclick="claimPrize()">Claim</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="confirmationModal">
+        <div class="modal-content">
+            <h2>✅ Claimed!</h2>
+            <p>Prize sent to your email.</p>
+            <button class="submit-btn" onclick="resetGame()">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        const segments = {{segments_json}};
+        const campaignId = '{{campaign_id}}';
+        const apiBase = '{{api_base}}';
+        let isSpinning = false;
+
+        function drawWheel() {
+            const canvas = document.getElementById('wheelCanvas');
+            const ctx = canvas.getContext('2d');
+            const cx = 80, cy = 80, r = 72;
+            const arc = (2 * Math.PI) / segments.length;
+            ctx.clearRect(0, 0, 160, 160);
+            segments.forEach((seg, i) => {
+                const startAngle = i * arc - Math.PI / 2;
+                const endAngle = startAngle + arc;
+                ctx.beginPath(); ctx.moveTo(cx, cy);
+                ctx.arc(cx, cy, r, startAngle, endAngle); ctx.closePath();
+                ctx.fillStyle = seg.color || '#3b82f6'; ctx.fill();
+                ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+                const midAngle = startAngle + arc / 2;
+                ctx.save();
+                ctx.translate(cx + (r*0.6)*Math.cos(midAngle), cy + (r*0.6)*Math.sin(midAngle));
+                ctx.rotate(midAngle + Math.PI/2);
+                ctx.fillStyle = '#fff'; ctx.font = 'bold 9px sans-serif';
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(seg.label || '', 0, 0);
+                ctx.restore();
+            });
+            ctx.beginPath();
+            ctx.moveTo(cx - 8, cy - r + 4); ctx.lineTo(cx + 8, cy - r + 4);
+            ctx.lineTo(cx, cy - r - 8); ctx.closePath();
+            ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#333'; ctx.lineWidth=1; ctx.stroke();
+        }
+
+        let currentRotation = 0;
+        function spin() {
+            if (isSpinning) return;
+            isSpinning = true;
+            document.getElementById('spinBtn').disabled = true;
+            const canvas = document.getElementById('wheelCanvas');
+            const ctx = canvas.getContext('2d');
+            const target = currentRotation + 6 * Math.PI + Math.random() * 2 * Math.PI;
+            const duration = 2000;
+            const start = performance.now();
+            function animate(now) {
+                const elapsed = now - start;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                currentRotation = target * eased;
+                ctx.clearRect(0, 0, 160, 160);
+                ctx.save(); ctx.translate(80, 80); ctx.rotate(currentRotation); ctx.translate(-80, -80);
+                const arc = (2*Math.PI)/segments.length;
+                segments.forEach((seg, i) => {
+                    const sa = i*arc - Math.PI/2; const ea = sa+arc;
+                    ctx.beginPath(); ctx.moveTo(80,80); ctx.arc(80,80,72,sa,ea); ctx.closePath();
+                    ctx.fillStyle=seg.color||'#3b82f6'; ctx.fill(); ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.stroke();
+                    const ma=sa+arc/2;
+                    ctx.save(); ctx.translate(80+72*0.6*Math.cos(ma),80+72*0.6*Math.sin(ma));
+                    ctx.rotate(ma+currentRotation+Math.PI/2);
+                    ctx.fillStyle='#fff'; ctx.font='bold 9px sans-serif';
+                    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(seg.label||'',0,0);
+                    ctx.restore();
+                });
+                ctx.restore();
+                ctx.beginPath(); ctx.moveTo(72, 80-72+4); ctx.lineTo(88, 80-72+4); ctx.lineTo(80, 80-72-8); ctx.closePath();
+                ctx.fillStyle='#fff'; ctx.fill(); ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.stroke();
+                if (progress<1) requestAnimationFrame(animate);
+                else { isSpinning=false; onSpinComplete(); }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        function onSpinComplete() {
+            const si = Math.floor(((2*Math.PI-(currentRotation%(2*Math.PI)))/(2*Math.PI)*segments.length))%segments.length;
+            document.getElementById('prizeDisplay').textContent = segments[si]?.prize_name || segments[si]?.label || 'Prize!';
+            document.getElementById('emailModal').classList.add('active');
+        }
+
+        async function claimPrize() {
+            const email = document.getElementById('emailInput').value.trim();
+            if (!email||!email.includes('@')) { alert('Valid email required.'); return; }
+            document.getElementById('claimBtn').disabled = true;
+            document.getElementById('claimBtn').textContent = '...';
+            try {
+                const resp = await fetch(apiBase+'/api/v1/entries', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({campaign_id:campaignId,email:email,source:'widget'}) });
+                if (!resp.ok) throw Error();
+                document.getElementById('emailModal').classList.remove('active');
+                document.getElementById('confirmationModal').classList.add('active');
+            } catch(e) { alert('Try again.'); document.getElementById('claimBtn').disabled=false; document.getElementById('claimBtn').textContent='Claim'; }
+        }
+
+        function resetGame() {
+            document.getElementById('confirmationModal').classList.remove('active');
+            document.getElementById('emailInput').value = '';
+            document.getElementById('claimBtn').disabled = false;
+            document.getElementById('claimBtn').textContent = 'Claim';
+            document.getElementById('spinBtn').disabled = false;
+            currentRotation = 0; drawWheel();
+        }
+
+        drawWheel();
+    </script>
+</body>
+</html>

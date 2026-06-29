@@ -1,7 +1,8 @@
 [package]
 name = "incentiveswift-api"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.96"
 
 [profile.release]
 opt-level = 3
@@ -10,18 +11,20 @@ codegen-units = 1
 panic = "abort"
 
 [dependencies]
+argon2 = "0.5"
+rand = "0.8"
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace", "timeout", "compression-br"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "timeout"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "rust_decimal"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 bcrypt = "0.15"
-rand = "0.8"
+jsonwebtoken = "9"
 governor = "0.6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -31,7 +34,8 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
+anyhow = "1"
+rust_decimal = { version = "1", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
-mockito = "1"

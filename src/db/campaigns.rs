@@ -1,7 +1,7 @@
 //! Campaign database operations.
 
 use crate::error::AppError;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -26,13 +26,14 @@ pub struct CreateCampaignInput {
 }
 
 /// A campaign record.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct Campaign {
     pub id: uuid::Uuid,
     pub name: String,
     pub slug: String,
     pub r#type: String,
     pub status: String,
+    #[serde(rename = "config")]
     pub config: serde_json::Value,
     pub tag_namespace: String,
     pub outcome_tags: serde_json::Value,
@@ -51,16 +52,15 @@ pub async fn get_campaign_by_slug(
     pool: &PgPool,
     slug: &str,
 ) -> Result<Campaign, AppError> {
-    let campaign = sqlx::query_as!(
-        Campaign,
-        r#"SELECT id, name, slug, type as "type!", status,
-                  config as "config!", tag_namespace,
-                  outcome_tags as "outcome_tags!",
-                  delivery_method, delivery_config as "delivery_config!",
+    let campaign = sqlx::query_as::<_, Campaign>(
+        r#"SELECT id, name, slug, type as "type", status,
+                  config, tag_namespace,
+                  outcome_tags,
+                  delivery_method, delivery_config,
                   created_at
-           FROM campaigns WHERE slug = $1"#,
-        slug
+           FROM campaigns WHERE slug = $1"#
     )
+    .bind(slug)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
@@ -72,12 +72,11 @@ pub async fn get_campaign_by_slug(
 pub async fn list_campaigns(
     pool: &PgPool,
 ) -> Result<Vec<Campaign>, AppError> {
-    let campaigns = sqlx::query_as!(
-        Campaign,
-        r#"SELECT id, name, slug, type as "type!", status,
-                  config as "config!", tag_namespace,
-                  outcome_tags as "outcome_tags!",
-                  delivery_method, delivery_config as "delivery_config!",
+    let campaigns = sqlx::query_as::<_, Campaign>(
+        r#"SELECT id, name, slug, type as "type", status,
+                  config, tag_namespace,
+                  outcome_tags,
+                  delivery_method, delivery_config,
                   created_at
            FROM campaigns WHERE status = 'active'
            ORDER BY created_at DESC"#

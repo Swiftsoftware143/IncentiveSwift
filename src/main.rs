@@ -1,9 +1,12 @@
 //! IncentiveSwift — Multi-tenant Engagement & Capture Engine
 //!
-//! REST API server providing gamified incentive mechanics, raffle/giveaway system,
-//! long-form qualifier, and loyalty program module.
+// REST API server providing gamified incentive mechanics, raffle/giveaway system,
+// long-form qualifier, and loyalty program module.
+
+mod email;
 
 mod config;
+mod features;
 mod state;
 mod error;
 mod db;
@@ -14,7 +17,7 @@ pub mod access;
 pub mod security;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put, delete},
     Router,
     middleware,
 };
@@ -22,13 +25,11 @@ use tokio::signal;
 use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
-    compression::CompressionLayer,
     timeout::TimeoutLayer,
 };
 use tracing_subscriber::EnvFilter;
 use std::time::Duration;
 use std::sync::Arc;
-use governor::clock::QuantaClock;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -46,13 +47,6 @@ async fn main() -> anyhow::Result<()> {
     // Build shared state
     let state = state::AppState::new(&config).await?;
 
-    // Shared rate limiter for public endpoints (20 req/min per IP tracked in middleware)
-    let public_limiter = Arc::new(governor::RateLimiter::direct(
-        governor::Quota::per_minute(
-            std::num::NonZeroU32::new(20).unwrap(),
-        ),
-    ));
-
     // Build router
     let app = Router::new()
         // Public routes
@@ -65,16 +59,53 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
         .route("/api/v1/raffles/{slug}/draw", post(handlers::raffles::draw))
         .route("/api/v1/raffles/{slug}/redraw", post(handlers::raffles::redraw))
-        .route("/api/v1/loyalty/rewards/{id}/approve", post(handlers::loyalty::approve_reward))
-        .route("/api/v1/loyalty/rewards/{id}/deny", post(handlers::loyalty::deny_reward))
+        .route("/api/v1/loyalty/rewards/:id/approve", post(handlers::loyalty::approve_reward))
+        .route("/api/v1/loyalty/rewards/:id/deny", post(handlers::loyalty::deny_reward))
         .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
         .route("/api/v1/contacts", get(handlers::contacts::list_contacts))
-        .route("/api/v1/contacts/{id}", get(handlers::contacts::get_contact))
+        .route("/api/v1/contacts/:id", get(handlers::contacts::get_contact))
+        .route("/api/v1/portfolio-companies", get(handlers::portfolio_handler::list_portfolio_companies).post(handlers::portfolio_handler::create_portfolio_company))
+        .route("/api/v1/portfolio-companies/:id", get(handlers::portfolio_handler::get_portfolio_company).put(handlers::portfolio_handler::update_portfolio_company).delete(handlers::portfolio_handler::delete_portfolio_company))
+        .route("/api/v1/integration-targets", get(handlers::integration_target_handler::list_integration_targets).post(handlers::integration_target_handler::create_integration_target))
+        .route("/api/v1/integration-targets/:id", put(handlers::integration_target_handler::update_integration_target).delete(handlers::integration_target_handler::delete_integration_target))
+
+        // Auth endpoints
+        .route("/api/v1/auth/login", post(crate::handlers::auth_handler::login))
+        .route("/api/v1/auth/me", get(crate::handlers::auth_handler::me))
+        .route("/api/v1/auth/password", put(crate::handlers::auth_handler::change_password))
+        .route("/api/v1/auth/forgot-password", post(crate::handlers::auth_handler::forgot_password))
+        .route("/api/v1/auth/reset-password", post(crate::handlers::auth_handler::reset_password))
+
+        // Admin endpoints (cross-app portfolio sync + impersonation)
+        .route("/api/v1/admin/portfolio-sync", post(crate::handlers::admin_handler::portfolio_sync))
+        .route("/api/v1/admin/impersonate", post(crate::handlers::admin_handler::impersonate))
+        .route("/api/v1/admin/stop-impersonation", post(crate::handlers::admin_handler::stop_impersonation))
+
+        // Admin plan management
+        .route("/api/v1/admin/plans", get(crate::handlers::plans_handler::list_plans).post(crate::handlers::plans_handler::create_plan))
+        .route("/api/v1/admin/plans/assign", post(crate::handlers::plans_handler::admin_assign_plan))
+        .route("/api/v1/admin/plans/:id", get(crate::handlers::plans_handler::get_plan).put(crate::handlers::plans_handler::update_plan).delete(crate::handlers::plans_handler::delete_plan))
+        .route("/api/v1/admin/plans/:id/features", put(crate::handlers::plans_handler::admin_update_plan_features))
+        .route("/api/v1/api-keys", get(handlers::api_keys::list_api_keys).post(handlers::api_keys::create_api_key))
+        .route("/api/v1/api-keys/:id", put(handlers::api_keys::update_api_key).delete(handlers::api_keys::delete_api_key))
+        // Surface routes (public — no auth required)
+        .route("/api/v1/widget/{hash}", get(handlers::surface_handler::get_widget_js))
+        .route("/api/v1/widget/{hash}/config", get(handlers::surface_handler::get_widget_config))
+        .route("/api/v1/tablet/{id}", get(handlers::surface_handler::get_tablet_view))
+        .route("/api/v1/tablet/{id}/interact", post(handlers::surface_handler::tablet_interaction))
+        .route("/api/v1/play/{id}", get(handlers::surface_handler::get_play_view))
+        .route("/api/v1/play/{id}/dashboard", get(handlers::surface_handler::get_loyalty_dashboard))
+        .route("/api/v1/embed/{id}", get(handlers::surface_handler::get_embed_view))
+        // Surface routes (admin — protected by auth middleware)
+        .route("/api/v1/admin/campaigns/{id}/surface", get(handlers::surface_handler::get_surface_config).put(handlers::surface_handler::update_surface_config))
+        .route("/api/v1/admin/domains", get(handlers::surface_handler::list_domains).post(handlers::surface_handler::register_domain))
+        .route("/api/v1/admin/domains/{id}", delete(handlers::surface_handler::remove_domain))
+        .route("/api/v1/admin/domains/{id}/verify", post(handlers::surface_handler::verify_domain))
+        .route("/api/v1/admin/plans/{id}/domains", get(handlers::surface_handler::check_plan_domains))
         // Middleware — order matters: outer layers wrap inner
-        .layer(middleware::from_fn(security::rate_limit::rate_limit_middleware))
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
-        .layer(CompressionLayer::new())
+        
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()
@@ -121,3 +152,4 @@ async fn shutdown_signal() {
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
 }
+

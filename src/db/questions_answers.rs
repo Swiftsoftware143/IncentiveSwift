@@ -64,7 +64,7 @@ pub async fn create_answer(
 }
 
 /// A question-answer pair from normalized DB joins.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct QuestionAnswerPair {
     pub question_text: String,
     pub question_key: String,
@@ -78,16 +78,15 @@ pub async fn get_questions_with_answers(
     pool: &PgPool,
     entry_id: &Uuid,
 ) -> Result<Vec<QuestionAnswerPair>, AppError> {
-    let rows = sqlx::query_as!(
-        QuestionAnswerPair,
+    let rows = sqlx::query_as::<_, QuestionAnswerPair>(
         r#"SELECT q.question_text, q.question_key,
-                  a.value, a.raw_value as "raw_value?"
+                  a.value, a.raw_value
            FROM answers a
            JOIN questions q ON q.id = a.question_id
            WHERE a.entry_id = $1
            ORDER BY q.sort_order"#,
-        entry_id
     )
+    .bind(entry_id)
     .fetch_all(pool)
     .await?;
 

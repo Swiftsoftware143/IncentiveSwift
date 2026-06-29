@@ -10,11 +10,6 @@ pub async fn push_to_activecampaign(
     api_key: &str,
     payload: &DeliveryPayload,
 ) -> Result<(), AppError> {
-    let base_url = "https://{}.api-us1.com/api/3";
-
-    // ActiveCampaign uses API key as a header
-    // The base URL contains the account name, which we extract from the API key context
-    // For simplicity, we use a constructed URL pattern
     let response = client
         .post("https://api.activecampaign.com/api/3/contact/sync")
         .header("Api-Token", api_key)

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{campaign_name}} - Play & Win</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: {{bg_color}};
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: {{text_color}};
+            min-height: 100vh;
+        }
+        .hero {
+            background: {{hero_bg}};
+            text-align: center;
+            padding: 60px 20px 40px;
+        }
+        .logo { max-height: 100px; margin-bottom: 20px; object-fit: contain; }
+        h1 { font-size: 42px; margin-bottom: 10px; font-weight: 800; }
+        .subtitle { font-size: 18px; opacity: 0.85; margin-bottom: 0; }
+
+        .game-section {
+            max-width: 800px; margin: 0 auto; padding: 40px 20px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        .wheel-container { width: 320px; height: 320px; position: relative; margin: 0 auto; }
+        #wheelCanvas { width: 100%; height: 100%; }
+        .spin-btn {
+            width: 240px; height: 64px; font-size: 24px; font-weight: 700;
+            border-radius: 32px; border: none; background: {{button_color}};
+            color: {{button_text_color}}; cursor: pointer; margin-top: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3); transition: transform 0.15s;
+            letter-spacing: 1px;
+        }
+        .spin-btn:active { transform: scale(0.95); }
+        .spin-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .dashboard-section {
+            max-width: 800px; margin: 0 auto; padding: 40px 20px 80px;
+        }
+        .dashboard-section h2 {
+            font-size: 28px; margin-bottom: 20px; text-align: center;
+        }
+        .dashboard-card {
+            background: rgba(255,255,255,0.12);
+            border-radius: 16px; padding: 30px; backdrop-filter: blur(10px);
+            margin-bottom: 20px;
+        }
+        .dashboard-card h3 { font-size: 20px; margin-bottom: 10px; }
+        .points-display { font-size: 48px; font-weight: 800; text-align: center; padding: 10px 0; }
+        .recent-activity { margin-top: 20px; }
+        .activity-item { padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; }
+        .activity-item:last-child { border-bottom: none; }
+
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); display: none;
+            align-items: center; justify-content: center; z-index: 1000; padding: 20px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-content {
+            background: white; padding: 40px; border-radius: 16px;
+            text-align: center; max-width: 400px; width: 100%;
+            animation: modalIn 0.3s ease-out; color: #333;
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .modal-content h2 { margin-bottom: 10px; font-size: 24px; }
+        .modal-content p { color: #666; margin-bottom: 20px; line-height: 1.5; }
+        .prize-display { font-size: 28px; font-weight: bold; margin: 15px 0; }
+        .email-input {
+            width: 100%; padding: 15px; font-size: 16px; border: 2px solid #ddd;
+            border-radius: 8px; margin: 10px 0 20px; outline: none;
+        }
+        .email-input:focus { border-color: {{button_color}}; }
+        .submit-btn {
+            background: {{button_color}}; color: white; border: none;
+            padding: 15px 40px; font-size: 18px; font-weight: 600;
+            border-radius: 8px; cursor: pointer; width: 100%;
+        }
+        .submit-btn:disabled { opacity: 0.6; }
+        .reset-link { color: {{button_color}}; cursor: pointer; margin-top: 15px; display: inline-block; text-decoration: underline; }
+        .confirmation-icon { font-size: 60px; margin-bottom: 15px; }
+
+        @media (max-width: 600px) {
+            h1 { font-size: 28px; }
+            .wheel-container { width: 260px; height: 260px; }
+            .spin-btn { width: 200px; height: 56px; font-size: 20px; }
+            .hero { padding: 40px 20px 30px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="hero" style="background: linear-gradient(135deg, {{hero_bg}} 0%, {{bg_color}} 100%);">
+        {{#if logo_url}}<img class="logo" src="{{logo_url}}" alt="Logo">{{/if}}
+        <h1>{{campaign_name}}</h1>
+        {{#if subtitle}}<p class="subtitle">{{subtitle}}</p>{{/if}}
+    </div>
+
+    <div class="game-section">
+        <div class="wheel-container">
+            <canvas id="wheelCanvas" width="320" height="320"></canvas>
+        </div>
+        <button class="spin-btn" id="spinBtn" onclick="spin()">{{button_text}}</button>
+    </div>
+
+    {{#if show_loyalty_dashboard}}
+    <div class="dashboard-section" id="dashboardSection">
+        <h2>🏆 Your Loyalty Dashboard</h2>
+        <div class="dashboard-card">
+            <h3>Points Balance</h3>
+            <div class="points-display" id="pointsDisplay">{{loyalty_points}}</div>
+        </div>
+        <div class="dashboard-card">
+            <h3>Recent Activity</h3>
+            <div class="recent-activity" id="recentActivity">
+                <div class="activity-item"><span>No recent activity</span></div>
+            </div>
+        </div>
+    </div>
+    {{/if}}
+
+    <div class="modal-overlay" id="emailModal">
+        <div class="modal-content">
+            <h2>🎉 {{prize_heading}}</h2>
+            <div class="prize-display" id="prizeDisplay"></div>
+            <p>Enter your email to claim your prize and earn loyalty points!</p>
+            <input type="email" class="email-input" id="emailInput" placeholder="your@email.com" autocomplete="email" required>
+            <button class="submit-btn" id="claimBtn" onclick="claimPrize()">Claim Prize</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="confirmationModal">
+        <div class="modal-content">
+            <div class="confirmation-icon">✅</div>
+            <h2>You're In!</h2>
+            <p>Your prize has been sent to your email. You've been enrolled in our loyalty program — earn points on every visit!</p>
+            <button class="submit-btn" onclick="resetGame()">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        const segments = {{segments_json}};
+        const campaignId = '{{campaign_id}}';
+        const apiBase = '{{api_base}}';
+        const prizeFormat = '{{prize_format}}';
+        let isSpinning = false;
+
+        function drawWheel() {
+            const canvas = document.getElementById('wheelCanvas');
+            const ctx = canvas.getContext('2d');
+            const cx = 160, cy = 160, r = 150;
+            const arc = (2 * Math.PI) / segments.length;
+
+            ctx.clearRect(0, 0, 320, 320);
+            segments.forEach((seg, i) => {
+                const startAngle = i * arc - Math.PI / 2;
+                const endAngle = startAngle + arc;
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                ctx.arc(cx, cy, r, startAngle, endAngle);
+                ctx.closePath();
+                ctx.fillStyle = seg.color || '#3b82f6';
+                ctx.fill();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                const midAngle = startAngle + arc / 2;
+                const tx = cx + (r * 0.65) * Math.cos(midAngle);
+                const ty = cy + (r * 0.65) * Math.sin(midAngle);
+                ctx.save();
+                ctx.translate(tx, ty);
+                ctx.rotate(midAngle + Math.PI / 2);
+                ctx.fillStyle = '#fff';
+                ctx.font = 'bold 12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(seg.label || '', 0, 0);
+                ctx.restore();
+            });
+            drawPointer(ctx, cx, cy);
+        }
+
+        function drawPointer(ctx, cx, cy) {
+            ctx.beginPath();
+            ctx.moveTo(cx - 14, cy - r + 10);
+            ctx.lineTo(cx + 14, cy - r + 10);
+            ctx.lineTo(cx, cy - r - 14);
+            ctx.closePath();
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        let currentRotation = 0;
+
+        function spin() {
+            if (isSpinning) return;
+            isSpinning = true;
+            document.getElementById('spinBtn').disabled = true;
+            const canvas = document.getElementById('wheelCanvas');
+            const ctx = canvas.getContext('2d');
+            const spins = 5 + Math.random() * 3;
+            const extra = Math.random() * 2 * Math.PI;
+            const target = currentRotation + spins * 2 * Math.PI + extra;
+            const duration = 3000;
+            const start = performance.now();
+
+            function animate(now) {
+                const elapsed = now - start;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                currentRotation = target * eased;
+                ctx.clearRect(0, 0, 320, 320);
+                ctx.save();
+                ctx.translate(160, 160);
+                ctx.rotate(currentRotation);
+                ctx.translate(-160, -160);
+                const arc = (2 * Math.PI) / segments.length;
+                segments.forEach((seg, i) => {
+                    const startAngle = i * arc - Math.PI / 2;
+                    const endAngle = startAngle + arc;
+                    ctx.beginPath();
+                    ctx.moveTo(160, 160);
+                    ctx.arc(160, 160, 150, startAngle, endAngle);
+                    ctx.closePath();
+                    ctx.fillStyle = seg.color || '#3b82f6';
+                    ctx.fill();
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    const midAngle = startAngle + arc / 2;
+                    const tx = 160 + (150 * 0.65) * Math.cos(midAngle);
+                    const ty = 160 + (150 * 0.65) * Math.sin(midAngle);
+                    ctx.save();
+                    ctx.translate(tx, ty);
+                    ctx.rotate(midAngle + currentRotation + Math.PI / 2);
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 12px sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(seg.label || '', 0, 0);
+                    ctx.restore();
+                });
+                ctx.restore();
+                drawPointer(ctx, 160, 160);
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    isSpinning = false;
+                    onSpinComplete();
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        function onSpinComplete() {
+            const segmentIndex = Math.floor(((2 * Math.PI - (currentRotation % (2 * Math.PI))) / (2 * Math.PI) * segments.length)) % segments.length;
+            const prizeName = segments[segmentIndex]?.prize_name || segments[segmentIndex]?.label || 'Prize!';
+            document.getElementById('prizeDisplay').textContent = prizeName;
+            document.getElementById('emailModal').classList.add('active');
+        }
+
+        async function claimPrize() {
+            const email = document.getElementById('emailInput').value.trim();
+            if (!email || !email.includes('@')) {
+                alert('Please enter a valid email address.');
+                return;
+            }
+            document.getElementById('claimBtn').disabled = true;
+            document.getElementById('claimBtn').textContent = 'Submitting...';
+            try {
+                const resp = await fetch(apiBase + '/api/v1/entries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ campaign_id: campaignId, email: email, source: 'full_page' })
+                });
+                if (!resp.ok) throw new Error('Submission failed');
+                document.getElementById('emailModal').classList.remove('active');
+                document.getElementById('confirmationModal').classList.add('active');
+            } catch (e) {
+                alert('Something went wrong. Please try again.');
+                document.getElementById('claimBtn').disabled = false;
+                document.getElementById('claimBtn').textContent = 'Claim Prize';
+            }
+        }
+
+        function resetGame() {
+            document.getElementById('confirmationModal').classList.remove('active');
+            document.getElementById('emailInput').value = '';
+            document.getElementById('claimBtn').disabled = false;
+            document.getElementById('claimBtn').textContent = 'Claim Prize';
+            document.getElementById('spinBtn').disabled = false;
+            currentRotation = 0;
+            drawWheel();
+        }
+
+        drawWheel();
+    </script>
+</body>
+</html>

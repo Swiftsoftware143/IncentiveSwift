@@ -22,14 +22,6 @@ pub struct SupabaseClaims {
     pub exp: Option<i64>,
 }
 
-/// Authenticated user information extracted from a JWT.
-#[derive(Debug, Clone)]
-pub struct AuthenticatedUser {
-    pub user_id: String,
-    pub email: String,
-    pub role: String,
-}
-
 /// Decode and verify a Supabase JWT.
 ///
 /// # Arguments
@@ -81,30 +73,4 @@ pub fn verify_supabase_jwt(token: &str, jwt_secret: &str) -> Result<SupabaseClai
     }
 
     Ok(claims)
-}
-
-/// Extract authenticated user from JWT claims.
-pub fn claims_to_user(claims: &SupabaseClaims) -> Result<AuthenticatedUser, AppError> {
-    Ok(AuthenticatedUser {
-        user_id: claims.sub.clone().unwrap_or_default(),
-        email: claims.email.clone().unwrap_or_default(),
-        role: claims.role.clone().unwrap_or_else(|| "authenticated".to_string()),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_jwt_format() {
-        let result = verify_supabase_jwt("not-a-jwt", "secret");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_malformed_signature() {
-        let result = verify_supabase_jwt("header.payload.badsig", "secret");
-        assert!(result.is_err());
-    }
 }

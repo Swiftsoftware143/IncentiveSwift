@@ -1,7 +1,6 @@
 //! Feature gating — checks if an account's plan tier has access to a feature.
 
 use crate::{error::AppError, state::AppState};
-use sqlx::Row;
 
 /// Check if a feature is enabled for a given account's plan tier.
 /// Returns true if the tier-feature mapping exists and is enabled.

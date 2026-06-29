@@ -1,0 +1,39 @@
+//! Integration target handler stubs.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use serde_json::{json, Value};
+
+/// GET /api/v1/integration-targets
+pub async fn list_integration_targets(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented", "targets": []})))
+}
+
+/// POST /api/v1/integration-targets
+pub async fn create_integration_target(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/integration-targets/{id}
+pub async fn update_integration_target(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// DELETE /api/v1/integration-targets/{id}
+pub async fn delete_integration_target(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

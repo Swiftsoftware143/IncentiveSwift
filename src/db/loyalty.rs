@@ -1,7 +1,7 @@
 //! Loyalty database operations — member management, checkins, rewards, thresholds.
 
 use crate::error::AppError;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Find an existing loyalty member or create a new one.
@@ -91,7 +91,7 @@ pub async fn record_checkin(
 }
 
 /// Get program config including max_checkins_per_day and points_per_checkin.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct LoyaltyProgram {
     pub id: uuid::Uuid,
     pub campaign_id: uuid::Uuid,
@@ -109,14 +109,13 @@ pub async fn get_program(
     pool: &PgPool,
     program_id: &Uuid,
 ) -> Result<LoyaltyProgram, AppError> {
-    let program = sqlx::query_as!(
-        LoyaltyProgram,
+    let program = sqlx::query_as::<_, LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
-        program_id
     )
+    .bind(program_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
@@ -126,7 +125,7 @@ pub async fn get_program(
 
 /// Check if a reward threshold has just been crossed.
 /// Returns the reward tier that was crossed (if any).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct RewardTier {
     pub id: uuid::Uuid,
     pub program_id: uuid::Uuid,
@@ -144,8 +143,7 @@ pub async fn check_threshold_crossed(
     new_balance: i32,
 ) -> Result<Option<RewardTier>, AppError> {
     // Find tiers where points_required <= new_balance AND no existing reward for this member+tier
-    let tier = sqlx::query_as!(
-        RewardTier,
+    let tier = sqlx::query_as::<_, RewardTier>(
         r#"SELECT t.id, t.program_id, t.name, t.points_required, t.requires_approval,
                   t.reward_tag, t.sort_order
            FROM loyalty_reward_tiers t
@@ -157,10 +155,10 @@ pub async fn check_threshold_crossed(
              )
            ORDER BY t.points_required DESC
            LIMIT 1"#,
-        program_id,
-        new_balance,
-        member_id
     )
+    .bind(program_id)
+    .bind(new_balance)
+    .bind(member_id)
     .fetch_optional(pool)
     .await?;
 
@@ -209,7 +207,7 @@ pub async fn apply_reward_tag(
 }
 
 /// Get a reward earned record by ID.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct RewardEarned {
     pub id: uuid::Uuid,
     pub member_id: uuid::Uuid,
@@ -224,12 +222,11 @@ pub async fn get_reward(
     pool: &PgPool,
     reward_id: &Uuid,
 ) -> Result<RewardEarned, AppError> {
-    let reward = sqlx::query_as!(
-        RewardEarned,
+    let reward = sqlx::query_as::<_, RewardEarned>(
         r#"SELECT id, member_id, tier_id, status, earned_at, approved_by, fulfilled_at
            FROM loyalty_rewards_earned WHERE id = $1"#,
-        reward_id
     )
+    .bind(reward_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Reward not found".to_string()))?;
@@ -273,13 +270,12 @@ pub async fn get_reward_tier(
     pool: &PgPool,
     tier_id: &Uuid,
 ) -> Result<RewardTier, AppError> {
-    let tier = sqlx::query_as!(
-        RewardTier,
+    let tier = sqlx::query_as::<_, RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
                   reward_tag, sort_order
            FROM loyalty_reward_tiers WHERE id = $1"#,
-        tier_id
     )
+    .bind(tier_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Reward tier not found".to_string()))?;
@@ -288,7 +284,7 @@ pub async fn get_reward_tier(
 }
 
 /// Get member by ID.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct LoyaltyMember {
     pub id: uuid::Uuid,
     pub program_id: uuid::Uuid,
@@ -303,13 +299,12 @@ pub async fn get_member(
     pool: &PgPool,
     member_id: &Uuid,
 ) -> Result<LoyaltyMember, AppError> {
-    let member = sqlx::query_as!(
-        LoyaltyMember,
+    let member = sqlx::query_as::<_, LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at
            FROM loyalty_members WHERE id = $1"#,
-        member_id
     )
+    .bind(member_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty member not found".to_string()))?;

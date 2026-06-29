@@ -1,0 +1,63 @@
+//! Plan management handler stubs.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use crate::security::auth::AuthenticatedUser;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
+use serde_json::{json, Value};
+
+/// GET /api/v1/admin/plans
+pub async fn list_plans(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented", "plans": []})))
+}
+
+/// POST /api/v1/admin/plans
+pub async fn create_plan(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// POST /api/v1/admin/plans/assign
+pub async fn admin_assign_plan(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/admin/plans/{id}
+pub async fn get_plan(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/admin/plans/{id}
+pub async fn update_plan(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// DELETE /api/v1/admin/plans/{id}
+pub async fn delete_plan(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/admin/plans/{id}/features
+pub async fn admin_update_plan_features(
+    State(_state): State<AppState>,
+    Path(_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

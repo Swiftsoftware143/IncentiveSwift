@@ -1,7 +1,7 @@
 //! Contact database operations — dedup by email/phone, upsert, list, get.
 
 use crate::error::AppError;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Input for upserting a contact.
@@ -15,7 +15,7 @@ pub struct ContactInput {
 }
 
 /// A contact record as returned from queries.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct Contact {
     pub id: uuid::Uuid,
     pub first_name: Option<String>,
@@ -106,31 +106,29 @@ pub async fn list_contacts(
 ) -> Result<Vec<Contact>, AppError> {
     let contacts = if let Some(query) = search {
         let pattern = format!("%{}%", query);
-        sqlx::query_as!(
-            Contact,
+        sqlx::query_as::<_, Contact>(
             r#"SELECT id, first_name, last_name, email, phone, business_name,
                       first_seen_at, last_seen_at, total_entries, notes, created_at
                FROM contacts
                WHERE first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1
                ORDER BY last_seen_at DESC
                LIMIT $2 OFFSET $3"#,
-            pattern,
-            limit as i32,
-            offset as i32
         )
+        .bind(pattern)
+        .bind(limit as i32)
+        .bind(offset as i32)
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as!(
-            Contact,
+        sqlx::query_as::<_, Contact>(
             r#"SELECT id, first_name, last_name, email, phone, business_name,
                       first_seen_at, last_seen_at, total_entries, notes, created_at
                FROM contacts
                ORDER BY last_seen_at DESC
                LIMIT $1 OFFSET $2"#,
-            limit as i32,
-            offset as i32
         )
+        .bind(limit as i32)
+        .bind(offset as i32)
         .fetch_all(pool)
         .await?
     };
@@ -143,13 +141,12 @@ pub async fn get_contact(
     pool: &PgPool,
     contact_id: &uuid::Uuid,
 ) -> Result<Contact, AppError> {
-    let contact = sqlx::query_as!(
-        Contact,
+    let contact = sqlx::query_as::<_, Contact>(
         r#"SELECT id, first_name, last_name, email, phone, business_name,
                   first_seen_at, last_seen_at, total_entries, notes, created_at
            FROM contacts WHERE id = $1"#,
-        contact_id
     )
+    .bind(contact_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound("Contact not found".to_string()))?;

@@ -50,7 +50,7 @@ pub async fn create_entry(
     let tags_applied = tags.clone();
 
     // 4. Create entry
-    let answers_json = body.answers.unwrap_or_else(|| json!({}));
+    let answers_json = body.answers.clone().unwrap_or_else(|| json!({}));
     let entry_input = entries::CreateEntryInput {
         contact_id,
         campaign_id: campaign.id,

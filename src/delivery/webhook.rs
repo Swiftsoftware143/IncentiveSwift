@@ -2,7 +2,6 @@
 
 use crate::delivery::payload::DeliveryPayload;
 use crate::error::AppError;
-use serde_json::json;
 use uuid::Uuid;
 
 /// Push payload to a webhook URL with retry (3 attempts, exponential backoff).

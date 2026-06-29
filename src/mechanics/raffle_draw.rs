@@ -23,8 +23,7 @@ pub fn seeded_fisher_yates(entries: &[String], seed: u64) -> Option<String> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut indices: Vec<usize> = (0..entries.len()).collect();
 
-    // Fisher-Yates shuffle: iterate from the end, swapping each element
-    // with a randomly selected element from the unprocessed portion
+    // Fisher-Yates shuffle
     for i in (1..indices.len()).rev() {
         let j = rng.gen_range(0..=i);
         indices.swap(i, j);
@@ -85,7 +84,6 @@ mod tests {
 
     #[test]
     fn test_deterministic_shuffle() {
-        // Verify that the entire shuffled order is deterministic
         let entries: Vec<String> = (1..=10).map(|i| format!("e{}", i)).collect();
         let seed = 100;
 

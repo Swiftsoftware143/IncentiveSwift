@@ -5,12 +5,12 @@ pub struct AppConfig {
     pub database_url: String,
     pub supabase_url: String,
     pub supabase_service_key: String,
-    pub supabase_anon_key: String,
     pub redis_url: String,
     pub host: String,
     pub port: u16,
     pub aes_encryption_key: String,
     pub db_min_connections: u32,
+    pub jwt_secret: String,
     pub db_max_connections: u32,
 }
 
@@ -26,13 +26,11 @@ impl AppConfig {
                 .map_err(|_| ConfigError::MissingVar("SUPABASE_URL".to_string()))?,
             supabase_service_key: std::env::var("SUPABASE_SERVICE_KEY")
                 .map_err(|_| ConfigError::MissingVar("SUPABASE_SERVICE_KEY".to_string()))?,
-            supabase_anon_key: std::env::var("SUPABASE_ANON_KEY")
-                .map_err(|_| ConfigError::MissingVar("SUPABASE_ANON_KEY".to_string()))?,
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
             host: std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
             port: std::env::var("PORT")
-                .unwrap_or_else(|_| "8080".to_string())
+                .unwrap_or_else(|_| "8082".to_string())
                 .parse()
                 .map_err(|e| ConfigError::InvalidValue(format!("PORT: {}", e)))?,
             aes_encryption_key: std::env::var("AES_ENCRYPTION_KEY")
@@ -41,6 +39,9 @@ impl AppConfig {
                 .unwrap_or_else(|_| "5".to_string())
                 .parse()
                 .map_err(|e| ConfigError::InvalidValue(format!("DB_MIN_CONNECTIONS: {}", e)))?,
+            jwt_secret: std::env::var("JWT_SECRET")
+                .expect("JWT_SECRET is required"),
+
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .unwrap_or_else(|_| "20".to_string())
                 .parse()

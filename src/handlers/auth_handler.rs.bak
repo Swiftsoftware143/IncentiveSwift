@@ -1,0 +1,46 @@
+//! Auth handler stubs.
+
+use crate::error::AppError;
+use crate::state::AppState;
+use crate::security::auth::AuthenticatedUser;
+use axum::{
+    extract::State,
+    Json,
+};
+use serde_json::{json, Value};
+
+/// POST /api/v1/auth/login
+pub async fn login(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// GET /api/v1/auth/me
+pub async fn me(
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// PUT /api/v1/auth/password
+pub async fn change_password(
+    State(_state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// POST /api/v1/auth/forgot-password
+pub async fn forgot_password(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}
+
+/// POST /api/v1/auth/reset-password
+pub async fn reset_password(
+    State(_state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(json!({"status": "not_implemented"})))
+}

@@ -2,7 +2,7 @@
 
 use crate::error::AppError;
 use serde_json::Value as JsonValue;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Input for creating an entry.
@@ -17,7 +17,7 @@ pub struct CreateEntryInput {
 }
 
 /// A entry record.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct Entry {
     pub id: uuid::Uuid,
     pub contact_id: uuid::Uuid,
@@ -88,32 +88,8 @@ pub async fn record_delivery(
     Ok(())
 }
 
-/// Get all entries for a contact with campaign info.
-pub async fn get_entries_for_contact(
-    pool: &PgPool,
-    contact_id: &uuid::Uuid,
-) -> Result<Vec<EntryWithCampaign>, AppError> {
-    let rows = sqlx::query_as!(
-        EntryWithCampaign,
-        r#"SELECT e.id, e.contact_id, e.campaign_id, e.answers as "answers!",
-                  e.score, e.outcome, e.tags_applied as "tags_applied?",
-                  e.delivered, e.delivered_at, e.delivery_attempts, e.created_at,
-                  c.name as campaign_name, c.slug as campaign_slug,
-                  c.type as campaign_type, c.tag_namespace
-           FROM entries e
-           JOIN campaigns c ON c.id = e.campaign_id
-           WHERE e.contact_id = $1
-           ORDER BY e.created_at DESC"#,
-        contact_id
-    )
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows)
-}
-
 /// Entry with campaign info for contact history.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct EntryWithCampaign {
     pub id: uuid::Uuid,
     pub contact_id: uuid::Uuid,
@@ -130,4 +106,27 @@ pub struct EntryWithCampaign {
     pub campaign_slug: String,
     pub campaign_type: String,
     pub tag_namespace: String,
+}
+
+/// Get all entries for a contact with campaign info.
+pub async fn get_entries_for_contact(
+    pool: &PgPool,
+    contact_id: &uuid::Uuid,
+) -> Result<Vec<EntryWithCampaign>, AppError> {
+    let rows = sqlx::query_as::<_, EntryWithCampaign>(
+        r#"SELECT e.id, e.contact_id, e.campaign_id, e.answers,
+                  e.score, e.outcome, e.tags_applied,
+                  e.delivered, e.delivered_at, e.delivery_attempts, e.created_at,
+                  c.name as campaign_name, c.slug as campaign_slug,
+                  c.type as campaign_type, c.tag_namespace
+           FROM entries e
+           JOIN campaigns c ON c.id = e.campaign_id
+           WHERE e.contact_id = $1
+           ORDER BY e.created_at DESC"#,
+    )
+    .bind(contact_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
 }

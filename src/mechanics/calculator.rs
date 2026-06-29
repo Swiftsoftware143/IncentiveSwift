@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 
 /// Allowed characters in a safe formula.
-/// Restrict to digits, arithmetic operators, parentheses, dot, spaces, and variable placeholders.
 fn is_safe_formula(formula: &str) -> bool {
     formula.chars().all(|c| {
         c.is_ascii_digit()
@@ -39,6 +38,7 @@ fn substitute_vars(formula: &str, vars: &HashMap<String, f64>) -> String {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 enum Token {
     Number(f64),
     Plus,
@@ -101,7 +101,6 @@ impl Parser {
         token
     }
 
-    /// parse_expression handles + and -
     fn parse_expression(&mut self) -> Result<f64, String> {
         let mut left = self.parse_term()?;
 
@@ -124,7 +123,6 @@ impl Parser {
         Ok(left)
     }
 
-    /// parse_term handles * and /
     fn parse_term(&mut self) -> Result<f64, String> {
         let mut left = self.parse_factor()?;
 
@@ -150,7 +148,6 @@ impl Parser {
         Ok(left)
     }
 
-    /// parse_factor handles numbers and parenthesized expressions
     fn parse_factor(&mut self) -> Result<f64, String> {
         match self.consume() {
             Some(Token::Number(n)) => Ok(n),
@@ -162,7 +159,6 @@ impl Parser {
                 }
             }
             Some(Token::Minus) => {
-                // Unary minus
                 let val = self.parse_factor()?;
                 Ok(-val)
             }
@@ -180,15 +176,11 @@ impl Parser {
 /// # Returns
 /// The computed f64 value, or an error if the formula is invalid or contains unsafe characters.
 pub fn evaluate(formula: &str, vars: &HashMap<String, f64>) -> Result<f64, String> {
-    // First pass: check for unsafe characters
     if !is_safe_formula(formula) {
         return Err("Formula contains unsafe characters".to_string());
     }
 
-    // Substitute variables
     let substituted = substitute_vars(formula, vars);
-
-    // Tokenize and parse
     let tokens = tokenize(&substituted)?;
     let mut parser = Parser::new(tokens);
     let result = parser.parse_expression()?;
