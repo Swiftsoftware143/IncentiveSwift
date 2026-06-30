@@ -50,7 +50,7 @@ where
         }
 
         // Fall back to local JWT validation
-        let claims = crate::security::jwt::verify_supabase_jwt(
+        let claims = crate::security::jwt::verify_jwt(
             token,
             &app_state.config.jwt_secret,
         )?;

@@ -40,7 +40,7 @@ pub async fn add_security_headers(
         "Content-Security-Policy",
         HeaderValue::from_static(
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
-             connect-src 'self' https://*.supabase.co; frame-ancestors 'none'; form-action 'self'",
+             connect-src 'self'; frame-ancestors 'none'; form-action 'self'",
         ),
     );
 

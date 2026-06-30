@@ -30,7 +30,7 @@ pub struct SupabaseClaims {
 ///
 /// # Returns
 /// The parsed claims if the token is valid, or an error.
-pub fn verify_supabase_jwt(token: &str, jwt_secret: &str) -> Result<SupabaseClaims, AppError> {
+pub fn verify_jwt(token: &str, jwt_secret: &str) -> Result<SupabaseClaims, AppError> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err(AppError::Unauthorized("Invalid JWT format".to_string()));
