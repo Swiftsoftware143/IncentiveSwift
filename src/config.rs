@@ -3,8 +3,6 @@
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub database_url: String,
-    pub supabase_url: String,
-    pub supabase_service_key: String,
     pub redis_url: String,
     pub host: String,
     pub port: u16,
@@ -25,10 +23,7 @@ impl AppConfig {
         Ok(Self {
             database_url: std::env::var("DATABASE_URL")
                 .map_err(|_| ConfigError::MissingVar("DATABASE_URL".to_string()))?,
-            supabase_url: std::env::var("SUPABASE_URL")
-                .map_err(|_| ConfigError::MissingVar("SUPABASE_URL".to_string()))?,
-            supabase_service_key: std::env::var("SUPABASE_SERVICE_KEY")
-                .map_err(|_| ConfigError::MissingVar("SUPABASE_SERVICE_KEY".to_string()))?,
+
             redis_url: std::env::var("REDIS_URL")
                 .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
             host: std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
