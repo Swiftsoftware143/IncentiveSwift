@@ -7,6 +7,7 @@ use crate::delivery::{payload::DeliveryPayload, webhook, payload::ContactPayload
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 /// Request body for creating an entry.
 #[derive(Deserialize)]
@@ -89,56 +90,162 @@ pub async fn create_entry(
         entry_id.to_string(),
     );
 
-    // 6. Trigger delivery based on campaign delivery method
-    match campaign.delivery_method.as_str() {
-        "direct_api" => {
-            // Direct API delivery — determine which API from delivery_config
-            let api_type = campaign.delivery_config.get("api_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("webhook");
-            let api_key = campaign.delivery_config.get("api_key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+    // 7. Execute campaign integrations — pushes to WorkflowSwift
+    //    WorkflowSwift handles routing to API targets using stored keys
+    dispatch_integrations(
+        &state.http_client,
+        &state.config.workflowswift_url,
+        &campaign.delivery_config,
+        &payload,
+        &state.db,
+        &entry_id,
+    ).await?;
 
-            match api_type {
-                "hubspot" => {
-                    crate::delivery::direct_api::hubspot::push_to_hubspot(&state.http_client, api_key, &payload).await?;
-                }
-                "activecampaign" => {
-                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(&state.http_client, api_key, &payload).await?;
-                }
-                "gohighlevel" => {
-                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(&state.http_client, api_key, &payload).await?;
-                }
-                _ => {
-                    // Fallback: try webhook
-                    let url = campaign.delivery_config.get("webhook_url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !url.is_empty() {
-                        webhook::push_to_webhook(&state.http_client, url, &payload, &state.db, &entry_id).await?;
-                    }
-                }
-            }
-        }
-        _ => {
-            // Webhook delivery
-            let url = campaign.delivery_config.get("webhook_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !url.is_empty() {
-                webhook::push_to_webhook(&state.http_client, url, &payload, &state.db, &entry_id).await?;
-            }
-        }
-    }
-
-    // 7. Return result
+    // 8. Return result
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,
         "outcome": payload.outcome,
         "tags_applied": payload.tags_applied,
     })))
+}
+
+/// Dispatch to all integrations configured in a campaign's delivery_config.
+///
+/// The primary dispatch route is to WorkflowSwift's incoming webhook, which
+/// handles all routing using stored API keys, workflow steps, and n8n triggers.
+/// Users configure everything in WorkflowSwift — this is the hands-off layer.
+///
+/// For backwards compatibility, if `integrations` is not empty, those direct
+/// integrations will also be dispatched (legacy path). New campaigns should
+/// configure everything via WorkflowSwift and leave `integrations` empty.
+pub(crate) async fn dispatch_integrations(
+    client: &reqwest::Client,
+    workflowswift_url: &str,
+    delivery_config: &serde_json::Value,
+    payload: &DeliveryPayload,
+    db: &sqlx::PgPool,
+    entry_id: &Uuid,
+) -> Result<(), AppError> {
+    // PRIMARY: push to WorkflowSwift for orchestrated routing
+    // This is the recommended path — WorkflowSwift handles all integrations
+    crate::delivery::coreswift::push_to_workflowswift(client, workflowswift_url, payload).await?;
+
+    // LEGACY: also do any direct integrations specified in the campaign config
+    // These are kept for backwards compat with existing campaigns
+    if let Some(integrations) = delivery_config.get("integrations").and_then(|v| v.as_array()) {
+        for integration in integrations {
+            let int_type = integration.get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let int_config = integration.get("config")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+
+            match int_type {
+                "core_swift" => {
+                    // Already handled by WorkflowSwift, skip
+                }
+                "mailchimp" => {
+                    let _api_key = int_config.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let _server_prefix = int_config.get("server_prefix")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("us1");
+                    let list_id = int_config.get("list_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // TODO: add Mailchimp direct push module
+                    tracing::info!("Mailchimp integration configured for {} — pushing to list {}",
+                        payload.contact.email.as_deref().unwrap_or("unknown"), list_id);
+                }
+                "webhook" => {
+                    let url = int_config.get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !url.is_empty() {
+                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                    }
+                }
+                "hubspot" => {
+                    let api_key = int_config.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload).await?;
+                }
+                "activecampaign" => {
+                    let api_key = int_config.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(client, api_key, payload).await?;
+                }
+                "gohighlevel" => {
+                    let api_key = int_config.get("api_key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(client, api_key, payload).await?;
+                }
+                "n8n" => {
+                    let url = int_config.get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !url.is_empty() {
+                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                    }
+                }
+                _ => {
+                    tracing::warn!("Unknown integration type: {}", int_type);
+                }
+            }
+        }
+    }
+
+    // Fallback: legacy flat delivery_config pattern
+    let delivery_method = delivery_config.get("_method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("webhook");
+
+    match delivery_method {
+        "direct_api" => {
+            let api_type = delivery_config.get("api_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("webhook");
+            let api_key = delivery_config.get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            match api_type {
+                "hubspot" => {
+                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload).await?;
+                }
+                "activecampaign" => {
+                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(client, api_key, payload).await?;
+                }
+                "gohighlevel" => {
+                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(client, api_key, payload).await?;
+                }
+                _ => {
+                    let url = delivery_config.get("webhook_url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !url.is_empty() {
+                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                    }
+                }
+            }
+        }
+        _ => {
+            let url = delivery_config.get("webhook_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !url.is_empty() {
+                webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Determine outcome and tags based on campaign config and score.
