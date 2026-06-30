@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub db_max_connections: u32,
     pub internal_sync_key: String,
+    pub coreswift_url: String,
+    pub workflowswift_url: String,
 }
 
 impl AppConfig {
@@ -45,6 +47,12 @@ impl AppConfig {
 
             internal_sync_key: std::env::var("INTERNAL_SYNC_KEY")
                 .unwrap_or_else(|_| String::new()),
+
+            coreswift_url: std::env::var("CORESWIFT_URL")
+                .unwrap_or_else(|_| "http://localhost:8084".to_string()),
+
+            workflowswift_url: std::env::var("WORKFLOWSWIFT_URL")
+                .unwrap_or_else(|_| "http://localhost:8085".to_string()),
 
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .unwrap_or_else(|_| "20".to_string())

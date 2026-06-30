@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
 use crate::db::questions_answers;
-use crate::delivery::{payload::DeliveryPayload, payload::ContactPayload, payload::CampaignPayload, payload::QuestionAnswerPair, webhook};
+use crate::delivery::{payload::DeliveryPayload, payload::ContactPayload, payload::CampaignPayload, payload::QuestionAnswerPair};
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -94,45 +94,17 @@ pub async fn resend(
         entry_id.to_string(),
     );
 
-    // Trigger delivery based on campaign delivery method
-    match delivery_method.as_str() {
-        "direct_api" => {
-            let api_type = delivery_config.get("api_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("webhook");
-            let api_key = delivery_config.get("api_key")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            match api_type {
-                "hubspot" => {
-                    crate::delivery::direct_api::hubspot::push_to_hubspot(&state.http_client, api_key, &payload).await?;
-                }
-                "activecampaign" => {
-                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(&state.http_client, api_key, &payload).await?;
-                }
-                "gohighlevel" => {
-                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(&state.http_client, api_key, &payload).await?;
-                }
-                _ => {
-                    let url = delivery_config.get("webhook_url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    if !url.is_empty() {
-                        webhook::push_to_webhook(&state.http_client, url, &payload, &state.db, &entry_id).await?;
-                    }
-                }
-            }
-        }
-        _ => {
-            let url = delivery_config.get("webhook_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !url.is_empty() {
-                webhook::push_to_webhook(&state.http_client, url, &payload, &state.db, &entry_id).await?;
-            }
-        }
-    }
+    // Trigger integrations using the shared dispatch logic
+    // Unused variable kept for backwards compat in the query
+    let _ = delivery_method;
+    crate::handlers::entries::dispatch_integrations(
+        &state.http_client,
+        &state.config.workflowswift_url,
+        &delivery_config,
+        &payload,
+        &state.db,
+        &entry_id,
+    ).await?;
 
     Ok(Json(json!({
         "status": "resent",
