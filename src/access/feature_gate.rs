@@ -16,7 +16,7 @@ pub async fn has_feature_access(
         .map_err(|_| AppError::BadRequest("Invalid account ID format".to_string()))?;
 
     // Get the account's plan tier
-    let plan_tier_id: Option<String> = sqlx::query_scalar(
+    let plan_tier_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT plan_tier_id FROM accounts WHERE id = $1"
     )
     .bind(account_uuid)
@@ -29,7 +29,7 @@ pub async fn has_feature_access(
     };
 
     // Get the feature ID
-    let feature_id: Option<String> = sqlx::query_scalar(
+    let feature_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM features WHERE key = $1"
     )
     .bind(feature_key)
@@ -45,8 +45,8 @@ pub async fn has_feature_access(
     let enabled: Option<bool> = sqlx::query_scalar(
         "SELECT enabled FROM tier_features WHERE tier_id = $1 AND feature_id = $2"
     )
-    .bind(&tier_id)
-    .bind(&feature_id)
+    .bind(tier_id)
+    .bind(feature_id)
     .fetch_optional(&state.db)
     .await?
     .flatten();
