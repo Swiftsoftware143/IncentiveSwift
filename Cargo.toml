@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "incentiveswift-api"
 version = "0.2.0"
