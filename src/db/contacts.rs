@@ -153,3 +153,70 @@ pub async fn get_contact(
 
     Ok(contact)
 }
+
+/// Create a standalone contact (not via entry).
+pub async fn create_contact(
+    pool: &PgPool,
+    input: &ContactInput,
+) -> Result<Contact, AppError> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name)
+           VALUES ($1, $2, $3, $4, $5, $6)"#
+    )
+    .bind(id)
+    .bind(&input.first_name)
+    .bind(&input.last_name)
+    .bind(&input.email)
+    .bind(&input.phone)
+    .bind(&input.business_name)
+    .execute(pool)
+    .await?;
+
+    get_contact(pool, &id).await
+}
+
+/// Update an existing contact.
+pub async fn update_contact(
+    pool: &PgPool,
+    contact_id: &Uuid,
+    input: &ContactInput,
+) -> Result<Contact, AppError> {
+    let existing = get_contact(pool, contact_id).await?;
+
+    // Use input values where provided, fall back to existing values
+    let new_first_name = input.first_name.clone().or_else(|| existing.first_name.clone());
+    let new_last_name = input.last_name.clone().or_else(|| existing.last_name.clone());
+    let new_email = input.email.clone().or_else(|| existing.email.clone());
+    let new_phone = input.phone.clone().or_else(|| existing.phone.clone());
+    let new_business_name = input.business_name.clone().or_else(|| existing.business_name.clone());
+
+    sqlx::query(
+        r#"UPDATE contacts
+           SET first_name = $1, last_name = $2, email = $3, phone = $4, business_name = $5
+           WHERE id = $6"#
+    )
+    .bind(new_first_name)
+    .bind(new_last_name)
+    .bind(new_email)
+    .bind(new_phone)
+    .bind(new_business_name)
+    .bind(contact_id)
+    .execute(pool)
+    .await?;
+
+    get_contact(pool, contact_id).await
+}
+
+/// Delete a contact by id.
+pub async fn delete_contact(
+    pool: &PgPool,
+    contact_id: &Uuid,
+) -> Result<bool, AppError> {
+    let result = sqlx::query("DELETE FROM contacts WHERE id = $1")
+        .bind(contact_id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}

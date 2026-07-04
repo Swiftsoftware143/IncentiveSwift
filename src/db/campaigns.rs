@@ -129,6 +129,76 @@ pub async fn create_campaign(
     get_campaign_by_slug(pool, &slug).await
 }
 
+/// Get a campaign by its id.
+pub async fn get_campaign_by_id(
+    pool: &PgPool,
+    id: &Uuid,
+) -> Result<Campaign, AppError> {
+    let campaign = sqlx::query_as::<_, Campaign>(
+        r#"SELECT id, name, slug, type as "type", status,
+                  config, tag_namespace,
+                  outcome_tags,
+                  delivery_method, delivery_config,
+                  created_at
+           FROM campaigns WHERE id = $1"#
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+
+    Ok(campaign)
+}
+
+/// Update a campaign's name, config, and other fields.
+pub async fn update_campaign(
+    pool: &PgPool,
+    id: &Uuid,
+    name: Option<&str>,
+    config: Option<&JsonValue>,
+    outcome_tags: Option<&JsonValue>,
+    delivery_method: Option<&str>,
+    delivery_config: Option<&JsonValue>,
+) -> Result<Campaign, AppError> {
+    let existing = get_campaign_by_id(pool, id).await?;
+
+    let new_name = name.unwrap_or(&existing.name);
+    let new_config = config.unwrap_or(&existing.config);
+    let new_outcome_tags = outcome_tags.unwrap_or(&existing.outcome_tags);
+    let new_delivery_method = delivery_method.unwrap_or(&existing.delivery_method);
+    let new_delivery_config = delivery_config.unwrap_or(&existing.delivery_config);
+
+    sqlx::query(
+        r#"UPDATE campaigns
+           SET name = $1, config = $2, outcome_tags = $3,
+               delivery_method = $4, delivery_config = $5
+           WHERE id = $6"#
+    )
+    .bind(new_name)
+    .bind(new_config)
+    .bind(new_outcome_tags)
+    .bind(new_delivery_method)
+    .bind(new_delivery_config)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    get_campaign_by_id(pool, id).await
+}
+
+/// Delete a campaign by id.
+pub async fn delete_campaign(
+    pool: &PgPool,
+    id: &Uuid,
+) -> Result<bool, AppError> {
+    let result = sqlx::query("DELETE FROM campaigns WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Generate a URL-safe slug from a name.
 fn generate_slug(name: &str) -> String {
     let slug: String = name

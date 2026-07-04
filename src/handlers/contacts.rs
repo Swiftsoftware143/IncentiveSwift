@@ -70,3 +70,85 @@ pub async fn get_contact(
         "entries": entries_with_qa,
     })))
 }
+
+/// Input for creating/updating a contact via REST.
+#[derive(Deserialize)]
+pub struct ContactBody {
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub business_name: Option<String>,
+    pub name: Option<String>,
+}
+
+/// Helper to convert ContactBody to ContactInput, splitting full name if needed.
+fn body_to_input(body: ContactBody) -> contacts::ContactInput {
+    let (first_name, last_name) = if let Some(name) = body.name {
+        let mut parts = name.splitn(2, ' ');
+        let first = parts.next().map(|s| s.to_string());
+        let last = parts.next().map(|s| s.to_string());
+        (first, last)
+    } else {
+        (body.first_name, body.last_name)
+    };
+
+    contacts::ContactInput {
+        first_name,
+        last_name,
+        email: body.email,
+        phone: body.phone,
+        business_name: body.business_name,
+    }
+}
+
+/// POST /api/v1/contacts — create contact (authenticated).
+pub async fn create_contact(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Json(body): Json<ContactBody>,
+) -> Result<Json<Value>, AppError> {
+    let input = body_to_input(body);
+    let contact = contacts::create_contact(&state.db, &input).await?;
+    Ok(Json(json!({
+        "contact": contact,
+        "created": true
+    })))
+}
+
+/// PUT /api/v1/contacts/:id — update contact (authenticated).
+pub async fn update_contact(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Path(id): Path<String>,
+    Json(body): Json<ContactBody>,
+) -> Result<Json<Value>, AppError> {
+    let contact_id = Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+
+    let input = body_to_input(body);
+    let contact = contacts::update_contact(&state.db, &contact_id, &input).await?;
+    Ok(Json(json!({
+        "contact": contact,
+        "updated": true
+    })))
+}
+
+/// DELETE /api/v1/contacts/:id — delete contact (authenticated).
+pub async fn delete_contact(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let contact_id = Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+
+    let deleted = contacts::delete_contact(&state.db, &contact_id).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Contact not found".to_string()));
+    }
+
+    Ok(Json(json!({
+        "status": "deleted"
+    })))
+}

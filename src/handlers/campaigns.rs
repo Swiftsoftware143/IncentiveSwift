@@ -75,3 +75,53 @@ pub async fn create_campaign(
     let campaign = campaigns::create_campaign(&state.db, &input).await?;
     Ok(Json(json!({ "campaign": campaign })))
 }
+
+/// Input for updating a campaign.
+#[derive(Deserialize)]
+pub struct UpdateCampaignBody {
+    pub name: Option<String>,
+    pub config: Option<Value>,
+    pub outcome_tags: Option<Value>,
+    pub delivery_method: Option<String>,
+    pub delivery_config: Option<Value>,
+}
+
+/// PUT /api/v1/campaigns/:id — update campaign (authenticated).
+pub async fn update_campaign(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateCampaignBody>,
+) -> Result<Json<Value>, AppError> {
+    let campaign_id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
+
+    let campaign = campaigns::update_campaign(
+        &state.db,
+        &campaign_id,
+        body.name.as_deref(),
+        body.config.as_ref(),
+        body.outcome_tags.as_ref(),
+        body.delivery_method.as_deref(),
+        body.delivery_config.as_ref(),
+    ).await?;
+
+    Ok(Json(json!({ "campaign": campaign })))
+}
+
+/// DELETE /api/v1/campaigns/:id — delete campaign (authenticated).
+pub async fn delete_campaign_by_id(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let campaign_id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
+
+    let deleted = campaigns::delete_campaign(&state.db, &campaign_id).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Campaign not found".to_string()));
+    }
+
+    Ok(Json(json!({ "status": "deleted" })))
+}

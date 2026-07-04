@@ -1,6 +1,7 @@
 //! Feature gating — checks if an account's plan tier has access to a feature.
 
 use crate::{error::AppError, state::AppState};
+use uuid::Uuid;
 
 /// Check if a feature is enabled for a given account's plan tier.
 /// Returns true if the tier-feature mapping exists and is enabled.
@@ -10,11 +11,15 @@ pub async fn has_feature_access(
     account_id: &str,
     feature_key: &str,
 ) -> Result<bool, AppError> {
+    // Parse account_id string to UUID before binding to UUID column
+    let account_uuid = Uuid::parse_str(account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID format".to_string()))?;
+
     // Get the account's plan tier
     let plan_tier_id: Option<String> = sqlx::query_scalar(
         "SELECT plan_tier_id FROM accounts WHERE id = $1"
     )
-    .bind(account_id)
+    .bind(account_uuid)
     .fetch_optional(&state.db)
     .await?
     .flatten();
