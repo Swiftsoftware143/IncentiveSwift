@@ -51,13 +51,12 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
-        .route("/api/v1/campaigns/:slug", get(handlers::campaigns::get_campaign))
+        .route("/api/v1/campaigns/:slug", get(handlers::campaigns::get_campaign).put(handlers::campaigns::update_campaign).delete(handlers::campaigns::delete_campaign_by_id))
         .route("/api/v1/entries", post(handlers::entries::create_entry))
         .route("/api/v1/raffles/:slug/enter", post(handlers::raffles::enter_raffle))
         .route("/api/v1/loyalty/checkin", post(handlers::loyalty::checkin))
         // Authenticated routes
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
-        .route("/api/v1/campaigns/:id", put(handlers::campaigns::update_campaign).delete(handlers::campaigns::delete_campaign_by_id))
         .route("/api/v1/raffles/:slug/draw", post(handlers::raffles::draw))
         .route("/api/v1/raffles/:slug/redraw", post(handlers::raffles::redraw))
         .route("/api/v1/loyalty/rewards/:id/approve", post(handlers::loyalty::approve_reward))
