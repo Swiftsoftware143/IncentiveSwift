@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/portfolio-sync", post(crate::handlers::admin_handler::portfolio_sync))
         .route("/api/v1/admin/impersonate", post(crate::handlers::admin_handler::impersonate))
         .route("/api/v1/admin/stop-impersonation", post(crate::handlers::admin_handler::stop_impersonation))
+        .route("/api/v1/admin/tenants", get(crate::handlers::admin_handler::list_all_tenants))
 
         // Admin plan management
         .route("/api/v1/admin/plans", get(crate::handlers::plans_handler::list_plans).post(crate::handlers::plans_handler::create_plan))
@@ -102,7 +103,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/domains/:id", delete(handlers::surface_handler::remove_domain))
         .route("/api/v1/admin/domains/:id/verify", post(handlers::surface_handler::verify_domain))
         .route("/api/v1/admin/plans/:id/domains", get(handlers::surface_handler::check_plan_domains))
-        // Middleware — order matters: outer layers wrap inner
+        // Provider Keys routes
+        .route("/api/v1/provider-keys", get(handlers::provider_keys_handler::list_provider_keys).post(handlers::provider_keys_handler::upsert_provider_key))
+        .route("/api/v1/provider-keys/:provider", delete(handlers::provider_keys_handler::delete_provider_key))
+        .route("/api/v1/available-providers", get(handlers::provider_keys_handler::list_available_providers))
+        // Settings routes
+        .route("/api/v1/settings", get(handlers::settings_handler::get_settings).put(handlers::settings_handler::update_settings))
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         
