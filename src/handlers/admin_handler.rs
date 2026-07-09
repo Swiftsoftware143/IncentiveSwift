@@ -139,3 +139,59 @@ pub async fn stop_impersonation(
         "message": "Discard your impersonation token to complete the process"
     })))
 }
+
+/// GET /api/v1/admin/tenants
+/// Lists all accounts with their plan info — for the super admin dashboard.
+pub async fn list_all_tenants(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            a.id,
+            a.name,
+            a.email,
+            a.created_at,
+            COALESCE(pt.name, 'No Plan') as plan_name,
+            COALESCE(pt.id::text, '') as plan_id,
+            COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
+            u.user_count
+        FROM accounts a
+        LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
+        LEFT JOIN (
+            SELECT a2.id as acc_id, COUNT(DISTINCT a3.id)::bigint as user_count
+            FROM accounts a2
+            LEFT JOIN accounts a3 ON a3.tenant_id = a2.id OR a3.id = a2.id
+            WHERE a2.id IS NOT NULL
+            GROUP BY a2.id
+        ) u ON u.acc_id = a.id
+        ORDER BY a.created_at DESC
+        "#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let tenants: Vec<Value> = rows.iter().map(|row| {
+        let id: uuid::Uuid = row.get("id");
+        let name: Option<String> = row.get("name");
+        let email: String = row.get("email");
+        let plan_name: String = row.get("plan_name");
+        let plan_id: String = row.get("plan_id");
+        let price_monthly: f64 = row.get("price_monthly");
+        let user_count: i64 = row.get("user_count");
+        json!({
+            "id": id.to_string(),
+            "name": name.unwrap_or_default(),
+            "email": email,
+            "plan_name": plan_name,
+            "plan_id": plan_id,
+            "price_monthly": price_monthly,
+            "user_count": user_count,
+        })
+    }).collect();
+
+    Ok(Json(json!({
+        "tenants": tenants
+    })))
+}

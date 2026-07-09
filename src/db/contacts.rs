@@ -155,10 +155,28 @@ pub async fn get_contact(
 }
 
 /// Create a standalone contact (not via entry).
+/// Checks for existing contact by email first to avoid unique constraint violations.
 pub async fn create_contact(
     pool: &PgPool,
     input: &ContactInput,
 ) -> Result<Contact, AppError> {
+    // Check for existing contact by email (case-insensitive)
+    if let Some(ref email) = input.email {
+        let existing: Option<Contact> = sqlx::query_as::<_, Contact>(
+            r#"SELECT id, first_name, last_name, email, phone, business_name,
+                      first_seen_at, last_seen_at, total_entries, notes, created_at
+               FROM contacts WHERE lower(email) = lower($1)"#
+        )
+        .bind(email)
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(contact) = existing {
+            // Update fields if provided
+            return update_contact(pool, &contact.id, input).await;
+        }
+    }
+
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name)

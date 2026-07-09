@@ -34,3 +34,5 @@ pub mod call_logs_handler;
 pub mod calendar_events_handler;
 
 pub mod surfaces_handler;
+pub mod settings_handler;
+pub mod provider_keys_handler;

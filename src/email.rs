@@ -7,10 +7,10 @@ use serde_json::json;
 /// Required env vars:
 ///   EMAIL_API_URL - The HTTP endpoint (default: uses Mailgun format)
 ///   EMAIL_API_KEY - API key for the provider
-///   EMAIL_FROM    - From address (default: noreply@swiftsoftware.com)
+///   EMAIL_FROM    - From address (default: swiftsoftware143@yahoo.com)
 ///
 /// Mailgun example:
-///   EMAIL_API_URL=https://api.mailgun.net/v3/mg.swiftsoftware.com/messages
+///   EMAIL_API_URL=https://api.mailgun.net/v3/mg.funnelswift.net/messages
 ///   EMAIL_API_KEY=key-xxxxxxxxx
 ///
 /// SMTP.com example:
@@ -22,7 +22,7 @@ pub async fn send_reset_email(to: &str, token: &str) -> Result<(), String> {
     let api_key = env::var("EMAIL_API_KEY")
         .map_err(|_| "EMAIL_API_KEY not set".to_string())?;
     let from = env::var("EMAIL_FROM")
-        .unwrap_or_else(|_| "noreply@swiftsoftware.com".to_string());
+        .unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
 
     let body = format!(
         "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- SwiftSoftware",
