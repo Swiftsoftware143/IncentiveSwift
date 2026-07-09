@@ -12,12 +12,14 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// GET /api/v1/campaigns — list all campaigns (authenticated).
+/// GET /api/v1/campaigns — list campaigns scoped to authenticated user's account.
 pub async fn list_campaigns(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let campaigns = campaigns::list_campaigns(&state.db).await?;
+    let account_id = uuid::Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let campaigns = campaigns::list_campaigns(&state.db, &account_id).await?;
     Ok(Json(json!({ "campaigns": campaigns })))
 }
 
@@ -28,6 +30,16 @@ pub async fn get_campaign(
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     Ok(Json(json!({ "campaign": campaign })))
+}
+
+/// GET /api/v1/campaigns/by-subdomain/:slug — public campaigns for a tenant subdomain.
+pub async fn get_campaigns_by_subdomain(
+    State(state): State<AppState>,
+    Path(t_slug): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = campaigns::get_account_by_slug(&state.db, &t_slug).await?;
+    let campaigns = campaigns::list_campaigns(&state.db, &account_id).await?;
+    Ok(Json(json!({ "campaigns": campaigns })))
 }
 
 /// Input for creating a campaign.
@@ -84,6 +96,7 @@ pub struct UpdateCampaignBody {
     pub outcome_tags: Option<Value>,
     pub delivery_method: Option<String>,
     pub delivery_config: Option<Value>,
+    pub branding: Option<Value>,
 }
 
 /// PUT /api/v1/campaigns/:slug — update campaign (authenticated).
@@ -93,14 +106,30 @@ pub async fn update_campaign(
     Path(slug): Path<String>,
     Json(body): Json<UpdateCampaignBody>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign_id = uuid::Uuid::parse_str(&slug)
-        .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
+    // Resolve campaign by slug or UUID
+    let campaign = if let Ok(id) = uuid::Uuid::parse_str(&slug) {
+        campaigns::get_campaign_by_id(&state.db, &id).await
+    } else {
+        campaigns::get_campaign_by_slug(&state.db, &slug).await
+    };
+    let campaign = campaign?;
+
+    // Merge branding into existing campaign config if provided
+    let config: Option<Value> = if let Some(ref branding) = body.branding {
+        let mut merged = body.config.clone().unwrap_or(campaign.config);
+        if let Some(obj) = merged.as_object_mut() {
+            obj.insert("branding".to_string(), branding.clone());
+        }
+        Some(merged)
+    } else {
+        body.config.clone()
+    };
 
     let campaign = campaigns::update_campaign(
         &state.db,
-        &campaign_id,
+        &campaign.id,
         body.name.as_deref(),
-        body.config.as_ref(),
+        config.as_ref(),
         body.outcome_tags.as_ref(),
         body.delivery_method.as_deref(),
         body.delivery_config.as_ref(),
@@ -109,16 +138,21 @@ pub async fn update_campaign(
     Ok(Json(json!({ "campaign": campaign })))
 }
 
-/// DELETE /api/v1/campaigns/:slug — delete campaign (authenticated).
+/// DELETE /api/v1/campaigns/:slug — delete campaign by slug (authenticated).
 pub async fn delete_campaign_by_id(
     State(state): State<AppState>,
     _user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign_id = uuid::Uuid::parse_str(&slug)
-        .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
+    // Try as UUID first, then as slug
+    let campaign = if let Ok(id) = uuid::Uuid::parse_str(&slug) {
+        campaigns::get_campaign_by_id(&state.db, &id).await
+    } else {
+        campaigns::get_campaign_by_slug(&state.db, &slug).await
+    };
 
-    let deleted = campaigns::delete_campaign(&state.db, &campaign_id).await?;
+    let campaign = campaign?;
+    let deleted = campaigns::delete_campaign(&state.db, &campaign.id).await?;
     if !deleted {
         return Err(AppError::NotFound("Campaign not found".to_string()));
     }

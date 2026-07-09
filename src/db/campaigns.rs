@@ -68,9 +68,10 @@ pub async fn get_campaign_by_slug(
     Ok(campaign)
 }
 
-/// List all active campaigns.
+/// List campaigns scoped to an account.
 pub async fn list_campaigns(
     pool: &PgPool,
+    account_id: &Uuid,
 ) -> Result<Vec<Campaign>, AppError> {
     let campaigns = sqlx::query_as::<_, Campaign>(
         r#"SELECT id, name, slug, type as "type", status,
@@ -78,13 +79,30 @@ pub async fn list_campaigns(
                   outcome_tags,
                   delivery_method, delivery_config,
                   created_at
-           FROM campaigns WHERE status = 'active'
+           FROM campaigns WHERE account_id = $1
            ORDER BY created_at DESC"#
     )
+    .bind(account_id)
     .fetch_all(pool)
     .await?;
 
     Ok(campaigns)
+}
+
+/// Look up an account by its subdomain slug.
+pub async fn get_account_by_slug(
+    pool: &PgPool,
+    slug: &str,
+) -> Result<Uuid, AppError> {
+    let account_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE slug = $1"
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+
+    account_id.ok_or_else(|| AppError::NotFound("Tenant not found".to_string()))
 }
 
 /// Create a new campaign.
@@ -110,10 +128,11 @@ pub async fn create_campaign(
     let delivery_config = input.delivery_config.clone().unwrap_or_else(|| serde_json::json!({}));
 
     sqlx::query(
-        r#"INSERT INTO campaigns (id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config)
-           VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9)"#
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10)"#
     )
     .bind(id)
+    .bind(input.account_id)
     .bind(&input.name)
     .bind(&slug)
     .bind(&input.r#type)
