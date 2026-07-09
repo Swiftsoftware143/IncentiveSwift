@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
         .route("/api/v1/campaigns/:slug", get(handlers::campaigns::get_campaign).put(handlers::campaigns::update_campaign).delete(handlers::campaigns::delete_campaign_by_id))
+        .route("/api/v1/campaigns/subdomain/:t_slug", get(handlers::campaigns::get_campaigns_by_subdomain))
         .route("/api/v1/entries", post(handlers::entries::create_entry))
         .route("/api/v1/raffles/:slug/enter", post(handlers::raffles::enter_raffle))
         .route("/api/v1/loyalty/checkin", post(handlers::loyalty::checkin))

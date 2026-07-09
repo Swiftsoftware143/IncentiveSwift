@@ -1,0 +1,5 @@
+-- No schema changes needed; email_capture and email_prize are handled via campaign.config JSONB.
+-- This migration is a placeholder for any future email-related columns.
+-- Email capture toggle: campaign.config.email_capture (bool)
+-- Email prize delivery: campaign.config.email_prize (bool)
+-- Prize name: campaign.config.prize_name (string)

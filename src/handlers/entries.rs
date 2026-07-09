@@ -28,7 +28,7 @@ pub struct ContactBody {
 }
 
 /// POST /api/v1/entries — create entry (public, rate-limited).
-/// Flow: upsert contact -> find campaign -> create entry -> build payload -> trigger delivery -> return.
+/// Flow: upsert contact -> find campaign -> check daily limit -> apply pity timer -> create entry -> build payload -> trigger delivery -> return.
 pub async fn create_entry(
     State(state): State<AppState>,
     Json(body): Json<CreateEntryBody>,
@@ -46,11 +46,32 @@ pub async fn create_entry(
     // 2. Find campaign by slug
     let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
 
-    // 3. Determine outcome and tags
-    let (outcome, tags) = determine_outcome(&campaign, body.score);
+    // 3. Check daily spin limit (before creating entry)
+    crate::mechanics::pity_timer::check_daily_limit(
+        &state.db, &campaign.id, &contact_id, &campaign.config
+    ).await?;
+
+    // 4. Determine outcome and tags
+    let (mut outcome, mut tags) = determine_outcome(&campaign, body.score);
+
+    // 5. Apply pity timer — may override outcome to force a win
+    let (pity_triggered, pity_outcome, pity_tags) = crate::mechanics::pity_timer::apply_pity_timer(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        &campaign.config,
+        &campaign.tag_namespace,
+        &outcome,
+        &tags,
+    ).await?;
+    if pity_triggered {
+        outcome = pity_outcome;
+        tags = pity_tags;
+    }
+
     let tags_applied = tags.clone();
 
-    // 4. Create entry
+    // 6. Create entry
     let answers_json = body.answers.clone().unwrap_or_else(|| json!({}));
     let entry_input = entries::CreateEntryInput {
         contact_id,
@@ -62,9 +83,43 @@ pub async fn create_entry(
     };
     let entry_id = entries::create_entry(&state.db, &entry_input).await?;
 
-    // 5. Build delivery payload from normalized Q&A
+    // 7. Record daily spin count
+    crate::mechanics::pity_timer::record_daily_spin(&state.db, &campaign.id, &contact_id).await?;
+
+    // 8. If winning outcome and auto-email configured, trigger prize email via n8n
+    //    Do this BEFORE consuming contact fields in the delivery payload.
+    let is_win = outcome == "winner" || outcome == "grand_prize";
+    if is_win && campaign.config.get("email_prize").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let email_payload = json!({
+            "event": "prize.won",
+            "contact": {
+                "first_name": body.contact.first_name.as_deref(),
+                "last_name": body.contact.last_name.as_deref(),
+                "email": body.contact.email.as_deref(),
+                "phone": body.contact.phone.as_deref(),
+            },
+            "campaign": {
+                "name": campaign.name,
+                "type": campaign.r#type,
+                "tag_namespace": campaign.tag_namespace,
+            },
+            "prize": campaign.config.get("prize_name"),
+            "entry_id": entry_id.to_string(),
+            "captured_at": chrono::Utc::now().to_rfc3339(),
+        });
+
+        let n8n_url = format!("{}/api/prize-email", state.config.workflowswift_url.trim_end_matches('/'));
+        let _ = state.http_client
+            .post(&n8n_url)
+            .json(&email_payload)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+        // Best-effort: don't fail the entry if email fails
+    }
+
+    // 9. Build delivery payload from normalized Q&A
     let qa_pairs = if let Some(ref answers) = body.answers {
-        // Extract Q&A from the JSONB for delivery payload
         extract_qa_from_jsonb(answers, &[])
     } else {
         vec![]
@@ -83,15 +138,15 @@ pub async fn create_entry(
             campaign_type: campaign.r#type.clone(),
             tag_namespace: campaign.tag_namespace.clone(),
         },
-        outcome,
+        outcome.clone(),
         tags_applied,
         body.score,
         qa_pairs,
         entry_id.to_string(),
     );
 
-    // 7. Execute campaign integrations — pushes to WorkflowSwift
-    //    WorkflowSwift handles routing to API targets using stored keys
+    // 10. Execute campaign integrations — pushes to WorkflowSwift
+    //     WorkflowSwift handles routing to API targets using stored keys
     dispatch_integrations(
         &state.http_client,
         &state.config.workflowswift_url,
@@ -101,7 +156,7 @@ pub async fn create_entry(
         &entry_id,
     ).await?;
 
-    // 8. Return result
+    // 11. Return result
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,

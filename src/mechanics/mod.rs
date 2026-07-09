@@ -6,3 +6,4 @@ pub mod scoring;
 pub mod loyalty_checkin;
 pub mod calculator;
 pub mod raffle_draw;
+pub mod pity_timer;
