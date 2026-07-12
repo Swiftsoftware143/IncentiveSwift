@@ -503,7 +503,7 @@ pub async fn update_profile(
                     .and_then(|v| v.as_i64())
                     .unwrap_or(1);
 
-                let current_count: i64 = sqlx::query_scalar(
+                let current_count = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM account_industries WHERE account_id = $1"
                 )
                 .bind(&account_uuid)
