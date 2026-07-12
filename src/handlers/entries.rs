@@ -4,7 +4,11 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::db::{contacts, entries, campaigns};
 use crate::delivery::{payload::DeliveryPayload, webhook, payload::ContactPayload};
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -16,6 +20,11 @@ pub struct CreateEntryBody {
     pub campaign_slug: String,
     pub answers: Option<Value>,
     pub score: Option<i32>,
+    pub utm_source: Option<String>,
+    pub utm_medium: Option<String>,
+    pub utm_campaign: Option<String>,
+    pub referrer_url: Option<String>,
+    pub page_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -24,13 +33,33 @@ pub struct ContactBody {
     pub last_name: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub website: Option<String>,
     pub business_name: Option<String>,
 }
 
 /// POST /api/v1/entries — create entry (public, rate-limited).
 /// Flow: upsert contact -> find campaign -> check daily limit -> apply pity timer -> create entry -> build payload -> trigger delivery -> return.
+/// Extract user agent and IP from request headers.
+fn extract_source_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let ip_address = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+        })
+        .map(|s| s.to_string());
+    (user_agent, ip_address)
+}
+
 pub async fn create_entry(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<CreateEntryBody>,
 ) -> Result<Json<Value>, AppError> {
     // 1. Upsert contact
@@ -39,6 +68,7 @@ pub async fn create_entry(
         last_name: body.contact.last_name.clone(),
         email: body.contact.email.clone(),
         phone: body.contact.phone.clone(),
+        website: body.contact.website.clone(),
         business_name: body.contact.business_name.clone(),
     };
     let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
@@ -72,6 +102,8 @@ pub async fn create_entry(
     let tags_applied = tags.clone();
 
     // 6. Create entry
+    let (user_agent, ip_address) = extract_source_headers(&headers);
+
     let answers_json = body.answers.clone().unwrap_or_else(|| json!({}));
     let entry_input = entries::CreateEntryInput {
         contact_id,
@@ -80,11 +112,35 @@ pub async fn create_entry(
         score: body.score,
         outcome: Some(outcome.clone()),
         tags_applied: Some(tags_applied.clone()),
+        utm_source: body.utm_source.clone(),
+        utm_medium: body.utm_medium.clone(),
+        utm_campaign: body.utm_campaign.clone(),
+        referrer_url: body.referrer_url.clone(),
+        page_url: body.page_url.clone(),
+        user_agent,
+        ip_address,
     };
     let entry_id = entries::create_entry(&state.db, &entry_input).await?;
 
     // 7. Record daily spin count
     crate::mechanics::pity_timer::record_daily_spin(&state.db, &campaign.id, &contact_id).await?;
+
+    // 7.5. Loyalty bridge — auto-enroll and award points if campaign is linked to a loyalty program
+    if campaign.auto_enroll_loyalty {
+        if let Some(program_id) = campaign.loyalty_program_id {
+            let points = campaign.loyalty_points_per_play;
+            // Use the loyalty checkin mechanics to process the loyalty enrollment
+            let _ = crate::mechanics::loyalty_checkin::process_checkin_from_entry(
+                &state,
+                &program_id.to_string(),
+                &contact_id.to_string(),
+                &entry_id.to_string(),
+                &body.campaign_slug,
+                points,
+            ).await;
+            // Best-effort: don't fail the entry if loyalty checkin fails
+        }
+    }
 
     // 8. If winning outcome and auto-email configured, trigger prize email via n8n
     //    Do this BEFORE consuming contact fields in the delivery payload.
@@ -131,6 +187,7 @@ pub async fn create_entry(
             last_name: body.contact.last_name,
             email: body.contact.email,
             phone: body.contact.phone,
+            website: body.contact.website,
             business_name: body.contact.business_name,
         },
         crate::delivery::payload::CampaignPayload {

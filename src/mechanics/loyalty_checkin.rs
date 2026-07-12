@@ -297,3 +297,132 @@ async fn push_reward_notification(
     tracing::info!("Reward notification would be sent for: {} (contact: {})", _reward_name, _contact_id);
     Ok(())
 }
+
+/// Process a loyalty check-in triggered from a campaign entry (spin, raffle, etc).
+/// This is the campaign-to-loyalty bridge — called by `create_entry()` when a campaign
+/// has `auto_enroll_loyalty = true` and a `loyalty_program_id` set.
+///
+/// Unlike the standalone `process_checkin()`, this:
+/// - Does NOT enforce daily cap (entry is already gated)
+/// - Records the entry_id on the checkin for traceability
+/// - Awards the campaign's configured points_per_play (not the loyalty program's default)
+pub async fn process_checkin_from_entry(
+    state: &AppState,
+    program_id: &str,
+    contact_id: &str,
+    entry_id: &str,
+    _source_campaign_slug: &str,
+    points_to_award: i32,
+) -> Result<CheckinResult, AppError> {
+    // Get program config (just to validate it exists)
+    let program = get_program(state, program_id).await?;
+
+    // Find or create loyalty member
+    let member_id = find_or_create_member(state, program_id, contact_id).await?;
+
+    // Award points: record checkin with the entry_id
+    record_entry_checkin(state, &member_id, points_to_award, "entry", entry_id).await?;
+
+    // Update points_balance and lifetime_points
+    let new_balance = update_points_balance(state, &member_id, points_to_award).await?;
+
+    // Check reward tier thresholds
+    let newly_crossed = check_threshold_crossed(state, program_id, new_balance, &member_id).await?;
+
+    let mut rewards_awarded = Vec::new();
+
+    for tier in newly_crossed {
+        if !tier.requires_approval {
+            // Auto-approve
+            let reward_id = create_reward(state, &member_id, &tier.id, "approved").await?;
+            apply_reward_tag(state, contact_id, &tier.reward_tag).await?;
+            let _ = push_reward_notification(state, contact_id, &tier.name).await;
+
+            rewards_awarded.push(RewardInfo {
+                id: reward_id,
+                name: tier.name.clone(),
+                status: "approved".to_string(),
+            });
+        } else {
+            // Requires manual approval
+            let reward_id = create_reward(state, &member_id, &tier.id, "pending").await?;
+            rewards_awarded.push(RewardInfo {
+                id: reward_id,
+                name: tier.name.clone(),
+                status: "pending".to_string(),
+            });
+        }
+    }
+
+    Ok(CheckinResult::Success {
+        points_awarded: points_to_award,
+        new_balance,
+        rewards_awarded: if !rewards_awarded.is_empty() {
+            rewards_awarded
+        } else {
+            // Use the program's default points_per_checkin
+            vec![]
+        },
+    })
+}
+
+/// Record a checkin for an entry-based loyalty award.
+async fn record_entry_checkin(
+    state: &AppState,
+    member_id: &str,
+    points_awarded: i32,
+    method: &str,
+    entry_id: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO loyalty_checkins (member_id, points_awarded, method, entry_id, checked_in_at)
+         VALUES ($1, $2, $3, $4, now())"
+    )
+    .bind(member_id)
+    .bind(points_awarded)
+    .bind(method)
+    .bind(entry_id.parse::<uuid::Uuid>().ok())
+    .execute(&state.db)
+    .await?;
+
+    Ok(())
+}
+/// Award loyalty points from an external action (earn click, referral credit, etc.).
+#[allow(dead_code)]
+pub async fn award_points_from_action(
+    state: &AppState,
+    program_id: &str,
+    contact_id: &str,
+    points_to_award: i32,
+    action_type: &str,
+    _channel_code: &str,
+) -> Result<(), AppError> {
+    let _program = get_program(state, program_id).await?;
+    let member_id = find_or_create_member(state, program_id, contact_id).await?;
+
+    let notes = format!("earn:{}", _channel_code);
+    sqlx::query(
+        "INSERT INTO loyalty_checkins (member_id, points_awarded, method, checked_in_at, notes)
+         VALUES ($1, $2, $3, now(), $4)"
+    )
+    .bind(&member_id)
+    .bind(points_to_award)
+    .bind(action_type)
+    .bind(&notes)
+    .execute(&state.db)
+    .await?;
+
+    let _new_balance = update_points_balance(state, &member_id, points_to_award).await?;
+
+    if let Ok(newly_crossed) = check_threshold_crossed(state, program_id, _new_balance, &member_id).await {
+        for tier in newly_crossed {
+            if !tier.requires_approval {
+                let _ = create_reward(state, &member_id, &tier.id, "approved").await;
+                let _ = apply_reward_tag(state, contact_id, &tier.reward_tag).await;
+            } else {
+                let _ = create_reward(state, &member_id, &tier.id, "pending").await;
+            }
+        }
+    }
+    Ok(())
+}

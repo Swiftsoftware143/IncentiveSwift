@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::Row;
 
 /// GET /api/v1/campaigns — list campaigns scoped to authenticated user's account.
 pub async fn list_campaigns(
@@ -52,6 +53,9 @@ pub struct CreateCampaignBody {
     pub outcome_tags: Option<Value>,
     pub delivery_method: Option<String>,
     pub delivery_config: Option<Value>,
+    pub loyalty_program_id: Option<uuid::Uuid>,
+    pub loyalty_points_per_play: Option<i32>,
+    pub auto_enroll_loyalty: Option<bool>,
 }
 
 /// POST /api/v1/campaigns — create campaign (authenticated + feature-gated).
@@ -65,7 +69,11 @@ pub async fn create_campaign(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let feature_key = format!("mechanic_{}", body.r#type);
-    let has_access = feature_gate::has_feature_access(&state, &user.account_id, &feature_key).await?;
+    let mut has_access = feature_gate::has_feature_access(&state, &user.account_id, &feature_key).await?;
+    // Also check the catch-all 'all_mechanics' feature
+    if !has_access {
+        has_access = feature_gate::has_feature_access(&state, &user.account_id, "all_mechanics").await?;
+    }
     if !has_access {
         return Err(AppError::Forbidden(format!(
             "Your plan does not include the '{}' mechanic. Upgrade to access this feature.",
@@ -82,6 +90,9 @@ pub async fn create_campaign(
         delivery_method: body.delivery_method,
         delivery_config: body.delivery_config,
         account_id,
+        loyalty_program_id: body.loyalty_program_id,
+        loyalty_points_per_play: body.loyalty_points_per_play,
+        auto_enroll_loyalty: body.auto_enroll_loyalty,
     };
 
     let campaign = campaigns::create_campaign(&state.db, &input).await?;
@@ -97,6 +108,9 @@ pub struct UpdateCampaignBody {
     pub delivery_method: Option<String>,
     pub delivery_config: Option<Value>,
     pub branding: Option<Value>,
+    pub loyalty_program_id: Option<Option<uuid::Uuid>>,
+    pub loyalty_points_per_play: Option<i32>,
+    pub auto_enroll_loyalty: Option<bool>,
 }
 
 /// PUT /api/v1/campaigns/:slug — update campaign (authenticated).
@@ -133,6 +147,9 @@ pub async fn update_campaign(
         body.outcome_tags.as_ref(),
         body.delivery_method.as_deref(),
         body.delivery_config.as_ref(),
+        body.loyalty_program_id,
+        body.loyalty_points_per_play,
+        body.auto_enroll_loyalty,
     ).await?;
 
     Ok(Json(json!({ "campaign": campaign })))
@@ -158,4 +175,41 @@ pub async fn delete_campaign_by_id(
     }
 
     Ok(Json(json!({ "status": "deleted" })))
+}
+
+/// POST /api/v1/campaigns/:slug/clone — Clone a campaign with all config
+pub async fn clone_campaign(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Path(slug): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let original = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let new_name = format!("{} (Copy)", original.name);
+    let new_slug = campaigns::generate_clone_slug(&original.name);
+    let account_id = uuid::Uuid::parse_str(&_user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let new_id = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
+           VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11, $12, $13)"#
+    )
+    .bind(new_id)
+    .bind(account_id)
+    .bind(&new_name)
+    .bind(&new_slug)
+    .bind(&original.r#type)
+    .bind(&original.config)
+    .bind(&original.tag_namespace)
+    .bind(&original.outcome_tags)
+    .bind(&original.delivery_method)
+    .bind(&original.delivery_config)
+    .bind(original.loyalty_program_id)
+    .bind(original.loyalty_points_per_play)
+    .bind(original.auto_enroll_loyalty)
+    .execute(&state.db)
+    .await?;
+
+    let cloned = campaigns::get_campaign_by_slug(&state.db, &new_slug).await?;
+    Ok(Json(json!({ "campaign": cloned })))
 }

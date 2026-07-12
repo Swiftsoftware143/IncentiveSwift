@@ -2,7 +2,7 @@
 //!
 //! Flow:
 //!   1. Get account's plan_tier_id from accounts table
-//!   2. Join plan_tiers to get the slug (e.g. "free", "pro")
+//!   2. Join plans to get the slug (e.g. "free", "pro")
 //!   3. Look up limit_value from feature_limits table by plan_tier slug + feature_key
 //!   4. If limit_value == -1, unlimited
 //!   5. Count current usage, compare against limit
@@ -27,7 +27,7 @@ pub async fn check_feature_limit(
     // Get the account's plan tier slug
     let plan_tier_slug: Option<String> = sqlx::query_scalar(
         "SELECT pt.slug FROM accounts a
-         JOIN plan_tiers pt ON pt.id = a.plan_tier_id
+         JOIN plans pt ON pt.id = a.plan_tier_id
          WHERE a.id = $1",
     )
     .bind(account_id)

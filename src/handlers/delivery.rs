@@ -80,6 +80,7 @@ pub async fn resend(
             last_name,
             email,
             phone,
+            website: None,
             business_name,
         },
         CampaignPayload {

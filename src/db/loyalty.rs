@@ -98,7 +98,7 @@ pub async fn record_checkin(
 #[allow(dead_code)]
 pub struct LoyaltyProgram {
     pub id: uuid::Uuid,
-    pub campaign_id: uuid::Uuid,
+    pub campaign_id: Option<uuid::Uuid>,
     pub name: String,
     pub recognition_method: String,
     pub points_per_checkin: i32,
@@ -106,6 +106,16 @@ pub struct LoyaltyProgram {
     pub point_decay_days: Option<i32>,
     pub is_active: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub tiers_enabled: bool,
+    pub milestones_enabled: bool,
+    pub streak_enabled: bool,
+    pub streak_bonus: i32,
+    pub streak_days: i32,
+    pub referral_bonus: i32,
+    pub birthday_bonus: i32,
+    pub points_expire_days: i32,
+    pub social_share_points: i32,
+    pub points_per_visit: i32,
 }
 
 /// Get a loyalty program by ID or slug.
@@ -116,7 +126,10 @@ pub async fn get_program(
     let program = sqlx::query_as::<_, LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
                   points_per_checkin, max_checkins_per_day,
-                  point_decay_days, is_active, created_at
+                  point_decay_days, is_active, created_at,
+                  tiers_enabled, milestones_enabled, streak_enabled,
+                  streak_bonus, streak_days, referral_bonus, birthday_bonus,
+                  points_expire_days, social_share_points, points_per_visit
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
     )
     .bind(program_id)

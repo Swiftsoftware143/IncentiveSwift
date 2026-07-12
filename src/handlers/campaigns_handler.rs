@@ -82,6 +82,48 @@ pub async fn create(
     Ok(Json(json!({ "item": item })))
 }
 
+/// POST /api/v1/campaigns/{slug}/clone — Clone a campaign with all config
+pub async fn clone_campaign(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    use crate::db::campaigns;
+
+    // Fetch the original campaign by slug
+    let original = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let new_name = format!("{} (Copy)", original.name);
+
+    // Create new campaign using the db helper
+    let new_id = Uuid::new_v4();
+    let new_slug = campaigns::generate_clone_slug(&original.name);
+    let account_id = Uuid::parse_str(&_user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
+
+    sqlx::query(
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
+           VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11, $12, $13)"#
+    )
+    .bind(new_id)
+    .bind(account_id)
+    .bind(&new_name)
+    .bind(&new_slug)
+    .bind(&original.r#type)
+    .bind(&original.config)
+    .bind(&original.tag_namespace)
+    .bind(&original.outcome_tags)
+    .bind(&original.delivery_method)
+    .bind(&original.delivery_config)
+    .bind(original.loyalty_program_id)
+    .bind(original.loyalty_points_per_play)
+    .bind(original.auto_enroll_loyalty)
+    .execute(&state.db)
+    .await?;
+
+    let cloned = campaigns::get_campaign_by_slug(&state.db, &new_slug).await?;
+    Ok(Json(json!({ "item": cloned })))
+}
+
 /// GET /api/v1/campaigns/{id}
 pub async fn get(
     State(state): State<AppState>,

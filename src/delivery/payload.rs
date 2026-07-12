@@ -22,6 +22,7 @@ pub struct ContactPayload {
     pub last_name: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub website: Option<String>,
     pub business_name: Option<String>,
 }
 

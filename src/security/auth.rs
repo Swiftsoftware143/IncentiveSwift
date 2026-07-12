@@ -19,6 +19,7 @@ pub struct AuthenticatedUser {
     pub account_id: String,
     pub email: String,
     pub role: String,
+    pub impersonating: Option<String>,
 }
 
 /// Extracts and validates Bearer token from Authorization header.
@@ -59,6 +60,7 @@ where
             account_id: claims.sub.clone().unwrap_or_default(),
             email: claims.email.clone().unwrap_or_default(),
             role: claims.role.clone().unwrap_or_else(|| "authenticated".to_string()),
+            impersonating: claims.impersonating.clone(),
         })
     }
 }
@@ -103,6 +105,7 @@ async fn validate_api_key(
                     account_id,
                     email,
                     role: "api_key".to_string(),
+                impersonating: None,
                 })),
                 _ => Err(AppError::Unauthorized("Invalid API key".to_string())),
             }

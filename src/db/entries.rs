@@ -14,6 +14,13 @@ pub struct CreateEntryInput {
     pub score: Option<i32>,
     pub outcome: Option<String>,
     pub tags_applied: Option<Vec<String>>,
+    pub utm_source: Option<String>,
+    pub utm_medium: Option<String>,
+    pub utm_campaign: Option<String>,
+    pub referrer_url: Option<String>,
+    pub page_url: Option<String>,
+    pub user_agent: Option<String>,
+    pub ip_address: Option<String>,
 }
 
 /// A entry record.
@@ -26,6 +33,13 @@ pub struct Entry {
     pub score: Option<i32>,
     pub outcome: Option<String>,
     pub tags_applied: Option<Vec<String>>,
+    pub utm_source: Option<String>,
+    pub utm_medium: Option<String>,
+    pub utm_campaign: Option<String>,
+    pub referrer_url: Option<String>,
+    pub page_url: Option<String>,
+    pub user_agent: Option<String>,
+    pub ip_address: Option<String>,
     pub delivered: bool,
     pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
     pub delivery_attempts: i32,
@@ -41,8 +55,9 @@ pub async fn create_entry(
     let tags_applied = input.tags_applied.clone().unwrap_or_default();
 
     sqlx::query(
-        r#"INSERT INTO entries (id, contact_id, campaign_id, answers, score, outcome, tags_applied)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+        r#"INSERT INTO entries (id, contact_id, campaign_id, answers, score, outcome, tags_applied,
+            utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#
     )
     .bind(id)
     .bind(input.contact_id)
@@ -51,6 +66,13 @@ pub async fn create_entry(
     .bind(input.score)
     .bind(&input.outcome)
     .bind(&tags_applied)
+    .bind(&input.utm_source)
+    .bind(&input.utm_medium)
+    .bind(&input.utm_campaign)
+    .bind(&input.referrer_url)
+    .bind(&input.page_url)
+    .bind(&input.user_agent)
+    .bind(&input.ip_address)
     .execute(pool)
     .await?;
 
@@ -98,6 +120,13 @@ pub struct EntryWithCampaign {
     pub score: Option<i32>,
     pub outcome: Option<String>,
     pub tags_applied: Option<Vec<String>>,
+    pub utm_source: Option<String>,
+    pub utm_medium: Option<String>,
+    pub utm_campaign: Option<String>,
+    pub referrer_url: Option<String>,
+    pub page_url: Option<String>,
+    pub user_agent: Option<String>,
+    pub ip_address: Option<String>,
     pub delivered: bool,
     pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
     pub delivery_attempts: i32,

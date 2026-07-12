@@ -17,7 +17,7 @@ pub mod access;
 pub mod security;
 
 use axum::{
-    routing::{get, post, put, delete},
+    routing::{get, post, put, delete, patch},
     Router,
     middleware,
 };
@@ -55,13 +55,64 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/campaigns/subdomain/:t_slug", get(handlers::campaigns::get_campaigns_by_subdomain))
         .route("/api/v1/entries", post(handlers::entries::create_entry))
         .route("/api/v1/raffles/:slug/enter", post(handlers::raffles::enter_raffle))
+        // Spin wheel / prize draw routes
+        .route("/api/v1/campaigns/:slug/spin", post(handlers::spin_handler::spin))
+        .route("/api/v1/campaigns/:slug/spin-status", get(handlers::spin_handler::spin_status))
         .route("/api/v1/loyalty/checkin", post(handlers::loyalty::checkin))
+        .route("/api/v1/loyalty/online/visit", post(handlers::loyalty::online_visit))
+        .route("/api/v1/loyalty/online/share", post(handlers::loyalty::online_share))
+        .route("/api/v1/loyalty/online/referral-click", post(handlers::loyalty::referral_click))
+        .route("/api/v1/loyalty/online/stats/:code", get(handlers::loyalty::online_stats))
+        // Viral campaign engine -- Phase 1 (public)
+        .route("/api/v1/earn/:channel_code", get(handlers::viral_handler::earn_click_through))
+        .route("/api/v1/c/:campaign_slug", get(handlers::viral_handler::campaign_share_link))
         // Authenticated routes
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
         .route("/api/v1/raffles/:slug/draw", post(handlers::raffles::draw))
         .route("/api/v1/raffles/:slug/redraw", post(handlers::raffles::redraw))
+        .route("/api/v1/loyalty/programs", get(handlers::loyalty::list_programs).post(handlers::loyalty::create_program))
+        .route("/api/v1/loyalty/programs/:id", put(handlers::loyalty::update_program).delete(handlers::loyalty::delete_program))
+        .route("/api/v1/loyalty/rewards", get(handlers::loyalty::list_rewards))
         .route("/api/v1/loyalty/rewards/:id/approve", post(handlers::loyalty::approve_reward))
         .route("/api/v1/loyalty/rewards/:id/deny", post(handlers::loyalty::deny_reward))
+        .route("/api/v1/loyalty/tiers", get(handlers::loyalty::list_tiers).post(handlers::loyalty::create_tier))
+        .route("/api/v1/loyalty/tiers/:id", put(handlers::loyalty::update_tier).delete(handlers::loyalty::delete_tier))
+        .route("/api/v1/loyalty/check-plan", get(handlers::loyalty::check_plan_loyalty))
+        // Secret code admin routes
+        .route("/api/v1/loyalty/secret-codes", get(handlers::secret_codes_handler::list_secret_codes).post(handlers::secret_codes_handler::create_secret_code))
+        .route("/api/v1/loyalty/secret-codes/:id", delete(handlers::secret_codes_handler::delete_secret_code))
+        .route("/api/v1/loyalty/secret-codes/:id/toggle", post(handlers::secret_codes_handler::toggle_secret_code))
+
+        // Viral campaign engine -- Admin routes
+        .route("/api/v1/campaigns/:slug/referral-codes", post(handlers::viral_handler::create_referral_code))
+        .route("/api/v1/campaigns/:slug/referral-stats", get(handlers::viral_handler::get_referral_stats))
+        .route("/api/v1/campaigns/:slug/earn-channels", get(handlers::viral_handler::list_earn_channels).post(handlers::viral_handler::create_earn_channel))
+        .route("/api/v1/campaigns/:slug/earn-channels/:channel_id", patch(handlers::viral_handler::update_earn_channel).delete(handlers::viral_handler::delete_earn_channel))
+        .route("/api/v1/campaigns/:slug/earn/verify", post(handlers::viral_handler::verify_earn_action))
+        .route("/api/v1/campaigns/:slug/leaderboard", get(handlers::viral_handler::campaign_leaderboard))
+        // Phase 2: Milestone Rewards (admin)
+        .route("/api/v1/campaigns/:slug/milestones",
+            get(handlers::milestone_handler::list_milestones)
+            .post(handlers::milestone_handler::create_milestone))
+        .route("/api/v1/campaigns/:slug/milestones/achieved",
+            get(handlers::milestone_handler::list_achieved_milestones))
+        .route("/api/v1/campaigns/:slug/milestones/:milestone_id",
+            put(handlers::milestone_handler::update_milestone)
+            .delete(handlers::milestone_handler::delete_milestone))
+        // Campaign secret codes (promo-code style, type-to-redeem)
+        .route("/api/v1/campaigns/:campaign_id/secret-codes", get(handlers::campaign_secret_codes::list_secret_codes).post(handlers::campaign_secret_codes::create_secret_code))
+        .route("/api/v1/secret-codes", get(handlers::secret_codes_handler::list_secret_codes).post(handlers::secret_codes_handler::create_secret_code))
+        .route("/api/v1/secret-codes/:id", delete(handlers::secret_codes_handler::delete_secret_code))
+        .route("/api/v1/secret-codes/:id/toggle", post(handlers::secret_codes_handler::toggle_secret_code))
+
+        .route("/api/v1/campaigns/:campaign_id/secret-codes/:code_id", put(handlers::campaign_secret_codes::update_secret_code).delete(handlers::campaign_secret_codes::delete_secret_code))
+        .route("/api/v1/campaigns/:campaign_id/secret-codes/redemptions", get(handlers::campaign_secret_codes::list_redemptions))
+        .route("/api/v1/campaigns/:campaign_id/redeem-code", post(handlers::campaign_secret_codes::redeem_secret_code))
+
+        // Verify uses the new loyalty_secret_codes table
+        .route("/api/v1/loyalty/secret-code/verify", post(handlers::secret_codes_handler::verify_secret_code))
+        .route("/api/v1/loyalty/programs/:id/secret-code", put(handlers::loyalty::set_secret_code))
+        .route("/api/v1/loyalty/programs/:id/qr", get(handlers::loyalty::program_qr))
         .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
         .route("/api/v1/contacts", get(handlers::contacts::list_contacts).post(handlers::contacts::create_contact))
         .route("/api/v1/contacts/:id", get(handlers::contacts::get_contact).put(handlers::contacts::update_contact).delete(handlers::contacts::delete_contact))
@@ -71,8 +122,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/integration-targets/:id", put(handlers::integration_target_handler::update_integration_target).delete(handlers::integration_target_handler::delete_integration_target))
 
         // Auth endpoints
+        .route("/api/v1/auth/register", post(crate::handlers::auth_handler::register))
         .route("/api/v1/auth/login", post(crate::handlers::auth_handler::login))
         .route("/api/v1/auth/me", get(crate::handlers::auth_handler::me))
+        .route("/api/v1/auth/profile", put(crate::handlers::auth_handler::update_profile))
         .route("/api/v1/auth/password", put(crate::handlers::auth_handler::change_password))
         .route("/api/v1/auth/forgot-password", post(crate::handlers::auth_handler::forgot_password))
         .route("/api/v1/auth/reset-password", post(crate::handlers::auth_handler::reset_password))
@@ -82,12 +135,17 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/impersonate", post(crate::handlers::admin_handler::impersonate))
         .route("/api/v1/admin/stop-impersonation", post(crate::handlers::admin_handler::stop_impersonation))
         .route("/api/v1/admin/tenants", get(crate::handlers::admin_handler::list_all_tenants))
+        .route("/api/v1/admin/tenants/:id", delete(crate::handlers::admin_handler::delete_tenant))
 
         // Admin plan management
         .route("/api/v1/admin/plans", get(crate::handlers::plans_handler::list_plans).post(crate::handlers::plans_handler::create_plan))
         .route("/api/v1/admin/plans/assign", post(crate::handlers::plans_handler::admin_assign_plan))
         .route("/api/v1/admin/plans/:id", get(crate::handlers::plans_handler::get_plan).put(crate::handlers::plans_handler::update_plan).delete(crate::handlers::plans_handler::delete_plan))
         .route("/api/v1/admin/plans/:id/features", put(crate::handlers::plans_handler::admin_update_plan_features))
+        // Industry routes
+        .route("/api/v1/industries", get(crate::handlers::industries_handler::list_active_industries))
+        .route("/api/v1/admin/industries", get(crate::handlers::industries_handler::admin_list_industries).post(crate::handlers::industries_handler::admin_create_industry))
+        .route("/api/v1/admin/industries/:id", put(crate::handlers::industries_handler::admin_update_industry).delete(crate::handlers::industries_handler::admin_delete_industry))
         .route("/api/v1/api-keys", get(handlers::api_keys::list_api_keys).post(handlers::api_keys::create_api_key))
         .route("/api/v1/api-keys/:id", put(handlers::api_keys::update_api_key).delete(handlers::api_keys::delete_api_key))
         // Surface routes (public — no auth required)
@@ -95,8 +153,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/widget/:hash/config", get(handlers::surface_handler::get_widget_config))
         .route("/api/v1/tablet/:id", get(handlers::surface_handler::get_tablet_view))
         .route("/api/v1/tablet/:id/interact", post(handlers::surface_handler::tablet_interaction))
+        .route("/api/v1/dashboard/stats", get(handlers::dashboard_handler::dashboard_stats))
         .route("/api/v1/play/:id", get(handlers::surface_handler::get_play_view))
         .route("/api/v1/play/:id/dashboard", get(handlers::surface_handler::get_loyalty_dashboard))
+        .route("/api/v1/embed/campaign/:slug", get(handlers::surface_handler::get_campaign_embed))
         .route("/api/v1/embed/:id", get(handlers::surface_handler::get_embed_view))
         // Surface routes (admin — protected by auth middleware)
         .route("/api/v1/admin/campaigns/:id/surface", get(handlers::surface_handler::get_surface_config).put(handlers::surface_handler::update_surface_config))
@@ -104,12 +164,38 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/domains/:id", delete(handlers::surface_handler::remove_domain))
         .route("/api/v1/admin/domains/:id/verify", post(handlers::surface_handler::verify_domain))
         .route("/api/v1/admin/plans/:id/domains", get(handlers::surface_handler::check_plan_domains))
+        // Surfaces REST CRUD routes
+        .route("/api/v1/surfaces", get(handlers::surfaces_handler::list).post(handlers::surfaces_handler::create))
+        .route("/api/v1/surfaces/:id", get(handlers::surfaces_handler::get).put(handlers::surfaces_handler::update).delete(handlers::surfaces_handler::delete))
         // Provider Keys routes
         .route("/api/v1/provider-keys", get(handlers::provider_keys_handler::list_provider_keys).post(handlers::provider_keys_handler::upsert_provider_key))
         .route("/api/v1/provider-keys/:provider", delete(handlers::provider_keys_handler::delete_provider_key))
         .route("/api/v1/available-providers", get(handlers::provider_keys_handler::list_available_providers))
+        // Campaign Integration Hub routes
+        .route("/api/v1/campaigns/:slug/integrations", get(handlers::campaign_integrations::list_campaign_integrations).post(handlers::campaign_integrations::link_campaign_integration))
+        .route("/api/v1/campaigns/:slug/integrations/:integration_id", delete(handlers::campaign_integrations::unlink_campaign_integration))
+        // Campaign wins / admin routes
+        .route("/api/v1/campaigns/:slug/clone", post(handlers::campaigns::clone_campaign))
+        .route("/api/v1/campaigns/:slug/wins", get(handlers::spin_handler::list_wins))
+        .route("/api/v1/campaigns/:slug/wins/:win_id/redeem", post(handlers::spin_handler::redeem_win))
+        // Custom fields routes
+        .route("/api/v1/campaigns/:slug/custom-fields",
+            get(handlers::custom_fields_handler::list_custom_fields)
+            .post(handlers::custom_fields_handler::create_custom_field))
+        .route("/api/v1/campaigns/:slug/custom-fields/reorder",
+            put(handlers::custom_fields_handler::reorder_custom_fields))
+        .route("/api/v1/campaigns/:slug/custom-fields/:field_id",
+            delete(handlers::custom_fields_handler::delete_custom_field)
+            .put(handlers::custom_fields_handler::update_custom_field))
         // Settings routes
         .route("/api/v1/settings", get(handlers::settings_handler::get_settings).put(handlers::settings_handler::update_settings))
+        // Analytics routes
+        .route("/api/v1/analytics/overview", get(handlers::analytics_handler::overview))
+        .route("/api/v1/analytics/campaigns", get(handlers::analytics_handler::campaign_list))
+        .route("/api/v1/analytics/campaigns/:slug", get(handlers::analytics_handler::campaign_detail))
+        .route("/api/v1/analytics/contacts", get(handlers::analytics_handler::contacts_analytics))
+        .route("/api/v1/analytics/loyalty", get(handlers::analytics_handler::loyalty_analytics))
+        .route("/api/v1/analytics/export", get(handlers::analytics_handler::export_csv))
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         

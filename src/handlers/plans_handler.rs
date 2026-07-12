@@ -173,23 +173,23 @@ pub async fn admin_assign_plan(
         .await?
         .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
 
-    // The plans table doesn't have a FK to accounts, so we need to map plan->plan_tier
-    // Use the plan's slug to find the matching plan_tier
+    // Find the plan by slug
+    
     let plan_info = sqlx::query("SELECT slug FROM plans WHERE id = $1")
         .bind(plan_id)
         .fetch_one(&state.db)
         .await?;
     let plan_slug: String = plan_info.get("slug");
 
-    // Find plan_tier by slug
+    // Find plan by slug
     let tier_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM plan_tiers WHERE slug = $1"
+        "SELECT id FROM plans WHERE slug = $1"
     )
     .bind(&plan_slug)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound(format!(
-        "No plan_tier found matching plan slug '{}' — create the plan_tier first", plan_slug
+        "No plan found matching plan slug '{}' — create the plan first", plan_slug
     )))?;
 
     sqlx::query("UPDATE accounts SET plan_tier_id = $1 WHERE id = $2")
