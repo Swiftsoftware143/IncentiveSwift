@@ -4,9 +4,13 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
+
+fn esc_html(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
+}
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -84,14 +88,20 @@ pub struct UpdateSurfaceConfigInput {
     pub surface_config: Value,
 }
 
-/// Public widget — basic JS snippet for display
+/// Public widget — JS snippet with source tracking
 const WIDGET_JS_TEMPLATE: &str = r#"(function() {
     var s = document.createElement('script');
     s.src = 'WIDGET_URL';
     s.async = true;
     s.setAttribute('data-campaign-hash', 'HASH');
+    // Auto-capture page context for source tracking
+    var params = new URLSearchParams(window.location.search);
+    s.setAttribute('data-utm-source', params.get('utm_source') || '');
+    s.setAttribute('data-utm-medium', params.get('utm_medium') || '');
+    s.setAttribute('data-utm-campaign', params.get('utm_campaign') || '');
+    s.setAttribute('data-referrer-url', document.referrer || '');
+    s.setAttribute('data-page-url', window.location.href);
     document.head.appendChild(s);
-    console.log('IncentiveSwift widget loaded for campaign hash: HASH');
 })();
 "#;
 
@@ -252,22 +262,66 @@ pub async fn tablet_interaction(
 }
 
 /// GET /api/v1/play/{id}
+/// Optional query param: ?company=subdomain to scope to a portfolio company
 pub async fn get_play_view(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(params): Query<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
+    // Resolve account_id from subdomain if provided
+    let account_filter = if let Some(company) = params.get("company").and_then(|v| v.as_str()) {
+        let filter = sqlx::query_scalar::<_, Uuid>(
+            "SELECT account_id FROM portfolio_companies WHERE subdomain = $1 OR domain = $1"
+        )
+        .bind(company)
+        .fetch_optional(&state.db).await?;
+        filter
+    } else {
+        None
+    };
 
-    let campaign = sqlx::query(
-        r#"SELECT id, name, slug, type, status, config, surface_config,
-                  tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
-           FROM campaigns WHERE id = $1 AND status = 'active'"#
-    )
-    .bind(campaign_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;
+    // Fetch company info for branding
+    let company_info: Option<serde_json::Value> = if let Some(company) = params.get("company").and_then(|v| v.as_str()) {
+        let row = sqlx::query_scalar(
+            "SELECT jsonb_build_object('name', name, 'slug', slug, 'subdomain', subdomain, 'domain', domain, 'settings', COALESCE(settings, '{}'::jsonb)) FROM portfolio_companies WHERE subdomain = $1 OR domain = $1"
+        )
+        .bind(company)
+        .fetch_optional(&state.db).await.unwrap_or(None);
+        row
+    } else {
+        None
+    };
+
+    // Try as UUID first, then as slug
+    let campaign = match Uuid::parse_str(&id) {
+        Ok(cid) => {
+            let mut q = String::from(
+                "SELECT id, name, slug, type, status, config, surface_config,
+                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
+                FROM campaigns WHERE id = $1 AND status = 'active'"
+            );
+            if let Some(aid) = account_filter {
+                q.push_str(" AND account_id = $2");
+                sqlx::query(&q).bind(cid).bind(aid).fetch_optional(&state.db).await?
+            } else {
+                sqlx::query(&q).bind(cid).fetch_optional(&state.db).await?
+            }
+        },
+        Err(_) => {
+            let mut q = String::from(
+                "SELECT id, name, slug, type, status, config, surface_config,
+                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
+                FROM campaigns WHERE slug = $1 AND status = 'active'"
+            );
+            if let Some(aid) = account_filter {
+                q.push_str(" AND account_id = $2");
+                sqlx::query(&q).bind(&id).bind(aid).fetch_optional(&state.db).await?
+            } else {
+                sqlx::query(&q).bind(&id).fetch_optional(&state.db).await?
+            }
+        }
+    };
+    let campaign = campaign.ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;
 
     let cid: Uuid = campaign.get("id");
     let name: String = campaign.get("name");
@@ -297,6 +351,7 @@ pub async fn get_play_view(
         "outcome_tags": outcome_tags,
         "delivery_method": delivery_method,
         "delivery_config": delivery_config,
+        "company": company_info,
     })))
 }
 
@@ -452,6 +507,71 @@ pub async fn get_surface_config(
     .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
 
     Ok(Json(json!({ "surface_config": surface_config })))
+}
+
+/// GET /api/v1/embed/campaign/{slug} — Get embed info for a campaign by slug (public)
+pub async fn get_campaign_embed(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let campaign = sqlx::query(
+        r#"SELECT id, name, slug, type, config, created_at
+           FROM campaigns WHERE slug = $1"#
+    )
+    .bind(&slug)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;
+
+    let cid: Uuid = campaign.get("id");
+    let name: String = campaign.get("name");
+    let slug_str: String = campaign.get("slug");
+    let campaign_type: String = campaign.get("type");
+    let config: Value = campaign.get("config");
+
+    let play_url = format!("/play/{}", slug_str);
+    let embed_code = format!(
+        r##"<!-- IncentiveSwift Campaign: {} -->
+<iframe src="{}/play/{}" width="100%" height="600" frameborder="0" style="border:none;border-radius:12px;" allow="geolocation"></iframe>
+<script>
+(function(){{
+  var iframe = document.querySelector('iframe[src*="/play/{}"]');
+  if(!iframe || !window.addEventListener) return;
+  var utmParams = ['utm_source','utm_medium','utm_campaign'];
+  var params = new URLSearchParams(window.location.search);
+  var msg = {{}};
+  utmParams.forEach(function(p){{ var v=params.get(p); if(v) msg[p]=v; }});
+  msg.referrer = document.referrer || '';
+  msg.page_url = window.location.href;
+  iframe.addEventListener('load', function(){{
+    iframe.contentWindow.postMessage({{type:'incentiveswift:source',data:msg}}, '*');
+  }});
+}})();
+</script>
+"##,
+        esc_html(&name),
+        "",
+        &slug_str,
+        &slug_str
+    );
+
+    let r = serde_json::json!({
+        "campaign": {
+            "id": cid,
+            "name": name,
+            "slug": slug_str,
+            "type": campaign_type,
+        },
+        "config": config,
+        "play_url": play_url,
+        "play_url_full": format!("/play/{}", slug_str),
+        "embed_code": embed_code,
+        "widget_snippet": format!(
+            "<script src=\"/api/v1/widget/{}\" async data-campaign-hash=\"{}\"></script>",
+            slug_str, slug_str
+        )
+    });
+    Ok(Json(r))
 }
 
 /// PUT /api/v1/admin/campaigns/{id}/surface

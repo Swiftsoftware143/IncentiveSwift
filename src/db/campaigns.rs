@@ -9,7 +9,7 @@ use uuid::Uuid;
 pub const VALID_MECHANIC_TYPES: &[&str] = &[
     "score_reveal", "spin_wheel", "scratch_card", "personality",
     "calculator", "mystery", "countdown", "poll", "chat",
-    "leaderboard", "raffle", "long_form_qualifier",
+    "leaderboard", "raffle", "long_form_qualifier", "quiz",
 ];
 
 /// Input for creating a campaign.
@@ -23,6 +23,9 @@ pub struct CreateCampaignInput {
     pub delivery_method: Option<String>,
     pub delivery_config: Option<JsonValue>,
     pub account_id: Uuid,
+    pub loyalty_program_id: Option<Uuid>,
+    pub loyalty_points_per_play: Option<i32>,
+    pub auto_enroll_loyalty: Option<bool>,
 }
 
 /// A campaign record.
@@ -40,6 +43,12 @@ pub struct Campaign {
     pub delivery_method: String,
     pub delivery_config: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Optional loyalty program linked to this campaign
+    pub loyalty_program_id: Option<uuid::Uuid>,
+    /// Points awarded per play that goes to the linked loyalty program
+    pub loyalty_points_per_play: i32,
+    /// Auto-enroll players into the loyalty program when they play
+    pub auto_enroll_loyalty: bool,
 }
 
 /// Validate mechanic type string.
@@ -57,7 +66,11 @@ pub async fn get_campaign_by_slug(
                   config, tag_namespace,
                   outcome_tags,
                   delivery_method, delivery_config,
-                  created_at
+                  created_at,
+                  account_id,
+                  loyalty_program_id,
+                  loyalty_points_per_play,
+                  auto_enroll_loyalty
            FROM campaigns WHERE slug = $1"#
     )
     .bind(slug)
@@ -78,7 +91,11 @@ pub async fn list_campaigns(
                   config, tag_namespace,
                   outcome_tags,
                   delivery_method, delivery_config,
-                  created_at
+                  created_at,
+                  account_id,
+                  loyalty_program_id,
+                  loyalty_points_per_play,
+                  auto_enroll_loyalty
            FROM campaigns WHERE account_id = $1
            ORDER BY created_at DESC"#
     )
@@ -127,9 +144,13 @@ pub async fn create_campaign(
     let outcome_tags = input.outcome_tags.clone().unwrap_or_else(|| serde_json::json!({}));
     let delivery_config = input.delivery_config.clone().unwrap_or_else(|| serde_json::json!({}));
 
+    let loyalty_program_id = input.loyalty_program_id;
+    let loyalty_points_per_play = input.loyalty_points_per_play.unwrap_or(0);
+    let auto_enroll_loyalty = input.auto_enroll_loyalty.unwrap_or(false);
+
     sqlx::query(
-        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10)"#
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13)"#
     )
     .bind(id)
     .bind(input.account_id)
@@ -141,6 +162,9 @@ pub async fn create_campaign(
     .bind(&outcome_tags)
     .bind(&delivery_method)
     .bind(&delivery_config)
+    .bind(loyalty_program_id)
+    .bind(loyalty_points_per_play)
+    .bind(auto_enroll_loyalty)
     .execute(pool)
     .await?;
 
@@ -158,7 +182,11 @@ pub async fn get_campaign_by_id(
                   config, tag_namespace,
                   outcome_tags,
                   delivery_method, delivery_config,
-                  created_at
+                  created_at,
+                  account_id,
+                  loyalty_program_id,
+                  loyalty_points_per_play,
+                  auto_enroll_loyalty
            FROM campaigns WHERE id = $1"#
     )
     .bind(id)
@@ -178,6 +206,9 @@ pub async fn update_campaign(
     outcome_tags: Option<&JsonValue>,
     delivery_method: Option<&str>,
     delivery_config: Option<&JsonValue>,
+    loyalty_program_id: Option<Option<Uuid>>,
+    loyalty_points_per_play: Option<i32>,
+    auto_enroll_loyalty: Option<bool>,
 ) -> Result<Campaign, AppError> {
     let existing = get_campaign_by_id(pool, id).await?;
 
@@ -186,18 +217,27 @@ pub async fn update_campaign(
     let new_outcome_tags = outcome_tags.unwrap_or(&existing.outcome_tags);
     let new_delivery_method = delivery_method.unwrap_or(&existing.delivery_method);
     let new_delivery_config = delivery_config.unwrap_or(&existing.delivery_config);
+    let new_loyalty_program_id = loyalty_program_id.unwrap_or(existing.loyalty_program_id);
+    let new_loyalty_points_per_play = loyalty_points_per_play.unwrap_or(existing.loyalty_points_per_play);
+    let new_auto_enroll_loyalty = auto_enroll_loyalty.unwrap_or(existing.auto_enroll_loyalty);
 
     sqlx::query(
         r#"UPDATE campaigns
            SET name = $1, config = $2, outcome_tags = $3,
-               delivery_method = $4, delivery_config = $5
-           WHERE id = $6"#
+               delivery_method = $4, delivery_config = $5,
+               loyalty_program_id = $6,
+               loyalty_points_per_play = $7,
+               auto_enroll_loyalty = $8
+           WHERE id = $9"#
     )
     .bind(new_name)
     .bind(new_config)
     .bind(new_outcome_tags)
     .bind(new_delivery_method)
     .bind(new_delivery_config)
+    .bind(new_loyalty_program_id)
+    .bind(new_loyalty_points_per_play)
+    .bind(new_auto_enroll_loyalty)
     .bind(id)
     .execute(pool)
     .await?;
@@ -216,6 +256,29 @@ pub async fn delete_campaign(
         .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Generate a clone slug by appending a short id to a slugified name.
+pub fn generate_clone_slug(name: &str) -> String {
+    let base: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | '0'..='9' | '-' => c,
+            ' ' | '_' => '-',
+            _ => '-',
+        })
+        .collect();
+    let base: String = base
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if base.is_empty() {
+        Uuid::new_v4().to_string()
+    } else {
+        format!("{}-clone-{}", base, &Uuid::new_v4().to_string()[..6])
+    }
 }
 
 /// Generate a URL-safe slug from a name.

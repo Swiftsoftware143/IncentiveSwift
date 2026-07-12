@@ -4,7 +4,7 @@
 name = "incentiveswift-api"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.96"
+rust-version = "1.75"
 
 [profile.release]
 opt-level = 3

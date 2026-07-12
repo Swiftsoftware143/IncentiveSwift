@@ -23,6 +23,9 @@ pub struct PortfolioCompany {
     pub settings: Value,
     pub email: Option<String>,
     pub description: Option<String>,
+    pub subdomain: Option<String>,
+    pub domain: Option<String>,
+    pub domain_verified: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -35,6 +38,8 @@ pub struct CreatePortfolioCompanyInput {
     pub settings: Option<Value>,
     pub email: Option<String>,
     pub description: Option<String>,
+    pub subdomain: Option<String>,
+    pub domain: Option<String>,
 }
 
 /// Input for updating a portfolio company.
@@ -45,6 +50,8 @@ pub struct UpdatePortfolioCompanyInput {
     pub settings: Option<Value>,
     pub email: Option<String>,
     pub description: Option<String>,
+    pub subdomain: Option<String>,
+    pub domain: Option<String>,
 }
 
 fn generate_slug(name: &str) -> String {
@@ -77,7 +84,7 @@ pub async fn list_portfolio_companies(
     _user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let companies = sqlx::query_as::<_, PortfolioCompany>(
-        r#"SELECT id, account_id, name, slug, settings, email, description, created_at, updated_at
+        r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
            FROM portfolio_companies
            ORDER BY name"#
     )
@@ -98,8 +105,8 @@ pub async fn create_portfolio_company(
     let settings = body.settings.unwrap_or_else(|| json!({}));
 
     sqlx::query(
-        r#"INSERT INTO portfolio_companies (id, account_id, name, slug, settings, email, description)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+        r#"INSERT INTO portfolio_companies (id, account_id, name, slug, settings, email, description, subdomain, domain)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
     )
     .bind(id)
     .bind(Uuid::parse_str(&_user.account_id).map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?)
@@ -108,11 +115,13 @@ pub async fn create_portfolio_company(
     .bind(&settings)
     .bind(&body.email)
     .bind(&body.description)
+    .bind(&body.subdomain)
+    .bind(&body.domain)
     .execute(&state.db)
     .await?;
 
     let company = sqlx::query_as::<_, PortfolioCompany>(
-        r#"SELECT id, account_id, name, slug, settings, email, description, created_at, updated_at
+        r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
            FROM portfolio_companies WHERE id = $1"#
     )
     .bind(id)
@@ -132,7 +141,7 @@ pub async fn get_portfolio_company(
         .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
 
     let company = sqlx::query_as::<_, PortfolioCompany>(
-        r#"SELECT id, account_id, name, slug, settings, email, description, created_at, updated_at
+        r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
            FROM portfolio_companies WHERE id = $1"#
     )
     .bind(company_id)
@@ -167,23 +176,27 @@ pub async fn update_portfolio_company(
     let settings = body.settings.unwrap_or_else(|| existing.get("settings"));
     let email: Option<String> = body.email.or_else(|| existing.get("email"));
     let description: Option<String> = body.description.or_else(|| existing.get("description"));
+    let subdomain: Option<String> = body.subdomain.or_else(|| existing.get("subdomain"));
+    let domain: Option<String> = body.domain.or_else(|| existing.get("domain"));
 
     sqlx::query(
         r#"UPDATE portfolio_companies SET
-               name = $1, slug = $2, settings = $3, email = $4, description = $5, updated_at = now()
-           WHERE id = $6"#
+               name = $1, slug = $2, settings = $3, email = $4, description = $5, subdomain = $6, domain = $7, updated_at = now()
+           WHERE id = $8"#
     )
     .bind(&name)
     .bind(&slug)
     .bind(&settings)
     .bind(&email)
     .bind(&description)
+    .bind(&subdomain)
+    .bind(&domain)
     .bind(company_id)
     .execute(&state.db)
     .await?;
 
     let company = sqlx::query_as::<_, PortfolioCompany>(
-        r#"SELECT id, account_id, name, slug, settings, email, description, created_at, updated_at
+        r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
            FROM portfolio_companies WHERE id = $1"#
     )
     .bind(company_id)
@@ -216,8 +229,8 @@ pub async fn internal_create_portfolio_company(
     let id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO portfolio_companies (id, account_id, name, slug, email, description, settings)
-           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb) ON CONFLICT (id) DO NOTHING"#
+        r#"INSERT INTO portfolio_companies (id, account_id, name, slug, email, description, settings, subdomain, domain)
+           VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, NULL, NULL) ON CONFLICT (id) DO NOTHING"#
     )
     .bind(id)
     .bind(account_id)

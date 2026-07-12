@@ -4,3 +4,4 @@ pub mod payload;
 pub mod webhook;
 pub mod direct_api;
 pub mod coreswift;
+pub mod integration_hub;

@@ -28,7 +28,7 @@ pub async fn get_plan_tier(
     let row = sqlx::query(
         r#"SELECT id, name, slug, price_monthly, price_annual, is_active,
                   sort_order, max_campaigns, max_entries_per_month, created_at
-           FROM plan_tiers WHERE id = $1"#
+           FROM plans WHERE id = $1"#
     )
     .bind(tier_id)
     .fetch_optional(pool)

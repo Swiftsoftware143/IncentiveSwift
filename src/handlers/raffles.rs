@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 pub struct EnterRaffleBody {
     pub contact: super::entries::ContactBody,
     pub consent_gathered: bool,
+    pub answers: Option<Value>,
 }
 
 /// POST /api/v1/raffles/:slug/enter — public.
@@ -36,6 +37,7 @@ pub async fn enter_raffle(
         last_name: body.contact.last_name.clone(),
         email: body.contact.email.clone(),
         phone: body.contact.phone.clone(),
+        website: body.contact.website.clone(),
         business_name: body.contact.business_name.clone(),
     };
     let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;

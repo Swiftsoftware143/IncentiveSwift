@@ -35,4 +35,14 @@ pub mod calendar_events_handler;
 
 pub mod surfaces_handler;
 pub mod settings_handler;
+pub mod spin_handler;
+pub mod campaign_integrations;
 pub mod provider_keys_handler;
+pub mod dashboard_handler;
+pub mod custom_fields_handler;
+pub mod analytics_handler;
+pub mod secret_codes_handler;
+pub mod viral_handler;
+pub mod milestone_handler;
+pub mod campaign_secret_codes;
+pub mod industries_handler;

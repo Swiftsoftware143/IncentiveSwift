@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     Json,
 };
 use serde::Deserialize;
@@ -140,6 +140,57 @@ pub async fn stop_impersonation(
     })))
 }
 
+/// DELETE /api/v1/admin/tenants/:id
+/// Deletes a tenant account and cleans up related data.
+pub async fn delete_tenant(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
+
+    // Delete related data first
+    // 1. Delete campaigns belonging to this account
+    sqlx::query("DELETE FROM campaigns WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+
+    // 2. Delete portfolio companies for this account
+    sqlx::query("DELETE FROM portfolio_companies WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+
+    // 3. Delete API keys (uses tenant_id)
+    sqlx::query("DELETE FROM api_keys WHERE tenant_id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+
+    // 4. Delete integration targets
+    sqlx::query("DELETE FROM integration_targets WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+
+    // 5. Delete the account itself
+    let result = sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(format!("Tenant not found: {}", id)));
+    }
+
+    Ok(Json(json!({
+        "status": "deleted",
+        "tenant_id": id
+    })))
+}
+
 /// GET /api/v1/admin/tenants
 /// Lists all accounts with their plan info — for the super admin dashboard.
 pub async fn list_all_tenants(
@@ -158,7 +209,7 @@ pub async fn list_all_tenants(
             COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
             u.user_count
         FROM accounts a
-        LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
+        LEFT JOIN plans pt ON a.plan_tier_id = pt.id
         LEFT JOIN (
             SELECT a2.id as acc_id, COUNT(DISTINCT a3.id)::bigint as user_count
             FROM accounts a2

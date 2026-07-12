@@ -78,6 +78,7 @@ pub struct ContactBody {
     pub last_name: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub website: Option<String>,
     pub business_name: Option<String>,
     pub name: Option<String>,
 }
@@ -98,6 +99,7 @@ fn body_to_input(body: ContactBody) -> contacts::ContactInput {
         last_name,
         email: body.email,
         phone: body.phone,
+        website: body.website,
         business_name: body.business_name,
     }
 }

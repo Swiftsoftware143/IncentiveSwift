@@ -20,6 +20,9 @@ pub struct SupabaseClaims {
     pub role: Option<String>,
     pub iat: Option<i64>,
     pub exp: Option<i64>,
+    /// When present, this JWT is an impersonation token.
+    /// Value is the admin account_id who initiated the impersonation.
+    pub impersonating: Option<String>,
 }
 
 /// Decode and verify a Supabase JWT.
