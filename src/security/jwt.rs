@@ -1,6 +1,6 @@
-//! Supabase JWT validation.
+//! App JWT validation.
 //!
-//! Decodes and verifies Supabase JWTs using HMAC-SHA256.
+//! Decodes and verifies App JWTs using HMAC-SHA256.
 //! The anon key (JWT secret) is used to verify the signature.
 
 use crate::error::AppError;
@@ -11,9 +11,9 @@ use base64::Engine;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Claims extracted from a verified Supabase JWT.
+/// Claims extracted from a verified App JWT.
 #[derive(Debug, Deserialize)]
-pub struct SupabaseClaims {
+pub struct AppClaims {
     pub sub: Option<String>,
     pub email: Option<String>,
     pub aud: Option<String>,
@@ -25,7 +25,7 @@ pub struct SupabaseClaims {
     pub impersonating: Option<String>,
 }
 
-/// Decode and verify a Supabase JWT.
+/// Decode and verify a App JWT.
 ///
 /// # Arguments
 /// * `token` - The JWT string (without "Bearer " prefix)
@@ -33,7 +33,7 @@ pub struct SupabaseClaims {
 ///
 /// # Returns
 /// The parsed claims if the token is valid, or an error.
-pub fn verify_jwt(token: &str, jwt_secret: &str) -> Result<SupabaseClaims, AppError> {
+pub fn verify_jwt(token: &str, jwt_secret: &str) -> Result<AppClaims, AppError> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err(AppError::Unauthorized("Invalid JWT format".to_string()));
@@ -64,7 +64,7 @@ pub fn verify_jwt(token: &str, jwt_secret: &str) -> Result<SupabaseClaims, AppEr
         .decode(payload_b64)
         .map_err(|_| AppError::Unauthorized("Invalid JWT payload encoding".to_string()))?;
 
-    let claims: SupabaseClaims = serde_json::from_slice(&payload_bytes)
+    let claims: AppClaims = serde_json::from_slice(&payload_bytes)
         .map_err(|e| AppError::Unauthorized(format!("Invalid JWT payload: {}", e)))?;
 
     // Check expiration
