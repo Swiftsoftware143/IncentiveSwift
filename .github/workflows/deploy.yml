@@ -20,5 +20,6 @@ jobs:
           cd /opt/swift/incentiveswift
           git pull origin main
           /root/.cargo/bin/cargo build --release
+          cp target/release/incentiveswift-api /opt/swift/incentiveswift/incentiveswift-api
           systemctl restart incentiveswift
           systemctl --no-pager status incentiveswift --no-pager | head -10
