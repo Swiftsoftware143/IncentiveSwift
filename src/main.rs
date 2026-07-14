@@ -159,6 +159,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/embed/campaign/:slug", get(handlers::surface_handler::get_campaign_embed))
         .route("/api/v1/embed/:id", get(handlers::surface_handler::get_embed_view))
         // Surface routes (admin — protected by auth middleware)
+        // Quiz/Trivia question CRUD + submission
+        .route("/api/v1/campaigns/:slug/questions", get(handlers::quiz_handler::list_campaign_questions).post(handlers::quiz_handler::create_question))
+        .route("/api/v1/campaigns/:slug/questions/:question_id", put(handlers::quiz_handler::update_question).delete(handlers::quiz_handler::delete_question))
+        .route("/api/v1/play/:campaign_id/questions", get(handlers::quiz_handler::play_campaign_questions))
+        .route("/api/v1/quiz/:campaign_id/submit", post(handlers::quiz_handler::submit_quiz))
         .route("/api/v1/admin/campaigns/:id/surface", get(handlers::surface_handler::get_surface_config).put(handlers::surface_handler::update_surface_config))
         .route("/api/v1/admin/domains", get(handlers::surface_handler::list_domains).post(handlers::surface_handler::register_domain))
         .route("/api/v1/admin/domains/:id", delete(handlers::surface_handler::remove_domain))

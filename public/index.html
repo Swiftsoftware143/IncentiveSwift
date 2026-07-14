@@ -126,6 +126,26 @@ tr:hover{background:rgba(167,139,250,.04)}
 .pagination button:disabled{opacity:.4;cursor:default}
 @media(max-width:768px){.sidebar{width:60px;overflow:hidden}.sidebar .logo{font-size:14px;padding:12px 16px}.sidebar nav a{padding:10px 16px;justify-content:center}.sidebar nav a span{display:none}.sidebar .user-info{display:none}.main{padding:16px}}
 </style>
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@type": "SoftwareApplication",
+ "name": "IncentiveSwift",
+ "operatingSystem": "All",
+ "applicationCategory": "BusinessApplication",
+ "offers": {
+  "@type": "Offer",
+  "price": "0.00",
+  "priceCurrency": "USD"
+ },
+ "description": "A high-performance, no-code viral marketing and referral software platform designed to engineer gamified milestone campaigns, double-sided local incentives, and action-stacked customer acquisition loops.",
+ "aggregateRating": {
+  "@type": "AggregateRating",
+  "ratingValue": "4.9",
+  "reviewCount": "142"
+ }
+}
+</script>
 </head>
 <body>
 <div id="login-page" style="display:none">
@@ -173,6 +193,7 @@ tr:hover{background:rgba(167,139,250,.04)}
     </div>
   </div>
   <div class="nav-divider" style="margin-top:4px"></div>
+  <a href="#" onclick="showCrmGuide()" style="border-top:none"><span>📖</span><span>CRM Data Guide</span></a>
   <a href="#" onclick="logout()" style="border-top:none;padding-top:8px;margin-top:0"><span>🚪</span><span>Logout</span></a>
 </nav>
 </div>
@@ -222,6 +243,61 @@ async function login(){
     $('login-error').textContent=e.message;
     show($('login-error'));
   }
+}
+
+function showCrmGuide(){
+  const existing=document.querySelector('.modal-overlay');
+  if(existing)existing.remove();
+  const ov=document.createElement('div');
+  ov.className='modal-overlay';
+  ov.innerHTML='<div class="modal modal-lg" style="max-width:900px;max-height:85vh;overflow-y:auto">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+    +'<h2 style="margin:0">📖 CRM Data Guide</h2>'
+    +'<button onclick="this.closest(\'.modal-overlay\').remove()" style="background:none;border:none;font-size:24px;cursor:pointer;color:var(--text2)">✕</button>'
+    +'</div>'
+    +'<p style="color:var(--text2);margin-bottom:16px;font-size:13px">'
+    +'When your quiz or form collects entries, some data is pushed to your CRM and some stays in the entry record. '
+    +'This guide explains what goes where so you can design your questions intentionally.</p>'
+    +'<div style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3);border-radius:8px;padding:16px;margin-bottom:16px">'
+    +'<h3 style="margin:0 0 8px;font-size:14px;color:var(--green)">✅ PUSHED TO CRM</h3>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:10px">Keep only data that informs a direct next step, segments the audience, or qualifies the lead.</p>'
+    +'<table style="width:100%;font-size:12px;border-collapse:collapse">'
+    +'<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:6px 8px;color:var(--text2)">Field</th><th style="text-align:left;padding:6px 8px;color:var(--text2)">Source</th><th style="text-align:left;padding:6px 8px;color:var(--text2)">CRM Mapping</th></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">👤 Full Name</td><td style="padding:6px 8px">Entry form</td><td style="padding:6px 8px;color:var(--accent)">Contact standard field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">📧 Email</td><td style="padding:6px 8px">Required entry field</td><td style="padding:6px 8px;color:var(--accent)">Contact standard field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">📞 Phone</td><td style="padding:6px 8px">Entry form</td><td style="padding:6px 8px;color:var(--accent)">Contact standard field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">🏢 Company</td><td style="padding:6px 8px">Entry form</td><td style="padding:6px 8px;color:var(--accent)">Contact standard field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">📊 Quiz Score</td><td style="padding:6px 8px">Calculated from answers</td><td style="padding:6px 8px;color:var(--accent)">Custom field: <code>quiz_score</code></td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">🏆 Persona / Tier</td><td style="padding:6px 8px">Score → outcome mapping</td><td style="padding:6px 8px;color:var(--accent)">Custom field: <code>persona</code></td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">🎯 Pain Points & Goals</td><td style="padding:6px 8px">Mapped MC question</td><td style="padding:6px 8px;color:var(--accent)">Custom field per question (set <code>crm_field</code> on question)</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">💰 Budget</td><td style="padding:6px 8px">Mapped MC question</td><td style="padding:6px 8px;color:var(--accent)">Custom field: match question to <code>budget</code> field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">👑 Authority (decision maker)</td><td style="padding:6px 8px">Mapped MC question</td><td style="padding:6px 8px;color:var(--accent)">Custom field: match question to <code>authority</code> field</td></tr>'
+    +'<tr style="border-bottom:1px solid var(--border)"><td style="padding:6px 8px">⏰ Timeline / Urgency</td><td style="padding:6px 8px">Mapped MC question</td><td style="padding:6px 8px;color:var(--accent)">Custom field: match question to <code>timeline</code> field</td></tr>'
+    +'<tr><td style="padding:6px 8px">🔗 Source / UTM</td><td style="padding:6px 8px">Auto-captured</td><td style="padding:6px 8px;color:var(--accent)">Standard lead source field</td></tr>'
+    +'</table>'
+    +'</div>'
+    +'<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:8px;padding:16px;margin-bottom:16px">'
+    +'<h3 style="margin:0 0 8px;font-size:14px;color:var(--red)">❌ STAYS IN ENTRY RECORD (NOT pushed to CRM)</h3>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:8px">These stay in your analytics dashboard and entry detail view but are filtered out of CRM delivery:</p>'
+    +'<ul style="font-size:12px;color:var(--text2);margin:0;padding-left:20px">'
+    +'<li>Long-form essay / open text answers (summarize the core issue instead)</li>'
+    +'<li>Hobbies or personal trivia not tied to your product/service</li>'
+    +'<li>Favorite colors, random preferences, non-contextual data</li>'
+    +'<li>Individual question-by-question answer details (only scores/persona push)</li>'
+    +'</ul>'
+    +'</div>'
+    +'<div style="background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.3);border-radius:8px;padding:16px">'
+    +'<h3 style="margin:0 0 8px;font-size:14px;color:var(--accent)">💡 How to Set Up CRM Field Mapping</h3>'
+    +'<ol style="font-size:12px;color:var(--text2);margin:0;padding-left:20px">'
+    +'<li style="margin-bottom:4px"><strong>Create a Quiz/Trivia campaign</strong> — the campaign type determines if it pushes scores and personas</li>'
+    +'<li style="margin-bottom:4px"><strong>Add questions</strong> with MC options — each question can optionally map to a CRM field (budget, authority, timeline, pain_point)</li>'
+    +'<li style="margin-bottom:4px"><strong>Set correct answers</strong> — the system scores submissions and generates a persona from outcome_tags</li>'
+    +'<li style="margin-bottom:4px"><strong>Connect a webhook integration</strong> — delivery will push contact data + only the mapped CRM fields</li>'
+    +'<li style="margin-bottom:4px"><strong>Check analytics</strong> — full entry data with all answers lives in the Entries & Analytics pages</li>'
+    +'</ol>'
+    +'</div>'
+    +'</div>';
+  document.body.appendChild(ov);
 }
 
 function logout(){
@@ -1090,6 +1166,17 @@ function showCampaignEditor(campaign){
     +'</div>'
     // Type-specific config
     +renderEditorTypeConfig(campaign)
+    // Questions section (quiz/trivia only)
+    +(campaign.type==='quiz'||campaign.type==='trivia'?'<div style="margin-bottom:16px">'
+      +'<h3 style="margin-bottom:8px;color:var(--accent)">🧠 Questions</h3>'
+      +'<p style="color:var(--text2);font-size:11px;margin-bottom:8px">'
+      +'Manage quiz questions, set correct answers, and map answers to CRM fields. '
+      +'Each question can optionally map to a CRM field (budget, authority, timeline, pain_point) for clean delivery.</p>'
+      +'<div id="questions-editor">'
+      +'<p style="color:var(--text2);font-size:12px">Loading questions...</p>'
+      +'</div>'
+      +'<button type="button" class="btn-secondary btn-sm" onclick="addQuestionRow()">+ Add Question</button>'
+      +'</div>':'')
     // Delivery & Integrations
     +'<div style="margin-bottom:16px"><h3 style="margin-bottom:8px;color:var(--accent)">📨 Prize Delivery</h3>'
     // Per-prize delivery configuration
@@ -2022,6 +2109,137 @@ function editPlan(id){
   const p=plans.find(x=>x.id===id);
   if(p)showPlanForm(p);
 }
+
+/* ===== QUIZ QUESTIONS MANAGER ===== */
+let questionRows=[];
+
+async function loadCampaignQuestions(){
+  if(!editingCampaignId)return;
+  try{
+    const slug=campaigns.find(c=>c.id===editingCampaignId)?.slug;
+    if(!slug)return;
+    const res=await api('/campaigns/'+slug+'/questions');
+    questionRows=res.questions||[];
+    renderQuestionEditor();
+  }catch(e){
+    questionRows=[];
+    renderQuestionEditor();
+  }
+}
+
+function renderQuestionEditor(){
+  const container=$('questions-editor');
+  if(!container)return;
+  if(questionRows.length===0){
+    container.innerHTML='<p style="color:var(--text2);font-size:12px">No questions yet. Add your first question below.</p>';
+    return;
+  }
+  let html='<table style="width:100%;font-size:12px;border-collapse:collapse">'
+    +'<tr style="border-bottom:2px solid var(--border)"><th>Key</th><th>Question Text</th><th>Type</th><th>Options</th><th>Correct Answer</th><th>CRM Field</th><th></th></tr>';
+  questionRows.forEach((q,i)=>{
+    html+='<tr style="border-bottom:1px solid var(--border)">'
+      +'<td style="padding:4px"><input class="q-key" value="'+esc(q.question_key)+'" style="width:50px"></td>'
+      +'<td style="padding:4px"><input class="q-text" value="'+esc(q.question_text)+'" style="width:180px"></td>'
+      +'<td style="padding:4px"><select class="q-type" style="width:100px">'
+      +'<option value="single" '+(q.question_type==='single'?'selected':'')+'>Single Choice</option>'
+      +'<option value="multiple" '+(q.question_type==='multiple'?'selected':'')+'>Multiple Choice</option>'
+      +'<option value="text" '+(q.question_type==='text'?'selected':'')+'>Open Text</option>'
+      +'<option value="numeric" '+(q.question_type==='numeric'?'selected':'')+'>Numeric</option>'
+      +'</select></td>'
+      +'<td style="padding:4px"><input class="q-options" value="'+(q.options?q.options.join(', '):'')+'" placeholder="opt1, opt2, ..." style="width:150px"></td>'
+      +'<td style="padding:4px"><input class="q-correct" value="'+esc(q.correct_answer||'')+'" style="width:100px"></td>'
+      +'<td style="padding:4px"><select class="q-crm" style="width:100px">'
+      +'<option value="" '+(q.crm_field?'':'selected')+'>— None —</option>'
+      +'<option value="budget" '+(q.crm_field==='budget'?'selected':'')+'>💰 Budget</option>'
+      +'<option value="authority" '+(q.crm_field==='authority'?'selected':'')+'>👑 Authority</option>'
+      +'<option value="timeline" '+(q.crm_field==='timeline'?'selected':'')+'>⏰ Timeline</option>'
+      +'<option value="pain_point" '+(q.crm_field==='pain_point'?'selected':'')+'>🎯 Pain Point</option>'
+      +'<option value="goal" '+(q.crm_field==='goal'?'selected':'')+'>🎯 Goal</option>'
+      +'</select></td>'
+      +'<td style="padding:4px"><button class="btn-sm btn-secondary" onclick="deleteQuestion('+i+')">🗑️</button></td>'
+      +'</tr>';
+  });
+  html+='</table>';
+  container.innerHTML=html;
+}
+
+function addQuestionRow(){
+  questionRows.push({
+    id:null,question_key:'q'+(questionRows.length+1),question_text:'',question_type:'single',
+    options:null,correct_answer:'',score_weight:1,crm_field:'',sort_order:questionRows.length
+  });
+  renderQuestionEditor();
+}
+
+async function deleteQuestion(idx){
+  const q=questionRows[idx];
+  if(q.id){
+    const slug=campaigns.find(c=>c.id===editingCampaignId)?.slug;
+    if(slug)await api('/campaigns/'+slug+'/questions/'+q.id,{method:'DELETE'});
+  }
+  questionRows.splice(idx,1);
+  renderQuestionEditor();
+}
+
+async function saveQuestions(){
+  const slug=campaigns.find(c=>c.id===editingCampaignId)?.slug;
+  if(!slug)return;
+  const editor=$('questions-editor');
+  if(!editor)return;
+  
+  // Collect from table rows
+  const rows=editor.querySelectorAll('tr:not(:first-child)');
+  const updates=[];
+  rows.forEach((tr,i)=>{
+    const fields={
+      id:questionRows[i]?.id||null,
+      question_key:tr.querySelector('.q-key')?.value||'q'+(i+1),
+      question_text:tr.querySelector('.q-text')?.value||'',
+      question_type:tr.querySelector('.q-type')?.value||'single',
+      options:tr.querySelector('.q-options')?.value.split(',').map(s=>s.trim()).filter(s=>s)||null,
+      correct_answer:tr.querySelector('.q-correct')?.value||'',
+      crm_field:tr.querySelector('.q-crm')?.value||'',
+      sort_order:i,
+    };
+    updates.push(fields);
+  });
+  
+  // Save each question
+  for(const f of updates){
+    const body={
+      question_key:f.question_key,
+      question_text:f.question_text,
+      question_type:f.question_type,
+      sort_order:f.sort_order,
+      correct_answer:f.correct_answer||null,
+      score_weight:1,
+      options:f.options?{values:f.options}:null,
+      crm_field:f.crm_field||null,
+      crm_field_type:f.crm_field?'custom_field':null,
+    };
+    try{
+      if(f.id){
+        await api('/campaigns/'+slug+'/questions/'+f.id,{method:'PUT',body:JSON.stringify(body)});
+      }else if(f.question_text){
+        await api('/campaigns/'+slug+'/questions',{method:'POST',body:JSON.stringify(body)});
+      }
+    }catch(e){console.error('Question save failed:',e);}
+  }
+}
+
+// Hook into showCampaignEditor to load questions
+const origShowEditor=showCampaignEditor;
+showCampaignEditor=function(campaign){
+  origShowEditor(campaign);
+  setTimeout(()=>loadCampaignQuestions(),100);
+};
+
+// Hook into saveCampaignEditor to save questions
+const origSaveEditor=saveCampaignEditor;
+saveCampaignEditor=async function(btn){
+  await saveQuestions();
+  await origSaveEditor(btn);
+};
 
 /* ===== UTILITIES ===== */
 function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML}

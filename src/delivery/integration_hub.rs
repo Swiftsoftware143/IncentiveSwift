@@ -120,6 +120,9 @@ pub struct ContactPayload {
     pub phone: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    /// Clean CRM-mapped fields (quiz score, persona, budget, timeline, etc.)
+    /// Only includes data that informs a next step — not raw answer dumps.
+    pub crm_fields: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,6 +196,10 @@ pub struct DeliveryContext {
     pub contact: ContactInfo,
     pub outcome: OutcomePayload,
     pub delivery_config: DeliveryConfig,
+    /// Clean CRM-mapped fields from quiz/trivia submissions
+    /// Key-value pairs mapped from question->crm_field. Only data that
+    /// informs a next step, segments audience, or qualifies lead.
+    pub crm_fields: Option<Value>,
 }
 
 /// Execute all delivery actions for a mechanic outcome.
@@ -401,6 +408,7 @@ async fn deliver_to_integration_target(
             phone: ctx.contact.phone.clone(),
             first_name: ctx.contact.first_name.clone(),
             last_name: ctx.contact.last_name.clone(),
+            crm_fields: ctx.crm_fields.clone(),
         },
         campaign: CampaignPayload {
             id: ctx.campaign.id.to_string(),
@@ -652,6 +660,7 @@ fn DeliveryContext_placeholder(
             total_spins: outcome.total_spins,
         },
         delivery_config: DeliveryConfig::default(),
+        crm_fields: None,
     }
 }
 

@@ -43,6 +43,7 @@ pub struct Campaign {
     pub delivery_method: String,
     pub delivery_config: serde_json::Value,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub account_id: uuid::Uuid,
     /// Optional loyalty program linked to this campaign
     pub loyalty_program_id: Option<uuid::Uuid>,
     /// Points awarded per play that goes to the linked loyalty program
