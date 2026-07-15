@@ -103,7 +103,11 @@ pub async fn upsert_provider_key(
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (account_id, provider)
         DO UPDATE SET
-            api_key = EXCLUDED.api_key,
+            api_key = CASE
+                WHEN EXCLUDED.api_key IS NOT NULL AND EXCLUDED.api_key != ''
+                THEN EXCLUDED.api_key
+                ELSE provider_keys.api_key
+            END,
             base_url = COALESCE(EXCLUDED.base_url, provider_keys.base_url),
             metadata = CASE
                 WHEN EXCLUDED.metadata IS NOT NULL AND EXCLUDED.metadata != '{}'::jsonb
@@ -118,7 +122,7 @@ pub async fn upsert_provider_key(
     )
     .bind(account_id)
     .bind(&body.provider)
-    .bind(&body.api_key)
+    .bind(body.api_key.as_deref().unwrap_or(""))
     .bind(&body.base_url)
     .bind(&body.metadata)
     .bind(body.is_active.unwrap_or(true))
@@ -199,7 +203,7 @@ pub async fn list_available_providers(
 #[derive(Deserialize)]
 pub struct UpsertInput {
     pub provider: String,
-    pub api_key: String,
+    pub api_key: Option<String>,
     #[serde(default)]
     pub base_url: Option<String>,
     #[serde(default)]

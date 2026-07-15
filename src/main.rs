@@ -51,8 +51,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
+        .route("/api/v1/channels/inbound", post(handlers::sms_handler::channel_inbound_webhook))
         .route("/api/v1/campaigns/:slug", get(handlers::campaigns::get_campaign).put(handlers::campaigns::update_campaign).delete(handlers::campaigns::delete_campaign_by_id))
         .route("/api/v1/campaigns/subdomain/:t_slug", get(handlers::campaigns::get_campaigns_by_subdomain))
+        .route("/api/v1/campaigns/test-webhook", post(handlers::entries::test_entry_webhook))
         .route("/api/v1/entries", post(handlers::entries::create_entry))
         .route("/api/v1/raffles/:slug/enter", post(handlers::raffles::enter_raffle))
         // Spin wheel / prize draw routes
@@ -156,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/dashboard/stats", get(handlers::dashboard_handler::dashboard_stats))
         .route("/api/v1/play/:id", get(handlers::surface_handler::get_play_view))
         .route("/api/v1/play/:id/dashboard", get(handlers::surface_handler::get_loyalty_dashboard))
+        .route("/api/v1/embed/campaign/all", get(handlers::surface_handler::get_embed_campaign_list))
         .route("/api/v1/embed/campaign/:slug", get(handlers::surface_handler::get_campaign_embed))
         .route("/api/v1/embed/:id", get(handlers::surface_handler::get_embed_view))
         // Surface routes (admin — protected by auth middleware)

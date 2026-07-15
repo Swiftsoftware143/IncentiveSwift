@@ -509,6 +509,47 @@ pub async fn get_surface_config(
     Ok(Json(json!({ "surface_config": surface_config })))
 }
 
+
+/// GET /api/v1/embed/campaign/all — List all active campaigns for public embed lobby
+pub async fn get_embed_campaign_list(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let rows = sqlx::query(
+        r#"SELECT c.id, c.name, c.slug, c.type, c.config, c.created_at,
+                  a.name as company_name
+           FROM campaigns c
+           JOIN accounts a ON a.id = c.account_id
+           WHERE c.status = 'active'
+           ORDER BY c.created_at DESC"#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut campaigns = Vec::new();
+    for row in rows {
+        let cid: Uuid = row.get("id");
+        let name: String = row.get("name");
+        let slug: String = row.get("slug");
+        let campaign_type: String = row.get("type");
+        let config: serde_json::Value = row.get("config");
+        let company: Option<String> = row.get("company_name");
+
+        campaigns.push(serde_json::json!({
+            "id": cid,
+            "name": name,
+            "slug": slug,
+            "type": campaign_type,
+            "config": config,
+            "company_name": company,
+        }));
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "campaigns": campaigns,
+    })))
+}
+
 /// GET /api/v1/embed/campaign/{slug} — Get embed info for a campaign by slug (public)
 pub async fn get_campaign_embed(
     State(state): State<AppState>,

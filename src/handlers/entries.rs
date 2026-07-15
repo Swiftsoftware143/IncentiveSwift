@@ -174,6 +174,60 @@ pub async fn create_entry(
         // Best-effort: don't fail the entry if email fails
     }
 
+    // 8.5. Fire entry webhook + CoreSwift sync (before body is consumed by payload)
+    // 8.5. Execute output actions (webhook, CoreSwift sync, email, SMS)
+    let oa_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
+    let oa_answers = body.answers.clone();
+    let oa_utm_source = body.utm_source.clone();
+    let oa_utm_medium = body.utm_medium.clone();
+    let oa_utm_campaign = body.utm_campaign.clone();
+    let oa_referrer_url = body.referrer_url.clone();
+    let oa_page_url = body.page_url.clone();
+    let first_name = body.contact.first_name.as_deref().unwrap_or("");
+    let last_name = body.contact.last_name.as_deref().unwrap_or("");
+    let email = body.contact.email.as_deref().unwrap_or("");
+    let phone = body.contact.phone.as_deref().unwrap_or("");
+    let website = body.contact.website.as_deref().unwrap_or("");
+    let business_name = body.contact.business_name.as_deref().unwrap_or("");
+    
+    tokio::spawn({
+        let state = state.clone();
+        let campaign_id = campaign.id;
+        let campaign_name = campaign.name.clone();
+        let campaign_slug = campaign.slug.clone();
+        let campaign_type = campaign.r#type.clone();
+        let campaign_config = campaign.config.clone();
+        let contact_id = contact_id;
+        let account_id = campaign.account_id;
+        let outcome = outcome.clone();
+        let tags = oa_tags.clone();
+        let score = body.score;
+        let answers = oa_answers.clone();
+        let utm_source = oa_utm_source.clone();
+        let utm_medium = oa_utm_medium.clone();
+        let utm_campaign = oa_utm_campaign.clone();
+        let referrer_url = oa_referrer_url.clone();
+        let page_url = oa_page_url.clone();
+        let fn1 = first_name.to_string();
+        let ln1 = last_name.to_string();
+        let em1 = email.to_string();
+        let ph1 = phone.to_string();
+        let ws1 = website.to_string();
+        let bn1 = business_name.to_string();
+        async move {
+            crate::delivery::output_actions::execute_output_actions(
+                &state, &campaign_id, &campaign_name, &campaign_slug, &campaign_type, &campaign_config,
+                &contact_id,
+                &fn1, &ln1, &em1, &ph1, &ws1, &bn1,
+                &account_id, &outcome, &tags,
+                score.map(|s| s as f64),
+                answers.as_ref(),
+                utm_source.as_deref(), utm_medium.as_deref(), utm_campaign.as_deref(),
+                referrer_url.as_deref(), page_url.as_deref(),
+            ).await;
+        }
+    });
+
     // 9. Build delivery payload from normalized Q&A
     let qa_pairs = if let Some(ref answers) = body.answers {
         extract_qa_from_jsonb(answers, &[])
@@ -425,4 +479,68 @@ fn extract_qa_from_jsonb(answers: &Value, _questions: &[crate::db::questions_ans
     }
 
     pairs
+}
+
+
+/// POST /api/v1/campaigns/test-webhook — Send a test webhook POST to a URL
+pub async fn test_entry_webhook(
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let webhook_url = body.get("webhook_url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("webhook_url is required".to_string()))?;
+
+    let contact = body.get("contact")
+        .cloned()
+        .unwrap_or_else(|| json!({"first_name":"Test","last_name":"User","email":"test@example.com"}));
+
+    let payload = json!({
+        "event": "entry.created",
+        "test": true,
+        "entry_id": "00000000-0000-0000-0000-000000000000",
+        "campaign": {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "Test Campaign",
+            "slug": "test-campaign",
+            "type": "spin_wheel",
+        },
+        "contact": contact,
+        "outcome": "winner",
+        "tags": ["test"],
+        "score": null,
+        "answers": {"test_question": "test_answer"},
+        "source": {
+            "utm_source": "test",
+            "utm_medium": null,
+            "utm_campaign": null,
+            "referrer_url": "https://test.com",
+            "page_url": "https://test.com/campaign",
+        },
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+
+    let client = reqwest::Client::new();
+    let result = client
+        .post(webhook_url)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .header("User-Agent", "IncentiveSwift-EntryWebhook/1.0")
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let body_text = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+            Ok(Json(json!({
+                "success": status >= 200 && status < 300,
+                "status": status,
+                "response": body_text,
+            })))
+        }
+        Err(e) => Ok(Json(json!({
+            "success": false,
+            "error": e.to_string(),
+        }))),
+    }
 }
