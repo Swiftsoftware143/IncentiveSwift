@@ -47,3 +47,5 @@ pub mod milestone_handler;
 pub mod campaign_secret_codes;
 pub mod industries_handler;
 pub mod quiz_handler;
+
+pub mod sms_handler;

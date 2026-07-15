@@ -213,6 +213,16 @@ pub async fn spin(
     // Get contact info for delivery
     let contact = contacts::get_contact(&state.db, &contact_id).await?;
 
+    // Build contact JSON for entry webhook (used after prize draw)
+    let contact_val = json!({
+        "first_name": contact.first_name,
+        "last_name": contact.last_name,
+        "email": contact.email,
+        "phone": contact.phone,
+        "website": contact.website,
+        "business_name": contact.business_name,
+    });
+
     // Execute the prize draw
     let result = prize_draw::apply_prize_draw(
         &state.db,
@@ -255,6 +265,46 @@ pub async fn spin(
         .execute(&state.db)
         .await;
     }
+
+    // Execute all configured output actions (webhooks, CoreSwift sync, emails, SMS, etc.)
+    let outcome = if result.won { "winner" } else { "loss" };
+    let campaign_config = campaign.config.clone();
+    let campaign_name = campaign.name.clone();
+    let campaign_slug = campaign.slug.clone();
+    let campaign_type = campaign.r#type.clone();
+    
+    let fn1 = contact.first_name.as_deref().unwrap_or("").to_string();
+    let ln1 = contact.last_name.as_deref().unwrap_or("").to_string();
+    let em1 = contact.email.as_deref().unwrap_or("").to_string();
+    let ph1 = contact.phone.as_deref().unwrap_or("").to_string();
+    let ws1 = contact.website.as_deref().unwrap_or("").to_string();
+    let bn1 = contact.business_name.as_deref().unwrap_or("").to_string();
+    let outcome_str = outcome.to_string();
+    
+    tokio::spawn({
+        let state = state.clone();
+        let campaign_id = campaign.id;
+        let contact_id = contact_id;
+        let account_id = campaign.account_id;
+        let answers = body.answers.clone();
+        let utm_source = body.utm_source.clone();
+        let utm_medium = body.utm_medium.clone();
+        let utm_campaign = body.utm_campaign.clone();
+        let referrer_url = body.referrer_url.clone();
+        let page_url = body.page_url.clone();
+        async move {
+            crate::delivery::output_actions::execute_output_actions(
+                &state, &campaign_id, &campaign_name, &campaign_slug, &campaign_type, &campaign_config,
+                &contact_id,
+                &fn1, &ln1, &em1, &ph1, &ws1, &bn1,
+                &account_id, &outcome_str, &[],
+                None,
+                answers.as_ref(),
+                utm_source.as_deref(), utm_medium.as_deref(), utm_campaign.as_deref(),
+                referrer_url.as_deref(), page_url.as_deref(),
+            ).await;
+        }
+    });
 
     if result.won {
         // Generate redemption code
@@ -392,6 +442,8 @@ pub async fn spin(
             ).await;
         });
     }
+
+
 
     // Build response
     let mut response = json!({

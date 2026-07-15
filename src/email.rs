@@ -29,19 +29,18 @@ pub async fn send_reset_email(to: &str, token: &str) -> Result<(), String> {
         token
     );
 
-    let payload = json!({
-        "from": from,
-        "to": to,
-        "subject": "Password Reset Request",
-        "text": body
-    });
+    let mut params = std::collections::HashMap::new();
+    params.insert("from", from.as_str());
+    params.insert("to", to);
+    params.insert("subject", "Password Reset Request");
+    params.insert("text", &body);
 
     let client = reqwest::Client::new();
     let resp = client
         .post(&api_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
+        .basic_auth("api", Some(&api_key))
+        .form(&params)
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("Failed to send email request: {}", e))?;
