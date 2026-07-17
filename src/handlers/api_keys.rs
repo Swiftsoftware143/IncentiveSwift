@@ -1,4 +1,4 @@
-//! API key handlers — CRUD for api_keys table.
+//! API key handlers ??? CRUD for api_keys table.
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -50,7 +50,7 @@ pub struct UpdateApiKeyInput {
 /// Generate a random API key.
 /// Format: is_key_<random_alphanumeric>
 /// Returns (full_key, prefix, key_hash)
-fn generate_api_key() -> (String, String, String) {
+fn generate_api_key() -> Result<(String, String, String), AppError> {
     use rand::Rng;
     
 
@@ -59,15 +59,15 @@ fn generate_api_key() -> (String, String, String) {
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(48)
         .collect();
-    let random_str: String = String::from_utf8(random_bytes).unwrap();
+    let random_str: String = String::from_utf8(random_bytes).map_err(|e| AppError::Internal(format!("Invalid UTF-8 in key generation: {}", e)))?;
     let prefix: String = random_str[..8].to_string();
 
     let full_key = format!("is_key_{}", random_str);
 
     // Hash with bcrypt for storage
-    let hash = bcrypt::hash(&full_key, 6).expect("Failed to hash API key");
+    let hash = bcrypt::hash(&full_key, 6).map_err(|e| AppError::Internal(format!("Failed to hash API key: {}", e)))?;
 
-    (full_key, prefix, hash)
+    Ok((full_key, prefix, hash))
 }
 
 /// GET /api/v1/api-keys
@@ -108,7 +108,7 @@ pub async fn create_api_key(
         .await?;
 
     let id = Uuid::new_v4();
-    let (full_key, prefix, key_hash) = generate_api_key();
+    let (full_key, prefix, key_hash) = generate_api_key()?;
     let name = body.name.unwrap_or_else(|| "default".to_string());
     let permissions = body.permissions.unwrap_or_else(|| json!([]));
 
@@ -138,7 +138,7 @@ pub async fn create_api_key(
             "created_at": chrono::Utc::now(),
         },
         "full_key": full_key,
-        "warning": "Save this key — it will not be shown again"
+        "warning": "Save this key ??? it will not be shown again"
     })))
 }
 
@@ -195,7 +195,7 @@ pub async fn update_api_key(
     Ok(Json(json!({ "api_key": key })))
 }
 
-/// DELETE /api/v1/api-keys/{id} — soft delete via is_active = false
+/// DELETE /api/v1/api-keys/{id} ??? soft delete via is_active = false
 pub async fn delete_api_key(
     State(state): State<AppState>,
     Path(id): Path<String>,
