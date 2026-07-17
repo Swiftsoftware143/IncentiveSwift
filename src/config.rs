@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub internal_sync_key: String,
     pub coreswift_url: String,
     pub workflowswift_url: String,
+    pub allowed_origins: Vec<String>,
 }
 
 impl AppConfig {
@@ -48,6 +49,12 @@ impl AppConfig {
 
             workflowswift_url: std::env::var("WORKFLOWSWIFT_URL")
                 .unwrap_or_else(|_| "http://localhost:8085".to_string()),
+
+            allowed_origins: std::env::var("ALLOWED_ORIGINS")
+                .unwrap_or_else(|_| "http://localhost:3000,http://localhost:8082".to_string())
+                .split(",")
+                .map(|s| s.trim().to_string())
+                .collect(),
 
             db_max_connections: std::env::var("DB_MAX_CONNECTIONS")
                 .unwrap_or_else(|_| "20".to_string())

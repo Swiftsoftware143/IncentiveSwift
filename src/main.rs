@@ -1,4 +1,4 @@
-//! IncentiveSwift — Multi-tenant Engagement & Capture Engine
+//! IncentiveSwift ??? Multi-tenant Engagement & Capture Engine
 //!
 // REST API server providing gamified incentive mechanics, raffle/giveaway system,
 // long-form qualifier, and loyalty program module.
@@ -20,6 +20,7 @@ use axum::{
     routing::{get, post, put, delete, patch},
     Router,
     middleware,
+    http::HeaderValue,
 };
 use tokio::signal;
 use tower_http::{
@@ -30,6 +31,23 @@ use tower_http::{
 use tracing_subscriber::EnvFilter;
 use std::time::Duration;
 use std::sync::Arc;
+
+
+
+/// Build a CORS origin predicate from allowed origins list.
+fn cors_allowed_origins(allowed: &[String]) -> tower_http::cors::AllowOrigin {
+    use std::sync::Arc;
+    let origins: Vec<Arc<str>> = allowed.iter().map(|s| Arc::from(s.as_str())).collect();
+    tower_http::cors::AllowOrigin::predicate(move |origin: &HeaderValue, _parts: &axum::http::request::Parts| {
+        origins.iter().any(|allowed| {
+            if let Ok(origin_str) = origin.to_str() {
+                origin_str == allowed.as_ref()
+            } else {
+                false
+            }
+        })
+    })
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -150,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/industries/:id", put(crate::handlers::industries_handler::admin_update_industry).delete(crate::handlers::industries_handler::admin_delete_industry))
         .route("/api/v1/api-keys", get(handlers::api_keys::list_api_keys).post(handlers::api_keys::create_api_key))
         .route("/api/v1/api-keys/:id", put(handlers::api_keys::update_api_key).delete(handlers::api_keys::delete_api_key))
-        // Surface routes (public — no auth required)
+        // Surface routes (public ??? no auth required)
         .route("/api/v1/widget/:hash", get(handlers::surface_handler::get_widget_js))
         .route("/api/v1/widget/:hash/config", get(handlers::surface_handler::get_widget_config))
         .route("/api/v1/tablet/:id", get(handlers::surface_handler::get_tablet_view))
@@ -161,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/embed/campaign/all", get(handlers::surface_handler::get_embed_campaign_list))
         .route("/api/v1/embed/campaign/:slug", get(handlers::surface_handler::get_campaign_embed))
         .route("/api/v1/embed/:id", get(handlers::surface_handler::get_embed_view))
-        // Surface routes (admin — protected by auth middleware)
+        // Surface routes (admin ??? protected by auth middleware)
         // Quiz/Trivia question CRUD + submission
         .route("/api/v1/campaigns/:slug/questions", get(handlers::quiz_handler::list_campaign_questions).post(handlers::quiz_handler::create_question))
         .route("/api/v1/campaigns/:slug/questions/:question_id", put(handlers::quiz_handler::update_question).delete(handlers::quiz_handler::delete_question))
@@ -210,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
+                .allow_origin(cors_allowed_origins(&config.allowed_origins))
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
@@ -253,4 +271,3 @@ async fn shutdown_signal() {
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
 }
-
