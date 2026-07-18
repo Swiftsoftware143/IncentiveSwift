@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment Received</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.08);padding:48px 40px;max-width:480px;width:100%;text-align:center}
+.icon{font-size:64px;margin-bottom:16px}
+h1{font-size:24px;font-weight:700;color:#0f172a;margin-bottom:8px}
+p{color:#64748b;font-size:15px;line-height:1.6;margin-bottom:24px}
+.status{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#166534}
+.status.loading{background:#fff7ed;border-color:#fed7aa;color:#9a3412}
+.status.error{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.details{text-align:left;background:#f8fafc;border-radius:8px;padding:16px;margin-bottom:24px}
+.details dt{font-size:12px;text-transform:uppercase;color:#94a3b8;letter-spacing:.5px;margin-top:8px}
+.details dt:first-child{margin-top:0}
+.details dd{font-size:14px;color:#0f172a;font-weight:500;margin-bottom:4px}
+.actions{display:flex;flex-direction:column;gap:8px}
+.btn{display:inline-block;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;text-decoration:none;transition:all .15s}
+.btn-primary{background:#0f172a;color:#fff}
+.btn-primary:hover{background:#1e293b}
+.btn-outline{border:1px solid #e2e8f0;color:#475569}
+.btn-outline:hover{background:#f8fafc}
+</style>
+</head>
+<body>
+<div class="card" id="app">
+  <div class="icon">🎉</div>
+  <h1>Payment Received!</h1>
+  <p>Thank you for your purchase. Your payment was successful.</p>
+  <div id="statusMsg" class="status loading">Verifying payment...</div>
+  <div id="detailsArea" class="details" style="display:none">
+    <dl>
+      <dt>Session</dt>
+      <dd id="sessionId">—</dd>
+      <dt>Plan</dt>
+      <dd id="planName">—</dd>
+    </dl>
+  </div>
+  <div class="actions">
+    <a id="loginLink" href="/admin" class="btn btn-primary">Go to Dashboard</a>
+  </div>
+</div>
+<script>
+(async function(){
+  const params = new URLSearchParams(window.location.search);
+  const sessionId = params.get('session_id') || params.get('token');
+  const el = document.getElementById('statusMsg');
+  const det = document.getElementById('detailsArea');
+  const sid = document.getElementById('sessionId');
+  const pn = document.getElementById('planName');
+
+  if(sessionId){
+    sid.textContent = sessionId;
+    try {
+      const res = await fetch('/api/v1/checkout/session/' + encodeURIComponent(sessionId));
+      if(res.ok){
+        const data = await res.json();
+        el.className = 'status';
+        el.textContent = '✅ Payment confirmed';
+        det.style.display = 'block';
+        pn.textContent = data.plan_name || data.purchasable_type || 'Subscription';
+        if(data.login_url) document.getElementById('loginLink').href = data.login_url;
+      } else {
+        el.className = 'status error';
+        el.textContent = 'Payment recorded. You can log in below.';
+      }
+    } catch(e){
+      el.className = 'status';
+      el.textContent = 'Payment confirmed. Welcome aboard.';
+    }
+  } else {
+    el.className = 'status';
+    el.textContent = '✅ Payment confirmed — welcome!';
+  }
+})();
+</script>
+</body>
+</html>

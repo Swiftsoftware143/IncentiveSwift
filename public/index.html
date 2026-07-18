@@ -2079,6 +2079,7 @@ function showPlanForm(p){
     +'<option value="stripe" '+(p.payment_provider==='stripe'?'selected':'')+'>Stripe</option>'
     +'<option value="paypal" '+(p.payment_provider==='paypal'?'selected':'')+'>PayPal</option>'
     +'</select>'
+    +'<label>Thank-You URL</label><input name="thank_you_url" value="'+esc(p.thank_you_url||'')+'" placeholder="/thank-you.html">'
     +'</form>'
     +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
     +'<button class="btn-primary" onclick="savePlanForm(this,'+(edit?('\''+p.id+'\''):'null')+')">'+(edit?'Update':'Create')+'</button></div></div>';
@@ -2098,6 +2099,7 @@ async function savePlanForm(btn,editId){
       price_yearly: parseFloat(fd.get('price_yearly'))||0,
       sort_order: parseInt(fd.get('sort_order'))||0,
       payment_provider: fd.get('payment_provider')||null,
+      thank_you_url: fd.get('thank_you_url')||null,
     };
     if(editId){
       await api('/admin/plans/'+editId,{method:'PUT',body:JSON.stringify(payload)});
