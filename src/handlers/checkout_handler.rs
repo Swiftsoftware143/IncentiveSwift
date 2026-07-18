@@ -248,6 +248,27 @@ pub async fn create_checkout_session(
         }
     }
 
+    // Resolve success_url: explicit > plan's thank_you_url > /thank-you.html
+    let success_url = body.success_url.clone().or_else(|| {
+        body.plan_id.as_ref().and_then(|pid| {
+            Uuid::parse_str(pid).ok().and_then(|uuid| {
+                let pool = state.db.clone();
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async move {
+                    sqlx::query_scalar::<_, Option<String>>(
+                        "SELECT thank_you_url FROM plans WHERE id = $1"
+                    )
+                    .bind(uuid)
+                    .fetch_optional(&pool)
+                    .ok()
+                    .flatten()
+                })
+            })
+        })
+    }).unwrap_or_else(|| "/thank-you.html".to_string());
+
+    let cancel_url = body.cancel_url.clone().unwrap_or_else(|| "/".to_string());
+
     // Store the checkout session
     let row = sqlx::query(
         r#"
@@ -265,8 +286,8 @@ pub async fn create_checkout_session(
     .bind(body.price_amount)
     .bind(&body.price_currency)
     .bind(&body.description)
-    .bind(&body.success_url)
-    .bind(&body.cancel_url)
+    .bind(&success_url)
+    .bind(&cancel_url)
     .bind(&body.metadata)
     .bind(&payment_provider)
     .fetch_one(&state.db)
