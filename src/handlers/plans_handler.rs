@@ -24,6 +24,7 @@ pub struct Plan {
     pub features: Value,
     pub is_active: bool,
     pub sort_order: i32,
+    pub payment_provider: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -39,6 +40,7 @@ pub struct CreatePlanInput {
     pub features: Option<Value>,
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
+    pub payment_provider: Option<String>,
 }
 
 /// Input for updating a plan.
@@ -52,6 +54,7 @@ pub struct UpdatePlanInput {
     pub features: Option<Value>,
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
+    pub payment_provider: Option<String>,
 }
 
 /// Input for admin plan assignment.
@@ -99,7 +102,7 @@ pub async fn list_plans(
 ) -> Result<Json<Value>, AppError> {
     let plans = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans
            WHERE is_active = true
            ORDER BY sort_order, name"#
@@ -121,8 +124,8 @@ pub async fn create_plan(
     let features = body.features.unwrap_or_else(|| json!({}));
 
     sqlx::query(
-        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
     )
     .bind(id)
     .bind(&body.name)
@@ -133,12 +136,13 @@ pub async fn create_plan(
     .bind(&features)
     .bind(body.is_active.unwrap_or(true))
     .bind(body.sort_order.unwrap_or(0))
+    .bind(&body.payment_provider)
     .execute(&state.db)
     .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#
     )
     .bind(id)
@@ -217,7 +221,7 @@ pub async fn get_plan(
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#
     )
     .bind(plan_id)
@@ -241,7 +245,7 @@ pub async fn update_plan(
     // Get existing plan
     let existing = sqlx::query(
         r#"SELECT name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order
+                  features, is_active, sort_order, payment_provider
            FROM plans WHERE id = $1"#
     )
     .bind(plan_id)
@@ -257,14 +261,16 @@ pub async fn update_plan(
     let features: Value = body.features.unwrap_or_else(|| existing.get("features"));
     let is_active: bool = body.is_active.unwrap_or_else(|| existing.get("is_active"));
     let sort_order: i32 = body.sort_order.unwrap_or_else(|| existing.get("sort_order"));
+    let payment_provider: Option<String> = existing.get("payment_provider");
+    let payment_provider: Option<String> = body.payment_provider.or(payment_provider);
 
     sqlx::query(
         r#"UPDATE plans SET
                name = $1, slug = $2, description = $3,
                price_monthly = $4, price_yearly = $5,
                features = $6, is_active = $7, sort_order = $8,
-               updated_at = now()
-           WHERE id = $9"#
+               payment_provider = $9, updated_at = now()
+           WHERE id = $10"#
     )
     .bind(&name)
     .bind(&slug)
@@ -274,13 +280,14 @@ pub async fn update_plan(
     .bind(&features)
     .bind(is_active)
     .bind(sort_order)
+    .bind(&payment_provider)
     .bind(plan_id)
     .execute(&state.db)
     .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#
     )
     .bind(plan_id)
@@ -333,7 +340,7 @@ pub async fn admin_update_plan_features(
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
-                  features, is_active, sort_order, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#
     )
     .bind(plan_id)
