@@ -197,6 +197,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/provider-keys", get(handlers::provider_keys_handler::list_provider_keys).post(handlers::provider_keys_handler::upsert_provider_key))
         .route("/api/v1/provider-keys/:provider", delete(handlers::provider_keys_handler::delete_provider_key))
         .route("/api/v1/available-providers", get(handlers::provider_keys_handler::list_available_providers))
+        // Payment provider & checkout routes
+        .route("/api/v1/payment-providers", get(handlers::checkout_handler::list_payment_providers).post(handlers::checkout_handler::upsert_payment_provider))
+        .route("/api/v1/payment-providers/{provider_type}", delete(handlers::checkout_handler::delete_payment_provider))
+        .route("/api/v1/checkout/create", post(handlers::checkout_handler::create_checkout_session))
+        .route("/api/v1/checkout/sessions", get(handlers::checkout_handler::list_checkout_sessions))
+        // Public webhooks (no auth — signature verification in handler)
+        .route("/api/v1/webhooks/stripe", post(handlers::checkout_handler::stripe_webhook))
+        .route("/api/v1/webhooks/paypal", post(handlers::checkout_handler::paypal_webhook))
         // Campaign Integration Hub routes
         .route("/api/v1/campaigns/:slug/integrations", get(handlers::campaign_integrations::list_campaign_integrations).post(handlers::campaign_integrations::link_campaign_integration))
         .route("/api/v1/campaigns/:slug/integrations/:integration_id", delete(handlers::campaign_integrations::unlink_campaign_integration))
