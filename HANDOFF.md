@@ -94,6 +94,36 @@ Every push carries the full Q&A set (built from normalized `answers` + `question
 }
 ```
 
+### Email Templates (New)
+
+IncentiveSwift has a database-backed email template system (`email_templates` table) for transactional emails.
+
+**Template Types:**
+
+| Type | When Sent | Merge Fields |
+|---|---|---|
+| `welcome` | Account created after checkout | `{{name}}`, `{{email}}`, `{{password}}`, `{{app_url}}` |
+| `purchase_confirmed` | Successful payment | `{{name}}`, `{{plan_name}}`, `{{app_url}}` |
+
+**API Endpoints:**
+
+| Method | Path | Description |
+|---|---|---|
+| GET/POST | `/api/email-templates` | List / Create |
+| GET/PUT/DELETE | `/api/email-templates/:id` | Read / Update / Delete |
+| GET | `/api/email-templates/merge-fields` | Available merge fields |
+
+**Template fields:** name, template_type, subject, body (txt), html_body, is_html, is_default
+
+**How it works:**
+1. `send_template_email()` called with type + variable map
+2. Looks up DB template (account-scoped → default fallback)
+3. Renders `{{variable}}` placeholders from the variable map
+4. Falls back to hardcoded inline template if no DB match
+5. Queues to `outbound_messages` for async SMTP delivery
+
+**Default seeds:** Welcome Email (credentials) + Purchase Confirmation (plan name, login link)
+
 ### Security Requirements
 - **All headers via Tower middleware** (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
 - **Rate limiting** via `governor`: 20 req/min/IP public, 100 req/min authenticated
