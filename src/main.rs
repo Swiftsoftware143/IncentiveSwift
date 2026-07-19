@@ -221,6 +221,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/campaigns/:slug/custom-fields/:field_id",
             delete(handlers::custom_fields_handler::delete_custom_field)
             .put(handlers::custom_fields_handler::update_custom_field))
+        // Email Templates routes
+        .route("/api/v1/email-templates", get(handlers::email_templates_handler::list).post(handlers::email_templates_handler::create))
+        .route("/api/v1/email-templates/:id", get(handlers::email_templates_handler::get).put(handlers::email_templates_handler::update).delete(handlers::email_templates_handler::delete))
         // Settings routes
         .route("/api/v1/settings", get(handlers::settings_handler::get_settings).put(handlers::settings_handler::update_settings))
         // Analytics routes
