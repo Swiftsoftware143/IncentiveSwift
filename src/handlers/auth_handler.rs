@@ -717,8 +717,6 @@ pub async fn forgot_password(
     Ok(Json(json!({
         "status": "ok",
         "message": "If the email exists, a reset link has been sent",
-        // Include token in response for development convenience
-        "reset_token": token,
     })))
 }
 

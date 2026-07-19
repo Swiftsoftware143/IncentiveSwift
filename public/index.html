@@ -158,8 +158,42 @@ tr:hover{background:rgba(167,139,250,.04)}
 <label>Password</label>
 <input type="password" id="login-password" value="SwiftAdmin2026!">
 <button class="btn-primary" onclick="login()">Sign In</button>
+<p style="text-align:center;margin-top:12px;font-size:13px;color:var(--text2)"><a href="#" onclick="showForgotPw();return false" style="color:var(--accent)">Forgot Password?</a></p>
 </div>
 </div>
+
+<!-- Forgot Password Modal -->
+<div id="forgot-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)clsForgot()">
+  <div class="modal" style="max-width:420px">
+    <div id="forgot-step-email">
+      <h2>Reset Password</h2>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Enter your email and we'll send you a reset code.</p>
+      <label>Email</label>
+      <input id="forgot-email" type="email" placeholder="you@example.com" style="margin-bottom:12px">
+      <div id="forgot-msg" class="error" style="display:none"></div>
+      <div id="forgot-success" class="success" style="display:none"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn-secondary" onclick="clsForgot()">Cancel</button>
+        <button class="btn-primary" id="forgot-btn" onclick="submitForgot()">Send Reset Code</button>
+      </div>
+    </div>
+    <div id="forgot-step-reset" style="display:none">
+      <h2>Set New Password</h2>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">Enter the code from your email and your new password.</p>
+      <label>Reset Code</label>
+      <input id="reset-token" type="text" placeholder="Paste the code">
+      <label>New Password</label>
+      <input id="reset-pw" type="password" placeholder="Minimum 8 characters">
+      <div id="reset-msg" class="error" style="display:none"></div>
+      <div id="reset-success" class="success" style="display:none"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn-secondary" onclick="clsForgot()">Cancel</button>
+        <button class="btn-primary" id="reset-btn" onclick="submitReset()">Reset Password</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="app" style="display:none">
 <div class="sidebar">
 <div class="logo">🏆 IncentiveSwift</div>
@@ -227,6 +261,61 @@ async function api(path, opts={}){
   if(ct.includes('json')){data=await res.json()}else{data=await res.text();try{data=JSON.parse(data)}catch(e){}}
   if(!res.ok) throw new Error(data?.message||data?.error||'Request failed');
   return data;
+}
+
+/* Forgot & Reset Password */
+function showForgotPw(){
+  show($('forgot-modal'));
+  $('forgot-step-email').style.display='';
+  $('forgot-step-reset').style.display='none';
+  hide($('forgot-msg'));
+  hide($('forgot-success'));
+  hide($('reset-msg'));
+  hide($('reset-success'));
+}
+function clsForgot(){hide($('forgot-modal'))}
+
+async function submitForgot(){
+  const email=$('forgot-email').value.trim();
+  const btn=$('forgot-btn');
+  hide($('forgot-msg'));
+  hide($('forgot-success'));
+  if(!email||!email.includes('@')){$('forgot-msg').textContent='Please enter a valid email';show($('forgot-msg'));return}
+  btn.textContent='Sending...';btn.disabled=true;
+  try{
+    const res=await api('/auth/forgot-password',{method:'POST',body:JSON.stringify({email})});
+    $('forgot-success').textContent=res.message||'If that email is registered, a reset code has been sent.';
+    show($('forgot-success'));
+    btn.textContent='Sent ✓';btn.disabled=false;
+    setTimeout(()=>{
+      hide($('forgot-step-email'));
+      show($('forgot-step-reset'));
+    },1500);
+  }catch(e){
+    $('forgot-msg').textContent=e.message;show($('forgot-msg'));
+    btn.textContent='Send Reset Code';btn.disabled=false;
+  }
+}
+
+async function submitReset(){
+  const token=$('reset-token').value.trim();
+  const password=$('reset-pw').value;
+  const btn=$('reset-btn');
+  hide($('reset-msg'));
+  hide($('reset-success'));
+  if(!token){$('reset-msg').textContent='Please enter the reset code';show($('reset-msg'));return}
+  if(password.length<8){$('reset-msg').textContent='Password must be at least 8 characters';show($('reset-msg'));return}
+  btn.textContent='Please wait...';btn.disabled=true;
+  try{
+    const res=await api('/auth/reset-password',{method:'POST',body:JSON.stringify({token,password})});
+    $('reset-success').textContent=res.message||'Password reset successfully!';
+    show($('reset-success'));
+    btn.textContent='Done';btn.disabled=true;
+    setTimeout(()=>{clsForgot()},2000);
+  }catch(e){
+    $('reset-msg').textContent=e.message;show($('reset-msg'));
+    btn.textContent='Reset Password';btn.disabled=false;
+  }
 }
 
 async function login(){
