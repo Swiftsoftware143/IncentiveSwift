@@ -709,7 +709,7 @@ pub async fn forgot_password(
     );
 
     // Attempt to send the email via configured provider
-    let email_sent = crate::email::send_reset_email(&body.email, &token).await;
+    let email_sent = crate::email::send_reset_email(&state.db, &body.email, &token).await;
     if let Err(e) = email_sent {
         tracing::warn!("Failed to send password reset email: {}", e);
     }

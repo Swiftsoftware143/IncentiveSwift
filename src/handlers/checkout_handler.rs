@@ -546,7 +546,7 @@ async fn deliver_credentials(
         match existing_hash {
             Some(hash) if !hash.is_empty() => {
                 // Account exists with password → send purchase confirmed
-                if let Err(e) = email::send_purchase_confirmed_email(email, &existing_name, plan_name).await {
+                if let Err(e) = email::send_purchase_confirmed_email(&state.db, email, &existing_name, plan_name).await {
                     tracing::warn!("Failed to send purchase confirmed email to {}: {}", email, e);
                 }
             }
@@ -561,7 +561,7 @@ async fn deliver_credentials(
                     .execute(&state.db)
                     .await?;
 
-                if let Err(e) = email::send_welcome_email(email, &existing_name, &temp_password).await {
+                if let Err(e) = email::send_welcome_email(&state.db, email, &existing_name, &temp_password).await {
                     tracing::warn!("Failed to send welcome email to {}: {}", email, e);
                 }
             }
@@ -584,7 +584,7 @@ async fn deliver_credentials(
         .execute(&state.db)
         .await?;
 
-        if let Err(e) = email::send_welcome_email(email, customer_name, &temp_password).await {
+        if let Err(e) = email::send_welcome_email(&state.db, email, customer_name, &temp_password).await {
             tracing::warn!("Failed to send welcome email to {}: {}", email, e);
         }
     }
