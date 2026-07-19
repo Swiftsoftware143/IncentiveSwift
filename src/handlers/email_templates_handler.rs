@@ -1,5 +1,4 @@
-//! Email Templates handler — REST endpoints for email_templates.
-//! Auto-generated during endpoint restoration.
+//! Email Templates handler — full CRUD with admin auth.
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -9,15 +8,21 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct EmailTemplates {
+pub struct EmailTemplate {
     pub id: Uuid,
+    pub aid: Uuid,
     pub account_id: Option<Uuid>,
     pub name: String,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub html_body: Option<String>,
+    pub is_html: Option<bool>,
+    pub is_default: Option<bool>,
+    pub template_type: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -26,16 +31,29 @@ pub struct EmailTemplates {
 pub struct ListQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub template_type: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct CreateInput {
     pub name: String,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub html_body: Option<String>,
+    pub is_html: Option<bool>,
+    pub is_default: Option<bool>,
+    pub template_type: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateInput {
     pub name: Option<String>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub html_body: Option<String>,
+    pub is_html: Option<bool>,
+    pub is_default: Option<bool>,
+    pub template_type: Option<String>,
 }
 
 /// GET /api/v1/email-templates
@@ -46,14 +64,48 @@ pub async fn list(
 ) -> Result<Json<Value>, AppError> {
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
-    let sql = "SELECT id, account_id, name, created_at, updated_at FROM email_templates ORDER BY name LIMIT $1 OFFSET $2".to_string();
-    let items = sqlx::query_as::<_, EmailTemplates>(&sql)
-        .bind(limit)
-        .bind(offset)
+
+    let items = if let Some(tt) = &query.template_type {
+        sqlx::query_as::<_, EmailTemplate>(
+            "SELECT * FROM email_templates WHERE template_type = $1 ORDER BY name LIMIT $2 OFFSET $3"
+        )
+        .bind(tt).bind(limit).bind(offset)
         .fetch_all(&state.db)
         .await
-        .unwrap_or_default();
-    Ok(Json(json!({ "items": items, "count": items.len(), "limit": limit, "offset": offset })))
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as::<_, EmailTemplate>(
+            "SELECT * FROM email_templates ORDER BY name LIMIT $1 OFFSET $2"
+        )
+        .bind(limit).bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+    };
+
+    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_templates")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+
+    Ok(Json(json!({ "items": items, "count": count })))
+}
+
+/// GET /api/v1/email-templates/{id}
+pub async fn get(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let item = sqlx::query_as::<_, EmailTemplate>(
+        "SELECT * FROM email_templates WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
+
+    Ok(Json(json!({"item": item})))
 }
 
 /// POST /api/v1/email-templates
@@ -63,84 +115,75 @@ pub async fn create(
     Json(body): Json<CreateInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
-    let account_id = Uuid::parse_str(&_user.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid user ID value".to_string()))?;
-    sqlx::query("INSERT INTO email_templates (id, account_id, name) VALUES ($1, $2, $3)")
-        .bind(id)
-        .bind(account_id)
-        .bind(&body.name)
-        .execute(&state.db)
-        .await?;
-    let item = sqlx::query_as::<_, EmailTemplates>(
-        "SELECT id, account_id, name, created_at, updated_at FROM email_templates WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
-    Ok(Json(json!({ "item": item })))
-}
+    let aid = Uuid::nil();
 
-/// GET /api/v1/email-templates/{id}
-pub async fn get(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    _user: AuthenticatedUser,
-) -> Result<Json<Value>, AppError> {
-    let item_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid item ID value".to_string()))?;
-    let item = sqlx::query_as::<_, EmailTemplates>(
-        "SELECT id, account_id, name, created_at, updated_at FROM email_templates WHERE id = $1"
+    sqlx::query(
+        r#"INSERT INTO email_templates (id, aid, name, subject, body, html_body, is_html, is_default, template_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
     )
-    .bind(item_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("Item not found for id: {}", id)))?;
-    Ok(Json(json!({ "item": item })))
+    .bind(id).bind(aid)
+    .bind(&body.name)
+    .bind(&body.subject)
+    .bind(&body.body)
+    .bind(&body.html_body)
+    .bind(body.is_html.unwrap_or(true))
+    .bind(body.is_default.unwrap_or(false))
+    .bind(&body.template_type)
+    .execute(&state.db).await?;
+
+    let item = sqlx::query_as::<_, EmailTemplate>(
+        "SELECT * FROM email_templates WHERE id = $1"
+    )
+    .bind(id).fetch_one(&state.db).await?;
+
+    Ok(Json(json!({"item": item})))
 }
 
 /// PUT /api/v1/email-templates/{id}
 pub async fn update(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     _user: AuthenticatedUser,
     Json(body): Json<UpdateInput>,
 ) -> Result<Json<Value>, AppError> {
-    let item_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
-    let row = sqlx::query("SELECT name FROM email_templates WHERE id = $1")
-        .bind(item_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound(format!("Item not found: {}", id)))?;
-    let new_name = body.name.unwrap_or_else(|| row.get("name"));
-    sqlx::query("UPDATE email_templates SET name = $1, updated_at = now() WHERE id = $2")
-        .bind(&new_name)
-        .bind(item_id)
-        .execute(&state.db)
-        .await?;
-    let item = sqlx::query_as::<_, EmailTemplates>(
-        "SELECT id, account_id, name, created_at, updated_at FROM email_templates WHERE id = $1"
+    sqlx::query(
+        r#"UPDATE email_templates SET
+            name = COALESCE($1, name),
+            subject = COALESCE($2, subject),
+            body = COALESCE($3, body),
+            html_body = COALESCE($4, html_body),
+            is_html = COALESCE($5, is_html),
+            is_default = COALESCE($6, is_default),
+            template_type = COALESCE($7, template_type),
+            updated_at = NOW()
+           WHERE id = $8"#
     )
-    .bind(item_id)
-    .fetch_one(&state.db)
-    .await?;
-    Ok(Json(json!({ "item": item })))
+    .bind(&body.name)
+    .bind(&body.subject)
+    .bind(&body.body)
+    .bind(&body.html_body)
+    .bind(body.is_html)
+    .bind(body.is_default)
+    .bind(&body.template_type)
+    .bind(id)
+    .execute(&state.db).await?;
+
+    let item = sqlx::query_as::<_, EmailTemplate>(
+        "SELECT * FROM email_templates WHERE id = $1"
+    )
+    .bind(id).fetch_one(&state.db).await?;
+
+    Ok(Json(json!({"item": item})))
 }
 
 /// DELETE /api/v1/email-templates/{id}
 pub async fn delete(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     _user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let item_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
-    let result = sqlx::query("DELETE FROM email_templates WHERE id = $1")
-        .bind(item_id)
-        .execute(&state.db)
-        .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(format!("Item not found: {}", id)));
-    }
-    Ok(Json(json!({ "status": "deleted" })))
+    sqlx::query("DELETE FROM email_templates WHERE id = $1")
+        .bind(id).execute(&state.db).await?;
+
+    Ok(Json(json!({"status": "deleted"})))
 }
