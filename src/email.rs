@@ -103,29 +103,33 @@ async fn send_inline(to: &str, template_type: &str, vars: &serde_json::Value, ap
     }
 }
 
-/// Keep original functions for backward compatibility
-pub async fn send_welcome_email(to: &str, name: &str, password: &str) -> Result<(), String> {
-    let body = format!(
-        "Welcome to IncentiveSwift, {0}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {1}\nPassword: {2}\n\nLogin at: https://app.incentiveswift.com/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@incentiveswift.com\n\nBest regards,\nThe IncentiveSwift Team",
-        name, to, password,
-    );
-    send_email_request(to, "Welcome to IncentiveSwift!", &body, "").await
+/// Keep original functions for backward compatibility — now use DB templates
+pub async fn send_welcome_email(pool: &sqlx::PgPool, to: &str, name: &str, password: &str) -> Result<(), String> {
+    let vars = json!({
+        "name": name,
+        "email": to,
+        "password": password,
+        "app_url": "https://app.incentiveswift.com",
+    });
+    send_template_email(pool, to, "welcome", &vars).await
 }
 
-pub async fn send_purchase_confirmed_email(to: &str, name: &str, plan_name: &str) -> Result<(), String> {
-    let body = format!(
-        "Hi {0},\n\nThank you for your purchase! Your payment for the {1} plan has been received successfully.\n\nYou can access your dashboard at: https://app.incentiveswift.com/dashboard\n\nIf you have any questions, please contact support@incentiveswift.com\n\nBest regards,\nThe IncentiveSwift Team",
-        name, plan_name,
-    );
-    send_email_request(to, "Payment Received - Thank You!", &body, "").await
+pub async fn send_purchase_confirmed_email(pool: &sqlx::PgPool, to: &str, name: &str, plan_name: &str) -> Result<(), String> {
+    let vars = json!({
+        "name": name,
+        "plan_name": plan_name,
+        "app_url": "https://app.incentiveswift.com",
+    });
+    send_template_email(pool, to, "purchase_confirmed", &vars).await
 }
 
-pub async fn send_reset_email(to: &str, token: &str) -> Result<(), String> {
-    let body = format!(
-        "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- SwiftSoftware",
-        token
-    );
-    send_email_request(to, "Password Reset Request", &body, "").await
+pub async fn send_reset_email(pool: &sqlx::PgPool, to: &str, token: &str) -> Result<(), String> {
+    let vars = json!({
+        "token": token,
+        "name": "there",
+        "app_url": "https://app.incentiveswift.com",
+    });
+    send_template_email(pool, to, "password_reset", &vars).await
 }
 
 /// Core email sender — form-based HTTP POST (Mailgun-compatible)
