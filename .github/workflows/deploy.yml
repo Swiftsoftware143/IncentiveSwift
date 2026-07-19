@@ -1,4 +1,4 @@
-name: Deploy incentiveswift
+name: Deploy IncentiveSwift
 
 on:
   push:
@@ -10,32 +10,19 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build and Deploy to VPS
+    - name: Deploy to VPS
       uses: appleboy/ssh-action@master
       with:
         host: 178.156.221.18
         username: root
         key: ${{ secrets.VPS_SSH_KEY }}
         script: |
-          # Acquire build lock — one build at a time (prevents OOM on 2vCPU/8GB)
-          echo "=== Acquiring build lock ==="
-          for i in $(seq 1 60); do
-            if mkdir /tmp/rust-build.lock 2>/dev/null; then
-              echo "Lock acquired after ${i}s"
-              break
-            fi
-            sleep 2
-            if [ "$i" -eq 60 ]; then
-              echo "ERROR: Could not acquire build lock after 120s"
-              exit 1
-            fi
-          done
-          trap 'rmdir /tmp/rust-build.lock 2>/dev/null' EXIT
-
+          set -e
+          echo "=== Deploying IncentiveSwift ==="
           cd /opt/swift/incentiveswift
           git pull origin main
-          CARGO_BUILD_JOBS=1 /root/.cargo/bin/cargo build --release
-          cp target/release/incentiveswift-api /opt/swift/incentiveswift/incentiveswift-api
+          cp incentiveswift-api /opt/swift/incentiveswift/incentiveswift-api 2>/dev/null || true
           systemctl restart incentiveswift
-          systemctl --no-pager status incentiveswift --no-pager | head -10
+          sleep 2
+          systemctl --no-pager status incentiveswift --no-pager | head -5
           echo "=== Deploy complete ==="
