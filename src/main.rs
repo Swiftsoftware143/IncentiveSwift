@@ -96,9 +96,18 @@ async fn main() -> anyhow::Result<()> {
         // Loyalty V2 — Business Pledges
         .route("/api/v1/business/pledge", post(handlers::loyalty_v2::create_pledge))
         .route("/api/v1/business/pledges/:business_id", get(handlers::loyalty_v2::list_business_pledges))
+        // Reward redemption
+        .route("/api/v1/loyalty/redeem-reward", post(handlers::loyalty_v2::redeem_reward))
+        .route("/api/v1/loyalty/rewards-earned/:contact_id", get(handlers::loyalty_v2::list_rewards_earned))
         // Admin routes
         .route("/api/v1/admin/pledges", get(handlers::loyalty_v2::list_pending_pledges))
         .route("/api/v1/admin/pledges/:id/review", post(handlers::loyalty_v2::review_pledge))
+        // Rotation Config API
+        .route("/api/v1/admin/rotation-configs", post(handlers::loyalty_v2::create_rotation_config))
+        .route("/api/v1/admin/rotation-configs/:campaign_slug", get(handlers::loyalty_v2::list_rotation_configs))
+        .route("/api/v1/admin/rotation-members", post(handlers::loyalty_v2::add_rotation_member))
+        .route("/api/v1/admin/rotation-members/:config_id/:business_id", delete(handlers::loyalty_v2::remove_rotation_member))
+        .route("/api/v1/admin/rotation-members/:config_id", get(handlers::loyalty_v2::list_rotation_members))
         // Authenticated routes
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
         .route("/api/v1/raffles/:slug/draw", post(handlers::raffles::draw))
