@@ -10,6 +10,7 @@ pub const VALID_MECHANIC_TYPES: &[&str] = &[
     "score_reveal", "spin_wheel", "scratch_card", "personality",
     "calculator", "mystery", "countdown", "poll", "chat",
     "leaderboard", "raffle", "long_form_qualifier", "quiz",
+    "loyalty", "b2b_loyalty",
 ];
 
 /// Input for creating a campaign.
