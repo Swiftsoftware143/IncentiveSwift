@@ -81,6 +81,41 @@ Consumers can redeem ZaarCash or Pro Credits for rewards. Fires a webhook to the
 | `POST /api/v1/loyalty/redeem-reward` | POST | Redeem points for reward |
 | `GET /api/v1/loyalty/rewards-earned/:contact_id` | GET | List earned rewards |
 
+
+## Webhook Delivery
+
+When events happen (reward redeemed, purchase verified, voucher claimed), IncentiveSwift fires webhooks to the tenant's configured endpoint.
+
+### Setting Up Webhooks
+
+1. Create/update a campaign with `delivery_config.entry_webhook_url` set to your endpoint
+2. Events POST as JSON with `event` type: `reward_redeemed`, `purchase_verified`, `voucher_issued`
+3. Your endpoint should return 200 to confirm receipt
+
+Example webhook payload:
+```json
+{
+  "event": "reward_redeemed",
+  "campaign": "ZaarHub Local Pass",
+  "reward": "Featured Directory Spotlight (30 days)",
+  "reward_tag": "featured_spotlight",
+  "points_spent": 2500,
+  "contact_id": "uuid",
+  "timestamp": "2026-07-20T00:00:00Z"
+}
+```
+
+### Setting Up for a New Tenant
+
+1. Create an account in IncentiveSwift (API or direct)
+2. Set branded currency: `currency_name`, `currency_icon`, `currency_color`, `b2b_currency_name`
+3. Create campaigns with `delivery_method: "webhook"` and your `entry_webhook_url`
+4. Create loyalty programs with points rules per campaign
+5. Create reward tiers with redemption costs
+6. Create rotation configs and add businesses
+7. Businesses submit pledges → admin approves
+8. System auto-issues vouchers on purchase verification
+
 ## Auto-Expire
 
 Vouchers expire after 30 days. Cron runs every 6 hours: `POST /api/v1/loyalty/expire-vouchers`
