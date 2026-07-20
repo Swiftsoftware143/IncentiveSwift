@@ -2,20 +2,18 @@
 //! PIN generation, receipt verification, rotating vouchers, business pledges
 
 use axum::{
-    extract::{Path, State, Query},
-    http::StatusCode,
+    extract::{Path, State},
     response::IntoResponse,
     Json,
 };
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use sqlx::PgPool;
-
 use crate::state::AppState;
 use crate::error::AppError;
+use crate::handlers::campaign_integrations;
 
 // ── Purchase Verification ──
 
@@ -169,12 +167,30 @@ pub async fn issue_voucher(
     .bind(req.contact_id)
     .bind(req.source_business_id)
     .bind(req.target_business_id)
-    .bind(req.voucher_type.unwrap_or_else(|| "discount".to_string()))
+    .bind(req.voucher_type.clone().unwrap_or_else(|| "discount".to_string()))
     .bind(&req.discount_value)
     .bind(&code)
     .bind(days)
     .execute(&s.db)
     .await?;
+
+    // Fire Marketing Boost webhook if configured
+    let mb_payload = json!({
+        "voucher_id": voucher_id,
+        "code": code,
+        "discount_value": req.discount_value,
+        "voucher_type": req.voucher_type,
+        "contact_id": req.contact_id,
+        "source_business_id": req.source_business_id,
+        "target_business_id": req.target_business_id,
+        "expires_in_days": days,
+    });
+    campaign_integrations::fire_marketing_boost(
+        &s,
+        &campaign.0,
+        "voucher_issued",
+        &mb_payload,
+    ).await;
 
     Ok(Json(json!({
         "voucher_id": voucher_id,
@@ -687,7 +703,7 @@ pub async fn redeem_reward(
     .execute(&s.db)
     .await?;
 
-    // Fire webhook to tenant
+    // Fire webhook to tenant (legacy entry_webhook_url config)
     let webhook_url = campaign.2.clone().unwrap_or_default();
     if !webhook_url.is_empty() {
         let payload = json!({
@@ -706,6 +722,21 @@ pub async fn redeem_reward(
             .send()
             .await;
     }
+
+    // Fire Marketing Boost webhook if configured
+    let mb_payload = json!({
+        "reward": tier.1,
+        "reward_tag": tier.4,
+        "points_spent": tier.2,
+        "contact_id": req.contact_id,
+        "campaign_slug": req.campaign_slug,
+    });
+    campaign_integrations::fire_marketing_boost(
+        &s,
+        &campaign.0,
+        "reward_redeemed",
+        &mb_payload,
+    ).await;
 
     Ok(Json(json!({
         "status": "redeemed",

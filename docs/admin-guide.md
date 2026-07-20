@@ -105,6 +105,53 @@ Example webhook payload:
 }
 ```
 
+### Marketing Boost (per-campaign webhook)
+
+Marketing Boost is a per-campaign webhook that fires on high-value events for external marketing systems. Config is stored in the campaign's config JSONB field.
+
+**Endpoint:**
+- `GET /api/v1/campaigns/{slug}/marketing-boost` — read current config
+- `PUT /api/v1/campaigns/{slug}/marketing-boost` — set or disable
+
+**PUT payload:**
+```json
+{
+  "enabled": true,
+  "webhook_url": "https://your-marketing-system.com/webhook",
+  "auth_header_name": "X-API-Key",
+  "auth_header_value": "your-api-key-here",
+  "events": ["voucher_issued", "reward_redeemed"],
+  "label": "Marketing Boost"
+}
+```
+
+**Events that trigger:**
+- `voucher_issued` — fires when a voucher is created via `issue_voucher`
+- `reward_redeemed` — fires when a reward is redeemed via `redeem_reward`
+
+Default event list is both. Set `enabled: false` or `PUT` with `enabled: false` to disable.
+
+**Auth support:** Optional header name/value pair sent with every webhook POST. Supports any API key scheme.
+
+**Webhook payload:**
+```json
+{
+  "event": "voucher_issued",
+  "campaign_id": "uuid-of-campaign",
+  "timestamp": "2026-07-20T00:00:00Z",
+  "data": {
+    "voucher_id": "uuid",
+    "code": "ABC12345",
+    "discount_value": "10% Off",
+    "contact_id": "uuid",
+    "source_business_id": "uuid",
+    "target_business_id": "uuid"
+  }
+}
+```
+
+Any authenticated IncentiveSwift user with campaign access can configure this. Different campaigns can point to different marketing endpoints.
+
 ### Setting Up for a New Tenant
 
 1. Create an account in IncentiveSwift (API or direct)

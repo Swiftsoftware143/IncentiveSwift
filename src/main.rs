@@ -230,6 +230,11 @@ async fn main() -> anyhow::Result<()> {
         // Campaign Integration Hub routes
         .route("/api/v1/campaigns/:slug/integrations", get(handlers::campaign_integrations::list_campaign_integrations).post(handlers::campaign_integrations::link_campaign_integration))
         .route("/api/v1/campaigns/:slug/integrations/:integration_id", delete(handlers::campaign_integrations::unlink_campaign_integration))
+        // Marketing Boost -- per-campaign webhook for external marketing systems
+        .route("/api/v1/campaigns/:slug/marketing-boost",
+            get(handlers::campaign_integrations::get_marketing_boost)
+            .put(handlers::campaign_integrations::set_marketing_boost))
+
         // Campaign wins / admin routes
         .route("/api/v1/campaigns/:slug/clone", post(handlers::campaigns::clone_campaign))
         .route("/api/v1/campaigns/:slug/wins", get(handlers::spin_handler::list_wins))

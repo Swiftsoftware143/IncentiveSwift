@@ -9,6 +9,7 @@
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::db::campaigns;
+use crate::security::auth::AuthenticatedUser;
 use axum::{
     extract::{Path, State},
     Json,
@@ -219,6 +220,198 @@ pub async fn unlink_campaign_integration(
     }
 
     Ok(Json(json!({ "status": "unlinked", "campaign_slug": slug, "integration_id": integration_id })))
+}
+
+// ---------------------------------------------------------------------------
+// Marketing Boost configuration (per-campaign webhook for external marketing systems)
+// ---------------------------------------------------------------------------
+
+/// Marketing Boost config stored in campaigns.config['marketing_boost'].
+/// When set, fires a webhook each time a voucher is issued or reward redeemed
+/// for this campaign.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketingBoostConfig {
+    pub enabled: bool,
+    pub webhook_url: String,
+    /// Optional API key header name, e.g. "X-API-Key"
+    pub auth_header_name: Option<String>,
+    /// Optional API key value sent in the header
+    pub auth_header_value: Option<String>,
+    /// Which events to fire on. Default: ["voucher_issued", "reward_redeemed"]
+    pub events: Option<Vec<String>>,
+    /// Optional label for display in admin UI
+    pub label: Option<String>,
+}
+
+/// Input for setting up Marketing Boost.
+#[derive(Debug, Deserialize)]
+pub struct SetMarketingBoostInput {
+    pub enabled: bool,
+    pub webhook_url: String,
+    pub auth_header_name: Option<String>,
+    pub auth_header_value: Option<String>,
+    pub events: Option<Vec<String>>,
+    pub label: Option<String>,
+}
+
+/// PUT /api/v1/campaigns/{slug}/marketing-boost
+/// Set or clear Marketing Boost webhook config on a campaign.
+pub async fn set_marketing_boost(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    _user: AuthenticatedUser,
+    Json(body): Json<SetMarketingBoostInput>,
+) -> Result<Json<Value>, AppError> {
+    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+
+    // Build the marketing_boost block
+    let boost = if body.enabled {
+        let default_events = vec!["voucher_issued".to_string(), "reward_redeemed".to_string()];
+        json!({
+            "enabled": true,
+            "webhook_url": body.webhook_url,
+            "auth_header_name": body.auth_header_name,
+            "auth_header_value": body.auth_header_value,
+            "events": body.events.unwrap_or(default_events),
+            "label": body.label.unwrap_or_else(|| "Marketing Boost".to_string()),
+        })
+    } else {
+        // Disabled => remove from config
+        json!(null)
+    };
+
+    // Merge into existing config
+    let config = campaign.config.clone();
+    let mut new_map = config.as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    if body.enabled {
+        new_map.insert("marketing_boost".to_string(), boost);
+    } else {
+        new_map.remove("marketing_boost");
+    }
+    let config = json!(new_map);
+
+    sqlx::query("UPDATE campaigns SET config = $1 WHERE id = $2")
+        .bind(&config)
+        .bind(campaign.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(json!({
+        "status": if body.enabled { "configured" } else { "disabled" },
+        "campaign_slug": slug,
+        "marketing_boost": if body.enabled {
+            config.get("marketing_boost").cloned()
+        } else {
+            None::<Value>
+        }
+    })))
+}
+
+/// GET /api/v1/campaigns/{slug}/marketing-boost
+/// Read the current Marketing Boost config.
+pub async fn get_marketing_boost(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let boost = campaign.config.get("marketing_boost");
+    match boost {
+        Some(Value::Object(_)) => Ok(Json(json!({
+            "campaign_slug": slug,
+            "marketing_boost": boost
+        }))),
+        _ => Ok(Json(json!({
+            "campaign_slug": slug,
+            "marketing_boost": null,
+            "message": "Marketing Boost is not configured for this campaign."
+        }))),
+    }
+}
+
+/// Fire Marketing Boost webhook for a given event.
+/// Returns Ok(()) regardless of webhook success — fire-and-forget.
+pub async fn fire_marketing_boost(
+    state: &AppState,
+    campaign_id: &Uuid,
+    event: &str,
+    payload: &Value,
+) {
+    // Fetch campaign config fresh
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT config FROM campaigns WHERE id = $1"
+    )
+    .bind(campaign_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    let config = match row {
+        Ok(Some(c)) => c,
+        _ => return,
+    };
+
+    let boost = match config.get("marketing_boost") {
+        Some(Value::Object(m)) => m.clone(),
+        _ => return,
+    };
+
+    if boost.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
+        return;
+    }
+
+    let webhook_url = match boost.get("webhook_url") {
+        Some(Value::String(s)) => s.clone(),
+        _ => return,
+    };
+
+    // Check if this event is in the configured list
+    let allowed_events = boost.get("events").and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["voucher_issued".to_string(), "reward_redeemed".to_string()]);
+
+    if !allowed_events.iter().any(|e| e == event) {
+        tracing::debug!("Marketing Boost: event '{}' not in allowed list {:?}", event, allowed_events);
+        return;
+    }
+
+    // Build the full webhook payload
+    let auth_header_name = boost.get("auth_header_name").and_then(|v| v.as_str()).map(String::from);
+    let auth_header_value = boost.get("auth_header_value").and_then(|v| v.as_str()).map(String::from);
+
+    let full_payload = json!({
+        "event": event,
+        "campaign_id": campaign_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "data": payload,
+    });
+
+    let mut req = state.http_client.post(&webhook_url)
+        .json(&full_payload)
+        .timeout(std::time::Duration::from_secs(10));
+
+    if let Some(ref name) = auth_header_name {
+        if let Some(ref val) = auth_header_value {
+            req = req.header(name.as_str(), val.as_str());
+        }
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                tracing::info!("Marketing Boost webhook sent for event '{}': {}", event, status);
+            } else {
+                tracing::warn!("Marketing Boost webhook returned {} for event '{}'", status, event);
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Marketing Boost webhook failed for event '{}': {}", event, e);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
