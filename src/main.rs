@@ -86,6 +86,19 @@ async fn main() -> anyhow::Result<()> {
         // Viral campaign engine -- Phase 1 (public)
         .route("/api/v1/earn/:channel_code", get(handlers::viral_handler::earn_click_through))
         .route("/api/v1/c/:campaign_slug", get(handlers::viral_handler::campaign_share_link))
+        // Loyalty V2 — Purchase Verification & Vouchers (public)
+        .route("/api/v1/loyalty/generate-pin", post(handlers::loyalty_v2::generate_pin))
+        .route("/api/v1/loyalty/verify-purchase", post(handlers::loyalty_v2::verify_purchase))
+        .route("/api/v1/loyalty/issue-voucher", post(handlers::loyalty_v2::issue_voucher))
+        .route("/api/v1/loyalty/my-vouchers/:contact_id", get(handlers::loyalty_v2::list_my_vouchers))
+        .route("/api/v1/loyalty/claim-voucher", post(handlers::loyalty_v2::claim_voucher))
+        .route("/api/v1/loyalty/expire-vouchers", post(handlers::loyalty_v2::expire_vouchers))
+        // Loyalty V2 — Business Pledges
+        .route("/api/v1/business/pledge", post(handlers::loyalty_v2::create_pledge))
+        .route("/api/v1/business/pledges/:business_id", get(handlers::loyalty_v2::list_business_pledges))
+        // Admin routes
+        .route("/api/v1/admin/pledges", get(handlers::loyalty_v2::list_pending_pledges))
+        .route("/api/v1/admin/pledges/:id/review", post(handlers::loyalty_v2::review_pledge))
         // Authenticated routes
         .route("/api/v1/campaigns", get(handlers::campaigns::list_campaigns).post(handlers::campaigns::create_campaign))
         .route("/api/v1/raffles/:slug/draw", post(handlers::raffles::draw))
