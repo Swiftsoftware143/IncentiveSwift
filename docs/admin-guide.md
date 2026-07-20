@@ -1,69 +1,68 @@
 # IncentiveSwift Admin Guide
 
 ## Overview
-IncentiveSwift is a multi-tenant loyalty engine powering spin-to-win, loyalty programs, referral systems, purchase verification, and rotating cross-promotions for ZaarHub and other platforms.
+Multi-tenant loyalty engine powering ZaarHub's loyalty programs, purchase verification, rotating cross-promotions, and referral systems.
 
 ## Tenant Roles
 
 | Role | Description |
 |---|---|
-| `admin` | Super admin — full access to all tenants, impersonation, system config |
-| `portfolio_company` | Sister/portfolio company (e.g., ZaarHub) — owns campaigns, manages its own loyalty |
-| `company_admin` | External business tenant — separate campaigns, isolated from ZaarHub |
+| `admin` | Full system access, impersonation, all tenants |
+| `portfolio_company` | Sister company (ZaarHub) — owns its campaigns and loyalty |
+| `company_admin` | External business tenant — isolated from ZaarHub |
 
 ## ZaarHub Loyalty Campaigns
 
-ZaarHub has two active campaigns in IncentiveSwift:
+### 1. ZaarHub Local Pass (B2C) — ZaarCash 🟠
+| Earning Action | Points |
+|---|---|
+| Purchase at claimed business + PIN verification | +50 |
+| Daily check-in | +10 |
+| Refer a friend who buys | +100 |
+| Social share | +5 |
 
-### 1. ZaarHub Local Pass (B2C)
-- **Currency:** ZaarCash 🟠
-- **How consumers earn:** Purchase at claimed business + verify with PIN, refer friends, daily check-in
-- **How consumers redeem:** Vouchers for non-competing local businesses (rotating cross-promo)
-- **Entry requirement:** Business must claim their listing AND submit a pledge (reward offer) — admin approves
+| Reward Tier | Points | Type |
+|---|---|---|
+| Free Coffee Voucher | 100 | Auto |
+| 25% Off Local Dining | 300 | Auto |
+| VIP Local Pass ($100 Service Credit) | 1,000 | Admin approval |
+| Featured Directory Spotlight (30 days) | 2,500 | Admin approval |
 
-### 2. ZaarHub B2B Supplier Loop
-- **Currency:** Pro Credits 💼
-- **How businesses earn:** Purchase from listed suppliers on ZaarHub
-- **How businesses redeem:** Featured directory placement, newsletter ads, AI lead campaigns
+### 2. ZaarHub B2B Supplier Loop — Pro Credits 💼
+| Earning Action | Credits |
+|---|---|
+| Purchase from listed supplier | +200 |
+| Refer another business to ZaarHub | +500 |
+
+| Reward Tier | Credits | Type |
+|---|---|---|
+| Featured Supplier Badge (30 days) | 500 | Admin approval |
+| Newsletter Ad Placement | 1,500 | Admin approval |
+| AI Lead Campaign (100 leads) | 3,000 | Admin approval |
 
 ## Purchase Verification Flow
-
-1. **Business generates PIN** — Business logs into their portal, clicks "Generate PIN" for a customer purchase
-2. **Customer enters PIN** — Customer enters the 4-digit PIN in ZaarHub to verify the purchase
-3. **Voucher issued** — System automatically issues a rotating cross-promo voucher to the customer
-4. **Customer redeems** — Customer uses the voucher at another claimed business within 30 days
+1. Business generates 4-digit PIN via their portal
+2. Customer enters PIN in ZaarHub to verify purchase
+3. Rotating cross-promo voucher issued automatically
+4. Customer redeems voucher at non-competing claimed business within 30 days
 
 ## Business Pledge Flow
+1. Claimed business submits reward offer (e.g., "15% off")
+2. Status: `pending` → admin reviews
+3. Once approved, business joins the loyalty rotation
+4. Only businesses with active pledges participate in the network
 
-1. Business submits a pledge with their reward offer (e.g., "15% off HVAC inspection")
-2. Pledge goes to `pending` status
-3. Directory admin reviews in admin panel
-4. Once approved, business is activated in the loyalty rotation
+## API Endpoints
 
-## Admin Pledge Approval
-
-`GET /api/v1/admin/pledges` — view all pending pledges
-`POST /api/v1/admin/pledges/:id/review` — approve or reject
-
-## New API Endpoints
-
-### Consumer
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/loyalty/verify-purchase` | POST | Enter PIN to verify purchase |
-| `/api/v1/loyalty/my-vouchers/:contact_id` | GET | List active vouchers |
-| `/api/v1/loyalty/claim-voucher` | POST | Redeem a voucher by code |
-
-### Business
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/loyalty/generate-pin` | POST | Generate 4-digit PIN for customer |
-| `/api/v1/business/pledge` | POST | Submit reward offer |
-| `/api/v1/business/pledges/:business_id` | GET | View pledges and status |
-
-### Admin
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/admin/pledges` | GET | List pending pledges |
-| `/api/v1/admin/pledges/:id/review` | POST | Approve/reject pledge |
-| `/api/v1/admin/impersonate` | POST | Impersonate a portfolio company |
+| Endpoint | Method | Who | What |
+|---|---|---|---|
+| `/api/v1/loyalty/generate-pin` | POST | Business | Generate PIN for customer |
+| `/api/v1/loyalty/verify-purchase` | POST | Consumer | Enter PIN to verify |
+| `/api/v1/loyalty/issue-voucher` | POST | Internal | Issue rotating voucher |
+| `/api/v1/loyalty/my-vouchers/:id` | GET | Consumer | List vouchers |
+| `/api/v1/loyalty/claim-voucher` | POST | Consumer | Redeem voucher |
+| `/api/v1/business/pledge` | POST | Business | Submit reward offer |
+| `/api/v1/business/pledges/:id` | GET | Business | View pledges |
+| `/api/v1/admin/pledges` | GET | Admin | Pending approvals |
+| `/api/v1/admin/pledges/:id/review` | POST | Admin | Approve/reject |
+| `/api/v1/admin/impersonate` | POST | Admin | Switch to portfolio company |
