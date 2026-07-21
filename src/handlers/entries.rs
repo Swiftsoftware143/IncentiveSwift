@@ -99,6 +99,14 @@ pub async fn create_entry(
         tags = pity_tags;
     }
 
+    // 5.5. Auto-add Newsletter tag for directory (b2b_loyalty) campaign entries
+    if campaign.r#type == "b2b_loyalty" && !campaign.name.is_empty() {
+        let city_newsletter_tag = format!("{} - Newsletter", campaign.name);
+        if !tags.contains(&city_newsletter_tag) {
+            tags.push(city_newsletter_tag);
+        }
+    }
+
     let tags_applied = tags.clone();
 
     // 6. Create entry
@@ -174,8 +182,30 @@ pub async fn create_entry(
         // Best-effort: don't fail the entry if email fails
     }
 
-    // 8.5. Fire entry webhook + CoreSwift sync (before body is consumed by payload)
-    // 8.5. Execute output actions (webhook, CoreSwift sync, email, SMS)
+    // 8.5. Push tags to CoreSwift for directory campaign entries
+    if campaign.r#type == "b2b_loyalty" {
+        let push_contact_id = contact_id;
+        let push_account_id = campaign.account_id;
+        let push_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
+        let push_added: Vec<String> = tags_applied.iter()
+            .filter(|t| t.contains(" - Newsletter"))
+            .cloned()
+            .collect();
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            crate::delivery::coreswift_push::push_contact_to_coreswift(
+                &state_clone,
+                &push_contact_id,
+                &push_account_id,
+                &push_tags,
+                &push_added,
+                &[],
+                "entry",
+            ).await;
+        });
+    }
+
+    // 8.6. Execute output actions (webhook, CoreSwift sync, email, SMS)
     let oa_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
     let oa_answers = body.answers.clone();
     let oa_utm_source = body.utm_source.clone();

@@ -768,3 +768,245 @@ pub async fn list_rewards_earned(
 
     Ok(Json(json!({"rewards": result})))
 }
+
+// ── Cross-Platform Tag Sync (MultiDirectory → IncentiveSwift) ──────────────
+
+/// POST /api/v1/loyalty/external/tag-contact
+/// Receives tag events from MultiDirectory or CoreSwift.
+/// Creates/updates a contact with the given tags.
+pub async fn external_tag_contact(
+    State(s): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("");
+    let first_name = body.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+    let last_name = body.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+    let phone = body.get("phone").and_then(|v| v.as_str()).unwrap_or("");
+    let tags: Vec<String> = body.get("tags")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("external");
+
+    if email.is_empty() && phone.is_empty() && first_name.is_empty() && last_name.is_empty() {
+        return Err(AppError::BadRequest("At least one contact identifier required".into()));
+    }
+
+    // Upsert the contact — find by email first, then by phone, or create
+    let contact_id = crate::db::contacts::upsert_contact(&s.db, &crate::db::contacts::ContactInput {
+        first_name: if first_name.is_empty() { None } else { Some(first_name.to_string()) },
+        last_name: if last_name.is_empty() { None } else { Some(last_name.to_string()) },
+        email: if email.is_empty() { None } else { Some(email.to_string()) },
+        phone: if phone.is_empty() { None } else { Some(phone.to_string()) },
+        business_name: None,
+        website: None,
+    }).await?;
+
+    // Apply tags as notes2 (comma-separated, deduplicated)
+    if !tags.is_empty() {
+        let existing_notes: Option<String> = sqlx::query_scalar(
+            "SELECT notes2 FROM contacts WHERE id = $1"
+        )
+        .bind(contact_id)
+        .fetch_optional(&s.db)
+        .await
+        .ok()
+        .flatten();
+
+        let mut all_tags: Vec<String> = existing_notes
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        for tag in &tags {
+            let tag_trimmed = tag.trim().to_string();
+            if !tag_trimmed.is_empty() && !all_tags.contains(&tag_trimmed) {
+                all_tags.push(tag_trimmed);
+            }
+        }
+
+        let notes2 = all_tags.join(", ");
+        let _ = sqlx::query("UPDATE contacts SET notes2 = $1 WHERE id = $2")
+            .bind(&notes2)
+            .bind(contact_id)
+            .execute(&s.db)
+            .await;
+    }
+
+    tracing::info!(
+        "[tag-sync] IncentiveSwift tag-contact: contact={} email={} tags={:?} source={}",
+        contact_id, email, tags, source
+    );
+
+    Ok(Json(json!({
+        "status": "ok",
+        "contact_id": contact_id.to_string(),
+        "tags_applied": tags.len(),
+        "source": source,
+    })))
+}
+
+// ── Survey Response Handler ────────────────────────────────────────────────
+
+/// POST /api/v1/campaigns/external/survey-response
+/// Called by MultiDirectory when a visitor completes the onboarding survey.
+/// Awards 100 Zaarcash + issues $50 restaurant card voucher.
+#[derive(Debug, Deserialize)]
+pub struct SurveyResponsePayload {
+    pub directory_slug: String,
+    pub visitor_account_id: Option<Uuid>,
+    pub visitor_email: Option<String>,
+    pub survey_id: Option<Uuid>,
+    pub answers: Option<Value>,
+    pub applied_tags: Option<Vec<String>>,
+}
+
+pub async fn survey_response(
+    State(s): State<AppState>,
+    Json(payload): Json<SurveyResponsePayload>,
+) -> Result<impl IntoResponse, AppError> {
+    // Build campaign slug from directory slug
+    // Directory slug format: "palm-coast" -> campaign slug: "directory-palm-coast"
+    let campaign_slug = format!("directory-{}", payload.directory_slug);
+
+    // Find the campaign
+    let campaign = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, name FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1"
+    )
+    .bind(&campaign_slug)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(
+        format!("Campaign not found for slug: {}", campaign_slug)
+    ))?;
+
+    let campaign_id = campaign.0;
+    let campaign_name = campaign.1;
+
+    // If we have a visitor email, find or create the contact
+    let contact_id = if let Some(ref email) = payload.visitor_email {
+        // Try to find existing contact
+        let existing = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM contacts WHERE email = $1 LIMIT 1"
+        )
+        .bind(email)
+        .fetch_optional(&s.db)
+        .await?;
+
+        match existing {
+            Some(cid) => cid,
+            None => {
+                // Create new contact
+                let new_id = Uuid::new_v4();
+                sqlx::query(
+                    "INSERT INTO contacts (id, email, notes2) VALUES ($1, $2, $3)"
+                )
+                .bind(new_id)
+                .bind(email)
+                .bind(&payload.applied_tags.as_ref().map(|t| t.join(", ")))
+                .execute(&s.db)
+                .await?;
+                new_id
+            }
+        }
+    } else {
+        return Err(AppError::BadRequest("Visitor email is required".into()));
+    };
+
+    // Award 100 Zaarcash — upsert campaign_points_balance
+    let existing_balance = sqlx::query_scalar::<_, i32>(
+        "SELECT points_balance FROM campaign_points_balance 
+         WHERE campaign_id = $1 AND contact_id = $2"
+    )
+    .bind(campaign_id)
+    .bind(contact_id)
+    .fetch_optional(&s.db)
+    .await?
+    .unwrap_or(0);
+
+    if existing_balance == 0 {
+        // First time — insert
+        sqlx::query(
+            "INSERT INTO campaign_points_balance (campaign_id, contact_id, points_balance, lifetime_points)
+             VALUES ($1, $2, 100, 100)"
+        )
+        .bind(campaign_id)
+        .bind(contact_id)
+        .execute(&s.db)
+        .await?;
+    } else {
+        // Existing — add 100 points
+        sqlx::query(
+            "UPDATE campaign_points_balance 
+             SET points_balance = points_balance + 100, 
+                 lifetime_points = lifetime_points + 100,
+                 updated_at = NOW()
+             WHERE campaign_id = $1 AND contact_id = $2"
+        )
+        .bind(campaign_id)
+        .bind(contact_id)
+        .execute(&s.db)
+        .await?;
+    }
+
+    // No loyalty_transactions table exists — skipping history record
+
+    // Issue $50 restaurant card voucher
+    let voucher_id = Uuid::new_v4();
+    let code: String = {
+        use rand::Rng;
+        const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let mut rng = rand::thread_rng();
+        (0..8).map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        }).collect()
+    };
+
+    let thirty_days = chrono::Duration::days(30);
+    let expires_at = chrono::Utc::now() + thirty_days;
+
+    sqlx::query(
+        "INSERT INTO vouchers (id, campaign_id, issued_to_contact_id, voucher_type, 
+         discount_value, redemption_code, expires_at, status)
+         VALUES ($1, $2, $3, 'restaurant_card', '$50.00', $4, $5, 'active')"
+    )
+    .bind(voucher_id)
+    .bind(campaign_id)
+    .bind(contact_id)
+    .bind(&code)
+    .bind(expires_at)
+    .execute(&s.db)
+    .await?;
+
+    // Fire Marketing Boost webhook for the voucher (handles the $50 card fulfillment)
+    let mb_payload = serde_json::json!({
+        "voucher_id": voucher_id,
+        "code": code,
+        "discount_value": "$50.00",
+        "voucher_type": "restaurant_card",
+        "contact_id": contact_id,
+        "campaign_name": campaign_name,
+        "campaign_slug": campaign_slug,
+        "source": "onboarding_survey",
+    });
+    crate::handlers::campaign_integrations::fire_marketing_boost(
+        &s,
+        &campaign_id,
+        "voucher_issued",
+        &mb_payload,
+    ).await;
+
+    Ok(Json(json!({
+        "status": "ok",
+        "contact_id": contact_id,
+        "voucher_id": voucher_id,
+        "code": code,
+        "zaarcash_awarded": 100,
+        "voucher_type": "restaurant_card",
+        "campaign": campaign_name,
+    })))
+}
