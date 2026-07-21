@@ -174,6 +174,18 @@ pub async fn issue_voucher(
     .execute(&s.db)
     .await?;
 
+    // Look up contact info for Marketing Boost payload
+    let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1"
+    )
+    .bind(req.contact_id)
+    .fetch_optional(&s.db)
+    .await
+    .ok()
+    .flatten();
+
+    let (mb_email, mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None, None));
+
     // Fire Marketing Boost webhook if configured
     let mb_payload = json!({
         "voucher_id": voucher_id,
@@ -184,6 +196,9 @@ pub async fn issue_voucher(
         "source_business_id": req.source_business_id,
         "target_business_id": req.target_business_id,
         "expires_in_days": days,
+        "email": mb_email,
+        "first_name": mb_first_name,
+        "last_name": mb_last_name,
     });
     campaign_integrations::fire_marketing_boost(
         &s,
@@ -723,6 +738,18 @@ pub async fn redeem_reward(
             .await;
     }
 
+    // Look up contact info for Marketing Boost payload
+    let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1"
+    )
+    .bind(req.contact_id)
+    .fetch_optional(&s.db)
+    .await
+    .ok()
+    .flatten();
+
+    let (mb_email, mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None, None));
+
     // Fire Marketing Boost webhook if configured
     let mb_payload = json!({
         "reward": tier.1,
@@ -730,6 +757,9 @@ pub async fn redeem_reward(
         "points_spent": tier.2,
         "contact_id": req.contact_id,
         "campaign_slug": req.campaign_slug,
+        "email": mb_email,
+        "first_name": mb_first_name,
+        "last_name": mb_last_name,
     });
     campaign_integrations::fire_marketing_boost(
         &s,
@@ -982,6 +1012,18 @@ pub async fn survey_response(
     .execute(&s.db)
     .await?;
 
+    // Look up contact name for Marketing Boost payload
+    let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT first_name, last_name FROM contacts WHERE id = $1"
+    )
+    .bind(contact_id)
+    .fetch_optional(&s.db)
+    .await
+    .ok()
+    .flatten();
+
+    let (mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None));
+
     // Fire Marketing Boost webhook for the voucher (handles the $50 card fulfillment)
     let mb_payload = serde_json::json!({
         "voucher_id": voucher_id,
@@ -989,6 +1031,9 @@ pub async fn survey_response(
         "discount_value": "$50.00",
         "voucher_type": "restaurant_card",
         "contact_id": contact_id,
+        "email": payload.visitor_email,
+        "first_name": mb_first_name,
+        "last_name": mb_last_name,
         "campaign_name": campaign_name,
         "campaign_slug": campaign_slug,
         "source": "onboarding_survey",

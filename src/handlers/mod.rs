@@ -39,6 +39,7 @@ pub mod calendar_events_handler;
 pub mod surfaces_handler;
 pub mod settings_handler;
 pub mod spin_handler;
+pub mod marketing_boost_handler;
 pub mod campaign_integrations;
 pub mod provider_keys_handler;
 pub mod dashboard_handler;

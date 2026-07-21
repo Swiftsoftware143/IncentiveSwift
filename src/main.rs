@@ -238,6 +238,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/campaigns/:slug/marketing-boost",
             get(handlers::campaign_integrations::get_marketing_boost)
             .put(handlers::campaign_integrations::set_marketing_boost))
+        // Marketing Boost destinations list (cached, requires auth)
+        .route("/api/v1/marketing-boost/destinations",
+            get(handlers::marketing_boost_handler::get_destinations))
 
         // Campaign wins / admin routes
         .route("/api/v1/campaigns/:slug/clone", post(handlers::campaigns::clone_campaign))
