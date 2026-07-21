@@ -99,6 +99,10 @@ async fn main() -> anyhow::Result<()> {
         // Reward redemption
         .route("/api/v1/loyalty/redeem-reward", post(handlers::loyalty_v2::redeem_reward))
         .route("/api/v1/loyalty/rewards-earned/:contact_id", get(handlers::loyalty_v2::list_rewards_earned))
+        // Cross-platform tag sync (MultiDirectory → IncentiveSwift)
+        .route("/api/v1/loyalty/external/tag-contact", post(handlers::loyalty_v2::external_tag_contact))
+        // Survey response from MultiDirectory (onboarding completion)
+        .route("/api/v1/campaigns/external/survey-response", post(handlers::loyalty_v2::survey_response))
         // Admin routes
         .route("/api/v1/admin/pledges", get(handlers::loyalty_v2::list_pending_pledges))
         .route("/api/v1/admin/pledges/:id/review", post(handlers::loyalty_v2::review_pledge))
