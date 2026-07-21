@@ -410,6 +410,10 @@ pub async fn spin(
         let contact_phone = contact.phone.clone();
         let first_name = contact.first_name.clone();
         let last_name = contact.last_name.clone();
+        let contact_email_for_mb = contact.email.clone();
+        let contact_phone_for_mb = contact.phone.clone();
+        let first_name_for_mb = contact.first_name.clone();
+        let last_name_for_mb = contact.last_name.clone();
 
         let prize_info = campaign_integrations::PrizeInfo {
             id: result.prize_id.clone(),
@@ -426,6 +430,9 @@ pub async fn spin(
         };
 
         // Fire asynchronously so we don't block the response
+        let state_for_mb = state.clone();
+        let campaign_id_for_mb = campaign.id;
+        let campaign_name_for_mb = campaign.name.clone();
         tokio::spawn(async move {
             campaign_integrations::fire_campaign_integrations(
                 &state,
@@ -439,6 +446,22 @@ pub async fn spin(
                 result.was_pity,
                 result.streak,
                 result.total_spins,
+            ).await;
+
+            // Also fire Marketing Boost direct API send if configured
+            let mb_payload = json!({
+                "first_name": first_name_for_mb,
+                "last_name": last_name_for_mb,
+                "email": contact_email_for_mb,
+                "phone": contact_phone_for_mb,
+                "campaign_name": campaign_name_for_mb,
+                "event": "on_win",
+            });
+            campaign_integrations::fire_marketing_boost(
+                &state_for_mb,
+                &campaign_id_for_mb,
+                "on_win",
+                &mb_payload,
             ).await;
         });
     }

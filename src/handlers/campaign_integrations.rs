@@ -227,19 +227,25 @@ pub async fn unlink_campaign_integration(
 // ---------------------------------------------------------------------------
 
 /// Marketing Boost config stored in campaigns.config['marketing_boost'].
-/// When set, fires a webhook each time a voucher is issued or reward redeemed
-/// for this campaign.
+/// Supports two modes:
+///   1. Legacy webhook mode: fires webhook on events
+///   2. Direct API mode: sends vouchers/cards/incentives via Marketing Boost API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketingBoostConfig {
     pub enabled: bool,
-    pub webhook_url: String,
-    /// Optional API key header name, e.g. "X-API-Key"
+    // Legacy webhook fields
+    pub webhook_url: Option<String>,
     pub auth_header_name: Option<String>,
-    /// Optional API key value sent in the header
     pub auth_header_value: Option<String>,
-    /// Which events to fire on. Default: ["voucher_issued", "reward_redeemed"]
     pub events: Option<Vec<String>>,
-    /// Optional label for display in admin UI
+    // Direct API fields
+    pub api_key: Option<String>,
+    pub sender: Option<String>,
+    pub business: Option<String>,
+    pub incentive_type: Option<String>,
+    pub amount: Option<u32>,
+    pub destination: Option<u32>,
+    pub trigger_events: Option<Vec<String>>,
     pub label: Option<String>,
 }
 
@@ -247,15 +253,25 @@ pub struct MarketingBoostConfig {
 #[derive(Debug, Deserialize)]
 pub struct SetMarketingBoostInput {
     pub enabled: bool,
-    pub webhook_url: String,
+    // Legacy webhook fields
+    pub webhook_url: Option<String>,
     pub auth_header_name: Option<String>,
     pub auth_header_value: Option<String>,
     pub events: Option<Vec<String>>,
+    // Direct API fields
+    pub api_key: Option<String>,
+    pub sender: Option<String>,
+    pub business: Option<String>,
+    pub incentive_type: Option<String>,
+    pub amount: Option<u32>,
+    pub destination: Option<u32>,
+    pub trigger_events: Option<Vec<String>>,
     pub label: Option<String>,
 }
 
 /// PUT /api/v1/campaigns/{slug}/marketing-boost
-/// Set or clear Marketing Boost webhook config on a campaign.
+/// Set or clear Marketing Boost config on a campaign.
+/// Supports both legacy webhook mode and direct API mode (with incentive_type).
 pub async fn set_marketing_boost(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -266,15 +282,29 @@ pub async fn set_marketing_boost(
 
     // Build the marketing_boost block
     let boost = if body.enabled {
-        let default_events = vec!["voucher_issued".to_string(), "reward_redeemed".to_string()];
-        json!({
-            "enabled": true,
-            "webhook_url": body.webhook_url,
-            "auth_header_name": body.auth_header_name,
-            "auth_header_value": body.auth_header_value,
-            "events": body.events.unwrap_or(default_events),
-            "label": body.label.unwrap_or_else(|| "Marketing Boost".to_string()),
-        })
+        let mut m = serde_json::Map::new();
+        m.insert("enabled".to_string(), json!(true));
+
+        // Direct API fields
+        if let Some(ref v) = body.api_key { m.insert("api_key".to_string(), json!(v)); }
+        if let Some(ref v) = body.sender { m.insert("sender".to_string(), json!(v)); }
+        if let Some(ref v) = body.business { m.insert("business".to_string(), json!(v)); }
+        if let Some(ref v) = body.incentive_type { m.insert("incentive_type".to_string(), json!(v)); }
+        if let Some(v) = body.amount { m.insert("amount".to_string(), json!(v)); }
+        if let Some(v) = body.destination { m.insert("destination".to_string(), json!(v)); }
+        if let Some(ref v) = body.trigger_events { m.insert("trigger_events".to_string(), json!(v)); }
+
+        // Legacy webhook fields
+        if let Some(ref v) = body.webhook_url { m.insert("webhook_url".to_string(), json!(v)); }
+        if let Some(ref v) = body.auth_header_name { m.insert("auth_header_name".to_string(), json!(v)); }
+        if let Some(ref v) = body.auth_header_value { m.insert("auth_header_value".to_string(), json!(v)); }
+        if let Some(ref v) = body.events { m.insert("events".to_string(), json!(v)); }
+
+        // Label
+        let label = body.label.unwrap_or_else(|| "Marketing Boost".to_string());
+        m.insert("label".to_string(), json!(label));
+
+        json!(m)
     } else {
         // Disabled => remove from config
         json!(null)
@@ -332,7 +362,10 @@ pub async fn get_marketing_boost(
 }
 
 /// Fire Marketing Boost webhook for a given event.
-/// Returns Ok(()) regardless of webhook success — fire-and-forget.
+/// Supports two modes:
+///   1. Legacy webhook mode: fires HTTP webhook on events
+///   2. Direct API mode: sends voucher/card/incentive via Marketing Boost API
+/// Returns Ok(()) regardless — fire-and-forget.
 pub async fn fire_marketing_boost(
     state: &AppState,
     campaign_id: &Uuid,
@@ -361,55 +394,134 @@ pub async fn fire_marketing_boost(
         return;
     }
 
-    let webhook_url = match boost.get("webhook_url") {
-        Some(Value::String(s)) => s.clone(),
-        _ => return,
-    };
+    // Check if this is direct API mode (has incentive_type) or legacy webhook mode
+    if let Some(incentive_type) = boost.get("incentive_type").and_then(|v| v.as_str()) {
+        // Direct API mode — fire the marketing boost incentive send
+        let trigger_events = boost.get("trigger_events")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+            .unwrap_or_else(|| vec!["on_win".to_string(), "on_redeem".to_string()]);
 
-    // Check if this event is in the configured list
-    let allowed_events = boost.get("events").and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| vec!["voucher_issued".to_string(), "reward_redeemed".to_string()]);
-
-    if !allowed_events.iter().any(|e| e == event) {
-        tracing::debug!("Marketing Boost: event '{}' not in allowed list {:?}", event, allowed_events);
-        return;
-    }
-
-    // Build the full webhook payload
-    let auth_header_name = boost.get("auth_header_name").and_then(|v| v.as_str()).map(String::from);
-    let auth_header_value = boost.get("auth_header_value").and_then(|v| v.as_str()).map(String::from);
-
-    let full_payload = json!({
-        "event": event,
-        "campaign_id": campaign_id,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "data": payload,
-    });
-
-    let mut req = state.http_client.post(&webhook_url)
-        .json(&full_payload)
-        .timeout(std::time::Duration::from_secs(10));
-
-    if let Some(ref name) = auth_header_name {
-        if let Some(ref val) = auth_header_value {
-            req = req.header(name.as_str(), val.as_str());
+        if !trigger_events.iter().any(|e| e == event) {
+            tracing::debug!("Marketing Boost: event '{}' not in trigger_events {:?}", event, trigger_events);
+            return;
         }
-    }
 
-    match req.send().await {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                tracing::info!("Marketing Boost webhook sent for event '{}': {}", event, status);
-            } else {
-                tracing::warn!("Marketing Boost webhook returned {} for event '{}'", status, event);
+        // Extract contact info from payload
+        let first_name = payload.get("first_name")
+            .or_else(|| payload.get("contact_id")).and_then(|v| v.as_str())
+            .unwrap_or("");
+        let last_name = payload.get("last_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let email = payload.get("email")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let phone = payload.get("phone").and_then(|v| v.as_str()).map(String::from);
+        let countrycode = payload.get("countrycode").and_then(|v| v.as_str()).map(String::from);
+        let campaign_name = payload.get("campaign_name")
+            .or_else(|| payload.get("campaign_slug"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("Campaign");
+
+        // Check that we have enough info to send
+        if email.is_empty() {
+            tracing::warn!("Marketing Boost: cannot send {} incentive without email", incentive_type);
+            return;
+        }
+
+        let api_key = boost.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
+        let sender = boost.get("sender").and_then(|v| v.as_str()).unwrap_or("3822-4706");
+        let business = boost.get("business").and_then(|v| v.as_str()).unwrap_or("6111");
+        let amount = boost.get("amount").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let destination = boost.get("destination").and_then(|v| v.as_u64()).map(|v| v as u32);
+
+        let client = &state.http_client;
+
+        let result = match incentive_type {
+            "dining_voucher" => {
+                let amt = amount.unwrap_or(50);
+                crate::delivery::direct_api::marketing_boost::send_dining_voucher(
+                    client, api_key, sender, business,
+                    first_name, last_name, email, amt, campaign_name,
+                ).await
+            }
+            "hotel_savings_card" => {
+                let amt = amount.unwrap_or(200);
+                crate::delivery::direct_api::marketing_boost::send_hotel_savings_card(
+                    client, api_key, sender, business,
+                    first_name, last_name, email, amt, campaign_name,
+                ).await
+            }
+            "vacation_incentive" => {
+                let dest = destination.unwrap_or(41);
+                crate::delivery::direct_api::marketing_boost::send_vacation_incentive(
+                    client, api_key, sender, business,
+                    first_name, last_name, email, phone, countrycode, dest, campaign_name,
+                ).await
+            }
+            other => {
+                tracing::warn!("Marketing Boost: unknown incentive_type: {}", other);
+                return;
+            }
+        };
+
+        match result {
+            Ok(resp) => tracing::info!("Marketing Boost {} incentive sent: {:?}", incentive_type, resp),
+            Err(e) => tracing::warn!("Marketing Boost {} incentive failed: {}", incentive_type, e),
+        }
+    } else {
+        // Legacy webhook mode
+        let webhook_url = match boost.get("webhook_url") {
+            Some(Value::String(s)) => s.clone(),
+            _ => return,
+        };
+
+        // Check if this event is in the configured list
+        let allowed_events = boost.get("events").and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec!["voucher_issued".to_string(), "reward_redeemed".to_string()]);
+
+        if !allowed_events.iter().any(|e| e == event) {
+            tracing::debug!("Marketing Boost: event '{}' not in allowed list {:?}", event, allowed_events);
+            return;
+        }
+
+        // Build the full webhook payload
+        let auth_header_name = boost.get("auth_header_name").and_then(|v| v.as_str()).map(String::from);
+        let auth_header_value = boost.get("auth_header_value").and_then(|v| v.as_str()).map(String::from);
+
+        let full_payload = json!({
+            "event": event,
+            "campaign_id": campaign_id,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "data": payload,
+        });
+
+        let mut req = state.http_client.post(&webhook_url)
+            .json(&full_payload)
+            .timeout(std::time::Duration::from_secs(10));
+
+        if let Some(ref name) = auth_header_name {
+            if let Some(ref val) = auth_header_value {
+                req = req.header(name.as_str(), val.as_str());
             }
         }
-        Err(e) => {
-            tracing::warn!("Marketing Boost webhook failed for event '{}': {}", event, e);
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    tracing::info!("Marketing Boost webhook sent for event '{}': {}", event, status);
+                } else {
+                    tracing::warn!("Marketing Boost webhook returned {} for event '{}'", status, event);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Marketing Boost webhook failed for event '{}': {}", event, e);
+            }
         }
     }
 }
