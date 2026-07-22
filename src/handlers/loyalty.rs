@@ -142,7 +142,8 @@ pub async fn list_programs(
                   lp.point_decay_days, lp.is_active, lp.created_at,
                   lp.tiers_enabled, lp.milestones_enabled, lp.streak_enabled,
                   lp.streak_bonus, lp.streak_days, lp.referral_bonus, lp.birthday_bonus,
-                  lp.points_expire_days, lp.social_share_points, lp.points_per_visit
+                  lp.points_expire_days, lp.social_share_points, lp.points_per_visit,
+                  lp.currency_name, lp.currency_icon, lp.currency_color
            FROM loyalty_programs lp
            LEFT JOIN campaigns c ON c.id = lp.campaign_id
            WHERE c.account_id = $1 OR lp.campaign_id IS NULL
@@ -242,6 +243,9 @@ pub struct LoyaltyProgramInput {
     pub max_checkins_per_day: Option<i32>,
     pub point_decay_days: Option<i32>,
     pub is_active: Option<bool>,
+    pub currency_name: Option<String>,
+    pub currency_icon: Option<String>,
+    pub currency_color: Option<String>,
 }
 
 /// Query for listing tiers.
@@ -259,6 +263,7 @@ pub struct RewardTierInput {
     pub reward_tag: String,
     pub requires_approval: Option<bool>,
     pub sort_order: Option<i32>,
+    pub marketing_boost: Option<serde_json::Value>,
 }
 
 /// Input for updating a reward tier (all fields optional).
@@ -269,6 +274,7 @@ pub struct RewardTierUpdateInput {
     pub reward_tag: Option<String>,
     pub requires_approval: Option<bool>,
     pub sort_order: Option<i32>,
+    pub marketing_boost: Option<serde_json::Value>,
 }
 
 /// POST /api/v1/loyalty/programs — create program.
@@ -286,8 +292,9 @@ pub async fn create_program(
 
     sqlx::query(
         r#"INSERT INTO loyalty_programs (id, campaign_id, name, recognition_method,
-            points_per_checkin, max_checkins_per_day, point_decay_days, is_active)
-           VALUES ($1, $2, $3, 'both', $4, $5, $6, $7)"#
+            points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
+            currency_name, currency_icon, currency_color)
+           VALUES ($1, $2, $3, 'both', $4, $5, $6, $7, $8, $9, $10)"#
     )
     .bind(id)
     .bind(campaign_id)
@@ -296,6 +303,9 @@ pub async fn create_program(
     .bind(body.max_checkins_per_day.unwrap_or(1))
     .bind(body.point_decay_days)
     .bind(body.is_active.unwrap_or(true))
+    .bind(body.currency_name.unwrap_or_else(|| "Points".to_string()))
+    .bind(body.currency_icon.unwrap_or_else(|| "⭐".to_string()))
+    .bind(body.currency_color.unwrap_or_else(|| "#0d9488".to_string()))
     .execute(&state.db)
     .await?;
 
@@ -305,7 +315,8 @@ pub async fn create_program(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1"#
     )
     .bind(id)
@@ -342,14 +353,20 @@ pub async fn update_program(
                points_per_checkin = COALESCE($2, points_per_checkin),
                max_checkins_per_day = COALESCE($3, max_checkins_per_day),
                point_decay_days = COALESCE($4, point_decay_days),
-               is_active = COALESCE($5, is_active)
-           WHERE id = $6"#
+               is_active = COALESCE($5, is_active),
+               currency_name = COALESCE($6, currency_name),
+               currency_icon = COALESCE($7, currency_icon),
+               currency_color = COALESCE($8, currency_color)
+           WHERE id = $9"#
     )
     .bind(&body.name)
     .bind(body.points_per_checkin)
     .bind(body.max_checkins_per_day)
     .bind(body.point_decay_days)
     .bind(body.is_active)
+    .bind(body.currency_name)
+    .bind(body.currency_icon)
+    .bind(body.currency_color)
     .bind(program_id)
     .execute(&state.db)
     .await?;
@@ -360,7 +377,8 @@ pub async fn update_program(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1"#
     )
     .bind(program_id)
@@ -405,8 +423,8 @@ pub async fn create_tier(
 
     let id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO loyalty_reward_tiers (id, program_id, name, points_required, reward_tag, requires_approval, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+        r#"INSERT INTO loyalty_reward_tiers (id, program_id, name, points_required, reward_tag, requires_approval, sort_order, marketing_boost)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#
     )
     .bind(id)
     .bind(program_id)
@@ -415,12 +433,13 @@ pub async fn create_tier(
     .bind(&body.reward_tag)
     .bind(body.requires_approval.unwrap_or(false))
     .bind(body.sort_order.unwrap_or(0))
+    .bind(&body.marketing_boost)
     .execute(&state.db)
     .await?;
 
     let tier = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
-                  reward_tag, sort_order
+                  reward_tag, sort_order, marketing_boost
            FROM loyalty_reward_tiers WHERE id = $1"#
     )
     .bind(id)
@@ -446,21 +465,23 @@ pub async fn update_tier(
                points_required = COALESCE($2, points_required),
                reward_tag = COALESCE($3, reward_tag),
                requires_approval = COALESCE($4, requires_approval),
-               sort_order = COALESCE($5, sort_order)
-           WHERE id = $6"#
+               sort_order = COALESCE($5, sort_order),
+               marketing_boost = COALESCE($6, marketing_boost)
+           WHERE id = $7"#
     )
     .bind(&body.name)
     .bind(body.points_required)
     .bind(&body.reward_tag)
     .bind(body.requires_approval)
     .bind(body.sort_order)
+    .bind(&body.marketing_boost)
     .bind(tier_id)
     .execute(&state.db)
     .await?;
 
     let tier = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
-                  reward_tag, sort_order
+                  reward_tag, sort_order, marketing_boost
            FROM loyalty_reward_tiers WHERE id = $1"#
     )
     .bind(tier_id)
@@ -505,7 +526,7 @@ pub async fn list_tiers(
 
     let tiers = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
-                  reward_tag, sort_order
+                  reward_tag, sort_order, marketing_boost
            FROM loyalty_reward_tiers
            WHERE program_id = $1
            ORDER BY sort_order ASC, points_required ASC"#
@@ -567,7 +588,8 @@ pub async fn online_visit(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#
     )
     .bind(&member.program_id)
@@ -679,7 +701,8 @@ pub async fn online_share(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#
     )
     .bind(&member.program_id)
@@ -962,7 +985,8 @@ pub async fn program_qr(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1"#
     )
     .bind(program_id)

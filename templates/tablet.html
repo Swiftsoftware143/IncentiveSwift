@@ -281,6 +281,44 @@
         }
 
         drawWheel();
+
+        /* === HELP/GUIDE OVERLAY === */
+        (function(){
+          var style=document.createElement('style');
+          style.textContent='.is-help-btn{position:fixed;bottom:20px;right:20px;width:44px;height:44px;border-radius:50%;background:{{button_color}};color:{{button_text_color}};border:none;font-size:20px;font-weight:700;cursor:pointer;z-index:9998;box-shadow:0 4px 12px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;transition:all .2s}.is-help-btn:hover{transform:scale(1.1)}';
+          document.head.appendChild(style);
+          var helpBtn=document.createElement('button');
+          helpBtn.className='is-help-btn';
+          helpBtn.textContent='?';
+          helpBtn.title='How it works';
+          helpBtn.onclick=function(){
+            var ov=document.createElement('div');
+            ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)';
+            ov.onclick=function(e){if(e.target===ov)ov.remove()};
+            ov.innerHTML='<div style="background:#fff;border-radius:16px;padding:32px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:80vh;overflow-y:auto">'
+              +'<h2 style="margin-bottom:16px;color:#0f172a;font-size:1.3rem">🎯 How It Works</h2>'
+              +'<div style="margin-bottom:16px;border-bottom:1px solid #e2e8f0;padding-bottom:14px">'
+              +'<h3 style="font-size:1rem;color:#0f172a;margin-bottom:4px">💰 What are Points?</h3>'
+              +'<p style="font-size:.85rem;color:#64748b;line-height:1.6">Points are your reward currency. Earn them by playing games like Spin the Wheel, entering raffles, completing quizzes, or referring friends. Redeem points for deals, discounts, and rewards.</p>'
+              +'</div>'
+              +'<div style="margin-bottom:16px;border-bottom:1px solid #e2e8f0;padding-bottom:14px">'
+              +'<h3 style="font-size:1rem;color:#0f172a;margin-bottom:4px">🎮 How to Earn</h3>'
+              +'<p style="font-size:.85rem;color:#64748b;line-height:1.6">Spin wheels, enter raffles, complete surveys and quizzes, participate in photo contests, refer friends, and check in at locations. Each activity earns you points and entries.</p>'
+              +'</div>'
+              +'<div style="margin-bottom:16px;border-bottom:1px solid #e2e8f0;padding-bottom:14px">'
+              +'<h3 style="font-size:1rem;color:#0f172a;margin-bottom:4px">🎁 How to Redeem</h3>'
+              +'<p style="font-size:.85rem;color:#64748b;line-height:1.6">Use your points to claim rewards, get discounts, or unlock special offers. Check the Rewards section to see available prizes and their point costs.</p>'
+              +'</div>'
+              +'<div style="margin-bottom:0">'
+              +'<h3 style="font-size:1rem;color:#0f172a;margin-bottom:4px">🔗 Your Referral Link</h3>'
+              +'<p style="font-size:.85rem;color:#64748b;line-height:1.6">Share your unique referral link with friends! When they join through your link and participate, you earn bonus points. Find your link in the Refer section of your dashboard.</p>'
+              +'</div>'
+              +'<div style="text-align:center;margin-top:20px"><button style="background:{{button_color}};color:{{button_text_color}};border:none;border-radius:8px;padding:10px 28px;font-size:.9rem;font-weight:600;cursor:pointer" onclick="this.closest(\'[style*=\"position:fixed\"]\').remove()">Got it</button></div>'
+              +'</div>';
+            document.body.appendChild(ov);
+          };
+          document.body.appendChild(helpBtn);
+        })();
     </script>
 </body>
 </html>

@@ -429,10 +429,23 @@ pub async fn spin(
             last_name,
         };
 
+        // Look up prize-level marketing_boost from campaign_prize_inventory
+        let prize_marketing_boost: Option<serde_json::Value> = sqlx::query_scalar(
+            r#"SELECT marketing_boost FROM campaign_prize_inventory
+               WHERE campaign_id = $1 AND prize_id = $2"#
+        )
+        .bind(campaign.id)
+        .bind(&result.prize_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
         // Fire asynchronously so we don't block the response
         let state_for_mb = state.clone();
         let campaign_id_for_mb = campaign.id;
         let campaign_name_for_mb = campaign.name.clone();
+        let mb_override = prize_marketing_boost.clone();
         tokio::spawn(async move {
             campaign_integrations::fire_campaign_integrations(
                 &state,
@@ -449,6 +462,7 @@ pub async fn spin(
             ).await;
 
             // Also fire Marketing Boost direct API send if configured
+            // Per-prize marketing_boost takes priority over campaign-level config
             let mb_payload = json!({
                 "first_name": first_name_for_mb,
                 "last_name": last_name_for_mb,
@@ -457,11 +471,12 @@ pub async fn spin(
                 "campaign_name": campaign_name_for_mb,
                 "event": "on_win",
             });
-            campaign_integrations::fire_marketing_boost(
+            campaign_integrations::fire_marketing_boost_with_override(
                 &state_for_mb,
                 &campaign_id_for_mb,
                 "on_win",
                 &mb_payload,
+                mb_override.as_ref(),
             ).await;
         });
     }

@@ -29,6 +29,7 @@ pub struct PrizeConfig {
     pub weight: u32,
     pub prize_type: String,
     pub inventory: Option<i64>,
+    pub marketing_boost: Option<serde_json::Value>,
 }
 
 /// The prize pool section of campaign config.
@@ -87,6 +88,7 @@ pub struct PrizeInventoryRow {
     pub remaining: Option<i32>,
     pub claimed: i32,
     pub color: Option<String>,
+    pub marketing_boost: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +147,7 @@ async fn check_inventory(
     prize_id: &str,
 ) -> Result<Option<PrizeInventoryRow>, AppError> {
     let inv = sqlx::query_as::<_, PrizeInventoryRow>(
-        r#"SELECT id, campaign_id, prize_id, label, prize_type, total, remaining, claimed, color
+        r#"SELECT id, campaign_id, prize_id, label, prize_type, total, remaining, claimed, color, marketing_boost
            FROM campaign_prize_inventory
            WHERE campaign_id = $1 AND prize_id = $2"#
     )
@@ -165,7 +167,7 @@ pub async fn ensure_inventory(
 ) -> Result<(), AppError> {
     // Check if inventory row already exists
     let exists: Option<PrizeInventoryRow> = sqlx::query_as::<_, PrizeInventoryRow>(
-        r#"SELECT id, campaign_id, prize_id, label, prize_type, total, remaining, claimed, color
+        r#"SELECT id, campaign_id, prize_id, label, prize_type, total, remaining, claimed, color, marketing_boost
            FROM campaign_prize_inventory
            WHERE campaign_id = $1 AND prize_id = $2"#
     )
@@ -182,8 +184,8 @@ pub async fn ensure_inventory(
     let inv_i32: Option<i32> = prize.inventory.map(|v| v as i32);
 
     sqlx::query(
-        r#"INSERT INTO campaign_prize_inventory (campaign_id, prize_id, label, prize_type, total, remaining, color)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+        r#"INSERT INTO campaign_prize_inventory (campaign_id, prize_id, label, prize_type, total, remaining, color, marketing_boost)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#
     )
     .bind(campaign_id)
     .bind(&prize.id)
@@ -192,6 +194,7 @@ pub async fn ensure_inventory(
     .bind(inv_i32)
     .bind(inv_i32)
     .bind(&color)
+    .bind(&prize.marketing_boost)
     .execute(pool)
     .await?;
 

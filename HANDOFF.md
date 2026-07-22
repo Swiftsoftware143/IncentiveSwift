@@ -67,9 +67,8 @@ The full SQL schema is in `migrations/00001_full_schema.sql` — includes:
 12. `long_form_qualifier` — deep logic-based pre-qualification for high-ticket offers
 
 ### Loyalty Module (separate upsell)
-- Recurring point-based check-in system
-- Daily cap enforcement (DB-level, not in-memory)
-- Reward tiers with auto or manual approval
+- **Loyalty V1:** Recurring point-based check-in, online visit/share/referral tracking, reward tiers (auto/manual approval), daily cap enforcement (DB-level)
+- **Loyalty V2 (fully built):** Purchase verification via PIN, rotating cross-promotion vouchers, business pledges (admin review), reward redemption, rotation group config (non-competing business pairs)
 - Gated behind `module_loyalty_program` feature flag
 
 ### Delivery — Two Paths
@@ -142,23 +141,48 @@ IncentiveSwift has a database-backed email template system (`email_templates` ta
 - **Railway config:** railway.toml with healthcheck path `/api/v1/health`
 - **Formula evaluator:** Use `mathjs-rs` or a hand-rolled recursive-descent parser restricted to `+ - * / ( )` and named variables
 
-### API Endpoints
-```
-GET  /api/v1/health                    — Public, rate-limited (20/min/IP)
-GET  /api/v1/campaigns/:slug           — Public, edge-cacheable 60s
-POST /api/v1/entries                   — Public, rate-limited — core capture
-POST /api/v1/raffles/:slug/enter       — Public, rate-limited
+### API Endpoints (expanded)
 
-GET  /api/v1/campaigns                 — Authenticated (JWT or API key)
-POST /api/v1/campaigns                 — Authenticated, feature-gated
-POST /api/v1/raffles/:slug/draw        — Authenticated
-POST /api/v1/raffles/:slug/redraw      — Authenticated
-POST /api/v1/loyalty/checkin           — Public-but-scoped (QR), DB-level cap enforcement
-POST /api/v1/loyalty/rewards/:id/approve  — Authenticated
-POST /api/v1/loyalty/rewards/:id/deny     — Authenticated
-POST /api/v1/delivery/resend           — Authenticated
-GET  /api/v1/contacts                  — Authenticated, light CRM list
-GET  /api/v1/contacts/:id              — Authenticated, full entry history
+Full route table in `docs/inline-api-reference.md`. Key additions beyond initial build:
+
+**Credits (fully wired):**
+```
+GET  /api/v1/credits/balance           — Balance + plan limits
+GET  /api/v1/credits/history           — Paginated transaction log
+POST /api/v1/credits/topup             — Stripe checkout
+POST /api/v1/admin/credits/adjust      — Admin adjustment
+POST /api/v1/webhooks/sms/             — SMS credit triggers
+```
+
+**Loyalty V2 (purchase verification & vouchers):**
+```
+POST /api/v1/loyalty/generate-pin      — Business generates PIN
+POST /api/v1/loyalty/verify-purchase   — Consumer verifies purchase
+POST /api/v1/loyalty/issue-voucher     — Issue cross-promo voucher
+GET  /api/v1/loyalty/my-vouchers/:id   — List active vouchers
+POST /api/v1/loyalty/claim-voucher     — Redeem voucher
+POST /api/v1/loyalty/expire-vouchers   — Expire overdue (cron)
+POST /api/v1/loyalty/redeem-reward     — Points for reward
+```
+
+**Referral Engine:**
+```
+POST /api/v1/campaigns/:slug/referral-codes     — Generate code
+GET  /api/v1/campaigns/:slug/referral-stats      — Stats
+GET  /api/v1/campaigns/:slug/leaderboard         — Leaderboard
+POST /api/v1/campaigns/:slug/earn-channels       — Earn channels
+GET  /api/v1/earn/:channel_code                  — Public click-through
+```
+
+**Legacy (initial build):**
+```
+GET  /api/v1/health                    — Public
+POST /api/v1/entries                   — Core capture
+GET  /api/v1/campaigns                 — Authenticated
+POST /api/v1/campaigns                 — Feature-gated
+POST /api/v1/loyalty/checkin           — Daily check-in
+POST /api/v1/loyalty/rewards/:id/approve  — Approve reward
+GET  /api/v1/contacts                  — Light CRM list
 ```
 
 ### Cargo.toml Dependencies
@@ -170,22 +194,11 @@ GET  /api/v1/contacts/:id              — Authenticated, full entry history
 
 ---
 
-## Rust Build Prompt
-The full build prompt from the original spec is in `INCENTIVESWIFT_RUST_BUILD_PROMPT.md` in this repo. It includes:
-- Why Axum over Actix-web
-- Exact project structure
-- Security non-negotiables
-- Claude Code review checklist
-- Testing requirements
-
-## Architecture Document
-The full architecture spec is in `INCENTIVESWIFT_ARCHITECTURE.md` in this repo. It includes:
-- Complete data flow diagrams
-- Database schema (also in migrations/)
-- Light CRM design
-- Payload contract
-- Plan tier system
-- Loyalty module design
+## Guide Files (this repo)
+- `docs/admin-guide.md` — Full admin/API reference with concepts, setup, endpoint tables, webhook events
+- `docs/inline-api-reference.md` — Complete route-to-handler mapping extracted from `src/main.rs`
+- `INCENTIVESWIFT_ARCHITECTURE.md` — Ecosystem architecture, one-way flow, payload contract
+- `INCENTIVESWIFT_RUST_BUILD_PROMPT.md` — Rust build spec for code generation (includes security non-negotiables, testing requirements, Claude Code checklist)
 
 ---
 

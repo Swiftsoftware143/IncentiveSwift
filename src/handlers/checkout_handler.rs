@@ -573,16 +573,39 @@ async fn deliver_credentials(
         let hash = hash_password(&temp_password)?;
         let account_id = Uuid::new_v4();
 
+        // Insert account with tenant_id = self (standalone tenant)
         sqlx::query(
-            "INSERT INTO accounts (id, name, email, password_hash, slug, role) VALUES ($1, $2, $3, $4, $5, 'company_admin')"
+            "INSERT INTO accounts (id, name, email, password_hash, slug, role, tenant_id, purchase_pin)
+             VALUES ($1, $2, $3, $4, $5, 'company_admin', $6, '0000')"
         )
         .bind(account_id)
         .bind(customer_name)
         .bind(email)
         .bind(&hash)
         .bind(&slug)
+        .bind(account_id) // tenant_id = self
         .execute(&state.db)
         .await?;
+
+        // Auto-generate purchase PIN: prefix "Z" + sequential number from account's tenant record
+        let next_num: Option<i32> = sqlx::query_scalar(
+            "UPDATE accounts SET next_pin_number = next_pin_number + 1 WHERE id = $1 RETURNING next_pin_number - 1"
+        )
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(num) = next_num {
+            let new_pin = if num < 1000 {
+                format!("Z{:03}", num)
+            } else {
+                format!("Z{}", num)
+            };
+            sqlx::query("UPDATE accounts SET purchase_pin = $1 WHERE id = $2")
+                .bind(&new_pin)
+                .bind(account_id)
+                .execute(&state.db)
+                .await?;
+        }
 
         if let Err(e) = email::send_welcome_email(&state.db, email, customer_name, &temp_password).await {
             tracing::warn!("Failed to send welcome email to {}: {}", email, e);
