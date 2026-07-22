@@ -107,6 +107,17 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 |--------|------|------|---------|-------------|
 | POST | `/loyalty/external/tag-contact` | Service | `loyalty_v2::external_tag_contact` | Cross-platform tag sync |
 | POST | `/campaigns/external/survey-response` | Service | `loyalty_v2::survey_response` | Survey response from MD |
+| POST | `/loyalty/external/grant-credits` | Service* | `loyalty_v2::external_grant_credits` | Grant Zaarcash for verified referrals |
+| GET | `/credits/balance` | Service* | `credits_handler::get_balance` | Check Zaarcash balance (filtered by program) |
+
+*Service-level auth — called by MultiDirectory backend with API key, not user JWT. Used for referral payouts.
+
+**Referral grant payload:**
+```json
+{"email": "referrer@email.com", "amount": 50, "reason": "referral", "program": "zaarhub"}
+```
+
+**Directions & amounts:** visitor→visitor: 50, business→business: 200 (2× bonus), business→visitor: 50, visitor→business: 100 Zaarcash.
 
 ## Rewards Handler
 
