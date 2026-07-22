@@ -361,7 +361,12 @@ pub async fn get_marketing_boost(
     }
 }
 
-/// Fire Marketing Boost webhook for a given event.
+/// Fire Marketing Boost for a given event, with optional per-reward/per-prize override.
+///
+/// Strategy:
+///   1. If `per_item_boost` is `Some`, use that config (per-reward/per-prize).
+///   2. Otherwise, fall back to campaign-level `campaigns.config['marketing_boost']`.
+///
 /// Supports two modes:
 ///   1. Legacy webhook mode: fires HTTP webhook on events
 ///   2. Direct API mode: sends voucher/card/incentive via Marketing Boost API
@@ -371,6 +376,18 @@ pub async fn fire_marketing_boost(
     campaign_id: &Uuid,
     event: &str,
     payload: &Value,
+) {
+    fire_marketing_boost_with_override(state, campaign_id, event, payload, None).await;
+}
+
+/// Like `fire_marketing_boost`, but accepts an optional per-item boost config.
+/// When `per_item_boost` is Some, it takes priority over campaign-level config.
+pub async fn fire_marketing_boost_with_override(
+    state: &AppState,
+    campaign_id: &Uuid,
+    event: &str,
+    payload: &Value,
+    per_item_boost: Option<&serde_json::Value>,
 ) {
     // Fetch campaign config fresh
     let row = sqlx::query_scalar::<_, serde_json::Value>(
@@ -385,9 +402,23 @@ pub async fn fire_marketing_boost(
         _ => return,
     };
 
-    let boost = match config.get("marketing_boost") {
-        Some(Value::Object(m)) => m.clone(),
-        _ => return,
+    // Determine which boost config to use: per-item override takes priority
+    let boost = if let Some(override_val) = per_item_boost {
+        match override_val.as_object() {
+            Some(obj) => obj.clone(),
+            None => {
+                // Override is present but not an object (e.g. null) — fall back to campaign
+                match config.get("marketing_boost") {
+                    Some(Value::Object(m)) => m.clone(),
+                    _ => return,
+                }
+            }
+        }
+    } else {
+        match config.get("marketing_boost") {
+            Some(Value::Object(m)) => m.clone(),
+            _ => return,
+        }
     };
 
     if boost.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
@@ -430,9 +461,46 @@ pub async fn fire_marketing_boost(
             return;
         }
 
-        let api_key = boost.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
-        let sender = boost.get("sender").and_then(|v| v.as_str()).unwrap_or("3822-4706");
-        let business = boost.get("business").and_then(|v| v.as_str()).unwrap_or("6111");
+        // Resolve credentials: per-boost config -> stored provider key -> env defaults
+        let api_key = if let Some(k) = boost.get("api_key").and_then(|v| v.as_str()).filter(|k| !k.is_empty()) {
+            k.to_string()
+        } else {
+            sqlx::query_scalar::<_, String>(
+                "SELECT api_key FROM provider_keys WHERE account_id = (SELECT account_id FROM campaigns WHERE id = $1) AND provider = 'marketing_boost' AND is_active = true LIMIT 1"
+            )
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+        };
+        let sender = if let Some(s) = boost.get("sender").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            s.to_string()
+        } else {
+            sqlx::query_scalar::<_, String>(
+                "SELECT COALESCE(metadata->>'sender', '3822-4706') FROM provider_keys WHERE account_id = (SELECT account_id FROM campaigns WHERE id = $1) AND provider = 'marketing_boost' AND is_active = true LIMIT 1"
+            )
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "3822-4706".to_string())
+        };
+        let business = if let Some(b) = boost.get("business").and_then(|v| v.as_str()).filter(|b| !b.is_empty()) {
+            b.to_string()
+        } else {
+            sqlx::query_scalar::<_, String>(
+                "SELECT COALESCE(metadata->>'business', '6111') FROM provider_keys WHERE account_id = (SELECT account_id FROM campaigns WHERE id = $1) AND provider = 'marketing_boost' AND is_active = true LIMIT 1"
+            )
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "6111".to_string())
+        };
         let amount = boost.get("amount").and_then(|v| v.as_u64()).map(|v| v as u32);
         let destination = boost.get("destination").and_then(|v| v.as_u64()).map(|v| v as u32);
 
@@ -442,21 +510,21 @@ pub async fn fire_marketing_boost(
             "dining_voucher" => {
                 let amt = amount.unwrap_or(50);
                 crate::delivery::direct_api::marketing_boost::send_dining_voucher(
-                    client, api_key, sender, business,
+                    client, &api_key, &sender, &business,
                     first_name, last_name, email, amt, campaign_name,
                 ).await
             }
             "hotel_savings_card" => {
                 let amt = amount.unwrap_or(200);
                 crate::delivery::direct_api::marketing_boost::send_hotel_savings_card(
-                    client, api_key, sender, business,
+                    client, &api_key, &sender, &business,
                     first_name, last_name, email, amt, campaign_name,
                 ).await
             }
             "vacation_incentive" => {
                 let dest = destination.unwrap_or(41);
                 crate::delivery::direct_api::marketing_boost::send_vacation_incentive(
-                    client, api_key, sender, business,
+                    client, &api_key, &sender, &business,
                     first_name, last_name, email, phone, countrycode, dest, campaign_name,
                 ).await
             }

@@ -116,6 +116,9 @@ pub struct LoyaltyProgram {
     pub points_expire_days: i32,
     pub social_share_points: i32,
     pub points_per_visit: i32,
+    pub currency_name: String,
+    pub currency_icon: String,
+    pub currency_color: String,
 }
 
 /// Get a loyalty program by ID or slug.
@@ -129,7 +132,8 @@ pub async fn get_program(
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
     )
     .bind(program_id)
@@ -151,6 +155,7 @@ pub struct RewardTier {
     pub requires_approval: bool,
     pub reward_tag: String,
     pub sort_order: i32,
+    pub marketing_boost: Option<serde_json::Value>,
 }
 
 #[allow(dead_code)]

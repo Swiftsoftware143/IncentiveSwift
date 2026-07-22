@@ -246,3 +246,123 @@ pub async fn list_all_tenants(
         "tenants": tenants
     })))
 }
+
+/// Auth guard helper: ensures company_admin can only access their own tenant.
+/// super_admin and admin can access any tenant.
+async fn check_tenant_access(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    tenant_id: &str,
+) -> Result<(), AppError> {
+    if user.role != "super_admin" && user.role != "admin" {
+        // company_admin — verify they own this tenant
+        // Parse user's account_id as UUID first
+        let user_uuid = uuid::Uuid::parse_str(&user.account_id).map_err(|_| {
+            AppError::BadRequest("Invalid user account ID".to_string())
+        })?;
+        let account_tenant_id: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT tenant_id FROM accounts WHERE id = $1"
+        )
+        .bind(user_uuid)
+        .fetch_optional(&state.db)
+        .await?;
+        let tid = uuid::Uuid::parse_str(tenant_id).map_err(|_| {
+            AppError::BadRequest("Invalid tenant ID".to_string())
+        })?;
+        if account_tenant_id.map(|t| t == tid) != Some(true) {
+            return Err(AppError::Forbidden("You can only access your own tenant".into()));
+        }
+    }
+    Ok(())
+}
+
+/// GET /api/v1/admin/tenants/:tenant_id/credits-rate
+/// Returns the credit rate for a tenant (account).
+/// super_admin, admin, and company_admin all allowed (company_admin on their own tenant).
+pub async fn get_credit_rate(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(tenant_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    check_tenant_access(&state, &user, &tenant_id).await?;
+
+    let id = uuid::Uuid::parse_str(&tenant_id)
+        .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
+
+    let credit_rate: Option<i32> = sqlx::query_scalar(
+        "SELECT credit_rate FROM accounts WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Tenant not found: {}", tenant_id)))?;
+
+    Ok(Json(json!({
+        "credit_rate": credit_rate
+    })))
+}
+
+/// Input for updating credit rate.
+#[derive(Deserialize)]
+pub struct UpdateCreditRateInput {
+    pub credit_rate: i32,
+}
+
+/// PATCH /api/v1/admin/tenants/:tenant_id/credits-rate
+/// Updates the credit rate for a tenant (account).
+/// super_admin, admin, and company_admin all allowed (company_admin on their own tenant).
+pub async fn update_credit_rate(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(tenant_id): Path<String>,
+    Json(body): Json<UpdateCreditRateInput>,
+) -> Result<Json<Value>, AppError> {
+    check_tenant_access(&state, &user, &tenant_id).await?;
+
+    let id = uuid::Uuid::parse_str(&tenant_id)
+        .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
+
+    if body.credit_rate < 0 {
+        return Err(AppError::BadRequest("Credit rate must be non-negative".to_string()));
+    }
+
+    let updated = sqlx::query_scalar::<_, i32>(
+        "UPDATE accounts SET credit_rate = $1 WHERE id = $2 RETURNING credit_rate"
+    )
+    .bind(body.credit_rate)
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Tenant not found: {}", tenant_id)))?;
+
+    Ok(Json(json!({
+        "credit_rate": updated
+    })))
+}
+
+/// GET /api/v1/admin/tenants/:tenant_id/purchase-pin
+/// Returns the purchase PIN for a tenant (account). Read-only.
+pub async fn get_purchase_pin(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(tenant_id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    check_tenant_access(&state, &user, &tenant_id).await?;
+
+    let id = uuid::Uuid::parse_str(&tenant_id)
+        .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
+
+    let pin: Option<String> = sqlx::query_scalar(
+        "SELECT purchase_pin FROM accounts WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("Tenant not found: {}", tenant_id)))?;
+
+    Ok(Json(json!({
+        "pin": pin
+    })))
+}
+
+// Note: purchase_pin is auto-generated on account creation. Only read endpoint is exposed.

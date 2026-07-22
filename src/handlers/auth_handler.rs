@@ -95,9 +95,10 @@ pub async fn register(
     let slug = format!("{}-{}", slug_base, &account_id.to_string()[..8]);
 
     // Insert account with tenant_id = self (standalone tenant)
+    // purchase_pin set to '0000' temporarily; real PIN generated below
     sqlx::query(
-        r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug)
-           VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7)"#
+        r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug, purchase_pin)
+           VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000')"#
     )
     .bind(account_id)
     .bind(&name)
@@ -108,6 +109,27 @@ pub async fn register(
     .bind(&slug)
     .execute(&state.db)
     .await?;
+
+    // Auto-generate purchase PIN: prefix "Z" + sequential number from account's tenant record
+    // Format: Z followed by 3-digit zero-padded number (e.g., Z100, Z101, ..., Z999, Z1000+)
+    let next_num: Option<i32> = sqlx::query_scalar(
+        "UPDATE accounts SET next_pin_number = next_pin_number + 1 WHERE id = $1 RETURNING next_pin_number - 1"
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(num) = next_num {
+        let new_pin = if num < 1000 {
+            format!("Z{:03}", num)
+        } else {
+            format!("Z{}", num)
+        };
+        sqlx::query("UPDATE accounts SET purchase_pin = $1 WHERE id = $2")
+            .bind(&new_pin)
+            .bind(account_id)
+            .execute(&state.db)
+            .await?;
+    }
 
     // Assign industry if provided; fall back to 'general'
     let industry_slug = body.industry_slug.as_deref().unwrap_or("general");
@@ -159,7 +181,8 @@ pub async fn register(
                           point_decay_days, is_active, created_at,
                           tiers_enabled, milestones_enabled, streak_enabled,
                           streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                          points_expire_days, social_share_points, points_per_visit
+                          points_expire_days, social_share_points, points_per_visit,
+                          currency_name, currency_icon, currency_color
                    FROM loyalty_programs WHERE id = $1 AND is_active = true"#
             )
             .bind(&program_member.program_id)

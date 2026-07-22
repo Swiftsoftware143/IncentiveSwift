@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::error::AppError;
 use crate::handlers::campaign_integrations;
+use crate::security::auth::AuthenticatedUser;
 
 // ── Purchase Verification ──
 
@@ -22,6 +23,7 @@ pub struct GeneratePinRequest {
     pub campaign_slug: String,
     pub business_id: Uuid,
     pub business_name: Option<String>,
+    pub purchase_amount: Option<rust_decimal::Decimal>,
 }
 
 /// POST /api/v1/loyalty/generate-pin — business generates a 4-digit PIN for a customer purchase
@@ -46,14 +48,15 @@ pub async fn generate_pin(
 
     let verification_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO purchase_verifications (id, campaign_id, business_id, business_name, verification_type, pin_code, status)
-         VALUES ($1, $2, $3, $4, 'pin', $5, 'pending')"
+        "INSERT INTO purchase_verifications (id, campaign_id, business_id, business_name, verification_type, pin_code, purchase_amount, status)
+         VALUES ($1, $2, $3, $4, 'pin', $5, $6, 'pending')"
     )
     .bind(verification_id)
     .bind(campaign.0)
     .bind(req.business_id)
     .bind(&req.business_name)
     .bind(&pin)
+    .bind(req.purchase_amount)
     .execute(&s.db)
     .await?;
 
@@ -73,10 +76,14 @@ pub struct VerifyPurchaseRequest {
 /// POST /api/v1/loyalty/verify-purchase — consumer enters PIN to verify purchase
 pub async fn verify_purchase(
     State(s): State<AppState>,
+    auth: AuthenticatedUser,
     Json(req): Json<VerifyPurchaseRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let verification = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<String>, String)>(
-        "SELECT pv.id, pv.campaign_id, pv.business_id, pv.business_name, pv.pin_code, pv.status
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    let verification = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<String>, String, Option<rust_decimal::Decimal>)>(
+        "SELECT pv.id, pv.campaign_id, pv.business_id, pv.business_name, pv.pin_code, pv.status, pv.purchase_amount
          FROM purchase_verifications pv
          WHERE pv.pin_code = $1 AND pv.status = 'pending'
          LIMIT 1"
@@ -86,29 +93,98 @@ pub async fn verify_purchase(
     .await?
     .ok_or_else(|| AppError::NotFound("Invalid or expired PIN".into()))?;
 
-    // Mark verified
-    sqlx::query(
-        "UPDATE purchase_verifications SET status = 'verified', contact_id = $1, verified_at = NOW() WHERE id = $2"
+    // Check if contact exists before linking
+    let contact_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)"
     )
     .bind(req.contact_id)
-    .bind(verification.0)
-    .execute(&s.db)
-    .await?;
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or(false);
+
+    if contact_exists {
+        sqlx::query(
+            "UPDATE purchase_verifications SET status = 'verified', contact_id = $1, verified_at = NOW() WHERE id = $2"
+        )
+        .bind(req.contact_id)
+        .bind(verification.0)
+        .execute(&s.db)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE purchase_verifications SET status = 'verified', verified_at = NOW() WHERE id = $1"
+        )
+        .bind(verification.0)
+        .execute(&s.db)
+        .await?;
+    }
 
     let business_name = if verification.3.is_empty() { "Business".to_string() } else { verification.3.clone() };
 
-    // Auto-issue a rotating voucher from cross-promotion group
-    let voucher = issue_rotation_voucher(
-        &s.db,
-        &verification.1,
-        &req.contact_id,
-        &verification.2,
-    ).await?;
+    // Auto-issue a rotating voucher from cross-promotion group (only if contact exists)
+    let voucher = if contact_exists {
+        issue_rotation_voucher(
+            &s.db,
+            &verification.1,
+            &req.contact_id,
+            &verification.2,
+        ).await?
+    } else {
+        None
+    };
+
+    // Auto-credit the customer based on purchase amount
+    let mut credit_amount = 0i32;
+    let mut credit_message = String::new();
+    if let Some(amount) = verification.6 {
+        // Convert purchase amount to credits: $1 = 10 credits
+        let scaled = (amount * rust_decimal::Decimal::new(10, 0)).round();
+        if let Ok(int_val) = i32::try_from(scaled) {
+            if int_val > 0 {
+                credit_amount = int_val;
+                // Get current balance
+                let cur_balance: i32 = sqlx::query_scalar(
+                    "SELECT credits_balance FROM accounts WHERE id = $1"
+                )
+                .bind(account_id)
+                .fetch_optional(&s.db)
+                .await?
+                .unwrap_or(0);
+
+                let new_balance = cur_balance + credit_amount;
+
+                // Update balance
+                sqlx::query(
+                    "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
+                )
+                .bind(new_balance)
+                .bind(account_id)
+                .execute(&s.db)
+                .await?;
+
+                // Log transaction
+                sqlx::query(
+                    "INSERT INTO credit_transactions (account_id, amount, balance_after, action, reference_type, reference_id, description)
+                     VALUES ($1, $2, $3, 'purchase', 'purchase_verification', $4, $5)"
+                )
+                .bind(account_id)
+                .bind(credit_amount)
+                .bind(new_balance)
+                .bind(verification.0.to_string())
+                .bind(format!("Purchase at {} — {} credits earned", business_name, credit_amount))
+                .execute(&s.db)
+                .await?;
+
+                credit_message = format!("You earned {} loyalty credits!", credit_amount);
+            }
+        }
+    }
 
     let mut response = json!({
         "status": "verified",
         "business_name": business_name,
-        "message": format!("Purchase at {} verified!", business_name)
+        "credits_earned": credit_amount,
+        "message": format!("Purchase at {} verified! {}", business_name, credit_message)
     });
 
     if let Some(ref v) = voucher {
@@ -669,8 +745,8 @@ pub async fn redeem_reward(
     .await?
     .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
 
-    let tier = sqlx::query_as::<_, (Uuid, String, i32, bool, Option<String>, Option<Value>)>(
-        "SELECT id, name, points_required, requires_approval, reward_tag, redeem_action_config
+    let tier = sqlx::query_as::<_, (Uuid, String, i32, bool, Option<String>, Option<Value>, Option<Value>)>(
+        "SELECT id, name, points_required, requires_approval, reward_tag, redeem_action_config, marketing_boost
          FROM loyalty_reward_tiers WHERE id = $1 LIMIT 1"
     )
     .bind(req.reward_tier_id)
@@ -751,6 +827,7 @@ pub async fn redeem_reward(
     let (mb_email, mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None, None));
 
     // Fire Marketing Boost webhook if configured
+    // Per-reward marketing_boost (on the tier) takes priority over campaign-level config
     let mb_payload = json!({
         "reward": tier.1,
         "reward_tag": tier.4,
@@ -761,11 +838,12 @@ pub async fn redeem_reward(
         "first_name": mb_first_name,
         "last_name": mb_last_name,
     });
-    campaign_integrations::fire_marketing_boost(
+    campaign_integrations::fire_marketing_boost_with_override(
         &s,
         &campaign.0,
         "reward_redeemed",
         &mb_payload,
+        tier.6.as_ref(),  // tier.6 = marketing_boost column
     ).await;
 
     Ok(Json(json!({
@@ -879,7 +957,353 @@ pub async fn external_tag_contact(
     })))
 }
 
+// ── Purchase Verify (business-scanner auto-credit) ────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct PurchaseVerifyRequest {
+    pub contact_id: Uuid,
+    pub amount: f64,
+    pub pin: String,
+    pub offer_id: Option<Uuid>,
+}
+
+/// POST /api/v1/loyalty/purchase/verify
+/// Business scans customer QR code, enters PIN, and this endpoint
+/// verifies the purchase and auto-credits the customer.
+/// Credits awarded: amount * credit_rate (configurable per tenant).
+/// If an offer_id is provided, redemption credits are deducted per offer cap.
+pub async fn purchase_verify(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+    Json(req): Json<PurchaseVerifyRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let business_account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    // Get the account's tenant_id and purchase_pin
+    let account_info = sqlx::query_as::<_, (Option<Uuid>, String)>(
+        "SELECT tenant_id, purchase_pin FROM accounts WHERE id = $1"
+    )
+    .bind(business_account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Business account not found".into()))?;
+
+    let (tenant_id, purchase_pin) = account_info;
+
+    // Validate PIN against the business tenant's stored purchase_pin
+    if req.pin.trim() != purchase_pin.as_str() {
+        return Err(AppError::BadRequest("Invalid PIN".into()));
+    }
+
+    // Read credit_rate from accounts (tenant) table
+    let credit_rate: i32 = if let Some(tid) = tenant_id {
+        sqlx::query_scalar("SELECT credit_rate FROM accounts WHERE id = $1")
+            .bind(tid)
+            .fetch_optional(&s.db)
+            .await?
+            .unwrap_or(10)
+    } else {
+        10 // default
+    };
+
+    // Verify contact exists
+    let contact_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)"
+    )
+    .bind(req.contact_id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or(false);
+
+    if !contact_exists {
+        return Err(AppError::NotFound("Customer contact not found".into()));
+    }
+
+    // If an offer_id is provided, look up the offer and calculate redemption cap
+    let mut redeemed_credits: i32 = 0;
+    let mut offer_name: Option<String> = None;
+
+    if let Some(oid) = req.offer_id {
+        let offer = sqlx::query_as::<_, (String, i32, i32, bool)>(
+            "SELECT name, discount_percent, cap_dollars, active FROM offers WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(oid)
+        .bind(tenant_id.unwrap_or(business_account_id))
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Offer not found".into()))?;
+
+        let (o_name, discount_pct, cap_dollars, active) = offer;
+        if !active {
+            return Err(AppError::BadRequest("Offer is no longer active".into()));
+        }
+
+        offer_name = Some(o_name);
+
+        // Calculate max discount credits: min(cap_dollars * credit_rate, balance)
+        // discount_percent is informational — the actual cap is in dollars
+        let max_discount_credits = (cap_dollars as i32) * credit_rate;
+
+        // Get customer's current balance
+        let customer_balance: i32 = sqlx::query_scalar(
+            "SELECT credits_balance FROM accounts WHERE id = $1"
+        )
+        .bind(req.contact_id)
+        .fetch_optional(&s.db)
+        .await?
+        .unwrap_or(0);
+
+        // Redeemed = min(max_discount_credits, customer_balance)
+        redeemed_credits = max_discount_credits.min(customer_balance);
+    }
+
+    // Calculate earned credits using configurable credit_rate: amount * credit_rate
+    let credit_amount = ((req.amount * credit_rate as f64).floor() as i32).max(1);
+
+    // Update the contact's account credits
+    // First check if contact has an account by same UUID
+    let account_credits: Option<i32> = sqlx::query_scalar(
+        "SELECT credits_balance FROM accounts WHERE id = $1"
+    )
+    .bind(req.contact_id)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some(balance) = account_credits {
+        // Contact UUID matches an account
+        // Step 1: Deduct redeemed credits (if offer applied)
+        let mut net_change = credit_amount; // earned
+        if redeemed_credits > 0 {
+            net_change = credit_amount - redeemed_credits;
+        }
+
+        let new_balance = (balance as i32 + net_change).max(0);
+        sqlx::query(
+            "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
+        )
+        .bind(new_balance)
+        .bind(req.contact_id)
+        .execute(&s.db)
+        .await?;
+
+        // Log transaction(s)
+        let tx_id = Uuid::new_v4();
+        let mut desc = format!("Purchase verified -- {} credits earned (${:.2} purchase)", credit_amount, req.amount);
+
+        if redeemed_credits > 0 {
+            desc = format!(
+                "{} credits earned, {} redeemed via '{}' offer (${:.2} purchase)",
+                credit_amount, redeemed_credits,
+                offer_name.as_deref().unwrap_or("Offer"),
+                req.amount
+            );
+        }
+
+        sqlx::query(
+            "INSERT INTO credit_transactions (id, account_id, amount, balance_after, action, reference_type, reference_id, description)
+             VALUES ($1, $2, $3, $4, 'purchase', 'purchase_verify', $5, $6)"
+        )
+        .bind(tx_id)
+        .bind(req.contact_id)
+        .bind(net_change)
+        .bind(new_balance)
+        .bind(req.contact_id.to_string())
+        .bind(&desc)
+        .execute(&s.db)
+        .await?;
+
+        let mut resp = serde_json::Map::new();
+        resp.insert("status".to_string(), json!("verified"));
+        resp.insert("contact_id".to_string(), json!(req.contact_id));
+        resp.insert("credits_earned".to_string(), json!(credit_amount));
+        resp.insert("new_balance".to_string(), json!(new_balance));
+        resp.insert("purchase_amount".to_string(), json!(req.amount));
+
+        if redeemed_credits > 0 {
+            resp.insert("credits_redeemed".to_string(), json!(redeemed_credits));
+            resp.insert("offer_applied".to_string(), json!(offer_name));
+        }
+
+        resp.insert("message".to_string(), json!(format!("Purchase verified! You earned {} credits{}",
+            credit_amount,
+            if redeemed_credits > 0 { format!(" and redeemed {} credits", redeemed_credits) } else { String::new() }
+        )));
+
+        Ok(Json(Value::Object(resp)))
+    } else {
+        // Contact exists but no account with that UUID — return success with no credits
+        Ok(Json(json!({
+            "status": "contact_linked",
+            "contact_id": req.contact_id,
+            "credits_earned": 0,
+            "purchase_amount": req.amount,
+            "credits_eligible": credit_amount,
+            "message": "Contact linked. Credits available after account registration.".to_string()
+        })))
+    }
+}
+
 // ── Survey Response Handler ────────────────────────────────────────────────
+
+// ── Account-Level Loyalty Routes (via auth) ──────────────────────────────
+
+/// GET /api/v1/loyalty/referrals — get account referral code + referral count
+pub async fn get_referrals(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    // Get account's referrer_code
+    let code_row = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT referrer_code FROM accounts WHERE id = $1"
+    )
+    .bind(account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .flatten();
+
+    // Count referrals across ALL campaigns that reference this account's contact
+    let referral_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM campaign_referrals WHERE referrer_contact_id = $1::uuid"
+    )
+    .bind(account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .unwrap_or(0);
+
+    // Get the actual referral records
+    let referrals = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<Uuid>, String, String, bool, Option<chrono::DateTime<chrono::Utc>>, i32, i32, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, campaign_id, referrer_contact_id, referee_contact_id, referral_code, source, converted, converted_at, click_count, points_earned, created_at
+         FROM campaign_referrals WHERE referrer_contact_id = $1::uuid
+         ORDER BY created_at DESC LIMIT 50"
+    )
+    .bind(account_id)
+    .fetch_all(&s.db)
+    .await?;
+
+    let referral_list: Vec<Value> = referrals.into_iter().map(|r| json!({
+        "id": r.0,
+        "campaign_id": r.1,
+        "referrer_contact_id": r.2,
+        "referee_contact_id": r.3,
+        "referral_code": r.4,
+        "source": r.5,
+        "converted": r.6,
+        "converted_at": r.7,
+        "click_count": r.8,
+        "points_earned": r.9,
+        "created_at": r.10,
+    })).collect();
+
+    Ok(Json(json!({
+        "code": code_row,
+        "referrals": referral_list,
+        "referral_count": referral_count,
+    })))
+}
+
+/// POST /api/v1/loyalty/referrals/create — generate referral code for account
+pub async fn account_create_referral(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    
+    let existing = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT referrer_code FROM accounts WHERE id = $1"
+    )
+    .bind(account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .flatten();
+    
+    if let Some(code) = existing {
+        return Ok(Json(json!({"code": code, "message": "exists"})));
+    }
+    
+    let code = format!("REF{:06}", rand::thread_rng().gen_range(0..999999));
+    
+    sqlx::query(
+        "UPDATE accounts SET referrer_code = $1 WHERE id = $2"
+    )
+    .bind(&code)
+    .bind(account_id)
+    .execute(&s.db)
+    .await?;
+    
+    Ok(Json(json!({"code": code, "message": "created"})))
+}
+
+/// GET /api/v1/loyalty/rewards — list all reward tiers for account
+pub async fn get_rewards(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    let tiers = sqlx::query_as::<_, (Uuid, String, String, i32, bool)>(
+        r#"SELECT lrt.id, lp.name, lrt.name, lrt.points_required, lrt.requires_approval
+           FROM loyalty_reward_tiers lrt
+           JOIN loyalty_programs lp ON lp.id = lrt.program_id
+           WHERE lp.is_active = true
+           ORDER BY lrt.points_required ASC"#
+    )
+    .bind(account_id)
+    .fetch_all(&s.db)
+    .await?;
+
+    let rewards_list: Vec<Value> = tiers.into_iter().map(|t| json!({
+        "id": t.0,
+        "program_name": t.1,
+        "name": t.2,
+        "cost": t.3,
+        "requires_approval": t.4,
+    })).collect();
+
+    Ok(Json(json!({
+        "rewards": rewards_list,
+        "count": rewards_list.len(),
+    })))
+}
+
+/// GET /api/v1/loyalty/vouchers — list vouchers for account (uses account_id as fallback contact_id)
+pub async fn get_vouchers(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    // Try account_id as contact_id (vouchers are issued to contacts)
+    let vouchers = sqlx::query_as::<_, (Uuid, String, String, String, String, Option<chrono::DateTime<chrono::Utc>>)>(
+        r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status, v.expires_at
+           FROM vouchers v
+           WHERE v.issued_to_contact_id = $1
+           ORDER BY v.created_at DESC LIMIT 50"#
+    )
+    .bind(account_id)
+    .fetch_all(&s.db)
+    .await?;
+
+    let voucher_list: Vec<Value> = vouchers.into_iter().map(|v| json!({
+        "id": v.0,
+        "discount": v.1,
+        "type": v.2,
+        "code": v.3,
+        "status": v.4,
+        "expires_at": v.5,
+    })).collect();
+
+    Ok(Json(json!({
+        "vouchers": voucher_list,
+        "count": voucher_list.len(),
+    })))
+}
 
 /// POST /api/v1/campaigns/external/survey-response
 /// Called by MultiDirectory when a visitor completes the onboarding survey.

@@ -8,8 +8,18 @@ mystery reveal, countdown, poll, chat funnel, benchmark, score reveal), a raffle
 giveaway system, and a long-form qualifier for high-ticket pre-qualification — twelve
 mechanics total. It also offers an optional Loyalty Program module — a separate,
 recurring point-based check-in system sellable as an add-on upsell — that sits
-alongside the 12 single-moment mechanics rather than being one of them. It captures
-whoever interacts with these mechanics, scores or qualifies them where relevant,
+alongside the 12 single-moment mechanics rather than being one of them.
+
+**Expanded modules (post-initial build):**
+- **Loyalty V2** — Purchase verification via PIN, rotating cross-promotion vouchers,
+  business pledges, reward redemption. All work for any tenant generically.
+- **Viral/Referral Engine** — Campaign-scoped referral codes, earn channels, milestone
+  rewards, leaderboard, click tracking.
+- **Credit System** — Tenant credits with Stripe top-up, admin adjustment,
+  per-plan monthly allowance and overdraft. Fully wired credit handler.
+- **Marketing Boost** — Per-campaign webhook for external marketing system integration.
+
+It captures whoever interacts with these mechanics, scores or qualifies them where relevant,
 applies a tag, and pushes the tagged contact outward.
 
 That is the entire job. IncentiveSwift does not run campaigns. It does not manage a
