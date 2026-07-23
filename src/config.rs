@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub internal_sync_key: String,
     pub coreswift_url: String,
     pub workflowswift_url: String,
+    pub funnelswift_url: String,
     pub allowed_origins: Vec<String>,
 }
 
@@ -49,6 +50,9 @@ impl AppConfig {
 
             workflowswift_url: std::env::var("WORKFLOWSWIFT_URL")
                 .unwrap_or_else(|_| "http://localhost:8085".to_string()),
+
+            funnelswift_url: std::env::var("FUNNELSWIFT_URL")
+                .unwrap_or_else(|_| "http://localhost:8080".to_string()),
 
             allowed_origins: std::env::var("ALLOWED_ORIGINS")
                 .unwrap_or_else(|_| "http://localhost:3000,http://localhost:8082".to_string())

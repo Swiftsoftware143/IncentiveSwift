@@ -52,7 +52,6 @@ pub mod campaign_secret_codes;
 pub mod industries_handler;
 pub mod quiz_handler;
 
-pub mod checkout_handler;
 
 pub mod sms_handler;
 
@@ -61,3 +60,4 @@ pub mod external_grants;
 pub use external_grants::*;
 pub mod rewards_handler;
 pub mod offers_handler;
+pub mod tag_provision_handler;

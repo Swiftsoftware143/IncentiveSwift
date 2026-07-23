@@ -66,6 +66,22 @@ MultiDirectory's referral system (see its Admin Guide → Referral System) integ
 
 **Zaarcash amounts by direction:** visitor→visitor: 50, business→business: 200, business→visitor: 50, visitor→business: 100.
 
+## Affiliate Product Auto-Sync
+
+IncentiveSwift plans are automatically synced to FunnelSwift's `affiliate_products` table.
+
+**How it works:**
+
+| Action | What happens |
+|--------|-------------|
+| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: incentiveswift` |
+| **Plan updated** | Same endpoint with `action: update` |
+| **Plan deactivated** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
+
+The sync fires asynchronously. FunnelSwift must be reachable at `FUNNELSWIFT_URL` (default `http://localhost:8080`).
+
+**Requires:** `FUNNELSWIFT_URL` environment variable.
+
 ### Credit System
 Tenant credits for platform-level actions — fully wired and production-ready:
 - **Balance** — current available credits + plan limits (monthly allowance, overdraft)

@@ -11,6 +11,87 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
+use reqwest::Client as HttpClient;
+
+/// Notify the FunnelSwift affiliate system about a plan change.
+/// Calls FunnelSwift's conversion webhook endpoint to sync plan data.
+async fn sync_to_funnelswift_affiliates(
+    action: &str,
+    plan_name: &str,
+    plan_price_monthly: f64,
+    plan_id: &str,
+    is_active: bool,
+) {
+    let payload = json!({
+        "action": action,
+        "plan_name": plan_name,
+        "plan_price": plan_price_monthly,
+        "plan_id": plan_id,
+        "source_app": "incentiveswift",
+        "is_active": is_active,
+        "owner_name": "SwiftSoftware",
+        "product_type": "software"
+    });
+
+    // Try local FunnelSwift webhook; silently ignore if unavailable
+    if let Ok(client) = HttpClient::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        let _ = client
+            .post("http://localhost:8080/api/v1/internal/sync-affiliate-plan")
+            .json(&payload)
+            .send()
+            .await;
+    }
+}
+
+/// Fire-and-forget sync of a plan to FunnelSwift's affiliate_products
+/// using the configured funnelswift_url and internal_sync_key.
+async fn sync_plan_to_affiliate(
+    config: &crate::config::AppConfig,
+    action: &str,
+    plan_name: &str,
+    plan_price_monthly: f64,
+    is_active: bool,
+) {
+    let url = format!("{}/api/v1/internal/sync-affiliate-plan", config.funnelswift_url.trim_end_matches('/'));
+    let api_key = config.internal_sync_key.clone();
+
+    let action_owned = action.to_string();
+    let plan_name_owned = plan_name.to_string();
+
+    let payload = json!({
+        "action": &action_owned,
+        "plan_name": &plan_name_owned,
+        "plan_price": plan_price_monthly,
+        "source_app": "incentiveswift",
+        "is_active": is_active,
+        "owner_name": "SwiftSoftware",
+        "product_type": "software",
+        "api_key": &api_key,
+    });
+
+    tokio::spawn(async move {
+        match reqwest::Client::new()
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    tracing::info!("sync-affiliate-plan {} {}: {}", action_owned, plan_name_owned, status);
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!("sync-affiliate-plan {} {} failed: {} - {}", action_owned, plan_name_owned, status, body);
+                }
+            }
+            Err(e) => tracing::warn!("sync-affiliate-plan {} {} error: {}", action_owned, plan_name_owned, e),
+        }
+    });
+}
 
 /// A plan record.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -148,6 +229,22 @@ pub async fn create_plan(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
+
+    // Notify FunnelSwift affiliate system
+    let _ = sync_to_funnelswift_affiliates(
+        "create",
+        &body.name,
+        body.price_monthly.unwrap_or(0.0),
+        &id.to_string(),
+        true,
+    ).await;
+    // Fire-and-forget to FunnelSwift with configured URL + API key
+    let plan_name2 = body.name.clone();
+    let plan_price2 = body.price_monthly.unwrap_or(0.0);
+    let config2 = state.config.clone();
+    tokio::spawn(async move {
+        sync_plan_to_affiliate(&config2, "create", &plan_name2, plan_price2, true).await;
+    });
 
     Ok(Json(json!({ "plan": plan })))
 }
@@ -294,6 +391,21 @@ pub async fn update_plan(
     .fetch_one(&state.db)
     .await?;
 
+    // Notify FunnelSwift affiliate system about the update
+    let _ = sync_to_funnelswift_affiliates(
+        "update",
+        &name,
+        price_monthly,
+        &plan_id.to_string(),
+        is_active,
+    ).await;
+    // Fire-and-forget to FunnelSwift with configured URL + API key
+    let plan_name2 = name.clone();
+    let config2 = state.config.clone();
+    tokio::spawn(async move {
+        sync_plan_to_affiliate(&config2, "update", &plan_name2, price_monthly, is_active).await;
+    });
+
     Ok(Json(json!({ "plan": plan })))
 }
 
@@ -313,8 +425,34 @@ pub async fn delete_plan(
     .execute(&state.db)
     .await?;
 
+    // Get plan name before soft-delete for affiliate sync
+    let plan_name: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM plans WHERE id = $1"
+    )
+    .bind(plan_id)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Plan not found or already inactive".to_string()));
+    }
+
+    // Notify FunnelSwift affiliate system about the deletion
+    if let Some(name) = plan_name {
+        let _ = sync_to_funnelswift_affiliates(
+            "deactivate",
+            &name,
+            0.0,
+            &plan_id.to_string(),
+            false,
+        ).await;
+        // Fire-and-forget to FunnelSwift with configured URL + API key
+        let plan_name2 = name.clone();
+        let config2 = state.config.clone();
+        tokio::spawn(async move {
+            sync_plan_to_affiliate(&config2, "deactivate", &plan_name2, 0.0, false).await;
+        });
     }
 
     Ok(Json(json!({ "status": "deleted", "id": id })))
