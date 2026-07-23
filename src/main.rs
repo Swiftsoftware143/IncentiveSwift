@@ -11,6 +11,7 @@ mod state;
 mod error;
 mod db;
 pub mod handlers;
+pub mod billing;
 pub mod delivery;
 pub mod mechanics;
 pub mod access;
@@ -86,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
         // Viral campaign engine -- Phase 1 (public)
         .route("/api/v1/earn/:channel_code", get(handlers::viral_handler::earn_click_through))
         .route("/api/v1/c/:campaign_slug", get(handlers::viral_handler::campaign_share_link))
+        // FunnelSwift tag provision webhook — auto-provision contacts (no auth, internal key)
+        .route("/api/v1/internal/tag-provision", post(handlers::tag_provision_handler::handle_tag_provision))
         // Loyalty V2 — Purchase Verification & Vouchers (public)
         .route("/api/v1/loyalty/generate-pin", post(handlers::loyalty_v2::generate_pin))
         .route("/api/v1/loyalty/verify-purchase", post(handlers::loyalty_v2::verify_purchase))
@@ -240,14 +243,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/provider-keys", get(handlers::provider_keys_handler::list_provider_keys).post(handlers::provider_keys_handler::upsert_provider_key))
         .route("/api/v1/provider-keys/:provider", delete(handlers::provider_keys_handler::delete_provider_key))
         .route("/api/v1/available-providers", get(handlers::provider_keys_handler::list_available_providers))
-        // Payment provider & checkout routes
-        .route("/api/v1/payment-providers", get(handlers::checkout_handler::list_payment_providers).post(handlers::checkout_handler::upsert_payment_provider))
-        .route("/api/v1/payment-providers/{provider_type}", delete(handlers::checkout_handler::delete_payment_provider))
-        .route("/api/v1/checkout/create", post(handlers::checkout_handler::create_checkout_session))
-        .route("/api/v1/checkout/sessions", get(handlers::checkout_handler::list_checkout_sessions))
-        // Public webhooks (no auth — signature verification in handler)
-        .route("/api/v1/webhooks/stripe", post(handlers::checkout_handler::stripe_webhook))
-        .route("/api/v1/webhooks/paypal", post(handlers::checkout_handler::paypal_webhook))
+        // Payment provider, checkout & webhook routes (via billing module)
+        .merge(billing::router(state.clone()))
         // Campaign Integration Hub routes
         .route("/api/v1/campaigns/:slug/integrations", get(handlers::campaign_integrations::list_campaign_integrations).post(handlers::campaign_integrations::link_campaign_integration))
         .route("/api/v1/campaigns/:slug/integrations/:integration_id", delete(handlers::campaign_integrations::unlink_campaign_integration))
