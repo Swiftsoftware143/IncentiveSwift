@@ -1,3 +1,6 @@
+# Auto-deploy happens server-side via post-merge git hook
+# See /opt/swift/incentiveswift/deploy-from-vps.sh on the VPS
+
 name: Deploy IncentiveSwift
 
 on:
@@ -5,24 +8,7 @@ on:
     branches: [ main ]
 
 jobs:
-  deploy:
+  placeholder:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-
-    - name: Deploy to VPS
-      uses: appleboy/ssh-action@master
-      with:
-        host: 178.156.221.18
-        username: root
-        key: ${{ secrets.VPS_SSH_KEY }}
-        script: |
-          set -e
-          echo "=== Deploying IncentiveSwift ==="
-          cd /opt/swift/incentiveswift
-          git pull origin main
-          cp incentiveswift-api /opt/swift/incentiveswift/incentiveswift-api 2>/dev/null || true
-          systemctl restart incentiveswift
-          sleep 2
-          systemctl --no-pager status incentiveswift --no-pager | head -5
-          echo "=== Deploy complete ==="
+      - run: echo "Deploy is handled server-side via post-merge git hook"
