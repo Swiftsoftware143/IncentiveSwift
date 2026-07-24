@@ -11,7 +11,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::Row;
 
 /// GET /api/v1/campaigns — list campaigns scoped to authenticated user's account.
 pub async fn list_campaigns(
@@ -158,7 +157,7 @@ pub async fn update_campaign(
 /// DELETE /api/v1/campaigns/:slug — delete campaign by slug (authenticated).
 pub async fn delete_campaign_by_id(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     // Try as UUID first, then as slug
@@ -180,13 +179,13 @@ pub async fn delete_campaign_by_id(
 /// POST /api/v1/campaigns/:slug/clone — Clone a campaign with all config
 pub async fn clone_campaign(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let original = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     let new_name = format!("{} (Copy)", original.name);
     let new_slug = campaigns::generate_clone_slug(&original.name);
-    let account_id = uuid::Uuid::parse_str(&_user.account_id)
+    let account_id = uuid::Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let new_id = uuid::Uuid::new_v4();
 

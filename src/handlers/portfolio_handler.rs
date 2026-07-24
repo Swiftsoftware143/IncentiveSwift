@@ -81,7 +81,7 @@ fn generate_slug(name: &str) -> String {
 /// GET /api/v1/portfolio-companies
 pub async fn list_portfolio_companies(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let companies = sqlx::query_as::<_, PortfolioCompany>(
         r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
@@ -97,7 +97,7 @@ pub async fn list_portfolio_companies(
 /// POST /api/v1/portfolio-companies
 pub async fn create_portfolio_company(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreatePortfolioCompanyInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
@@ -109,7 +109,7 @@ pub async fn create_portfolio_company(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
     )
     .bind(id)
-    .bind(Uuid::parse_str(&_user.account_id).map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?)
+    .bind(Uuid::parse_str(&user.account_id).map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?)
     .bind(&body.name)
     .bind(&slug)
     .bind(&settings)
@@ -135,7 +135,7 @@ pub async fn create_portfolio_company(
 pub async fn get_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let company_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
@@ -156,7 +156,7 @@ pub async fn get_portfolio_company(
 pub async fn update_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdatePortfolioCompanyInput>,
 ) -> Result<Json<Value>, AppError> {
     let company_id = Uuid::parse_str(&id)
@@ -248,7 +248,7 @@ pub async fn internal_create_portfolio_company(
 pub async fn delete_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let company_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;

@@ -17,7 +17,6 @@ use axum::{Json, extract::State};
 use reqwest::Client;
 use serde_json::{json, Value};
 use uuid::Uuid;
-use std::sync::Arc;
 
 /// POST /api/v1/channels/sms/inbound — Telnyx inbound webhook with chat funnel routing
 pub async fn channel_inbound_webhook(
@@ -571,10 +570,10 @@ async fn complete_chat_funnel(
         async move {
             crate::delivery::output_actions::execute_output_actions(
                 &state, &campaign_id_owned, &cname_owned, &campaign_slug_owned,
-                &"chat".to_string(), &cfg_owned,
+                "chat", &cfg_owned,
                 &contact_id,
                 &fn1_owned, "", &email_owned, &phone_owned, "", "",
-                &account_id, &"completed".to_string(), &[],
+                &account_id, "completed", &[],
                 None,
                 Some(&cd_owned),
                 None, None, None,

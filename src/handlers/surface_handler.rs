@@ -493,7 +493,7 @@ pub async fn get_embed_view(
 pub async fn get_surface_config(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let campaign_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
@@ -619,7 +619,7 @@ pub async fn get_campaign_embed(
 pub async fn update_surface_config(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateSurfaceConfigInput>,
 ) -> Result<Json<Value>, AppError> {
     let campaign_id = Uuid::parse_str(&id)
@@ -642,9 +642,9 @@ pub async fn update_surface_config(
 /// GET /api/v1/admin/domains
 pub async fn list_domains(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let user_id = Uuid::parse_str(&_user.account_id)
+    let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     // Get the account's tenant_id
@@ -676,10 +676,10 @@ pub async fn list_domains(
 /// POST /api/v1/admin/domains
 pub async fn register_domain(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<RegisterDomainInput>,
 ) -> Result<Json<Value>, AppError> {
-    let user_id = Uuid::parse_str(&_user.account_id)
+    let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     let tenant_id: Uuid = sqlx::query_scalar(
@@ -725,11 +725,11 @@ pub async fn register_domain(
 pub async fn remove_domain(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let domain_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
-    let user_id = Uuid::parse_str(&_user.account_id)
+    let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     let tenant_id: Uuid = sqlx::query_scalar(
@@ -758,11 +758,11 @@ pub async fn remove_domain(
 pub async fn verify_domain(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let domain_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
-    let user_id = Uuid::parse_str(&_user.account_id)
+    let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     let tenant_id: Uuid = sqlx::query_scalar(
@@ -857,7 +857,7 @@ async fn check_dns_verification(domain: &str, token: &str) -> bool {
 pub async fn check_plan_domains(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;

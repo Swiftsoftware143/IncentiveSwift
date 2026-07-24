@@ -59,7 +59,7 @@ pub async fn enter_raffle(
 pub async fn draw(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
@@ -103,7 +103,7 @@ pub async fn draw(
 pub async fn redraw(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;

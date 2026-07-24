@@ -8,11 +8,9 @@ use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 
 /// Perform a seeded Fisher-Yates shuffle and return the first (winning) entry.
-///
 /// # Arguments
 /// * `entries` - A vector of entry IDs (strings) to shuffle
 /// * `seed` - A u64 seed that makes the shuffle deterministic
-///
 /// # Returns
 /// The winning entry ID, or None if the entries list is empty
 pub fn seeded_fisher_yates(entries: &[String], seed: u64) -> Option<String> {

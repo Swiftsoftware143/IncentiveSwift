@@ -168,11 +168,9 @@ impl Parser {
 }
 
 /// Evaluate a formula string safely.
-///
 /// # Arguments
 /// * `formula` - A formula string like "{monthly_revenue} * 0.1 + 500"
 /// * `vars` - A map of variable names to their numeric values
-///
 /// # Returns
 /// The computed f64 value, or an error if the formula is invalid or contains unsafe characters.
 pub fn evaluate(formula: &str, vars: &HashMap<String, f64>) -> Result<f64, String> {

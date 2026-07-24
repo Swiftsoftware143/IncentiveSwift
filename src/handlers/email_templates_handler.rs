@@ -59,7 +59,7 @@ pub struct UpdateInput {
 /// GET /api/v1/email-templates
 pub async fn list(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, AppError> {
     let limit = query.limit.unwrap_or(50).min(100);
@@ -95,7 +95,7 @@ pub async fn list(
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let item = sqlx::query_as::<_, EmailTemplate>(
         "SELECT * FROM email_templates WHERE id = $1"
@@ -111,7 +111,7 @@ pub async fn get(
 /// POST /api/v1/email-templates
 pub async fn create(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreateInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
@@ -143,7 +143,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateInput>,
 ) -> Result<Json<Value>, AppError> {
     sqlx::query(
@@ -180,7 +180,7 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     sqlx::query("DELETE FROM email_templates WHERE id = $1")
         .bind(id).execute(&state.db).await?;

@@ -20,7 +20,7 @@ pub struct ResendBody {
 /// Rebuilds payload from normalized Q&A join (NEVER from raw JSONB), repushes.
 pub async fn resend(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<ResendBody>,
 ) -> Result<Json<Value>, AppError> {
     let entry_id = Uuid::parse_str(&body.entry_id)
@@ -48,8 +48,8 @@ pub async fn resend(
     };
 
     use sqlx::Row;
-    let _contact_id: Uuid = row.get("contact_id");
-    let _campaign_id: Uuid = row.get("campaign_id");
+    let contact_id: Uuid = row.get("contact_id");
+    let campaign_id: Uuid = row.get("campaign_id");
     let score: Option<i32> = row.get("score");
     let outcome: Option<String> = row.get("outcome");
     let tags_applied: Option<Vec<String>> = row.get("tags_applied");

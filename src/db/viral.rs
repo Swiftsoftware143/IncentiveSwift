@@ -187,7 +187,7 @@ pub async fn create_referral(
     Ok(CampaignReferral {
         id,
         campaign_id: *campaign_id,
-        referrer_contact_id: referrer_contact_id,
+        referrer_contact_id,
         referee_contact_id: None,
         referral_code: referral_code.to_string(),
         source: source.to_string(),

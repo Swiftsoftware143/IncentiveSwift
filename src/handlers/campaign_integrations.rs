@@ -90,7 +90,6 @@ async fn get_by_campaign_and_integration(
 // ---------------------------------------------------------------------------
 
 /// GET /api/v1/campaigns/{slug}/integrations
-///
 /// List all integrations linked to a campaign.
 pub async fn list_campaign_integrations(
     State(state): State<AppState>,
@@ -120,7 +119,6 @@ pub async fn list_campaign_integrations(
 }
 
 /// POST /api/v1/campaigns/{slug}/integrations
-///
 /// Link an integration target to a campaign.
 pub async fn link_campaign_integration(
     State(state): State<AppState>,
@@ -195,7 +193,6 @@ pub async fn link_campaign_integration(
 }
 
 /// DELETE /api/v1/campaigns/{slug}/integrations/{integration_id}
-///
 /// Unlink an integration from a campaign.
 pub async fn unlink_campaign_integration(
     State(state): State<AppState>,
@@ -275,7 +272,7 @@ pub struct SetMarketingBoostInput {
 pub async fn set_marketing_boost(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<SetMarketingBoostInput>,
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
@@ -344,7 +341,7 @@ pub async fn set_marketing_boost(
 pub async fn get_marketing_boost(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     let boost = campaign.config.get("marketing_boost");
@@ -362,11 +359,9 @@ pub async fn get_marketing_boost(
 }
 
 /// Fire Marketing Boost for a given event, with optional per-reward/per-prize override.
-///
 /// Strategy:
 ///   1. If `per_item_boost` is `Some`, use that config (per-reward/per-prize).
 ///   2. Otherwise, fall back to campaign-level `campaigns.config['marketing_boost']`.
-///
 /// Supports two modes:
 ///   1. Legacy webhook mode: fires HTTP webhook on events
 ///   2. Direct API mode: sends voucher/card/incentive via Marketing Boost API

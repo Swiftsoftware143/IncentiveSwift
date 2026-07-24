@@ -44,7 +44,7 @@ pub struct SecretCodeInput {
 /// GET /api/v1/loyalty/secret-codes — list all secret codes for the admin's program
 pub async fn list_secret_codes(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let codes = sqlx::query_as::<_, SecretCode>(
         "SELECT id, program_id, code, description, points_reward, max_uses, uses_so_far,
@@ -61,7 +61,7 @@ pub async fn list_secret_codes(
 /// POST /api/v1/loyalty/secret-codes — create a new secret code
 pub async fn create_secret_code(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<SecretCodeInput>,
 ) -> Result<Json<Value>, AppError> {
     let code_upper = body.code.trim().to_uppercase();
@@ -135,7 +135,7 @@ pub async fn create_secret_code(
 /// DELETE /api/v1/loyalty/secret-codes/:id — delete a secret code
 pub async fn delete_secret_code(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let result = sqlx::query("DELETE FROM loyalty_secret_codes WHERE id = $1")
@@ -153,7 +153,7 @@ pub async fn delete_secret_code(
 /// POST /api/v1/loyalty/secret-codes/:id/toggle — toggle active/inactive
 pub async fn toggle_secret_code(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     let row = sqlx::query_scalar::<_, bool>(

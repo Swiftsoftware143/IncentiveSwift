@@ -527,7 +527,7 @@ async fn deliver_credentials(
     state: &AppState,
     email: &str,
     customer_name: &str,
-    _account_id: Uuid,
+    account_id: Uuid,
     plan_name: &str,
 ) -> Result<(), AppError> {
     // Look for existing account by email

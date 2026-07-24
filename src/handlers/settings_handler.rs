@@ -69,7 +69,7 @@ pub async fn update_settings(
         )
         .bind(account_id)
         .bind(&entry.key)
-        .bind(&entry.value.to_string())
+        .bind(entry.value.to_string())
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;

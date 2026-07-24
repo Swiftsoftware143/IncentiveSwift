@@ -3,6 +3,7 @@
 // REST API server providing gamified incentive mechanics, raffle/giveaway system,
 // long-form qualifier, and loyalty program module.
 
+#![allow(unused_variables, dead_code)]
 mod email;
 
 mod config;

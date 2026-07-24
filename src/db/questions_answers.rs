@@ -286,16 +286,14 @@ pub fn determine_persona(percentage: f64, outcome_tags: &serde_json::Value) -> (
             }
         }
         best
+    } else if percentage >= 80.0 {
+        ("Expert".to_string(), "expert".to_string())
+    } else if percentage >= 60.0 {
+        ("Advanced".to_string(), "advanced".to_string())
+    } else if percentage >= 40.0 {
+        ("Intermediate".to_string(), "intermediate".to_string())
     } else {
-        if percentage >= 80.0 {
-            ("Expert".to_string(), "expert".to_string())
-        } else if percentage >= 60.0 {
-            ("Advanced".to_string(), "advanced".to_string())
-        } else if percentage >= 40.0 {
-            ("Intermediate".to_string(), "intermediate".to_string())
-        } else {
-            ("Beginner".to_string(), "beginner".to_string())
-        }
+        ("Beginner".to_string(), "beginner".to_string())
     }
 }
 

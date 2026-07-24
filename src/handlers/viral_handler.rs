@@ -177,7 +177,7 @@ async fn handle_referral_credit(
                         &state.db, campaign_id, &ref_contact_id
                     ).await?;
                     let _ = crate::mechanics::milestone_engine::check_milestones(
-                        &state, campaign_id, &ref_contact_id, current_pts,
+                        state, campaign_id, &ref_contact_id, current_pts,
                     ).await;
                 }
 
@@ -229,12 +229,12 @@ pub async fn earn_click_through(
                 channel.redirect_url.clone()
             };
 
-            return Ok(Json(json!({
+            Ok(Json(json!({
                 "status": "logged",
                 "points_awarded": 0,
                 "message": "Click logged. Provide email or contact_id to earn points.",
                 "redirect": redirect,
-            })));
+            })))
         }
         Some(cid) => {
             // Check max clicks
@@ -415,7 +415,7 @@ pub async fn create_referral_code(
 pub async fn get_referral_stats(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<ReferralStatsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
@@ -455,7 +455,7 @@ pub async fn get_referral_stats(
 pub async fn list_earn_channels(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     let channels = viral::list_campaign_earn_channels(&state.db, &campaign.id).await?;
@@ -492,7 +492,7 @@ pub async fn create_earn_channel(
     .bind(campaign.id)
     .bind(&code)
     .bind(&body.label)
-    .bind(&body.description.unwrap_or_default())
+    .bind(body.description.unwrap_or_default())
     .bind(body.points_per_click)
     .bind(body.max_clicks_per_contact.unwrap_or(0))
     .bind(&body.redirect_url)
@@ -526,7 +526,7 @@ pub async fn create_earn_channel(
 pub async fn update_earn_channel(
     State(state): State<AppState>,
     Path((slug, channel_id)): Path<(String, String)>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreateEarnChannelBody>,
 ) -> Result<Json<Value>, AppError> {
     let _campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
@@ -547,7 +547,7 @@ pub async fn update_earn_channel(
     )
     .bind(&code)
     .bind(&body.label)
-    .bind(&body.description.unwrap_or_default())
+    .bind(body.description.unwrap_or_default())
     .bind(body.points_per_click)
     .bind(body.max_clicks_per_contact.unwrap_or(0))
     .bind(&body.redirect_url)
@@ -607,12 +607,12 @@ pub async fn verify_earn_action(
                 &state, &campaign.id, &contact_id, cur_pts
             ).await;
 
-            return Ok(Json(json!({
+            Ok(Json(json!({
                 "verified": true,
                 "verification_type": "auto_approve_all",
                 "points_awarded": channel.points_per_click,
                 "new_balance": cur_pts,
-            })));
+            })))
         }
         "auto_approve_answer" => {
             // Require exact answer match
@@ -662,7 +662,7 @@ pub async fn verify_earn_action(
 pub async fn delete_earn_channel(
     State(state): State<AppState>,
     Path((_slug, channel_id)): Path<(String, String)>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let ch_id = Uuid::parse_str(&channel_id)
         .map_err(|_| AppError::BadRequest("Invalid channel ID".to_string()))?;
@@ -691,7 +691,7 @@ pub async fn campaign_leaderboard(
     let leaderboard = viral::get_campaign_leaderboard(&state.db, &campaign.id, limit).await?;
 
     let mut entries = Vec::new();
-    for (contact_id, _campaign_id, lifetime_points, balance) in &leaderboard {
+    for (contact_id, campaign_id, lifetime_points, balance) in &leaderboard {
         let contact = contacts::get_contact(&state.db, contact_id).await.ok();
         let name = contact.as_ref()
             .map(|c| format!("{} {}", c.first_name.as_deref().unwrap_or(""), c.last_name.as_deref().unwrap_or("")).trim().to_string())

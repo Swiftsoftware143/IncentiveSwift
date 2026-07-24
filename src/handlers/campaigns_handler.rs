@@ -41,7 +41,7 @@ pub struct UpdateInput {
 /// GET /api/v1/campaigns
 pub async fn list(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, AppError> {
     let limit = query.limit.unwrap_or(50).min(100);
@@ -61,11 +61,11 @@ pub async fn list(
 /// POST /api/v1/campaigns
 pub async fn create(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreateInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID value".to_string()))?;
     sqlx::query(&format!("INSERT INTO campaigns (id, account_id, name) VALUES ($1, $2, $3)"))
         .bind(id)
@@ -86,7 +86,7 @@ pub async fn create(
 pub async fn clone_campaign(
     State(state): State<AppState>,
     Path(slug): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     use crate::db::campaigns;
 
@@ -97,7 +97,7 @@ pub async fn clone_campaign(
     // Create new campaign using the db helper
     let new_id = Uuid::new_v4();
     let new_slug = campaigns::generate_clone_slug(&original.name);
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     sqlx::query(
@@ -128,7 +128,7 @@ pub async fn clone_campaign(
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let item_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid item ID value".to_string()))?;
@@ -146,7 +146,7 @@ pub async fn get(
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateInput>,
 ) -> Result<Json<Value>, AppError> {
     let item_id = Uuid::parse_str(&id)
@@ -175,7 +175,7 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let item_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;

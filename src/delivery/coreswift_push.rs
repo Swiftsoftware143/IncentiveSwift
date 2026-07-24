@@ -9,11 +9,9 @@ use serde_json::json;
 use uuid::Uuid;
 
 /// Push contact + tags to CoreSwift CRM via its cross-app tag-sync webhook.
-///
 /// # Best-effort
 /// This function never fails the caller — if CoreSwift is unreachable or
 /// returns an error, we log the warning and continue.
-///
 /// # Arguments
 /// - `state`: AppState for DB access + HTTP client
 /// - `contact_id`: UUID of the contact in IncentiveSwift
@@ -120,7 +118,6 @@ pub async fn push_contact_to_coreswift(
 /// Get the current tags for a contact from the entry system.
 /// Since IncentiveSwift stores tags on entries (tags_applied), this
 /// aggregates unique tags across all entries for the contact.
-///
 /// Also checks the campaign's tag_namespace prefix to build a reasonable
 /// tag set.
 pub async fn get_contact_tags(state: &AppState, contact_id: &Uuid) -> Vec<String> {

@@ -55,7 +55,7 @@ pub struct UpdateIntegrationTargetInput {
 /// GET /api/v1/integration-targets
 pub async fn list_integration_targets(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let targets = sqlx::query_as::<_, IntegrationTarget>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
@@ -72,11 +72,11 @@ pub async fn list_integration_targets(
 /// POST /api/v1/integration-targets
 pub async fn create_integration_target(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreateIntegrationTargetInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
     let portfolio_company_id = body.portfolio_company_id
         .and_then(|s| Uuid::parse_str(&s).ok());
@@ -116,7 +116,7 @@ pub async fn create_integration_target(
 pub async fn update_integration_target(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateIntegrationTargetInput>,
 ) -> Result<Json<Value>, AppError> {
     let target_id = Uuid::parse_str(&id)
@@ -181,7 +181,7 @@ pub async fn update_integration_target(
 pub async fn delete_integration_target(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let target_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;

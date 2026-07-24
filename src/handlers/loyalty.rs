@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -85,7 +85,7 @@ pub struct ApproveBody {
 pub async fn approve_reward(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<ApproveBody>,
 ) -> Result<Json<Value>, AppError> {
     let reward_id = Uuid::parse_str(&id)
@@ -131,9 +131,9 @@ pub async fn approve_reward(
 /// GET /api/v1/loyalty/programs — list all loyalty programs for the authenticated user's account.
 pub async fn list_programs(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let programs = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
@@ -159,9 +159,9 @@ pub async fn list_programs(
 /// GET /api/v1/loyalty/rewards — list all rewards for the account.
 pub async fn list_rewards(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     #[derive(sqlx::FromRow, serde::Serialize)]
@@ -203,7 +203,7 @@ pub async fn list_rewards(
 pub async fn deny_reward(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let reward_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
@@ -280,10 +280,10 @@ pub struct RewardTierUpdateInput {
 /// POST /api/v1/loyalty/programs — create program.
 pub async fn create_program(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<LoyaltyProgramInput>,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let id = Uuid::new_v4();
@@ -330,7 +330,7 @@ pub async fn create_program(
 pub async fn update_program(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<LoyaltyProgramInput>,
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&id)
@@ -392,7 +392,7 @@ pub async fn update_program(
 pub async fn delete_program(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
@@ -415,7 +415,7 @@ pub async fn delete_program(
 /// POST /api/v1/loyalty/tiers — create reward tier.
 pub async fn create_tier(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<RewardTierInput>,
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&body.program_id)
@@ -453,7 +453,7 @@ pub async fn create_tier(
 pub async fn update_tier(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<RewardTierUpdateInput>,
 ) -> Result<Json<Value>, AppError> {
     let tier_id = Uuid::parse_str(&id)
@@ -495,7 +495,7 @@ pub async fn update_tier(
 pub async fn delete_tier(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let tier_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
@@ -518,7 +518,7 @@ pub async fn delete_tier(
 /// GET /api/v1/loyalty/tiers — list reward tiers for a program.
 pub async fn list_tiers(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<TierListQuery>,
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&query.program_id)
@@ -592,7 +592,7 @@ pub async fn online_visit(
                   currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#
     )
-    .bind(&member.program_id)
+    .bind(member.program_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
@@ -604,7 +604,7 @@ pub async fn online_visit(
              AND action_type = 'daily_visit'
              AND created_at::date = CURRENT_DATE"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -634,7 +634,7 @@ pub async fn online_visit(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
            VALUES ($1, 'daily_visit', $2, $3::jsonb)"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .bind(points)
     .bind(json!(metadata).to_string())
     .execute(&state.db)
@@ -651,7 +651,7 @@ pub async fn online_visit(
            WHERE id = $2"#
     )
     .bind(points as i32)
-    .bind(&member.id)
+    .bind(member.id)
     .execute(&state.db)
     .await?;
 
@@ -666,7 +666,7 @@ pub async fn online_visit(
         r#"SELECT points_balance, current_streak
            FROM loyalty_members WHERE id = $1"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -705,7 +705,7 @@ pub async fn online_share(
                   currency_name, currency_icon, currency_color
            FROM loyalty_programs WHERE id = $1 AND is_active = true"#
     )
-    .bind(&member.program_id)
+    .bind(member.program_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
@@ -722,7 +722,7 @@ pub async fn online_share(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
            VALUES ($1, 'social_share', $2, $3::jsonb)"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .bind(points)
     .bind(metadata.to_string())
     .execute(&state.db)
@@ -736,7 +736,7 @@ pub async fn online_share(
            WHERE id = $2"#
     )
     .bind(points as i32)
-    .bind(&member.id)
+    .bind(member.id)
     .execute(&state.db)
     .await?;
 
@@ -744,7 +744,7 @@ pub async fn online_share(
     let new_balance: i32 = sqlx::query_scalar(
         r#"SELECT points_balance FROM loyalty_members WHERE id = $1"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -782,7 +782,7 @@ pub async fn referral_click(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
            VALUES ($1, 'referral_click', 0, $2::jsonb)"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .bind(json!(metadata).to_string())
     .execute(&state.db)
     .await?;
@@ -813,7 +813,7 @@ pub async fn online_stats(
     let current_streak: i32 = sqlx::query_scalar(
         "SELECT current_streak FROM loyalty_members WHERE id = $1"
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -822,7 +822,7 @@ pub async fn online_stats(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
            WHERE member_id = $1 AND action_type = 'daily_visit'"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -831,7 +831,7 @@ pub async fn online_stats(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
            WHERE member_id = $1 AND action_type = 'social_share'"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -840,7 +840,7 @@ pub async fn online_stats(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
            WHERE member_id = $1 AND action_type = 'referral_click'"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -848,7 +848,7 @@ pub async fn online_stats(
     let total_referrals: i32 = sqlx::query_scalar(
         "SELECT total_referrals FROM loyalty_members WHERE id = $1"
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -857,7 +857,7 @@ pub async fn online_stats(
         r#"SELECT COALESCE(SUM(points_earned), 0)::bigint FROM loyalty_online_actions
            WHERE member_id = $1"#
     )
-    .bind(&member.id)
+    .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
@@ -879,9 +879,9 @@ pub async fn online_stats(
 /// Check if the account's plan has loyalty enabled.
 pub async fn check_plan_loyalty(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     // Get tenant's plan_tier
@@ -934,7 +934,7 @@ pub struct SetSecretCodeInput {
 pub async fn set_secret_code(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<SetSecretCodeInput>,
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&id)

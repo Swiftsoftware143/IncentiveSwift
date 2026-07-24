@@ -22,7 +22,7 @@ pub struct ImpersonateInput {
 /// Currently logs intent — real integration is app-specific.
 pub async fn portfolio_sync(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     tracing::info!("Portfolio sync requested");
 
@@ -132,7 +132,7 @@ pub async fn impersonate(
 /// POST /api/v1/admin/stop-impersonation
 /// Simply returns a confirmation — the client should discard the impersonation token.
 pub async fn stop_impersonation(
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     Ok(Json(json!({
         "status": "impersonation_stopped",
@@ -144,7 +144,7 @@ pub async fn stop_impersonation(
 /// Deletes a tenant account and cleans up related data.
 pub async fn delete_tenant(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let account_id = uuid::Uuid::parse_str(&id)
@@ -195,7 +195,7 @@ pub async fn delete_tenant(
 /// Lists all accounts with their plan info — for the super admin dashboard.
 pub async fn list_all_tenants(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
         r#"

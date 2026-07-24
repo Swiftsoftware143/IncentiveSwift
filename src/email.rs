@@ -97,7 +97,7 @@ async fn send_inline(to: &str, template_type: &str, vars: &serde_json::Value, ap
             send_email_request(to, "Password Reset Request", &body, "").await
         }
         _ => {
-            let body = format!("{} Notification:\n\n{}", app_name, vars.to_string());
+            let body = format!("{} Notification:\n\n{}", app_name, vars);
             send_email_request(to, &format!("{} Notification", app_name), &body, "").await
         }
     }

@@ -22,7 +22,6 @@ use crate::error::AppError;
 use serde_json::{json, Value};
 
 /// Validate a single answer value against a question's field-type rules.
-///
 /// `question_type` – the `question_type` column on `iqs_questions`
 /// `config`         – the `config` JSONB from `iqs_questions`
 /// `value`          – the answer string submitted by the contact

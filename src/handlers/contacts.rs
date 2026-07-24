@@ -23,7 +23,7 @@ pub struct ListContactsQuery {
 /// GET /api/v1/contacts — authenticated, paginated with search.
 pub async fn list_contacts(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<ListContactsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let limit = query.limit.unwrap_or(50).min(100);
@@ -44,7 +44,7 @@ pub async fn list_contacts(
 pub async fn get_contact(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let contact_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
@@ -107,7 +107,7 @@ fn body_to_input(body: ContactBody) -> contacts::ContactInput {
 /// POST /api/v1/contacts — create contact (authenticated).
 pub async fn create_contact(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<ContactBody>,
 ) -> Result<Json<Value>, AppError> {
     let input = body_to_input(body);
@@ -121,7 +121,7 @@ pub async fn create_contact(
 /// PUT /api/v1/contacts/:id — update contact (authenticated).
 pub async fn update_contact(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(id): Path<String>,
     Json(body): Json<ContactBody>,
 ) -> Result<Json<Value>, AppError> {
@@ -139,7 +139,7 @@ pub async fn update_contact(
 /// DELETE /api/v1/contacts/:id — delete contact (authenticated).
 pub async fn delete_contact(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let contact_id = Uuid::parse_str(&id)

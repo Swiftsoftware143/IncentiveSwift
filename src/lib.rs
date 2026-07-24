@@ -1,4 +1,6 @@
+
 //! This library serves as the main crate for IncentiveSwift.
+#![allow(unused_variables, dead_code)]
 //!
 //! Integration tests use `incentiveswift_api::*` to access public types and functions.
 //! Keep the module structure identical to main.rs so tests can reference everything.

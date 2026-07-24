@@ -179,7 +179,7 @@ fn generate_slug(name: &str) -> String {
 /// GET /api/v1/admin/plans
 pub async fn list_plans(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plans = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
@@ -197,7 +197,7 @@ pub async fn list_plans(
 /// POST /api/v1/admin/plans
 pub async fn create_plan(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreatePlanInput>,
 ) -> Result<Json<Value>, AppError> {
     let slug = body.slug.unwrap_or_else(|| generate_slug(&body.name));
@@ -252,7 +252,7 @@ pub async fn create_plan(
 /// POST /api/v1/admin/plans/assign
 pub async fn admin_assign_plan(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<AssignPlanInput>,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&body.plan_id)
@@ -311,7 +311,7 @@ pub async fn admin_assign_plan(
 pub async fn get_plan(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
@@ -333,7 +333,7 @@ pub async fn get_plan(
 pub async fn update_plan(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdatePlanInput>,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&id)
@@ -413,7 +413,7 @@ pub async fn update_plan(
 pub async fn delete_plan(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
@@ -462,7 +462,7 @@ pub async fn delete_plan(
 pub async fn admin_update_plan_features(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateFeaturesInput>,
 ) -> Result<Json<Value>, AppError> {
     let plan_id = Uuid::parse_str(&id)
