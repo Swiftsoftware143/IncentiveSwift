@@ -185,7 +185,7 @@ pub async fn register(
                           currency_name, currency_icon, currency_color
                    FROM loyalty_programs WHERE id = $1 AND is_active = true"#
             )
-            .bind(&program_member.program_id)
+            .bind(program_member.program_id)
             .fetch_optional(&state.db)
             .await?;
 
@@ -200,7 +200,7 @@ pub async fn register(
                        WHERE id = $2"#
                 )
                 .bind(bonus)
-                .bind(&program_member.id)
+                .bind(program_member.id)
                 .execute(&state.db)
                 .await?;
 
@@ -214,7 +214,7 @@ pub async fn register(
                     r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
                        VALUES ($1, 'referral_signup', $2, $3::jsonb)"#
                 )
-                .bind(&program_member.id)
+                .bind(program_member.id)
                 .bind(bonus)
                 .bind(metadata.to_string())
                 .execute(&state.db)
@@ -236,7 +236,7 @@ pub async fn register(
                         r#"SELECT COUNT(*) FROM loyalty_members WHERE contact_id = $1 AND program_id = $2"#
                     )
                     .bind(cid)
-                    .bind(&program_member.program_id)
+                    .bind(program_member.program_id)
                     .fetch_one(&state.db)
                     .await?;
 
@@ -246,10 +246,10 @@ pub async fn register(
                             r#"INSERT INTO loyalty_members (program_id, contact_id, points_balance, lifetime_points, referral_code)
                                VALUES ($1, $2, $3, $3, $4)"#
                         )
-                        .bind(&program_member.program_id)
+                        .bind(program_member.program_id)
                         .bind(cid)
                         .bind(bonus / 2) // Referee gets half the bonus
-                        .bind(&format!("ref-{}", &Uuid::new_v4().to_string()[..8]))
+                        .bind(format!("ref-{}", &Uuid::new_v4().to_string()[..8]))
                         .execute(&state.db)
                         .await?;
                     }
@@ -408,7 +408,7 @@ pub async fn me(
            LEFT JOIN plans p ON a.plan_tier_id = p.id
            WHERE a.id = $1"#
     )
-    .bind(&account_uuid)
+    .bind(account_uuid)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
@@ -431,7 +431,7 @@ pub async fn me(
            WHERE ai.account_id = $1
            ORDER BY ai.is_primary DESC, i.sort_order"#
     )
-    .bind(&account_uuid)
+    .bind(account_uuid)
     .fetch_all(&state.db)
     .await?
     .iter()
@@ -482,7 +482,7 @@ pub async fn update_profile(
     if let Some(ref name) = body.name {
         sqlx::query("UPDATE accounts SET name = $1 WHERE id = $2")
             .bind(name)
-            .bind(&account_uuid)
+            .bind(account_uuid)
             .execute(&state.db)
             .await?;
     }
@@ -503,7 +503,7 @@ pub async fn update_profile(
             let already_assigned: bool = sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM account_industries WHERE account_id = $1 AND industry_id = $2"
             )
-            .bind(&account_uuid)
+            .bind(account_uuid)
             .bind(ind_id)
             .fetch_one(&state.db)
             .await?
@@ -517,7 +517,7 @@ pub async fn update_profile(
                        LEFT JOIN plans p ON a.plan_tier_id = p.id
                        WHERE a.id = $1"#
                 )
-                .bind(&account_uuid)
+                .bind(account_uuid)
                 .fetch_optional(&state.db)
                 .await?
                 .unwrap_or(serde_json::json!({}));
@@ -529,7 +529,7 @@ pub async fn update_profile(
                 let current_count = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM account_industries WHERE account_id = $1"
                 )
-                .bind(&account_uuid)
+                .bind(account_uuid)
                 .fetch_one(&state.db)
                 .await?
                 .unwrap_or(0);
@@ -546,7 +546,7 @@ pub async fn update_profile(
                        VALUES ($1, $2, true)
                        ON CONFLICT (account_id, industry_id) DO UPDATE SET is_primary = true"#
                 )
-                .bind(&account_uuid)
+                .bind(account_uuid)
                 .bind(ind_id)
                 .execute(&state.db)
                 .await?;
@@ -555,7 +555,7 @@ pub async fn update_profile(
                 sqlx::query(
                     "UPDATE account_industries SET is_primary = true WHERE account_id = $1 AND industry_id = $2"
                 )
-                .bind(&account_uuid)
+                .bind(account_uuid)
                 .bind(ind_id)
                 .execute(&state.db)
                 .await?;
@@ -566,7 +566,7 @@ pub async fn update_profile(
                 r#"UPDATE account_industries SET is_primary = false
                    WHERE account_id = $1 AND industry_id != $2 AND is_primary = true"#
             )
-            .bind(&account_uuid)
+            .bind(account_uuid)
             .bind(ind_id)
             .execute(&state.db)
             .await?;
@@ -587,7 +587,7 @@ pub async fn update_profile(
            LEFT JOIN plans p ON a.plan_tier_id = p.id
            WHERE a.id = $1"#
     )
-    .bind(&account_uuid)
+    .bind(account_uuid)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
@@ -604,7 +604,7 @@ pub async fn update_profile(
            WHERE ai.account_id = $1
            ORDER BY ai.is_primary DESC, i.sort_order"#
     )
-    .bind(&account_uuid)
+    .bind(account_uuid)
     .fetch_all(&state.db)
     .await?
     .iter()
@@ -660,7 +660,7 @@ pub async fn change_password(
     let row = sqlx::query(
         r#"SELECT password_hash FROM accounts WHERE id = $1"#
     )
-    .bind(&account_uuid)
+    .bind(account_uuid)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
@@ -682,7 +682,7 @@ pub async fn change_password(
 
     sqlx::query("UPDATE accounts SET password_hash = $1 WHERE id = $2")
         .bind(&new_hash)
-        .bind(&account_uuid)
+        .bind(account_uuid)
         .execute(&state.db)
         .await?;
 

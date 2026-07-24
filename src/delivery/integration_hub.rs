@@ -24,7 +24,6 @@
 //! }
 //! ```
 
-use crate::error::AppError;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -229,7 +228,7 @@ pub async fn execute_delivery(
             if let Some(param_map) = params.as_object() {
                 let mut pairs: Vec<String> = Vec::new();
                 for (key, val) in param_map {
-                    let resolved = resolve_template(val.as_str().unwrap_or(""), &ctx);
+                    let resolved = resolve_template(val.as_str().unwrap_or(""), ctx);
                     pairs.push(format!("{}={}", key, urlencoding(resolved)));
                 }
                 if !pairs.is_empty() {
@@ -259,7 +258,7 @@ pub async fn execute_delivery(
     // 3. Webhooks to integration targets
     if !delivery.webhooks.is_empty() {
         for target_id_str in &delivery.webhooks {
-            match deliver_to_integration_target(pool, target_id_str, &ctx).await {
+            match deliver_to_integration_target(pool, target_id_str, ctx).await {
                 Ok(res) => result.webhooks_fired.push(res),
                 Err(e) => result.errors.push(format!("Webhook {}: {}", target_id_str, e)),
             }
@@ -268,7 +267,7 @@ pub async fn execute_delivery(
 
     // 4. Autoresponder
     if delivery.autoresponder_fire {
-        match fire_autoresponder(pool, &ctx).await {
+        match fire_autoresponder(pool, ctx).await {
             Ok(_) => result.autoresponder_fired = true,
             Err(e) => result.errors.push(format!("Autoresponder: {}", e)),
         }

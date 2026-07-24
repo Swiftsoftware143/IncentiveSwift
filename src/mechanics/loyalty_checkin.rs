@@ -14,7 +14,6 @@ use crate::state::AppState;
 use sqlx::Row;
 
 /// Process a loyalty check-in for a contact in a given program.
-///
 /// Returns a result indicating success or an error explaining why the check-in was rejected.
 #[allow(dead_code)]
 pub async fn process_checkin(
@@ -289,19 +288,18 @@ async fn apply_reward_tag(
 
 async fn push_reward_notification(
     _state: &AppState,
-    _contact_id: &str,
+    contact_id: &str,
     _reward_name: &str,
 ) -> Result<(), AppError> {
     // In production, push notification via delivery system
     // For now, this is a placeholder
-    tracing::info!("Reward notification would be sent for: {} (contact: {})", _reward_name, _contact_id);
+    tracing::info!("Reward notification would be sent for: {} (contact: {})", _reward_name, contact_id);
     Ok(())
 }
 
 /// Process a loyalty check-in triggered from a campaign entry (spin, raffle, etc).
 /// This is the campaign-to-loyalty bridge — called by `create_entry()` when a campaign
 /// has `auto_enroll_loyalty = true` and a `loyalty_program_id` set.
-///
 /// Unlike the standalone `process_checkin()`, this:
 /// - Does NOT enforce daily cap (entry is already gated)
 /// - Records the entry_id on the checkin for traceability
@@ -397,7 +395,7 @@ pub async fn award_points_from_action(
     action_type: &str,
     _channel_code: &str,
 ) -> Result<(), AppError> {
-    let _program = get_program(state, program_id).await?;
+    let program = get_program(state, program_id).await?;
     let member_id = find_or_create_member(state, program_id, contact_id).await?;
 
     let notes = format!("earn:{}", _channel_code);

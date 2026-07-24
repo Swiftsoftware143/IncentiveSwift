@@ -307,11 +307,9 @@ pub async fn create_entry(
 }
 
 /// Dispatch to all integrations configured in a campaign's delivery_config.
-///
 /// The primary dispatch route is to WorkflowSwift's incoming webhook, which
 /// handles all routing using stored API keys, workflow steps, and n8n triggers.
 /// Users configure everything in WorkflowSwift — this is the hands-off layer.
-///
 /// For backwards compatibility, if `integrations` is not empty, those direct
 /// integrations will also be dispatched (legacy path). New campaigns should
 /// configure everything via WorkflowSwift and leave `integrations` empty.
@@ -563,7 +561,7 @@ pub async fn test_entry_webhook(
             let status = resp.status().as_u16();
             let body_text = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
             Ok(Json(json!({
-                "success": status >= 200 && status < 300,
+                "success": (200..300).contains(&status),
                 "status": status,
                 "response": body_text,
             })))

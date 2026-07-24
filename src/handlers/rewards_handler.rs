@@ -44,9 +44,9 @@ pub struct RewardInput {
 /// GET /api/v1/rewards — list reward tiers with campaign context
 pub async fn list_rewards(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&_user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let rows = sqlx::query_as::<_, RewardRow>(
@@ -70,7 +70,7 @@ pub async fn list_rewards(
 /// POST /api/v1/rewards — create a reward tier
 pub async fn create_reward(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<RewardInput>,
 ) -> Result<Json<Value>, AppError> {
     // Find the loyalty program for the given campaign, or use default program
@@ -182,7 +182,7 @@ pub async fn create_reward(
 pub async fn update_reward(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<RewardInput>,
 ) -> Result<Json<Value>, AppError> {
     let reward_id = Uuid::parse_str(&id)

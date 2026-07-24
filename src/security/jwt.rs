@@ -26,11 +26,9 @@ pub struct AppClaims {
 }
 
 /// Decode and verify a App JWT.
-///
 /// # Arguments
 /// * `token` - The JWT string (without "Bearer " prefix)
 /// * `jwt_secret` - The Supabase anon key (used as HMAC secret)
-///
 /// # Returns
 /// The parsed claims if the token is valid, or an error.
 pub fn verify_jwt(token: &str, jwt_secret: &str) -> Result<AppClaims, AppError> {

@@ -34,7 +34,6 @@ pub struct GrantCreditsResponse {
 }
 
 /// POST /api/v1/loyalty/external/grant-credits
-///
 /// Grants credits to a user identified by email.
 /// Authenticated via X-API-Key header.
 /// Creates an account if one doesn't exist for that email.
@@ -76,7 +75,7 @@ pub async fn grant_credits(
         Some("referral"),
         None,
         &Some(credit_description),
-    ).await.map_err(|e| AppError::Internal(e))?;
+    ).await.map_err(AppError::Internal)?;
 
     tracing::info!(
         "Granted {} credits to account {} (email: {}) for reason: {}",
@@ -132,7 +131,6 @@ async fn find_or_create_account(
 }
 
 /// GET /api/v1/loyalty/external/program/{id} — get program info for external systems
-///
 /// Returns program details including currency_name, currency_icon, currency_color.
 pub async fn get_external_program(
     State(state): State<AppState>,

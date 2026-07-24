@@ -259,10 +259,10 @@ pub async fn create_topup_checkout(
             let success_url = format!("https://app.incentiveswift.com/admin/credits?checkout=success&credits={}", credits);
             let cancel_url = "https://app.incentiveswift.com/admin/credits?checkout=cancel".to_string();
 
-            match create_stripe_session(&key, amount as i64, &success_url, &cancel_url, account_id, credits as i32).await {
+            match create_stripe_session(&key, amount, &success_url, &cancel_url, account_id, credits as i32).await {
                 Some(session_url) => {
                     // Store pending checkout
-                    let stripe_session_id = session_url.split('/').last().unwrap_or("").to_string();
+                    let stripe_session_id = session_url.split('/').next_back().unwrap_or("").to_string();
                     sqlx::query(
                         "INSERT INTO stripe_checkout_sessions (account_id, stripe_session_id, amount, credits, status)
                          VALUES ($1, $2, $3, $4, 'pending')"
@@ -340,7 +340,7 @@ async fn create_stripe_session(
     amount_cents: i64,
     success_url: &str,
     cancel_url: &str,
-    _account_id: Uuid,
+    account_id: Uuid,
     _credits: i32,
 ) -> Option<String> {
     let client = reqwest::Client::new();

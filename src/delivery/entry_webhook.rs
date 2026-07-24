@@ -1,7 +1,6 @@
 // Entry webhook — fires POST to campaign's configured entry_webhook_url
 // when a user submits an entry (spin, form, quiz, etc.)
 
-use crate::state::AppState;
 use reqwest::Client;
 use serde_json::{json, Value};
 use uuid::Uuid;

@@ -33,7 +33,7 @@ pub struct RedeemSecretCodeBody {
 fn ok(d: Value) -> Json<Value> { Json(json!({"data": d, "error": null})) }
 
 pub async fn list_secret_codes(
-    State(app): State<AppState>, _user: AuthenticatedUser,
+    State(app): State<AppState>, user: AuthenticatedUser,
     Path(campaign_id): Path<Uuid>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let codes = sqlx::query_as::<_, CampaignSecretCode>(
@@ -44,7 +44,7 @@ pub async fn list_secret_codes(
 }
 
 pub async fn create_secret_code(
-    State(app): State<AppState>, _user: AuthenticatedUser,
+    State(app): State<AppState>, user: AuthenticatedUser,
     Path(campaign_id): Path<Uuid>, Json(body): Json<CreateSecretCodeBody>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let code = body.code.trim().to_uppercase();
@@ -64,7 +64,7 @@ pub async fn create_secret_code(
 }
 
 pub async fn update_secret_code(
-    State(app): State<AppState>, _user: AuthenticatedUser,
+    State(app): State<AppState>, user: AuthenticatedUser,
     Path((_cid, code_id)): Path<(Uuid, Uuid)>, Json(b): Json<UpdateSecretCodeBody>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let sc = sqlx::query_as::<_, CampaignSecretCode>(
@@ -80,7 +80,7 @@ pub async fn update_secret_code(
 }
 
 pub async fn delete_secret_code(
-    State(app): State<AppState>, _user: AuthenticatedUser,
+    State(app): State<AppState>, user: AuthenticatedUser,
     Path((_cid, code_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     sqlx::query("DELETE FROM campaign_secret_codes WHERE id=$1").bind(code_id)
@@ -153,7 +153,7 @@ pub async fn redeem_secret_code(
 }
 
 pub async fn list_redemptions(
-    State(app): State<AppState>, _user: AuthenticatedUser,
+    State(app): State<AppState>, user: AuthenticatedUser,
     Path(campaign_id): Path<Uuid>,
 ) -> Result<Json<Value>, crate::error::AppError> {
     let rows = sqlx::query(

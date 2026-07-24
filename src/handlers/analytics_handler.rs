@@ -10,7 +10,7 @@ use axum::{
     http::header,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
@@ -30,9 +30,9 @@ pub struct ExportQuery {
 /// GET /api/v1/analytics/overview — Account-level KPIs
 pub async fn overview(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Total campaigns
@@ -111,10 +111,10 @@ pub async fn overview(
 /// GET /api/v1/analytics/campaigns — Per-campaign summary
 pub async fn campaign_list(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<AnalyticsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let sort_col = query.sort.as_deref().unwrap_or("total_entries");
@@ -217,10 +217,10 @@ pub async fn campaign_list(
 /// GET /api/v1/analytics/campaigns/{slug} — Single campaign drill-down
 pub async fn campaign_detail(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Get campaign
@@ -420,9 +420,9 @@ pub async fn campaign_detail(
 /// GET /api/v1/analytics/contacts — Contact analytics
 pub async fn contacts_analytics(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let total_contacts: i64 = sqlx::query_scalar(
@@ -497,9 +497,9 @@ pub async fn contacts_analytics(
 /// GET /api/v1/analytics/loyalty — Loyalty program analytics
 pub async fn loyalty_analytics(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let total_programs: i64 = sqlx::query_scalar(
@@ -582,10 +582,10 @@ pub async fn loyalty_analytics(
 /// GET /api/v1/analytics/export?type=campaigns|contacts|entries — CSV export
 pub async fn export_csv(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Query(query): Query<ExportQuery>,
 ) -> Result<axum::response::Response, AppError> {
-    let account_id = _user.account_id.clone();
+    let account_id = user.account_id.clone();
     let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let export_type = query.r#type.as_deref().unwrap_or("campaigns");

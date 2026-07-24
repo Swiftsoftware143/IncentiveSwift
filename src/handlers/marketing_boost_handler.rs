@@ -20,7 +20,6 @@ use axum::{
 use serde_json::{json, Value};
 
 /// GET /api/v1/marketing-boost/destinations
-///
 /// Fetch the destination list from Marketing Boost API.
 /// Requires `MB_API_KEY` and `MB_SENDER` environment variables or
 /// the first configured campaign's marketing_boost config credentials.

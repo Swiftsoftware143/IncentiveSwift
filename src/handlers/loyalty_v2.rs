@@ -88,7 +88,7 @@ pub async fn verify_purchase(
          WHERE pv.pin_code = $1 AND pv.status = 'pending'
          LIMIT 1"
     )
-    .bind(&req.pin_code.to_uppercase())
+    .bind(req.pin_code.to_uppercase())
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Invalid or expired PIN".into()))?;
@@ -330,7 +330,7 @@ pub async fn claim_voucher(
     let voucher = sqlx::query_as::<_, (Uuid, String, String)>(
         "SELECT id, discount_value, status FROM vouchers WHERE redemption_code = $1 AND issued_to_contact_id = $2 LIMIT 1"
     )
-    .bind(&req.code.to_uppercase())
+    .bind(req.code.to_uppercase())
     .bind(req.contact_id)
     .fetch_optional(&s.db)
     .await?
@@ -1043,7 +1043,7 @@ pub async fn purchase_verify(
 
         // Calculate max discount credits: min(cap_dollars * credit_rate, balance)
         // discount_percent is informational — the actual cap is in dollars
-        let max_discount_credits = (cap_dollars as i32) * credit_rate;
+        let max_discount_credits = cap_dollars * credit_rate;
 
         // Get customer's current balance
         let customer_balance: i32 = sqlx::query_scalar(
@@ -1078,7 +1078,7 @@ pub async fn purchase_verify(
             net_change = credit_amount - redeemed_credits;
         }
 
-        let new_balance = (balance as i32 + net_change).max(0);
+        let new_balance = (balance + net_change).max(0);
         sqlx::query(
             "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
         )
@@ -1360,7 +1360,7 @@ pub async fn survey_response(
                 )
                 .bind(new_id)
                 .bind(email)
-                .bind(&payload.applied_tags.as_ref().map(|t| t.join(", ")))
+                .bind(payload.applied_tags.as_ref().map(|t| t.join(", ")))
                 .execute(&s.db)
                 .await?;
                 new_id

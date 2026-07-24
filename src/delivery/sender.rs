@@ -66,7 +66,7 @@ pub async fn load_system_smtp_fallback(pool: &PgPool) -> Option<SmtpConfig> {
     Some(SmtpConfig {
         host: "smtp.mailgun.org".to_string(),
         port: 587,
-        username: format!("postmaster@mail.incentiveswift.com"),
+        username: "postmaster@mail.incentiveswift.com".to_string(),
         password: key,
         from_email: "notifications@mail.incentiveswift.com".to_string(),
         from_name: Some("IncentiveSwift".to_string()),

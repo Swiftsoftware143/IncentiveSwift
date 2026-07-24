@@ -84,7 +84,7 @@ fn generate_slug(name: &str) -> String {
 /// GET /api/v1/industries — list active industries (user-facing)
 pub async fn list_active_industries(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let industries = sqlx::query_as::<_, Industry>(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
@@ -101,7 +101,7 @@ pub async fn list_active_industries(
 /// GET /api/v1/admin/industries — list all industries (admin)
 pub async fn admin_list_industries(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let industries = sqlx::query_as::<_, Industry>(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
@@ -117,7 +117,7 @@ pub async fn admin_list_industries(
 /// POST /api/v1/admin/industries
 pub async fn admin_create_industry(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<CreateIndustryInput>,
 ) -> Result<Json<Value>, AppError> {
     let slug = body.slug.unwrap_or_else(|| generate_slug(&body.name));
@@ -151,7 +151,7 @@ pub async fn admin_create_industry(
 pub async fn admin_update_industry(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(body): Json<UpdateIndustryInput>,
 ) -> Result<Json<Value>, AppError> {
     let industry_id = Uuid::parse_str(&id)
@@ -205,7 +205,7 @@ pub async fn admin_update_industry(
 pub async fn admin_delete_industry(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let industry_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid industry ID".to_string()))?;

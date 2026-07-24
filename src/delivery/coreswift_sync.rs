@@ -15,7 +15,6 @@ use crate::state::AppState;
 use reqwest::Client;
 use serde_json::{json, Value};
 use uuid::Uuid;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const CORESWIFT_PROVIDER: &str = "coreswift";
 
@@ -150,7 +149,7 @@ pub async fn sync_entry_to_coreswift(
     match contact_resp {
         Ok(r) => {
             let status = r.status().as_u16();
-            if status >= 200 && status < 300 {
+            if (200..300).contains(&status) {
                 tracing::info!("CoreSwift contact synced: {} {} (status={})", first, last, status);
             } else if status == 401 {
                 // JWT expired — clear it so next attempt re-authenticates

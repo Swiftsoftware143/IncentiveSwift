@@ -161,7 +161,6 @@ fn get_prize_delivery(prize_json: &serde_json::Value) -> PrizeDeliveryConfig {
 // ---------------------------------------------------------------------------
 
 /// POST /api/v1/campaigns/{slug}/spin
-///
 /// Execute a spin for a contact on a campaign. Creates an anonymous contact if
 /// no contact_id is provided (must have email or phone).
 /// After a win, generates a redemption code, handles delivery (email/redirect),
@@ -506,7 +505,6 @@ pub async fn spin(
 }
 
 /// GET /api/v1/campaigns/{slug}/spin-status
-///
 /// Check current spin status for a contact (streak, remaining spins, etc.).
 /// Uses query parameters for GET request.
 pub async fn spin_status(
@@ -560,7 +558,6 @@ pub async fn spin_status(
 }
 
 /// GET /api/v1/campaigns/{slug}/wins
-///
 /// List all wins for a campaign (admin).
 pub async fn list_wins(
     State(state): State<AppState>,
@@ -620,7 +617,6 @@ pub async fn list_wins(
 }
 
 /// POST /api/v1/campaigns/{slug}/wins/{win_id}/redeem
-///
 /// Mark a win as redeemed.
 pub async fn redeem_win(
     State(state): State<AppState>,

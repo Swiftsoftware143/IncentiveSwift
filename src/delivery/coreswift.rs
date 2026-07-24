@@ -12,14 +12,12 @@ use crate::error::AppError;
 use serde_json::json;
 
 /// Push entry data to WorkflowSwift for orchestrated routing.
-///
 /// WorkflowSwift's POST /api/incoming handler will:
 ///   1. Match the incoming data to an active workflow
 ///   2. Create a workflow instance
 ///   3. Step through configured workflow steps
 ///   4. Dispatch to integration targets using stored API keys
 ///   5. Trigger n8n workflows as configured
-///
 /// Best-effort: won't fail the entry if WorkflowSwift is unreachable.
 pub async fn push_to_workflowswift(
     client: &reqwest::Client,

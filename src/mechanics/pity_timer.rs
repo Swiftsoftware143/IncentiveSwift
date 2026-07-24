@@ -19,7 +19,6 @@ use serde_json::Value as JsonValue;
 
 /// Check pity timer: if the contact has hit the loss streak threshold,
 /// force a win and reset the streak. Otherwise increment the streak.
-///
 /// Returns (forced_win, outcome, tag) where forced_win is true if the
 /// pity timer triggered.
 pub async fn apply_pity_timer(
@@ -153,7 +152,7 @@ pub async fn check_daily_limit(
     .flatten()
     .unwrap_or(0);
 
-    if today >= max_spins as i64 {
+    if today >= max_spins {
         return Err(AppError::Forbidden(format!(
             "Daily spin limit reached ({}). Try again tomorrow.",
             max_spins
