@@ -668,6 +668,24 @@ async fn handle_stripe_checkout_completed(
         }
     }
 
+    // FunnelSwift affiliate conversion fire-and-forget
+    let psid = provider_session_id.to_string();
+    tokio::spawn(async move {
+        let funnelswift_url = std::env::var("FUNNELSWIFT_URL").unwrap_or_default();
+        if !funnelswift_url.is_empty() {
+            let _ = reqwest::Client::new()
+                .post(format!("{}/api/v1/webhooks/conversion", funnelswift_url))
+                .json(&serde_json::json!({
+                    "source_app": "incentiveswift",
+                    "event": "checkout_completed",
+                    "provider_session_id": psid,
+                }))
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+        }
+    });
+
     Ok(())
 }
 
