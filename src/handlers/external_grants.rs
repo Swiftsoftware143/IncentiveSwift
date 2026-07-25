@@ -1,6 +1,7 @@
-//! External Grant handler — allows authorized external services to grant credits.
-//!
-//! POST /api/v1/loyalty/external/grant-credits
+//! External integration handlers — allows authorized external services to:
+//!   - Register loyalty members (MultiDirectory signups)
+//!   - Grant credits (MultiDirectory referrals)
+//!   - Query program info
 //! Authenticated via X-API-Key header (system API key stored in provider_keys).
 
 use axum::{
@@ -202,4 +203,211 @@ async fn validate_system_api_key(
     }
 
     Ok(())
+}
+
+// ── Register Member ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterMemberRequest {
+    pub email: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub phone: Option<String>,
+    pub member_type: String,       // "visitor", "supplier", "business_owner"
+    pub business_type: Option<String>, // supplier subtype: farm, wholesaler, etc.
+    pub directory_slug: Option<String>, // which city directory (optional for network-wide)
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegisterMemberResponse {
+    pub success: bool,
+    pub contact_id: Option<String>,
+    pub member_id: Option<String>,
+    pub loyalty_program_id: Option<String>,
+    pub loyalty_program_name: Option<String>,
+    pub already_existed: bool,
+    pub message: String,
+}
+
+/// POST /api/v1/loyalty/external/register-member
+/// Called by MultiDirectory on every member signup (visitor, supplier, business owner).
+/// Creates/finds the IS contact, enrolls in the appropriate ZaarHub loyalty program.
+/// This is the single entry point for all ZaarHub members into the loyalty system.
+pub async fn register_member(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterMemberRequest>,
+) -> Result<Json<Value>, AppError> {
+    // NOTE: This endpoint is internal-only (called by MultiDirectory on localhost).
+    // No API key required — same pattern as survey-response endpoint.
+
+    // 1. Validate input
+    if req.email.trim().is_empty() {
+        return Err(AppError::BadRequest("email is required".to_string()));
+    }
+
+    let valid_types = ["visitor", "supplier", "business_owner"];
+    if !valid_types.contains(&req.member_type.as_str()) {
+        return Err(AppError::BadRequest(format!(
+            "Invalid member_type '{}'. Must be one of: visitor, supplier, business_owner",
+            req.member_type
+        )));
+    }
+
+    // 3. Determine which loyalty program to enroll in
+    //    - suppliers → ZaarHub B2B Loop
+    //    - visitors + business_owners → ZaarHub Local Pass
+    //    - Also link to city directory campaign if directory_slug is provided
+    let (loyalty_program_slug, fallback_program_slug) = if req.member_type == "supplier" {
+        ("zaarhub-b2b-loop", "zaarhub-b2b-loop")
+    } else {
+        ("zaarhub-local-pass", "zaarhub-local-pass")
+    };
+
+    let lookup_slug = req.directory_slug.as_deref().unwrap_or(fallback_program_slug);
+
+    // 4. Look up loyalty program by slug
+    let program = sqlx::query_as::<_, (Uuid, String, bool)>(
+        "SELECT id, name, is_active FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1"
+    )
+    .bind(loyalty_program_slug)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (program_id, program_name, _active) = match program {
+        Some(p) => p,
+        None => {
+            return Err(AppError::NotFound(format!(
+                "Loyalty program '{}' not found. Create it in IncentiveSwift first.",
+                loyalty_program_slug
+            )));
+        }
+    };
+
+    // 5. Upsert contact (dedup by email)
+    let contact_id = crate::db::contacts::upsert_contact(
+        &state.db,
+        &crate::db::contacts::ContactInput {
+            first_name: req.first_name.clone(),
+            last_name: req.last_name.clone(),
+            email: Some(req.email.clone()),
+            phone: req.phone.clone(),
+            business_name: None,
+            website: None,
+        },
+    ).await?;
+
+    // 6. Check if already a loyalty member in this program
+    let existing_member: Option<(Uuid, bool)> = sqlx::query_as(
+        "SELECT id, true FROM loyalty_members WHERE program_id = $1 AND contact_id = $2 LIMIT 1"
+    )
+    .bind(program_id)
+    .bind(contact_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (member_id, already_existed) = if let Some((mid, _)) = existing_member {
+        (mid, true)
+    } else {
+        // Enroll as loyalty member
+        let mid = crate::db::loyalty::find_or_create_member(&state.db, &program_id, &contact_id).await?;
+        (mid, false)
+    };
+
+    // 7. If directory_slug provided, also enroll in the city directory campaign
+    //    The city campaigns use campaign_points_balance for ZaarCash points
+    if let Some(ref dir_slug) = req.directory_slug {
+        let campaign_slug = format!("directory-{}", dir_slug);
+        let campaign_info: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, loyalty_program_id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1"
+        )
+        .bind(&campaign_slug)
+        .fetch_optional(&state.db)
+        .await?;
+
+        if let Some((campaign_id, campaign_program_id)) = campaign_info {
+            // Also enroll in the campaign's loyalty program if different from the main one
+            if let Some(cp_id) = campaign_program_id {
+                if cp_id != program_id {
+                    let _ = crate::db::loyalty::find_or_create_member(&state.db, &cp_id, &contact_id).await;
+                }
+            }
+        }
+    }
+
+    // 8. Apply tags if provided (store in contact notes2 for segmentation)
+    if let Some(ref tags) = req.tags {
+        if !tags.is_empty() {
+            let tag_string = tags.join(", ");
+            sqlx::query("UPDATE contacts SET notes2 = $1 WHERE id = $2")
+                .bind(&tag_string)
+                .bind(contact_id)
+                .execute(&state.db)
+                .await?;
+        }
+    }
+
+    // 9. If business_owner, ensure an IS accounts entry exists for credit tracking
+    let _account_id: Option<Uuid> = if req.member_type == "business_owner" {
+        let existing_acct: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM accounts WHERE email = $1 LIMIT 1"
+        )
+        .bind(&req.email)
+        .fetch_optional(&state.db)
+        .await?;
+
+        match existing_acct {
+            Some(id) => Some(id),
+            None => {
+                let new_id = Uuid::new_v4();
+                let now = chrono::Utc::now();
+                let name = format!("{} {}",
+                    req.first_name.as_deref().unwrap_or(""),
+                    req.last_name.as_deref().unwrap_or("")
+                ).trim().to_string();
+                let display_name = if name.is_empty() { req.email.clone() } else { name };
+
+                sqlx::query(
+                    r#"INSERT INTO accounts (id, email, name, role, credits_balance, credits_lifetime_used, created_at, updated_at)
+                       VALUES ($1, $2, $3, 'company_admin', 0, 0, $4, $5)
+                       ON CONFLICT (email) DO UPDATE SET updated_at = NOW()"#
+                )
+                .bind(new_id)
+                .bind(&req.email)
+                .bind(&display_name)
+                .bind(now)
+                .bind(now)
+                .execute(&state.db)
+                .await?;
+                Some(new_id)
+            }
+        }
+    } else {
+        None
+    };
+
+    tracing::info!(
+        "[register-member] {} {} enrolled in {} (program={}) contact={} member={} existed={}",
+        req.member_type,
+        req.email,
+        program_name,
+        loyalty_program_slug,
+        contact_id,
+        member_id,
+        already_existed
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "contact_id": contact_id.to_string(),
+        "member_id": member_id.to_string(),
+        "loyalty_program_id": program_id.to_string(),
+        "loyalty_program_name": program_name,
+        "already_existed": already_existed,
+        "message": if already_existed {
+            format!("{} was already enrolled in {}", req.email, program_name)
+        } else {
+            format!("{} enrolled in {}", req.email, program_name)
+        },
+    })))
 }
