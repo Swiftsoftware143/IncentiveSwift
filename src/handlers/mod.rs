@@ -17,7 +17,6 @@ pub mod auth_handler;
 pub mod admin_handler;
 pub mod plans_handler;
 pub mod api_keys;
-pub mod affiliates_handler;
 pub mod leads_handler;
 pub mod tags_handler;
 pub mod tag_groups_handler;
