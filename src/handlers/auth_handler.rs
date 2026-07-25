@@ -258,6 +258,14 @@ pub async fn register(
         }
     }
 
+    let cs_state = state.clone();
+    let cs_account_id = account_id;
+    tokio::spawn(async move {
+        crate::delivery::coreswift_push::push_contact_to_coreswift(
+            &cs_state, &cs_account_id, &cs_account_id, &["incentiveswift:Free".to_string()], &["incentiveswift:Free".to_string()], &[], "signup"
+        ).await;
+    });
+
     Ok(Json(json!({
         "token": token,
         "user": {

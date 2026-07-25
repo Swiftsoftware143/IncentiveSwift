@@ -64,7 +64,7 @@ pub async fn push_contact_to_coreswift(
     // Build the payload matching what CoreSwift's cross_app_tag_sync expects
     let payload = json!({
         "source_app": "incentiveswift",
-        "tenant_id": tenant_id.to_string(),
+        "tenant_id": "abd8ad22-aa01-4642-9a9f-6bef6a03d85b",   // SwiftSoftware tenant
         "triggered_by": triggered_by,
         "lead": {
             "id": contact_id.to_string(),
