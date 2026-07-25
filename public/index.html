@@ -219,6 +219,7 @@ tr:hover{background:rgba(167,139,250,.04)}
       <a href="#" onclick="showPage('tenants')" data-page="tenants"><span>👥</span><span>Tenants</span></a>
       <a href="#" onclick="showPage('portfolios')" data-page="portfolios"><span>🏢</span><span>Portfolio Co.</span></a>
       <a href="#" onclick="showPage('plans')" data-page="plans"><span>📋</span><span>Plans</span></a>
+      <a href="#" onclick="showPage('businesses')" data-page="businesses"><span>🏪</span><span>Businesses</span></a>
     </div>
     <a href="#" onclick="toggleAccordion('content-accordion')" class="accordion-toggle"><span>📄</span><span>Content <span style="font-size:10px;opacity:0.6">▸</span></span></a>
     <div id="content-accordion" class="accordion-sub">
@@ -440,6 +441,7 @@ async function showPage(page){
     analytics:renderAnalytics,
     seo:renderSeo,
     legal:renderLegal,
+    businesses:renderBusinesses,
   };
   try{
     await renderers[page]();
@@ -796,6 +798,72 @@ async function saveLegal(){
     await api('/settings',{method:'PUT',body:JSON.stringify({settings})});
     showToast('Legal pages saved');
   }catch(e){showToast(e.message,'error')}
+}
+
+/* ===== BUSINESSES (Phase 1 - Directory Integration) ===== */
+async function renderBusinesses(){
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>🏪 Businesses</h1></div><div class="loading">Loading...</div>';
+  try{
+    const data=await api('/admin/businesses');
+    const businesses=data.businesses||[];
+    mc.innerHTML='<div class="top-bar"><h1>🏪 Businesses</h1><span class="badge badge-active">'+businesses.length+' registered</span></div>';
+    if(!businesses.length){
+      mc.innerHTML+='<div class="card" style="text-align:center;padding:40px"><p style="color:var(--text2)">No directory businesses registered yet.</p><p style="color:var(--text2);font-size:12px;margin-top:8px">Businesses appear here when directory owners connect their IncentiveSwift account.</p></div>';
+      return;
+    }
+    let html='<div class="card" style="padding:0;overflow-x:auto"><table>'
+      +'<tr><th>Business</th><th>Directory</th><th>Type</th><th>Email</th><th>Phone</th><th>Created</th><th>Actions</th></tr>';
+    businesses.forEach(b=>{
+      html+='<tr>'
+        +'<td><strong>'+esc(b.name||'—')+'</strong></td>'
+        +'<td><span class="badge badge-active">'+esc(b.directory_slug||'—')+'</span></td>'
+        +'<td>'+esc(b.business_type||'—')+'</td>'
+        +'<td>'+esc(b.email||'—')+'</td>'
+        +'<td>'+esc(b.phone||'—')+'</td>'
+        +'<td style="font-size:12px;color:var(--text2)">'+(b.created_at?new Date(b.created_at).toLocaleDateString():'—')+'</td>'
+        +'<td style="white-space:nowrap">'
+        +'<button class="btn-secondary btn-sm" onclick="showBusinessDetail(\''+b.id+'\')">📊 View</button>'
+        +'</td></tr>';
+    });
+    html+='</table></div>';
+    mc.innerHTML+=html;
+  }catch(e){mc.innerHTML='<div class="error">Failed to load: '+e.message+'</div>';}
+}
+
+async function showBusinessDetail(id){
+  const mc=$('main-content');
+  mc.innerHTML='<div class="loading">Loading business details...</div>';
+  try{
+    const b=await api('/admin/businesses/'+id);
+    mc.innerHTML='<div class="top-bar"><h1>🏪 '+esc(b.name)+'</h1><button class="btn-secondary" onclick="renderBusinesses()">← Back</button></div>'
+      +'<div class="grid-4" style="margin-bottom:16px">'
+      +'<div class="card stat-card"><div class="num">'+b.stats.total_leads+'</div><div class="label">Total Leads</div></div>'
+      +'<div class="card stat-card"><div class="num">'+b.stats.active_campaigns+'</div><div class="label">Active Campaigns</div></div>'
+      +'</div>'
+      +'<div class="card"><h3 style="margin-bottom:12px;color:var(--accent)">Business Info</h3>'
+      +'<table><tr><td style="color:var(--text2);width:140px">Name</td><td>'+esc(b.name)+'</td></tr>'
+      +'<tr><td style="color:var(--text2)">Email</td><td>'+esc(b.email||'—')+'</td></tr>'
+      +'<tr><td style="color:var(--text2)">Type</td><td>'+esc(b.business_type||'—')+'</td></tr>'
+      +'<tr><td style="color:var(--text2)">Directory</td><td>'+esc(b.directory_slug||'—')+'</td></tr>'
+      +'<tr><td style="color:var(--text2)">Phone</td><td>'+esc(b.phone||'—')+'</td></tr>'
+      +'<tr><td style="color:var(--text2)">Listing ID</td><td><code>'+esc(b.listing_id||'—')+'</code></td></tr>'
+      +'<tr><td style="color:var(--text2)">API Key</td><td><code style="background:var(--surface2);padding:4px 8px;border-radius:4px">'+esc(b.api_key.prefix)+'…</code> <span class="badge '+(b.api_key.is_active?'badge-active':'badge-inactive')+'">'+(b.api_key.is_active?'Active':'Inactive')+'</span></td></tr>'
+      +'<tr><td style="color:var(--text2)">Created</td><td>'+new Date(b.created_at).toLocaleString()+'</td></tr>'
+      +'</table>'
+      +'<div class="actions" style="margin-top:16px">'
+      +'<button class="btn-secondary" onclick="rotateBusinessKey(\''+b.id+'\')">🔄 Rotate API Key</button>'
+      +'</div></div>';
+  }catch(e){mc.innerHTML='<div class="error">Failed to load: '+e.message+'</div>';}
+}
+
+async function rotateBusinessKey(id){
+  if(!confirm('Rotating the API key will invalidate the old key. The business owner will need to re-connect. Continue?'))return;
+  try{
+    const r=await api('/admin/businesses/'+id+'/rotate-key',{method:'POST'});
+    alert('New API Key: '+r.api_key+'\nPrefix: '+r.api_key_prefix+'\n\nStore this key securely — it will not be shown again.');
+    showBusinessDetail(id);
+  }catch(e){alert('Failed: '+e.message);}
 }
 
 /* ===== CAMPAIGNS ===== */

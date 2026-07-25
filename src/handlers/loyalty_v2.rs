@@ -1370,6 +1370,31 @@ pub async fn survey_response(
         return Err(AppError::BadRequest("Visitor email is required".into()));
     };
 
+    // Ensure this contact is enrolled in the ZaarHub Local Pass loyalty program
+    // and the city-specific loyalty program
+    let local_pass_program = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM loyalty_programs WHERE slug = 'zaarhub-local-pass' LIMIT 1"
+    )
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some(program_id) = local_pass_program {
+        let _ = crate::db::loyalty::find_or_create_member(&s.db, &program_id, &contact_id).await;
+    }
+
+    // Also enroll in the city-specific loyalty program if one exists
+    let city_program_slug = format!("directory-{}", payload.directory_slug);
+    let city_program: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM loyalty_programs WHERE slug = $1 LIMIT 1"
+    )
+    .bind(&city_program_slug)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some(program_id) = city_program {
+        let _ = crate::db::loyalty::find_or_create_member(&s.db, &program_id, &contact_id).await;
+    }
+
     // Award 100 Zaarcash — upsert campaign_points_balance
     let existing_balance = sqlx::query_scalar::<_, i32>(
         "SELECT points_balance FROM campaign_points_balance 

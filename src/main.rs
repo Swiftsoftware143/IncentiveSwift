@@ -114,9 +114,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/loyalty/external/tag-contact", post(handlers::loyalty_v2::external_tag_contact))
         // External grant-credits (used by MultiDirectory referral system)
         .route("/api/v1/loyalty/external/grant-credits", post(handlers::external_grants::grant_credits))
+        // External register-member (opt-in loyalty enrollment from directory)
+        .route("/api/v1/loyalty/external/register-member", post(handlers::external_grants::register_member))
         .route("/api/v1/loyalty/external/program/{id}", get(handlers::external_grants::get_external_program))
         // Survey response from MultiDirectory (onboarding completion)
         .route("/api/v1/campaigns/external/survey-response", post(handlers::loyalty_v2::survey_response))
+        // Business accounts (Phase 1: directory business integration)
+        .route("/api/v1/business/register", post(handlers::business_handler::register_business))
+        .route("/api/v1/business/:business_id/stats", get(handlers::business_handler::get_business_stats))
+        // Campaign widget (embeddable for directory listings)
+        .route("/api/v1/campaigns/:slug/widget", get(handlers::business_handler::get_campaign_widget))
         // Credits system (used by MultiDirectory proxy)
         .route("/api/v1/credits/balance", get(handlers::credits_handler::get_balance))
         .route("/api/v1/credits/history", get(handlers::credits_handler::get_history))
@@ -203,6 +210,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/tenants/:id", delete(crate::handlers::admin_handler::delete_tenant))
         .route("/api/v1/admin/tenants/:tenant_id/credits-rate", get(crate::handlers::admin_handler::get_credit_rate).put(crate::handlers::admin_handler::update_credit_rate))
         .route("/api/v1/admin/tenants/:tenant_id/purchase-pin", get(crate::handlers::admin_handler::get_purchase_pin))
+        // Phase 1: Business account management
+        .route("/api/v1/admin/businesses", get(handlers::business_handler::admin_list_businesses))
+        .route("/api/v1/admin/businesses/:business_id", get(handlers::business_handler::admin_get_business))
+        .route("/api/v1/admin/businesses/:business_id/rotate-key", post(handlers::business_handler::admin_rotate_business_key))
 
         // Admin plan management
         .route("/api/v1/admin/plans", get(crate::handlers::plans_handler::list_plans).post(crate::handlers::plans_handler::create_plan))
