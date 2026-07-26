@@ -19,6 +19,8 @@ pub struct LoyaltyPlan {
     pub monthly_price: i32,
     pub monthly_zc_pool: i32,
     pub features: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub how_it_works: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -37,7 +39,7 @@ pub async fn list_plans(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<LoyaltyPlan>>, AppError> {
     let plans = sqlx::query_as::<_, LoyaltyPlan>(
-        "SELECT id, name, slug, monthly_price, monthly_zc_pool, features FROM loyalty_plans WHERE is_active = true ORDER BY monthly_price ASC"
+        "SELECT id, name, slug, monthly_price, monthly_zc_pool, features, description, how_it_works FROM loyalty_plans WHERE is_active = true ORDER BY monthly_price ASC"
     )
     .fetch_all(&s.db)
     .await?;
