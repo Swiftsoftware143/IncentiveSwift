@@ -63,3 +63,4 @@ pub mod offers_handler;
 pub mod tag_provision_handler;
 pub mod business_handler;
 pub mod loyalty_badges;
+pub mod loyalty_plans;

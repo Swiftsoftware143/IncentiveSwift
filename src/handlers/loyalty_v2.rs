@@ -1006,6 +1006,30 @@ pub async fn purchase_verify(
         return Err(AppError::BadRequest("Invalid PIN".into()));
     }
 
+    // Check loyalty plan status for pool gating
+    let loyalty_plan_status: Option<String> = sqlx::query_scalar(
+        "SELECT loyalty_plan_status FROM accounts WHERE id = $1"
+    )
+    .bind(business_account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .flatten();
+
+    // If business has a loyalty plan but it's not active, block purchase verification
+    let loyalty_plan: Option<String> = sqlx::query_scalar(
+        "SELECT loyalty_plan FROM accounts WHERE id = $1"
+    )
+    .bind(business_account_id)
+    .fetch_optional(&s.db)
+    .await?
+    .flatten();
+
+    if loyalty_plan.is_some() && loyalty_plan_status.as_deref() != Some("active") {
+        return Err(AppError::BadRequest(
+            "Business loyalty plan is not active. Please subscribe to continue earning ZaarCash.".into()
+        ));
+    }
+
     // Read credit_rate from accounts (tenant) table.
     // credit_rate = credits earned per $1 spent (default 1 credit/dollar).
     // e.g. rate=2 means $25 purchase earns 50 credits.
@@ -1117,6 +1141,31 @@ pub async fn purchase_verify(
         }
 
         let new_balance = (balance + net_change).max(0);
+
+        // Check ZC pool for business loyalty plan gating
+        let zc_pool: i32 = sqlx::query_scalar(
+            "SELECT zc_pool_remaining FROM accounts WHERE id = $1"
+        )
+        .bind(business_account_id)
+        .fetch_optional(&s.db)
+        .await?
+        .unwrap_or(0);
+
+        if zc_pool > 0 && zc_pool < credit_amount {
+            return Err(AppError::BadRequest(
+                format!("Business ZC pool too low. Pool has {} ZC remaining — this transaction awards {} ZC.", zc_pool, credit_amount)
+            ));
+        }
+
+        // Deduct from pool (only if on a paid plan)
+        if loyalty_plan_status.as_deref() == Some("active") {
+            let _ = sqlx::query("UPDATE accounts SET zc_pool_remaining = zc_pool_remaining - $1 WHERE id = $2 AND zc_pool_remaining >= $1")
+                .bind(credit_amount)
+                .bind(business_account_id)
+                .execute(&s.db)
+                .await;
+        }
+
         sqlx::query(
             "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
         )

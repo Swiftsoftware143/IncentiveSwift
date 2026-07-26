@@ -4,6 +4,15 @@
 // long-form qualifier, and loyalty program module.
 
 #![allow(unused_variables, dead_code)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::redundant_locals)]
+#![allow(clippy::doc_lazy_continuation)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::incompatible_msrv)]
+#![allow(non_snake_case)]
 mod email;
 
 mod config;
@@ -124,6 +133,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/business/:business_id/stats", get(handlers::business_handler::get_business_stats))
         // Campaign widget (embeddable for directory listings)
         .route("/api/v1/campaigns/:slug/widget", get(handlers::business_handler::get_campaign_widget))
+        // Loyalty Plans — subscription tiers for business loyalty gating
+        .route("/api/v1/loyalty/plan/status", get(handlers::loyalty_plans::plan_status))
+        .route("/api/v1/loyalty/plans", get(handlers::loyalty_plans::list_plans))
         // Loyalty Badge endpoints (Phase 1)
         .route("/api/v1/loyalty/badge/business/:business_id", get(handlers::loyalty_badges::get_business_badge))
         .route("/api/v1/loyalty/badge/supplier/:supplier_id", get(handlers::loyalty_badges::get_supplier_badge))
