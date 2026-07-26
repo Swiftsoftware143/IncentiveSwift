@@ -962,16 +962,26 @@ pub async fn external_tag_contact(
 #[derive(Debug, Deserialize)]
 pub struct PurchaseVerifyRequest {
     pub contact_id: Uuid,
-    pub amount: f64,
+    pub amount: f64,                    // Total receipt amount (for logging/display)
     pub pin: String,
     pub offer_id: Option<Uuid>,
+    pub subtotal_amount: Option<f64>,   // Portion eligible for earning (excludes deal items)
+    pub deal_description: Option<String>, // Human-readable: "Free dessert — rest of meal earns"
 }
 
 /// POST /api/v1/loyalty/purchase/verify
 /// Business scans customer QR code, enters PIN, and this endpoint
 /// verifies the purchase and auto-credits the customer.
-/// Credits awarded: amount * credit_rate (configurable per tenant).
-/// If an offer_id is provided, redemption credits are deducted per offer cap.
+///
+/// Credits awarded:
+///   - If `subtotal_amount` is set: earned = subtotal_amount × credit_rate
+///   - Otherwise: earned = amount × credit_rate (full receipt)
+///
+/// This allows businesses to offer deals ("free dessert", "10% off item")
+/// while still giving customers ZaarCash on the portion they actually paid for.
+///
+/// If offer_id is provided: deduction is calculated from the offer's cap,
+/// applied against the customer's balance.
 pub async fn purchase_verify(
     State(s): State<AppState>,
     auth: AuthenticatedUser,
@@ -1058,8 +1068,14 @@ pub async fn purchase_verify(
         redeemed_credits = max_discount_credits.min(customer_balance);
     }
 
-    // Calculate earned credits using configurable credit_rate: amount * credit_rate
-    let credit_amount = ((req.amount * credit_rate as f64).floor() as i32).max(1);
+    // Calculate earned credits using configurable credit_rate.
+    // Use subtotal_amount if provided (portion eligible for earning minus deal items).
+    // Otherwise, use the full amount.
+    let earnable_amount = req.subtotal_amount.unwrap_or(req.amount);
+    let credit_amount = ((earnable_amount.max(0.0) * credit_rate as f64).floor() as i32).max(0);
+    // If no earnable amount (e.g. fully redeemed deal), still award minimum 1 point
+    let credit_amount = if credit_amount == 0 && earnable_amount > 0.0 { 1 } else { credit_amount };
+    let deal_discount = req.amount - earnable_amount;
 
     // Update the contact's account credits
     // First check if contact has an account by same UUID
@@ -1089,14 +1105,21 @@ pub async fn purchase_verify(
 
         // Log transaction(s)
         let tx_id = Uuid::new_v4();
-        let mut desc = format!("Purchase verified -- {} credits earned (${:.2} purchase)", credit_amount, req.amount);
+        let mut desc = format!("Purchase verified -- {} credits earned (${:.2} total, ${:.2} earnable)", credit_amount, req.amount, earnable_amount);
+
+        if deal_discount > 0.01 {
+            desc = format!("{}, ${:.2} deal discount excluded", desc, deal_discount);
+            if let Some(ref deal_note) = req.deal_description {
+                desc = format!("{} — {}", desc, deal_note);
+            }
+        }
 
         if redeemed_credits > 0 {
             desc = format!(
-                "{} credits earned, {} redeemed via '{}' offer (${:.2} purchase)",
+                "{} credits earned, {} redeemed via '{}' offer (${:.2} total, ${:.2} earnable)",
                 credit_amount, redeemed_credits,
                 offer_name.as_deref().unwrap_or("Offer"),
-                req.amount
+                req.amount, earnable_amount
             );
         }
 
@@ -1119,16 +1142,25 @@ pub async fn purchase_verify(
         resp.insert("credits_earned".to_string(), json!(credit_amount));
         resp.insert("new_balance".to_string(), json!(new_balance));
         resp.insert("purchase_amount".to_string(), json!(req.amount));
+        resp.insert("earnable_amount".to_string(), json!(earnable_amount));
+        resp.insert("deal_discount".to_string(), json!(deal_discount));
+        if let Some(ref deal_note) = req.deal_description {
+            resp.insert("deal_description".to_string(), json!(deal_note));
+        }
 
         if redeemed_credits > 0 {
             resp.insert("credits_redeemed".to_string(), json!(redeemed_credits));
             resp.insert("offer_applied".to_string(), json!(offer_name));
         }
 
-        resp.insert("message".to_string(), json!(format!("Purchase verified! You earned {} credits{}",
-            credit_amount,
-            if redeemed_credits > 0 { format!(" and redeemed {} credits", redeemed_credits) } else { String::new() }
-        )));
+        let msg = if deal_discount > 0.01 {
+            format!("${:.2} deal excluded! Earned {} credits on ${:.2} spend{}",
+                deal_discount, credit_amount, earnable_amount,
+                if let Some(ref n) = req.deal_description { format!(" ({})", n) } else { String::new() })
+        } else {
+            format!("Purchase verified! You earned {} credits", credit_amount)
+        };
+        resp.insert("message".to_string(), json!(msg));
 
         Ok(Json(Value::Object(resp)))
     } else {
