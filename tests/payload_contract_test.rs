@@ -14,6 +14,7 @@ mod tests {
                 email: Some("marcus@torreselectric.com".to_string()),
                 phone: Some("+13125550100".to_string()),
                 business_name: Some("Torres Electric LLC".to_string()),
+                website: Some("https://torreselectric.com".to_string()),
             },
             CampaignPayload {
                 name: "Summer Giveaway".to_string(),

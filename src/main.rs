@@ -136,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         // Loyalty Plans — subscription tiers for business loyalty gating
         .route("/api/v1/loyalty/plan/status", get(handlers::loyalty_plans::plan_status))
         .route("/api/v1/loyalty/plans", get(handlers::loyalty_plans::list_plans))
+        .route("/api/v1/loyalty/subscribe", post(handlers::loyalty_plans::subscribe))
         // Loyalty Badge endpoints (Phase 1)
         .route("/api/v1/loyalty/badge/business/:business_id", get(handlers::loyalty_badges::get_business_badge))
         .route("/api/v1/loyalty/badge/supplier/:supplier_id", get(handlers::loyalty_badges::get_supplier_badge))
