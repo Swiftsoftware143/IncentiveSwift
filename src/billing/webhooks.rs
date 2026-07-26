@@ -308,7 +308,13 @@ async fn handle_stripe_checkout_completed(
             .and_then(|r| r.try_get::<Uuid, _>("account_id").ok())
             .unwrap_or_else(Uuid::new_v4);
 
-        let plan_name = "Plan";
+        let metadata = session.get("metadata");
+    let is_loyalty_sub = metadata.and_then(|m| m.get("loyalty_subscription")).and_then(|v| v.as_str()).unwrap_or("") == "true";
+    let plan_name = if is_loyalty_sub {
+        metadata.and_then(|m| m.get("plan_name")).and_then(|v| v.as_str()).unwrap_or("Plan")
+    } else {
+        "Plan"
+    };
 
         if let Some(email_str) = email {
             if let Err(e) = deliver_credentials(state, email_str, customer_name, account_id, plan_name).await {
