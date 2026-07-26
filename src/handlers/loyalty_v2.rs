@@ -1006,15 +1006,17 @@ pub async fn purchase_verify(
         return Err(AppError::BadRequest("Invalid PIN".into()));
     }
 
-    // Read credit_rate from accounts (tenant) table
+    // Read credit_rate from accounts (tenant) table.
+    // credit_rate = credits earned per $1 spent (default 1 credit/dollar).
+    // e.g. rate=2 means $25 purchase earns 50 credits.
     let credit_rate: i32 = if let Some(tid) = tenant_id {
         sqlx::query_scalar("SELECT credit_rate FROM accounts WHERE id = $1")
             .bind(tid)
             .fetch_optional(&s.db)
             .await?
-            .unwrap_or(10)
+            .unwrap_or(1)
     } else {
-        10 // default
+        1 // default: 1 credit per $1
     };
 
     // Verify contact exists
@@ -1030,7 +1032,23 @@ pub async fn purchase_verify(
         return Err(AppError::NotFound("Customer contact not found".into()));
     }
 
-    // If an offer_id is provided, look up the offer and calculate redemption cap
+    // ── Read tenant-level ZaarCash guardrails ───────────────────────────
+    let (tenant_redemption_cap_pct, tenant_min_redemption): (i32, i32) = if let Some(tid) = tenant_id {
+        sqlx::query_as::<_, (i32, i32)>(
+            "SELECT redemption_cap_pct, min_redemption_credits FROM accounts WHERE id = $1"
+        )
+        .bind(tid)
+        .fetch_optional(&s.db)
+        .await?
+        .unwrap_or((10, 100))
+    } else {
+        (10, 100) // defaults: 10% cap, 100 ZC min to redeem
+    };
+
+    // ZC value: 100 ZaarCash = $1 (1 cent per credit)
+    const ZC_PER_DOLLAR: i32 = 100;
+
+    // ── Handle offer-based redemption (business applies a named offer) ──
     let mut redeemed_credits: i32 = 0;
     let mut offer_name: Option<String> = None;
 
@@ -1051,11 +1069,9 @@ pub async fn purchase_verify(
 
         offer_name = Some(o_name);
 
-        // Calculate max discount credits: min(cap_dollars * credit_rate, balance)
-        // discount_percent is informational — the actual cap is in dollars
-        let max_discount_credits = cap_dollars * credit_rate;
+        // Cap in ZC: cap_dollars converted to credits (e.g. $5 off = 500 ZC)
+        let max_discount_credits = cap_dollars * ZC_PER_DOLLAR;
 
-        // Get customer's current balance
         let customer_balance: i32 = sqlx::query_scalar(
             "SELECT credits_balance FROM accounts WHERE id = $1"
         )
@@ -1064,8 +1080,14 @@ pub async fn purchase_verify(
         .await?
         .unwrap_or(0);
 
-        // Redeemed = min(max_discount_credits, customer_balance)
-        redeemed_credits = max_discount_credits.min(customer_balance);
+        // Customer must have enough ZC to redeem the offer
+        if customer_balance < max_discount_credits {
+            return Err(AppError::BadRequest(format!(
+                "Insufficient ZaarCash. Offer needs {} ZC but you have {}.", max_discount_credits, customer_balance
+            )));
+        }
+
+        redeemed_credits = max_discount_credits;
     }
 
     // Calculate earned credits using configurable credit_rate.
@@ -1148,30 +1170,45 @@ pub async fn purchase_verify(
             resp.insert("deal_description".to_string(), json!(deal_note));
         }
 
+        // ZC value info for UI display
+        resp.insert("zc_per_dollar".to_string(), json!(ZC_PER_DOLLAR));
+        resp.insert("zc_value_display".to_string(), json!(format!("{} ZC = $1", ZC_PER_DOLLAR)));
+        resp.insert("redemption_cap_pct".to_string(), json!(tenant_redemption_cap_pct));
+        resp.insert("max_redeemable_this_visit".to_string(), json!(
+            ((req.amount * tenant_redemption_cap_pct as f64 / 100.0) * ZC_PER_DOLLAR as f64).floor() as i32
+        ));
+
         if redeemed_credits > 0 {
+            let zc_dollars = redeemed_credits as f64 / ZC_PER_DOLLAR as f64;
             resp.insert("credits_redeemed".to_string(), json!(redeemed_credits));
             resp.insert("offer_applied".to_string(), json!(offer_name));
+            resp.insert("zc_redeemed_value".to_string(), json!(format!("${:.2}", zc_dollars)));
         }
 
+        let zc_value = credit_amount as f64 / ZC_PER_DOLLAR as f64;
         let msg = if deal_discount > 0.01 {
-            format!("${:.2} deal excluded! Earned {} credits on ${:.2} spend{}",
-                deal_discount, credit_amount, earnable_amount,
+            format!("${:.2} deal excluded! Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend{}",
+                deal_discount, credit_amount, zc_value, earnable_amount,
                 if let Some(ref n) = req.deal_description { format!(" ({})", n) } else { String::new() })
         } else {
-            format!("Purchase verified! You earned {} credits", credit_amount)
+            format!("Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend",
+                credit_amount, zc_value, earnable_amount)
         };
         resp.insert("message".to_string(), json!(msg));
 
         Ok(Json(Value::Object(resp)))
     } else {
         // Contact exists but no account with that UUID — return success with no credits
+        let zc_value = credit_amount as f64 / ZC_PER_DOLLAR as f64;
         Ok(Json(json!({
             "status": "contact_linked",
             "contact_id": req.contact_id,
             "credits_earned": 0,
             "purchase_amount": req.amount,
             "credits_eligible": credit_amount,
-            "message": "Contact linked. Credits available after account registration.".to_string()
+            "zc_eligible_value": format!("${:.2}", zc_value),
+            "zc_per_dollar": ZC_PER_DOLLAR,
+            "message": format!("Register to earn! This visit would be worth {} ZaarCash (${:.2} value)", credit_amount, zc_value)
         })))
     }
 }
