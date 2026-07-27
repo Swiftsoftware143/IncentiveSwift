@@ -225,6 +225,7 @@ pub async fn internal_create_portfolio_company(
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
     let slug = body.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| generate_slug(&name));
     let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let id = Uuid::new_v4();
 
