@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/c/:campaign_slug", get(handlers::viral_handler::campaign_share_link))
         // FunnelSwift tag provision webhook — auto-provision contacts (no auth, internal key)
         .route("/api/v1/internal/tag-provision", post(handlers::tag_provision_handler::handle_tag_provision))
+        .route("/api/v1/internal/portfolio-companies", post(handlers::portfolio_handler::internal_create_portfolio_company))
         // Loyalty V2 — Purchase Verification & Vouchers (public)
         .route("/api/v1/loyalty/generate-pin", post(handlers::loyalty_v2::generate_pin))
         .route("/api/v1/loyalty/verify-purchase", post(handlers::loyalty_v2::verify_purchase))
