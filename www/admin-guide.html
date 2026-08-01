@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IncentiveSwift — Admin Guide</title>
+<style>
+  :root {
+    --primary: #7c3aed; --primary-light: #a78bfa; --primary-dark: #5b21b6; --primary-bg: #f5f3ff;
+    --g50: #f9fafb; --g100: #f3f4f6; --g200: #e5e7eb; --g300: #d1d5db; --g400: #9ca3af;
+    --g500: #6b7280; --g600: #4b5563; --g700: #374151; --g800: #1f2937; --g900: #111827;
+    --green: #059669; --green-bg: #ecfdf5; --amber: #d97706; --amber-bg: #fffbeb;
+    --red: #dc2626; --red-bg: #fef2f2; --purple: #7c3aed; --purple-bg: #f5f3ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--g50); color: var(--g800); line-height: 1.6; }
+  .header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: #fff; padding: 0; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+  .header-inner { max-width: 1200px; margin: 0 auto; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  .header-logo { width: 44px; height: 44px; background: #fff; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; font-weight: 800; color: var(--primary); flex-shrink: 0; }
+  .header-title h1 { font-size: 1.4rem; font-weight: 700; }
+  .header-title .sub { font-size: 0.85rem; opacity: 0.85; font-weight: 400; }
+  .header-badge { margin-left: auto; background: rgba(255,255,255,0.2); padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 500; white-space: nowrap; }
+  .nav-bar { background: #fff; border-bottom: 1px solid var(--g200); position: sticky; top: 68px; z-index: 99; overflow-x: auto; }
+  .nav-inner { max-width: 1200px; margin: 0 auto; display: flex; gap: 0; padding: 0 1rem; }
+  .nav-inner a { display: block; padding: 0.75rem 1.1rem; font-size: 0.88rem; font-weight: 500; color: var(--g600); text-decoration: none; white-space: nowrap; border-bottom: 3px solid transparent; transition: all .15s; }
+  .nav-inner a:hover, .nav-inner a.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .container { max-width: 1000px; margin: 2rem auto; padding: 0 1.5rem; }
+  .hero { background: linear-gradient(135deg, var(--primary-bg) 0%, #ede9fe 100%); border-radius: 16px; padding: 2.5rem 3rem; margin-bottom: 2.5rem; border: 1px solid #ddd6fe; }
+  .hero h2 { font-size: 1.8rem; color: var(--primary-dark); margin-bottom: 0.5rem; }
+  .hero p { color: var(--g600); max-width: 700px; font-size: 1.05rem; }
+  section { margin-bottom: 3rem; }
+  .sec-title { font-size: 1.5rem; font-weight: 700; color: var(--g900); padding-bottom: 0.5rem; border-bottom: 3px solid var(--primary); margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; }
+  .sec-num { background: var(--primary); color: #fff; width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 600; flex-shrink: 0; }
+  .card { background: #fff; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.25rem; border: 1px solid var(--g200); box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+  .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  .card h3 { font-size: 1.1rem; font-weight: 600; color: var(--g800); margin-bottom: 0.75rem; }
+  .card h4 { font-size: 0.95rem; font-weight: 600; color: var(--primary); margin-bottom: 0.5rem; }
+  .card p, .card li { color: var(--g600); font-size: 0.95rem; }
+  .card ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+  .card ul li { margin-bottom: 0.3rem; }
+  code { background: var(--g100); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.88em; color: var(--primary-dark); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  pre { background: var(--g800); color: #e5e7eb; padding: 1rem 1.25rem; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; line-height: 1.5; margin: 0.75rem 0; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  .callout { padding: 1rem 1.25rem; border-radius: 10px; margin: 1rem 0; border-left: 4px solid; }
+  .callout.tip { background: var(--green-bg); border-color: var(--green); }
+  .callout.tip strong { color: var(--green); }
+  .callout.info { background: var(--primary-bg); border-color: var(--primary-light); }
+  .callout.info strong { color: var(--primary); }
+  .callout.warn { background: var(--amber-bg); border-color: var(--amber); }
+  .callout.warn strong { color: var(--amber); }
+  .twrap { overflow-x: auto; margin: 0.75rem 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th { background: var(--g100); color: var(--g700); font-weight: 600; text-align: left; padding: 0.6rem 0.8rem; border-bottom: 2px solid var(--g200); }
+  td { padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--g100); }
+  tr:hover td { background: var(--g50); }
+  .foot { background: var(--g800); color: var(--g400); text-align: center; padding: 2rem; font-size: 0.85rem; margin-top: 3rem; }
+  .foot a { color: var(--primary-light); text-decoration: none; }
+  @media (max-width: 768px) { .header-inner { padding: 0.75rem 1rem; flex-wrap: wrap; } .hero { padding: 1.5rem; } .hero h2 { font-size: 1.3rem; } .container { padding: 0 1rem; } }
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="header-inner">
+    <div class="header-logo">IS</div>
+    <div>
+      <h1>IncentiveSwift — Admin Guide</h1>
+      <div class="sub">Agency Administration &amp; Configuration</div>
+    </div>
+    <span class="header-badge">v2.1 &middot; Admin</span>
+  </div>
+</header>
+<nav class="nav-bar">
+  <div class="nav-inner">
+    <a href="#overview">Overview</a>
+    <a href="#tenants">Tenants</a>
+    <a href="#plans">Plans</a>
+    <a href="#portfolio">Portfolio</a>
+    <a href="#integration">Integrations</a>
+    <a href="#security">Webhook Security</a>
+    <a href="#credits">Credits</a>
+    <a href="#loyalty">Loyalty</a>
+  </div>
+</nav>
+<div class="container">
+
+<div class="hero">
+  <h2>Managing IncentiveSwift</h2>
+  <p>This guide covers <strong>administrative configuration</strong> — managing tenants, plans, portfolio companies, integration provider keys, webhook security, and cross-app sync.</p>
+</div>
+
+<section id="overview">
+  <h2 class="sec-title"><span class="sec-num">1</span> Admin Access</h2>
+  <div class="card">
+    <h3>Admin Section</h3>
+    <p>The Admin section appears in the sidebar for users with the <code>agency_admin</code> role. It expands as an accordion section showing:</p>
+    <ul>
+      <li><strong>🏢 My Portfolio</strong> — Manage sister companies under your agency</li>
+      <li><strong>👥 Tenants</strong> — View all tenant accounts, assign plans, manage users</li>
+      <li><strong>💳 Plan Management</strong> — Create, edit, and delete subscription plans</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Super Admin Role</h3>
+    <p>Super admins have full access to all tenants and portfolio companies. They can:</p>
+    <ul>
+      <li>View any tenant's data without impersonation</li>
+      <li>Assign or change plans for any tenant</li>
+      <li>Create and delete plans including feature sets</li>
+      <li>Impersonate tenants for troubleshooting (audited)</li>
+    </ul>
+  </div>
+</section>
+
+<section id="tenants">
+  <h2 class="sec-title"><span class="sec-num">2</span> Tenants</h2>
+  <div class="card">
+    <h3>Viewing All Tenants</h3>
+    <p>The Tenants page lists all registered accounts in a searchable table. Each row shows:</p>
+    <ul>
+      <li><strong>Name</strong> — Tenant company or display name</li>
+      <li><strong>Plan</strong> — Currently assigned plan name</li>
+      <li><strong>Status</strong> — Active (<span style="color:var(--green)">●</span>) or Suspended (<span style="color:var(--red)">●</span>)</li>
+      <li><strong>Users</strong> — Number of user accounts under this tenant</li>
+      <li><strong>Created</strong> — Account creation date</li>
+      <li><strong>Actions</strong> — View details, Assign Plan, Impersonate</li>
+    </ul>
+    <pre>GET /api/v1/admin/tenants          — List all tenants
+GET /api/v1/admin/tenants/:id      — Tenant details</pre>
+  </div>
+  <div class="card">
+    <h3>Assigning Plans</h3>
+    <p>Click <strong>Assign Plan</strong> on any tenant to open a dropdown of all available plans. The plan change takes effect immediately — no confirmation from the tenant required.</p>
+    <pre>PATCH /api/v1/admin/tenants/:id/plan   — Assign plan</pre>
+  </div>
+  <div class="card">
+    <h3>Impersonating Tenants</h3>
+    <p>Admins can log in as any tenant for troubleshooting. Click the <strong>🔀 Impersonate</strong> button on the tenant detail view. The page reloads showing the tenant's dashboard with an orange banner. Click <strong>← Back to Admin</strong> to exit impersonation.</p>
+    <div class="callout warn"><strong>Security:</strong> All impersonation actions are logged in the audit trail with admin identity and timestamp.</div>
+  </div>
+</section>
+
+<section id="plans">
+  <h2 class="sec-title"><span class="sec-num">3</span> Plan Management</h2>
+  <div class="card">
+    <h3>Creating Plans</h3>
+    <p>From the Plan Management page, click <strong>+ New Plan</strong> to create a subscription plan. Each plan has:</p>
+    <ul>
+      <li><strong>Name</strong> — Display name (e.g. "Professional", "Enterprise")</li>
+      <li><strong>Price</strong> — Monthly and yearly pricing (USD)</li>
+      <li><strong>Features</strong> — JSON object of feature flags and limits</li>
+      <li><strong>Sort Order</strong> — Display order in dropdowns</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Feature Flags</h3>
+    <p>Plan features are defined as a JSON object. Each feature key maps to a boolean or numeric limit:</p>
+    <pre>{
+  "campaigns": true,           // Can create campaigns
+  "iqs_surveys": true,         // Can use IQS surveys
+  "integrations": 3,           // Max integration targets
+  "provider_keys": true,       // Can add own API keys
+  "widget": true,              // Popup widget access
+  "analytics_export": true,    // CSV export from analytics
+  "webhook_security": true,    // Domain allowlist + daily limits
+  "embed": true,               // Campaign embedding
+  "mobile_app": true,          // Mobile app access
+  "credits": 1000              // Monthly OpenClaw credit allocation
+}</pre>
+  </div>
+  <div class="card">
+    <h3>Deleting Plans</h3>
+    <p>Click the delete button on any plan. Tenants assigned to a deleted plan are moved to the default free plan. Active tenants are never left unassigned.</p>
+  </div>
+</section>
+
+<section id="portfolio">
+  <h2 class="sec-title"><span class="sec-num">4</span> Portfolio Companies</h2>
+  <div class="card">
+    <h3>Managing Sister Companies</h3>
+    <p>The Portfolio section lets admin-level users manage multiple business entities under one account. Each portfolio company can have its own:</p>
+    <ul>
+      <li>Separate campaign and survey data</li>
+      <li>Own integration provider keys (fallback chain)</li>
+      <li>Independent analytics and reporting</li>
+      <li>Custom branding and SEO settings</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Adding Portfolio Companies</h3>
+    <p>From <strong>Admin → My Portfolio</strong>, click <strong>+ Add Company</strong>. Enter a name and slug. The company is created as a sub-entity under your account. You can switch between companies from the portfolio view.</p>
+    <pre>GET  /api/v1/portfolio-companies      — List companies
+POST /api/v1/portfolio-companies      — Create company</pre>
+  </div>
+  <div class="card">
+    <h3>Cross-Company Copy</h3>
+    <p>Share integration targets, templates, and campaigns across portfolio companies. Data isolated by company ID unless explicitly shared.</p>
+  </div>
+</section>
+
+<section id="integration">
+  <h2 class="sec-title"><span class="sec-num">5</span> Integration Provider Keys</h2>
+  <div class="card">
+    <h3>Provider Keys Overview</h3>
+    <p>The Integration Hub relies on provider API keys stored in the <strong>Provider Keys</strong> section. These keys enable third-party service integration for campaign dispatch:</p>
+    <ul>
+      <li><strong>Marketing Boost</strong> — API key for email/SMS dispatch on wins and entries</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Key Resolution Chain</h3>
+    <p>When a campaign fires an integration, the system resolves provider keys in this priority order:</p>
+    <ol>
+      <li><strong>Integration Target's own key</strong> — Key stored directly on the target record</li>
+      <li><strong>Portfolio company settings</strong> — Fallback to the portfolio company's provider keys</li>
+      <li><strong>User-level Provider Keys</strong> — Global keys stored in the Provider Keys table</li>
+    </ol>
+    <div class="callout tip"><strong>Best practice:</strong> Store keys at the most specific level. Use user-level keys as a catch-all default.</div>
+  </div>
+  <div class="card">
+    <h3>Managing Keys</h3>
+    <p>Navigate to <strong>Integrations → Provider Keys</strong>. Keys are encrypted at rest and masked in the UI. You can add, update, or delete keys. Key changes take effect immediately for subsequent integration dispatches.</p>
+  </div>
+</section>
+
+<section id="security">
+  <h2 class="sec-title"><span class="sec-num">6</span> Webhook Security</h2>
+  <div class="card">
+    <h3>Admin Controls</h3>
+    <p>Webhook security settings are configurable per integration target:</p>
+    <ul>
+      <li><strong>Allowed Domains</strong> — Restrict webhook dispatch to approved domains only. Enter comma-separated domains in the integration form.</li>
+      <li><strong>Daily Limit</strong> — Set max webhook calls per day per integration target. Prevents runaway dispatch loops.</li>
+      <li><strong>Delivery Log</strong> — Admins can view the delivery log showing every webhook attempt, status, and error message.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Enforcement</h3>
+    <p>When a webhook is dispatched, the system checks the target domain against the allowlist. If not allowed, the dispatch is blocked and logged. If the daily limit is reached, further dispatches are blocked until the reset (24h from first dispatch).</p>
+  </div>
+  <div class="card">
+    <h3>Monitoring</h3>
+    <p>Check the delivery log from the Integration Hub for blocked or failed dispatches. Failed dispatches include the HTTP response code and error message from the target server.</p>
+  </div>
+</section>
+
+<section id="credits">
+  <h2 class="sec-title"><span class="sec-num">7</span> Credits &amp; Billing</h2>
+  <div class="card">
+    <h3>Plan-Based Credit System</h3>
+    <p>IncentiveSwift uses a credit system for advanced features. Credits are allocated per plan and consumed by:</p>
+    <ul>
+      <li><strong>OpenClaw AI agent actions</strong> — Per-task credit consumption</li>
+      <li><strong>Premium campaign types</strong> — Advanced campaign mechanics</li>
+      <li><strong>Integration dispatches</strong> — Per-integration-fire credit</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Admin Credit Management</h3>
+    <p>Admins can view credit usage per tenant and adjust plan allocations. Credit balances are visible in the admin panel and in each tenant's Settings → Billing tab. Overages can be configured to block, warn, or auto-bill.</p>
+  </div>
+  <div class="card">
+    <h3>Free Tier vs Paid</h3>
+    <p>The free tier provides access to basic campaign types and IQS surveys with limited features. Paid plans unlock premium campaign types, integrations, webhook security, analytics export, and increased credit allocations.</p>
+    <pre>GET /api/v1/billing/credits — View current credit balance
+GET /api/v1/admin/credits   — View all tenant credits (admin)</pre>
+  </div>
+</section>
+
+<section id="loyalty">
+  <h2 class="sec-title"><span class="sec-num">8</span> ⚖️ Loyalty Program Management</h2>
+
+  <div class="card">
+    <h3>Credit Rate Management</h3>
+    <p>Admins can view and update credit rates for each tenant. The credit rate determines how many credits a customer earns per $1 spent during purchase verification. Rates can range from 1 (minimum) to 1000 (maximum) credits per dollar, with a default of 10.</p>
+    <p>To update a tenant's credit rate:</p>
+    <pre>PATCH /api/v1/admin/tenants/:id/credits-rate
+{
+  "credits_rate": 15
+}</pre>
+    <p>The <strong>auth guard</strong> ensures that a <code>company_admin</code> can only change the credit rate for their own tenant. Agency admins can change rates for any tenant under their portfolio. Super admins have unrestricted access.</p>
+    <div class="callout tip"><strong>Tip:</strong> Rate changes take effect immediately for future purchase verifications. Historical transactions are not recalculated.</div>
+  </div>
+
+  <div class="card">
+    <h3>Purchase PIN Administration</h3>
+    <p>Purchase PINs are auto-generated sequentially (format <code>Z100</code>, <code>Z101</code>, etc.) when a tenant signs up. They are <strong>read-only</strong> in the tenant's UI — tenants can view but not modify their PIN.</p>
+    <p>Admins can view any tenant's PIN:</p>
+    <pre>GET /api/v1/admin/tenants/:id/purchase-pin</pre>
+    <p>If a PIN reset is required (e.g., compromised PIN), this is a <strong>manual database operation</strong> performed by a super admin. Every reset is logged in the audit trail with the admin identity, timestamp, old PIN, and new PIN.</p>
+    <div class="callout warn"><strong>Security:</strong> PIN resets should be rare. Require written authorization from the tenant's company admin before proceeding. Verify identity through a secondary channel (phone call or verified email).</div>
+  </div>
+
+  <div class="card">
+    <h3>Offer Oversight</h3>
+    <p>Admins can view all offers across all tenants from the admin panel. This provides visibility into what discounts tenants are offering and helps maintain quality control.</p>
+    <p>Key monitoring responsibilities:</p>
+    <ul>
+      <li><strong>Check for negative caps</strong> — The <code>cap_dollars</code> field must always be greater than 0. Negative or zero caps can break the discount calculation.</li>
+      <li><strong>Watch for >100% discount</strong> — The <code>discount_percent</code> field is validated server-side to 1–100, but review extreme values (90%+) for business appropriateness.</li>
+      <li><strong>Deactivate problematic offers</strong> — If an offer violates policy or appears abusive, set it to <strong>Inactive</strong>. This prevents it from appearing during purchase verification while preserving the offer record.</li>
+    </ul>
+    <div class="callout info"><strong>Note:</strong> The server enforces that <code>discount_percent</code> must be between 1 and 100 and <code>cap_dollars</code> must be greater than 0. These validations prevent many common issues at the API level.</div>
+  </div>
+
+  <div class="card">
+    <h3>Fraud Monitoring</h3>
+    <p>Admin-level fraud monitoring is essential for maintaining the integrity of the loyalty program. Common patterns to watch for:</p>
+    <ul>
+      <li><strong>Same PIN at multiple locations simultaneously</strong> — A Purchase PIN used at different merchant locations within seconds or minutes may indicate a shared or compromised PIN.</li>
+      <li><strong>Self-referral loops</strong> — A customer creating multiple accounts and referring themselves to earn bonus credits repeatedly. Watch for referral patterns where multiple accounts share the same device, IP, or contact info.</li>
+      <li><strong>Inflated purchase amounts</strong> — Unusually high purchase amounts compared to typical transactions at a merchant. This could be an attempt to earn excessive credits.</li>
+    </ul>
+    <p><strong>All admin actions are logged.</strong> Every view of a tenant's PIN, every credit rate change, every impersonation, and every offer status change is recorded in the audit trail with admin identity, timestamp, and action details.</p>
+    <div class="callout warn"><strong>Important:</strong> If you suspect fraud, gather evidence (screenshots, timestamps, affected account IDs) before taking action. Contact the tenant's company admin to verify legitimate use before locking accounts.</div>
+  </div>
+
+  <div class="card">
+    <h3>Voucher &amp; Redemption Auditing</h3>
+    <p>Admins can review voucher issuance and claim history across all tenants. The audit log shows:</p>
+    <ul>
+      <li>Which customer received which voucher</li>
+      <li>When the voucher was issued and its expiration date</li>
+      <li>Whether the voucher was claimed, and the claim code returned</li>
+      <li>Any voucher redemptions against actual purchases</li>
+    </ul>
+    <p>If a voucher has expired before the customer could use it, an admin can <strong>re-issue</strong> it with a new expiration date. This requires admin approval and is logged in the audit trail. Re-issued vouchers get a new voucher ID linked to the original in the audit record.</p>
+    <div class="callout tip"><strong>Best practice:</strong> Set voucher expiration to a reasonable window (30–90 days) to encourage timely redemption while giving customers adequate time to use their rewards.</div>
+  </div>
+</section>
+
+<div class="foot">
+  <p><strong>IncentiveSwift</strong> — Admin Guide v2.1</p>
+  <p style="margin-top:0.5rem;font-size:0.8rem;opacity:0.7;">Campaign &amp; Survey Platform Administration</p>
+</div>
+
+</div>
+</body>
+</html>

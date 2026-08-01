@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IncentiveSwift User Guide</title>
+<style>
+  :root {
+    --accent: #a78bfa; --accent-light: #c4b5fd; --accent-dark: #7c3aed; --accent-glow: rgba(167,139,250,0.15);
+    --bg-dark: #0E0F12; --bg-card: #16181D; --bg-elevated: #1E2028; --border: #2A2D38;
+    --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
+    --success: #22C55E; --warning: #F97316; --danger: #EF4444; --info: #3B82F6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg-dark); color: var(--text-primary); line-height: 1.6; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-dark); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .app-layout { display: flex; min-height: 100vh; }
+
+  .sidebar { width: 260px; background: var(--bg-card); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; z-index: 100; display: flex; flex-direction: column; }
+  .sidebar-logo { display: flex; align-items: center; gap: 12px; padding: 24px; border-bottom: 1px solid var(--border); }
+  .sidebar-logo .logo-icon { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, var(--accent), #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .sidebar-logo h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+  .sidebar-logo p { font-size: 11px; color: var(--text-muted); }
+  .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
+  .sidebar-nav .section-title { padding: 8px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text-secondary); text-decoration: none; transition: all 0.15s ease; cursor: pointer; border: none; background: none; width: 100%; text-align: left; margin-bottom: 2px; }
+  .nav-item:hover { background: var(--border); color: var(--text-primary); }
+  .nav-item.active { background: var(--accent-glow); color: var(--accent); border-left: 2px solid var(--accent); }
+  .nav-item .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--text-muted); }
+
+  .main-content { margin-left: 260px; flex: 1; display: flex; flex-direction: column; }
+  .topbar { padding: 16px 28px; border-bottom: 1px solid var(--border); background: var(--bg-card); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 50; }
+  .topbar h2 { font-size: 16px; font-weight: 600; }
+  .topbar-badge { background: var(--accent-glow); color: var(--accent); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .content-area { flex: 1; padding: 28px; overflow-y: auto; max-width: 1100px; }
+
+  h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 24px; font-weight: 700; margin: 48px 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  h3 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; color: var(--accent); }
+  h4 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
+  p { margin-bottom: 16px; color: var(--text-secondary); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 32px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .card-header .card-icon { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), #7c3aed); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .card-header h3 { margin: 0; padding: 0; border: none; color: var(--text-primary); font-size: 16px; }
+
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0; }
+  .feature-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 20px; transition: border-color 0.2s; }
+  .feature-card:hover { border-color: var(--accent); }
+  .feature-card .fc-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--accent-glow); display: flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 12px; }
+  .feature-card h4 { margin: 0 0 8px; font-size: 14px; }
+  .feature-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+  code { background: var(--bg-elevated); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  pre { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text-secondary); line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--text-secondary); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text-secondary); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .badge-purple { background: var(--accent-glow); color: var(--accent); }
+  .badge-green { background: rgba(34,197,94,0.15); color: var(--success); }
+  .badge-orange { background: rgba(249,115,22,0.15); color: var(--warning); }
+  .badge-red { background: rgba(239,68,68,0.15); color: var(--danger); }
+  .badge-blue { background: rgba(59,130,246,0.15); color: var(--info); }
+
+  .step-list { list-style: none; counter-reset: step; }
+  .step-list li { counter-increment: step; padding: 16px 16px 16px 52px; position: relative; margin-bottom: 8px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border); }
+  .step-list li::before { content: counter(step); position: absolute; left: 14px; top: 14px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .step-list li strong { color: var(--text-primary); }
+  .step-list li p { margin: 4px 0 0; font-size: 13px; }
+
+  .alert { padding: 14px 18px; border-radius: 8px; margin: 16px 0; border-left: 3px solid; font-size: 14px; }
+  .alert-info { background: rgba(59,130,246,0.08); border-color: var(--info); color: #93C5FD; }
+  .alert-warning { background: rgba(249,115,22,0.08); border-color: var(--warning); color: #FDBA74; }
+  .alert-success { background: rgba(34,197,94,0.08); border-color: var(--success); color: #86EFAC; }
+  .alert-danger { background: rgba(239,68,68,0.08); border-color: var(--danger); color: #FCA5A5; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .stat-card .stat-value { font-size: 28px; font-weight: 700; color: var(--text-primary); }
+  .stat-card .stat-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+
+  dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 12px 0; }
+  dt { font-weight: 600; color: var(--text-primary); font-size: 13px; padding: 6px 0; }
+  dd { color: var(--text-secondary); font-size: 13px; padding: 6px 0; }
+  dd code { font-size: 12px; }
+
+  .faq-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .faq-q { padding: 14px 18px; background: var(--bg-elevated); font-weight: 600; font-size: 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); border: none; width: 100%; text-align: left; }
+  .faq-q:hover { background: var(--bg-card); }
+  .faq-a { padding: 16px 18px; border-top: 1px solid var(--border); font-size: 14px; color: var(--text-secondary); display: none; }
+  .faq-a.open { display: block; }
+
+  .campaign-icon { font-size: 24px; margin-right: 8px; }
+  .icon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 16px 0; }
+  .icon-item { text-align: center; padding: 16px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; }
+  .icon-item .campaign-icon { font-size: 28px; margin-bottom: 6px; display: block; }
+  .icon-item span { font-size: 12px; color: var(--text-secondary); }
+  .icon-item .label { font-weight: 600; color: var(--text-primary); display: block; margin-bottom: 2px; }
+
+  ul { color: var(--text-secondary); margin: 8px 0 16px 24px; }
+  ul li { margin-bottom: 4px; }
+
+  .mobile-menu-btn { display: none; position: fixed; top: 14px; left: 14px; z-index: 200; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); width: 40px; height: 40px; border-radius: 8px; cursor: pointer; font-size: 20px; align-items: center; justify-content: center; }
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.25s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
+    .sidebar-overlay.open { display: block; }
+    .main-content { margin-left: 0; }
+    .mobile-menu-btn { display: flex; }
+    .topbar { padding: 14px 16px 14px 64px; }
+    .content-area { padding: 16px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    dl { grid-template-columns: 1fr; gap: 2px; }
+    dt { padding-bottom: 0; }
+  }
+</style>
+</head>
+<body>
+<button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()">=</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileSidebar()"></div>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">🎯</div>
+      <div>
+        <h1>IncentiveSwift</h1>
+        <p>User Guide v2.1</p>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="section-title">Getting Started</div>
+      <a href="#introduction" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📖</span> Introduction</a>
+      <a href="#getting-started" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🚀</span> Getting Started</a>
+      <a href="#dashboard" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📊</span> Dashboard</a>
+      <div class="section-title">Campaigns</div>
+      <a href="#campaign-types" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎮</span> Campaign Types</a>
+      <a href="#loyalty-overview" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🏪</span> Loyalty Program</a>
+      <a href="#creating-campaigns" class="nav-item" onclick="closeMobile()"><span class="nav-icon">➕</span> Creating Campaigns</a>
+      <a href="#prize-delivery" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎁</span> Prize Delivery</a>
+      <a href="#embedding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔌</span> Embedding Campaigns</a>
+      <div class="section-title">IQS Surveys</div>
+      <a href="#iqs-overview" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📋</span> IQS Overview</a>
+      <a href="#iqs-question-types" class="nav-item" onclick="closeMobile()"><span class="nav-icon">❓</span> Question Types</a>
+      <a href="#iqs-classification" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔥</span> Auto-Classification</a>
+      <a href="#iqs-branching" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔀</span> Conditional Branching</a>
+      <a href="#iqs-campaign" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎯</span> Survey + Campaigns</a>
+      <a href="#iqs-widget" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🪟</span> Popup Widget</a>
+      <a href="#post-submit" class="nav-item" onclick="closeMobile()"><span class="nav-icon">✅</span> Post-Submit Flow</a>
+      <div class="section-title">Integrations</div>
+      <a href="#integration-hub" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔗</span> Integration Hub</a>
+      <a href="#marketing-boost" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📈</span> Marketing Boost</a>
+      <a href="#webhooks" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📡</span> Webhooks &amp; Security</a>
+      <div class="section-title">Analytics &amp; Settings</div>
+      <a href="#analytics" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📈</span> Analytics</a>
+      <a href="#settings" class="nav-item" onclick="closeMobile()"><span class="nav-icon">⚙️</span> Settings</a>
+      <div class="section-title">Support</div>
+      <a href="#faq" class="nav-item" onclick="closeMobile()"><span class="nav-icon">❓</span> FAQ</a>
+    </nav>
+    <div class="sidebar-footer">&copy; 2026 IncentiveSwift &mdash; Campaign &amp; Survey Platform</div>
+  </aside>
+  <div class="main-content">
+    <header class="topbar">
+      <h2>IncentiveSwift User Guide</h2>
+      <span class="topbar-badge">v2.1 &middot; Campaigns, Surveys &amp; Integrations</span>
+    </header>
+    <div class="content-area">
+      <h1 id="introduction">IncentiveSwift User Guide</h1>
+      <p class="lead">A comprehensive guide to IncentiveSwift — the complete platform for running engaging campaigns, qualifying leads with intelligent surveys, and integrating with your marketing stack. From viral giveaways to qualified lead generation, everything in one place.</p>
+
+      <h2 id="getting-started">🚀 Getting Started</h2>
+      <p>IncentiveSwift is built around two core concepts: <strong>Campaigns</strong> (interactive giveaways and contests) and <strong>IQS</strong> (Intelligent Qualifying Surveys). You can use them independently or together — attach a survey as a gate before a campaign entry.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="fc-icon">🎮</div>
+          <h4>6 Campaign Types</h4>
+          <p>Spin the Wheel, Raffle, Scratch Card, Slots, Quiz, Wheel of Fortune — choose the right engagement mechanic</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">📋</div>
+          <h4>IQS Surveys</h4>
+          <p>Build intelligent surveys with 12+ question types, scoring, auto-classification, and conditional branching</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">🔗</div>
+          <h4>Integration Hub</h4>
+          <p>Connect to Marketing Boost, webhooks, and external APIs — dispatch data on every win or entry</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">📊</div>
+          <h4>Analytics</h4>
+          <p>Track campaign performance, source attribution, loyalty metrics, and export to CSV</p>
+        </div>
+      </div>
+
+      <h3>Quick Start</h3>
+      <ol class="step-list">
+        <li><strong>Log In</strong><p>Go to https://incentiveswift.com and log in with your credentials. If you don't have an account, sign up first.</p></li>
+        <li><strong>Create a Campaign</strong><p>From the sidebar, click <strong>Campaigns</strong> → <strong>+ New Campaign</strong>. Choose a type (start with Spin the Wheel), give it a name, and set your entry rules.</p></li>
+        <li><strong>Add Prizes</strong><p>Define what users can win — cash amounts, discounts, free shipping, or custom rewards. Configure the odds for each prize.</p></li>
+        <li><strong>Launch</strong><p>Toggle the campaign to Active. Your campaign is now live with a shareable link and embed code.</p></li>
+        <li><strong>Track Results</strong><p>Monitor entries, wins, and conversions in the Campaign detail view and Analytics section.</p></li>
+      </ol>
+
+      <h2 id="dashboard">📊 Dashboard</h2>
+      <p>The dashboard shows your key metrics at a glance. Cards display total campaigns, active campaigns, total entries, wins, and conversion rates. Click any stat to drill into the data. The dashboard also shows recent activity and upcoming campaigns.</p>
+
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-value" style="color:var(--accent)">{{total}}</div><div class="stat-label">Total Campaigns</div></div>
+        <div class="stat-card"><div class="stat-value" style="color:var(--success)">{{active}}</div><div class="stat-label">Active Campaigns</div></div>
+        <div class="stat-card"><div class="stat-value" style="color:var(--info)">{{entries}}</div><div class="stat-label">Total Entries</div></div>
+        <div class="stat-card"><div class="stat-value" style="color:var(--warning)">{{wins}}</div><div class="stat-label">Total Wins</div></div>
+      </div>
+
+      <h2 id="campaign-types">🎮 Campaign Types</h2>
+      <p>IncentiveSwift offers 6 campaign types, each with a unique user interaction mechanic. Choose the one that fits your audience and goal.</p>
+
+      <div class="icon-grid">
+        <div class="icon-item"><span class="campaign-icon">🔄</span><span class="label">Spin Wheel</span><span>Users spin a wheel for instant wins</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎟️</span><span class="label">Raffle</span><span>Enter for a chance to win later</span></div>
+        <div class="icon-item"><span class="campaign-icon">🪙</span><span class="label">Scratch Card</span><span>Virtual scratch-off for prizes</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎰</span><span class="label">Slots</span><span>3-reel slot machine mechanic</span></div>
+        <div class="icon-item"><span class="campaign-icon">📝</span><span class="label">Quiz</span><span>Answer questions to qualify</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎡</span><span class="label">Wheel of Fortune</span><span>Multi-tier prize wheel</span></div>
+      </div>
+
+      <h3>🔄 Spin the Wheel</h3>
+      <p>The most popular campaign type. Users click a button, the wheel spins, and lands on a prize segment. Great for instant gratification giveaways, lead magnets, and promotional events. Configure segments with prize labels, colors, odds, and win/lose outcomes.</p>
+
+      <h3>🎟️ Raffle</h3>
+      <p>Users enter a raffle by submitting their information. Winners are drawn at a scheduled time. Best for longer-running campaigns where you want to collect entries over time and announce winners later. Set a draw date and time, and the system will automatically select winners.</p>
+
+      <h3>🪙 Scratch Card</h3>
+      <p>A virtual scratch-off card. Users "scratch" (click/hover) to reveal hidden prizes. Three tiers allow for engaging reveal mechanics. Perfect for mobile audiences and email campaigns where quick interaction is key.</p>
+
+      <h3>🎰 Slots</h3>
+      <p>3-reel slot machine with spinning animation. Configure symbols on each reel and set match rules for wins. Three matching symbols = grand prize, two matching = small prize. High engagement, especially for gamified experiences.</p>
+
+      <h3>📝 Quiz</h3>
+      <p>Multiple-choice quiz where users answer questions to qualify. Configure correct answers, scoring, and outcomes. Great for educational content, product knowledge tests, and qualifying leads by knowledge level.</p>
+
+      <h3>🎡 Wheel of Fortune</h3>
+      <p>Similar to Spin the Wheel but with multi-tier mechanics — users can spin multiple times, unlock bonus rounds, or chain spins. More complex prize structures for advanced campaigns.</p>
+
+      <!-- ==================== LOYALTY SECTION ==================== -->
+      <h2 id="loyalty-overview">🏪 Loyalty Program</h2>
+      <p>IncentiveSwift powers comprehensive loyalty programs with purchase verification, credit earning and redeeming, custom offers, voucher rewards, and a referral system. The loyalty module transforms one-time campaign participants into repeat, engaged customers.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="fc-icon">💳</div>
+          <h4>Credit Earning</h4>
+          <p>Customers earn credits on every verified purchase at a configurable rate</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">🎁</div>
+          <h4>Offers &amp; Redemption</h4>
+          <p>Create discount offers that customers redeem with their earned credits</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">🎟️</div>
+          <h4>Voucher System</h4>
+          <p>Auto-issue vouchers when customers reach earning thresholds</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">👥</div>
+          <h4>Referral Program</h4>
+          <p>Customers earn bonus credits by referring friends who complete purchases</p>
+        </div>
+      </div>
+
+      <h3>Configuring Credit Rate</h3>
+      <p>The <strong>credit rate</strong> determines how many credits a customer earns per $1 spent. The minimum value is 1 (1 credit per dollar) and the maximum is 1000 (1000 credits per dollar). The default rate is 10. Set the credit rate per tenant in <strong>Settings → Loyalty</strong>.</p>
+
+      <h4>Credit Formula</h4>
+      <pre>credits_earned = floor(purchase_amount * credit_rate)</pre>
+      <p>For example, with a credit rate of 10, a $25.50 purchase earns <code>floor(25.50 * 10) = 255</code> credits. The minimum credit award is always 1 credit, so any purchase of $0.10 or more earns at least 1 credit.</p>
+
+      <div class="callout tip" style="background:rgba(34,197,94,0.08);border-color:var(--success);padding:1rem 1.25rem;border-radius:10px;margin:1rem 0;border-left:4px solid;"><strong>Tip:</strong> The credit rate is applied at verification time. Changing the rate affects future verifications only — historical transactions are not recalculated.</div>
+
+      <h3>Purchase PIN</h3>
+      <p>Every tenant is assigned a <strong>Purchase PIN</strong> automatically on signup. The PIN is a sequential identifier in the format <code>Z100</code>, <code>Z101</code>, <code>Z102</code>, and so on. This PIN is required for purchase verification — merchants enter it when verifying a customer's purchase.</p>
+
+      <p>The Purchase PIN is found in <strong>Settings → Loyalty</strong>. It is <strong>read-only</strong> in the UI. If a PIN is compromised, contact an admin to request a reset. PIN resets are a manual database operation with a full audit trail.</p>
+
+      <div class="alert alert-warning">
+        <strong>Security:</strong> Never share your Purchase PIN publicly. Treat it like a shared secret between your tenant and your point-of-sale or verification process. If you suspect it has been exposed, request a reset immediately.
+      </div>
+
+      <h3>Creating Offers</h3>
+      <p>Offers are discount incentives that customers can redeem using their earned credits. Create and manage offers from <strong>Loyalty → Offers</strong>.</p>
+
+      <h4>Offer Fields</h4>
+      <table>
+        <thead><tr><th>Field</th><th>Description</th><th>Constraints</th></tr></thead>
+        <tbody>
+          <tr><td>Name</td><td>Display name for the offer</td><td>Required, max 255 characters</td></tr>
+          <tr><td>Discount Percent</td><td>Percentage discount off the purchase</td><td>1–100</td></tr>
+          <tr><td>Cap Dollars</td><td>Maximum dollar value of the discount</td><td>Must be greater than 0</td></tr>
+          <tr><td>Active</td><td>Toggle offer active/inactive</td><td>Only active offers appear during verification</td></tr>
+        </tbody>
+      </table>
+
+      <h4>How Caps Work</h4>
+      <p>The discount amount is calculated as <code>min(purchase_amount × discount_percent / 100, cap_dollars)</code>. For example, a 20% offer with a $10 cap on a $100 purchase gives a $10 discount (capped). The same offer on a $30 purchase gives a $6 discount (below cap).</p>
+
+      <p>Credits are redeemed based on the cap: <code>credits_redeemed = cap_dollars × 100</code>. This means 1 credit = $0.01 of discount value. The redeemed credits are deducted from the customer's balance.</p>
+
+      <h3>Purchase Verification Flow</h3>
+      <p>The purchase verification process works step by step at the point of sale:</p>
+
+      <ol class="step-list">
+        <li><strong>Customer shows QR code</strong><p>The customer presents their unique loyalty QR code from their account portal. This identifies them to the merchant.</p></li>
+        <li><strong>Merchant scans QR</strong><p>The merchant scans the QR code using the IncentiveSwift verification interface (mobile or web). The system identifies the customer account.</p></li>
+        <li><strong>Enter purchase amount + PIN</strong><p>The merchant enters the purchase total and their tenant's Purchase PIN. The PIN authenticates the merchant and links the transaction to the correct tenant.</p></li>
+        <li><strong>Optional offer selection</strong><p>The merchant may select an active offer to apply. If no offer is selected, the customer simply earns credits on the purchase.</p></li>
+        <li><strong>Verify</strong><p>Click <strong>Verify</strong> to process the transaction. The system calculates: <code>credits_earned = floor(amount × credit_rate)</code>. If an offer was selected, the discount is applied, credits redeemed are deducted from the customer's balance, and the offer name is logged in the transaction record.</p></li>
+      </ol>
+
+      <div class="alert alert-success">
+        <strong>Transaction record:</strong> Every verification creates a permanent transaction record showing the amount, credits earned, any offer applied, credits redeemed, and the merchant who processed it.
+      </div>
+
+      <h3>Voucher System</h3>
+      <p>When a customer's purchase verification earns credits above a configurable threshold (e.g., 100 credits earned in a single transaction), the system may <strong>auto-issue a voucher</strong>. Vouchers represent special rewards or bonus offers.</p>
+
+      <p>Vouchers are listed in the customer's portal under <strong>Loyalty → My Vouchers</strong>. Each voucher shows its value, expiration date, and status (active/claimed/expired). To use a voucher, the customer clicks <strong>Claim</strong> to receive a unique claim code they can present at checkout.</p>
+
+      <div class="callout tip" style="background:rgba(59,130,246,0.08);border-color:var(--info);padding:1rem 1.25rem;border-radius:10px;margin:1rem 0;border-left:4px solid;"><strong>Note:</strong> Voucher thresholds are configurable per tenant. Contact your admin to adjust the threshold amount or disable auto-issuance.</div>
+
+      <h3>Referral System</h3>
+      <p>The referral system encourages customers to bring in new business. Every participant gets a <strong>referral code</strong> (e.g., <code>REF-JOHN-ABC123</code>) they can share with friends.</p>
+
+      <p>When a referred friend signs up and completes their first purchase verification, the referrer earns <strong>bonus credits</strong>. The bonus amount is configurable per tenant. Referral history is visible in the customer portal under <strong>Loyalty → Referrals</strong>.</p>
+
+      <h4>How It Works</h4>
+      <ol class="step-list">
+        <li><strong>Get your code</strong><p>Share your referral code from the Loyalty → Referrals section of your account.</p></li>
+        <li><strong>Friend signs up</strong><p>The referred friend enters (or is tagged with) your referral code during account creation.</p></li>
+        <li><strong>First purchase</strong><p>When the friend completes their first purchase verification, the system credits your account with the bonus amount.</p></li>
+        <li><strong>Track earnings</strong><p>View your referral history, bonus credits earned, and pending referrals in the Referrals dashboard.</p></li>
+      </ol>
+
+      <h3>API Endpoints</h3>
+      <p>The following API endpoints support the loyalty program. They are available for custom integrations:</p>
+
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/generate-pin</code></td><td>Generate or retrieve the tenant's Purchase PIN</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/verify-purchase</code></td><td>Verify a purchase and credit/apply offer</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/issue-voucher</code></td><td>Issue a voucher to a customer</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/v1/credits/balance</code></td><td>Get the customer's current credit balance</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/v1/credits/history</code></td><td>Get the customer's credit transaction history</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/vouchers</code></td><td>List the customer's available vouchers</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/claim-voucher</code></td><td>Claim a voucher and receive a claim code</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/referrals</code></td><td>Get the customer's referral history</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/referrals/create</code></td><td>Create a new referral code</td></tr>
+          <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/rewards</code></td><td>List available rewards</td></tr>
+          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/redeem-reward</code></td><td>Redeem a reward using credits</td></tr>
+        </tbody>
+      </table>
+
+      <div class="alert alert-info">
+        <strong>API authentication:</strong> All loyalty API endpoints require a valid tenant API key passed in the <code>Authorization</code> header. See the API documentation for full request/response schemas.
+      </div>
+
+      <h2 id="creating-campaigns">➕ Creating Campaigns</h2>
+
+      <h3>Basic Setup</h3>
+      <ol class="step-list">
+        <li><strong>Name &amp; Type</strong><p>Give your campaign a name and select the campaign type. You can also add a description and custom slug for the public URL.</p></li>
+        <li><strong>Prizes</strong><p>Define prize tiers. Each prize has a label, type (cash, discount, free_shipping, custom), value, and probability weight. Higher weight = more likely to win.</p></li>
+        <li><strong>Entry Rules</strong><p>Set how many times a user can enter (once per day, once total, unlimited). Optionally require email verification or phone number.</p></li>
+        <li><strong>Schedule</strong><p>Set a start and end date. Campaigns are only active within this window. You can manually toggle active/inactive anytime.</p></li>
+        <li><strong>Theme</strong><p>Customize the colors and appearance to match your brand. The campaign player will automatically use your theme colors.</p></li>
+        <li><strong>Save &amp; Launch</strong><p>Click Create Campaign, then toggle Active to publish. Your campaign now has a public play URL.</p></li>
+      </ol>
+
+      <h3>Attaching an IQS Survey (Optional)</h3>
+      <p>You can gate any campaign with an IQS survey. When enabled, users must complete the survey before they can enter the campaign. To attach a survey:</p>
+      <ol class="step-list" start="7">
+        <li><strong>Open Campaign Editor</strong><p>Edit an existing campaign or create a new one.</p></li>
+        <li><strong>Select Survey</strong><p>Find the <strong>Qualifying Survey</strong> section in the editor. Choose an IQS funnel from the dropdown, or leave it as "None" to skip.</p></li>
+        <li><strong>Save</strong><p>Click Save. Now when users visit the campaign link, they'll complete the survey first. Only qualified respondents (based on score thresholds) get access to the campaign.</p></li>
+      </ol>
+
+      <div class="alert alert-info">
+        <strong>How it works:</strong> When a campaign has an attached IQS funnel, the play page detects it automatically. Users see the survey questions first, then based on their score (qualified/disqualified), they're either allowed to enter the campaign or shown a disqualified message with optional redirect.
+      </div>
+
+      <h2 id="prize-delivery">🎁 Prize Delivery</h2>
+      <p>Each prize type supports a different delivery mechanism. Configure per-prize delivery in the campaign editor.</p>
+
+      <table>
+        <thead><tr><th>Prize Type</th><th>Delivery Method</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Cash</td><td>Manual payout or API trigger</td><td>Amount recorded; payout handled externally</td></tr>
+          <tr><td>Discount Code</td><td>Auto-generated code (Redeem-XXXX)</td><td>Unique code shown instantly on win; also stored in campaign_wins</td></tr>
+          <tr><td>Free Shipping</td><td>Auto-generated code</td><td>Same as discount, common for e-commerce lead gen</td></tr>
+          <tr><td>Custom</td><td>Manual or webhook</td><td>Your own reward — use Integration Hub for webhook delivery</td></tr>
+        </tbody>
+      </table>
+
+      <p>Wins are recorded with a unique redemption code in the format <code>REDEEM-XXXXXXXX</code>. Users see their code on the post-win screen and can copy or save it. For manual delivery prizes, the system records the win and you handle fulfillment from the campaign detail view.</p>
+
+      <h2 id="embedding">🔌 Embedding Campaigns</h2>
+      <p>Campaigns can be played directly on IncentiveSwift or embedded on your own website. From the campaign detail view, click the Embed button to get options:</p>
+      <ul>
+        <li><strong>Direct Link</strong> — Share the campaign URL directly. e.g. <code>https://incentiveswift.com/play/YOUR-SLUG</code></li>
+        <li><strong>Iframe Embed</strong> — Copy an iframe snippet to embed the campaign within your site's content</li>
+        <li><strong>Widget Script</strong> — A JavaScript widget that overlays on your page, great for popup campaigns</li>
+      </ul>
+
+      <div class="alert alert-warning">
+        <strong>Note:</strong> The embed widget auto-captures source tracking fields (referrer URL, page URL, UTM parameters) for your analytics.
+      </div>
+
+      <!-- ==================== IQS SECTION ==================== -->
+      <h2 id="iqs-overview">📋 IQS — Intelligent Qualifying Surveys</h2>
+      <p>IQS (Intelligent Qualifying Survey) is IncentiveSwift's advanced survey engine. Use it to qualify and score leads, collect structured data, and push results into your CRM — all before they enter a campaign or independently as a stand-alone survey.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="fc-icon">❓</div>
+          <h4>12+ Question Types</h4>
+          <p>Single choice, multiple choice, text, email, phone, rating, date, file upload, consent, slider, dropdown, image choice, matrix/grid</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">📊</div>
+          <h4>Scoring &amp; Tags</h4>
+          <p>Each answer option has a score value. Total score determines outcome. Tags are auto-applied to leads in CoreSwift CRM</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">🔥</div>
+          <h4>Auto-Classification</h4>
+          <p>Respondents are automatically classified as Hot, Warm, or Cold based on their score percentage</p>
+        </div>
+        <div class="feature-card">
+          <div class="fc-icon">🔀</div>
+          <h4>Conditional Branching</h4>
+          <p>Show or hide questions dynamically based on previous answers. Create smart, adaptive surveys</p>
+        </div>
+      </div>
+
+      <h3>Creating a Survey Funnel</h3>
+      <ol class="step-list">
+        <li><strong>Navigate to IQS</strong><p>Click <strong>IQS</strong> in the main sidebar (not the admin menu). Click <strong>+ New Funnel</strong> to create a survey.</p></li>
+        <li><strong>Funnel Settings</strong><p>Give your funnel a name and description. Optionally enable Auto-Classification to automatically sort respondents into Hot/Warm/Cold based on score thresholds.</p></li>
+        <li><strong>Add Questions</strong><p>Click <strong>+ Add Question</strong>. Choose a question type, write the question text, and configure options (for choice types). Each option has a Score and Tag that applies when selected.</p></li>
+        <li><strong>Set Outcomes</strong><p>Define outcome ranges for Qualified and Disqualified based on total score percentage. Configure redirect URLs and thank-you messages for each outcome.</p></li>
+        <li><strong>Save &amp; Publish</strong><p>Save the funnel and toggle it Active. Your survey is now available for standalone play, widget display, or campaign attachment.</p></li>
+      </ol>
+
+      <h3>Survey Play Modes</h3>
+      <p>IQS surveys support two play modes that users can choose from:</p>
+      <ul>
+        <li><strong>Step by Step</strong> — One question at a time with smooth transitions. Best for longer surveys where you want to maintain focus.</li>
+        <li><strong>All at Once</strong> — All questions displayed on a single page. Best for short surveys where speed is important.</li>
+      </ul>
+
+      <h2 id="iqs-question-types">❓ Question Types</h2>
+      <p>IQS supports 13 question types, each designed for specific data collection needs:</p>
+
+      <table>
+        <thead><tr><th>Type</th><th>Icon</th><th>Best For</th><th>Config Options</th></tr></thead>
+        <tbody>
+          <tr><td>Single Choice</td><td>☑️</td><td>Yes/No, pick one from list</td><td>Options with scores &amp; tags</td></tr>
+          <tr><td>Multiple Choice</td><td>✅</td><td>Select all that apply</td><td>Options with scores &amp; tags</td></tr>
+          <tr><td>Open Text</td><td>📝</td><td>Free-form written answers</td><td>Placeholder text</td></tr>
+          <tr><td>Numeric</td><td>🔢</td><td>Age, budget, quantity</td><td>Min, max, step, unit label</td></tr>
+          <tr><td>Email</td><td>📧</td><td>Email collection</td><td>Auto-validates format</td></tr>
+          <tr><td>Phone</td><td>📞</td><td>Phone number with country code</td><td>Country code selector</td></tr>
+          <tr><td>Rating</td><td>⭐</td><td>Star rating (1-5, 1-10)</td><td>Max rating value</td></tr>
+          <tr><td>Date</td><td>📅</td><td>Appointment or birth date</td><td>Include time toggle</td></tr>
+          <tr><td>File Upload</td><td>📁</td><td>Resume, photo, document</td><td>Allowed extensions, max size</td></tr>
+          <tr><td>Consent</td><td>📋</td><td>GDPR/terms agreement</td><td>Custom consent label</td></tr>
+          <tr><td style="color:var(--accent)">Slider</td><td>🎚️</td><td>0-100 scale (satisfaction, likelihood)</td><td>Min, max, step size</td></tr>
+          <tr><td style="color:var(--accent)">Dropdown</td><td>📋</td><td>Long option lists in compact format</td><td>Options with scores &amp; tags</td></tr>
+          <tr><td style="color:var(--accent)">Image Choice</td><td>🖼️</td><td>Visual selection (product, style, photo)</td><td>Image URLs + options</td></tr>
+          <tr><td style="color:var(--accent)">Matrix/Grid</td><td>📊</td><td>Rate multiple items on same scale</td><td>Rows &amp; columns config</td></tr>
+        </tbody>
+      </table>
+
+      <div class="alert alert-success">
+        <strong>New!</strong> The last 4 types (Slider, Dropdown, Image Choice, Matrix/Grid) were added recently. They provide richer data collection options — try Image Choice for visual product selections and Matrix for multi-attribute ratings.
+      </div>
+
+      <h3>Question Options: Scores &amp; Tags</h3>
+      <p>Every choice-type question option has two extra fields:</p>
+      <ul>
+        <li><strong>Score</strong> — A numeric value assigned when this option is selected. The total score across all questions determines the respondent's qualification outcome.</li>
+        <li><strong>Tag</strong> — A text label that gets applied to the respondent's profile in CoreSwift CRM. Tags make it easy to segment and filter leads later.</li>
+      </ul>
+      <p>Example: On a question "What's your budget?" — Option "Under $500" has score 5, tag "budget_low". Option "$500-$2000" has score 15, tag "budget_mid". Option "Over $2000" has score 25, tag "budget_high".</p>
+
+      <h2 id="iqs-classification">🔥 Auto-Classification (Hot/Warm/Cold)</h2>
+      <p>Auto-Classification automatically sorts respondents into lead tiers based on their survey score percentage. Enable it in your funnel settings.</p>
+
+      <h3>How It Works</h3>
+      <p>When enabled, the system calculates the respondent's final score as a percentage of the maximum possible score. It then matches the percentage against your configured ranges:</p>
+
+      <table>
+        <thead><tr><th>Classification</th><th>Score Range</th><th>Badge</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>🔥 Hot</td><td>80% – 100%</td><td><span class="badge badge-red">Hot</span></td><td>High priority — push to CRM immediately, auto-assign to hot pipeline stage</td></tr>
+          <tr><td>🟡 Warm</td><td>50% – 79%</td><td><span class="badge badge-orange">Warm</span></td><td>Nurturing — enters standard pipeline, scheduled follow-up</td></tr>
+          <tr><td>🔵 Cold</td><td>0% – 49%</td><td><span class="badge badge-blue">Cold</span></td><td>Long-term — saved for future campaigns or drip nurture</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Configuration</h3>
+      <p>In the funnel editor, enable Auto-Classification. Three default ranges (Hot/Warm/Cold) are pre-configured but fully customizable. For each range you can set:</p>
+      <ul>
+        <li><strong>Label</strong> — The name of the classification (e.g. "Hot", "VIP", "Tier 1")</li>
+        <li><strong>Minimum Score %</strong> — The lower bound of this range (0-100)</li>
+        <li><strong>Tag</strong> — A tag automatically applied to the respondent's profile (e.g. "hot_lead", "vip_prospect")</li>
+      </ul>
+
+      <div class="alert alert-info">
+        <strong>CRM integration:</strong> Classified leads are automatically pushed to CoreSwift CRM with their classification tag and score. Hot leads appear in your pipeline's high-priority stage.
+      </div>
+
+      <h2 id="iqs-branching">🔀 Conditional Branching</h2>
+      <p>Conditional Branching lets you create smart surveys that adapt to each respondent's answers. Questions appear or hide based on what was answered previously.</p>
+
+      <h3>How It Works</h3>
+      <p>Each question can have a condition (show_if) that controls whether it's displayed:</p>
+
+      <table>
+        <thead><tr><th>Operator</th><th>Description</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr><td><code>equals</code></td><td>Show if previous answer exactly matches value</td><td>Show "What's your budget?" only if "Are you interested?" = "Yes"</td></tr>
+          <tr><td><code>not_equals</code></td><td>Show if previous answer does NOT match</td><td>Show "Why not?" only if "Interested?" ≠ "Yes"</td></tr>
+          <tr><td><code>contains</code></td><td>Show if previous answer contains the value (for multi-select)</td><td>Show follow-up if answer contains "Premium"</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Setting Up Conditions</h3>
+      <ol class="step-list">
+        <li><strong>Open Question Editor</strong><p>When creating or editing a question, scroll to the <strong>Advanced</strong> section.</p></li>
+        <li><strong>Enable Condition</strong><p>Toggle "Show this question only if..." — this reveals the condition fields.</p></li>
+        <li><strong>Select Dependency</strong><p>Choose which previous question this depends on from the dropdown. All questions with a lower sort order are available.</p></li>
+        <li><strong>Set Operator &amp; Value</strong><p>Choose equals/not_equals/contains and enter the value to match against.</p></li>
+        <li><strong>Save</strong><p>The condition is stored. When the survey is played, this question only appears if the condition is met.</p></li>
+      </ol>
+
+      <div class="alert alert-success">
+        <strong>Example:</strong> A car dealership survey: "Do you currently own a vehicle?" → No → Hide "What make and model?" and "How many miles?". Instead show "What type of vehicle are you looking for?". The survey stays relevant and short for every respondent.
+      </div>
+
+      <h2 id="iqs-campaign">🎯 Survey + Campaigns</h2>
+      <p>You can attach an IQS survey as a qualification gate before any campaign type. This creates a two-step flow: survey first, then campaign for qualified respondents.</p>
+
+      <h3>How the Flow Works</h3>
+      <ol class="step-list">
+        <li><strong>User visits campaign link</strong><p>The system detects an attached IQS funnel and redirects to the survey play page instead of the campaign directly.</p></li>
+        <li><strong>User completes survey</strong><p>All question types, scoring, classification, and branching apply normally. The system calculates total score and compares against outcome thresholds.</p></li>
+        <li><strong>If Qualified</strong><p>The user is redirected to the campaign play page where they can enter normally (spin the wheel, scratch the card, etc.). Their survey score and tags flow with them.</p></li>
+        <li><strong>If Disqualified</strong><p>The user sees a thank-you/disqualified message with an optional redirect URL (e.g., "Thanks for your interest — here's a consolation offer").</p></li>
+      </ol>
+
+      <h3>Use Cases</h3>
+      <ul>
+        <li><strong>VIP Giveaways</strong> — Only qualified leads can enter the prize drawing</li>
+        <li><strong>Product Launches</strong> — Survey to gauge interest, then offer a discount spin to high-scorers</li>
+        <li><strong>Lead Gen Campaigns</strong> — Collect qualification data before allowing entry, pushing scores + tags to CoreSwift</li>
+        <li><strong>Event Registration</strong> — Qualify attendees before they enter a raffle for a free ticket</li>
+      </ul>
+
+      <div class="alert alert-warning">
+        <strong>Tip:</strong> Set your Qualified threshold carefully. Too high and you'll disqualify too many. Too low and the survey gate loses its purpose. Start around 60% and adjust based on analytics.
+      </div>
+
+      <h2 id="iqs-widget">🪟 Popup Widget</h2>
+      <p>The IQS Popup Widget lets you display a survey as a floating overlay on any website. Perfect for capturing leads with minimal friction — visitors see a subtle trigger button (or auto-display), click it, and complete the survey without leaving your page.</p>
+
+      <h3>Setting Up the Widget</h3>
+      <ol class="step-list">
+        <li><strong>Open an IQS Funnel</strong><p>From the IQS section, open the funnel you want to use as a widget.</p></li>
+        <li><strong>Click Widget Button</strong><p>Click the <strong>Widget</strong> button (🔌) in the funnel detail view.</p></li>
+        <li><strong>Configure Display</strong><p>Choose display mode: <strong>Trigger Button</strong> (small floating CTA button) or <strong>Auto</strong> (appears automatically on page load).</p></li>
+        <li><strong>Copy Embed Code</strong><p>Copy the generated code snippet and paste it just before <code>&lt;/body&gt;</code> on your website.</p></li>
+      </ol>
+
+      <h3>Widget Features</h3>
+      <ul>
+        <li>Responsive — works on desktop and mobile</li>
+        <li>Themed — auto-matches your funnel's colors</li>
+        <li>Non-intrusive — trigger button stays small, modal is dismissible</li>
+        <li>Auto-captures source tracking (referrer, UTM params)</li>
+      </ul>
+
+      <h2 id="post-submit">✅ Post-Submit Flow</h2>
+      <p>After a survey is completed, you control exactly what happens next. Configure different outcomes and responses per qualification level.</p>
+
+      <h3>Outcome Configuration</h3>
+      <p>In the funnel editor, under <strong>Outcomes</strong>, set:</p>
+      <ul>
+        <li><strong>Qualified Range</strong> — The minimum score % threshold (default 60%)</li>
+        <li><strong>Qualified Message</strong> — A themed thank-you message shown to qualified respondents (e.g. "Great news! You qualify for our special offer.")</li>
+        <li><strong>Disqualified Message</strong> — Message for those who don't meet the threshold (e.g. "Thanks for your interest — we'll be in touch.")</li>
+        <li><strong>Redirect URLs</strong> — Optional URLs for each outcome. After 3 seconds, the user is automatically redirected. Leave blank for no redirect.</li>
+      </ul>
+
+      <div class="alert alert-info">
+        <strong>No redirect:</strong> If no redirect URL is set, users see a clean themed thank-you page that matches their survey experience. No page jump, smooth transition, branded to your campaign's colors.
+      </div>
+
+      <!-- ==================== INTEGRATIONS ==================== -->
+      <h2 id="integration-hub">🔗 Integration Hub</h2>
+      <p>The Integration Hub connects your campaigns and surveys to external services. Every time a user wins a prize or enters a campaign, configured integrations fire automatically.</p>
+
+      <h3>Managing Integrations</h3>
+      <p>Navigate to <strong>Integrations</strong> in the sidebar. Here you can:</p>
+      <ul>
+        <li><strong>Add Integration Targets</strong> — External endpoints or services that receive data</li>
+        <li><strong>Configure Provider Keys</strong> — API keys for connected services (Marketing Boost, Telnyx, etc.)</li>
+        <li><strong>Link Integrations to Campaigns</strong> — Toggle which integrations fire for each campaign</li>
+        <li><strong>Monitor Webhook Security</strong> — View domain allowlists and daily usage</li>
+      </ul>
+
+      <h3>Integration Types</h3>
+      <table>
+        <thead><tr><th>Type</th><th>When It Fires</th><th>Data Sent</th></tr></thead>
+        <tbody>
+          <tr><td>Webhook</td><td>Entry or Win</td><td>JSON payload with user info, campaign, prize, score</td></tr>
+          <tr><td>Marketing Boost</td><td>Win/Entry</td><td>Offer ID + user contact info for email/SMS dispatch</td></tr>
+          <tr><td>Custom API</td><td>Entry or Win</td><td>Configurable payload to any HTTPS endpoint</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="marketing-boost">📈 Marketing Boost</h2>
+      <p>Marketing Boost is an integrated email/SMS marketing dispatch service. When a user wins a prize or enters a campaign, Marketing Boost can automatically send them a targeted email or SMS offer.</p>
+
+      <h3>Setting Up Marketing Boost</h3>
+      <ol class="step-list">
+        <li><strong>Go to Provider Keys</strong><p>Navigate to <strong>Integrations</strong> → <strong>Provider Keys</strong> and add your Marketing Boost API key.</p></li>
+        <li><strong>Create Integration</strong><p>In the Integration Hub, add a new target of type <strong>Marketing Boost</strong>. Enter your Offer ID in the metadata section.</p></li>
+        <li><strong>Link to Campaign</strong><p>Open a campaign, scroll to Integrations, and toggle the Marketing Boost integration on. Optionally set a per-campaign Offer ID override.</p></li>
+        <li><strong>Done</strong><p>Every time a user wins or enters that campaign, the integration fires automatically with the configured Offer ID.</p></li>
+      </ol>
+
+      <h3>Key Resolution Chain</h3>
+      <p>When dispatching to Marketing Boost, the system resolves the API key in this order:</p>
+      <ol>
+        <li><strong>Integration Target's own key</strong> — if set directly on the target</li>
+        <li><strong>Portfolio company settings</strong> — if the target is shared by a portfolio company</li>
+        <li><strong>Provider Keys table</strong> — the user's global Marketing Boost key</li>
+      </ol>
+
+      <h2 id="webhooks">📡 Webhooks &amp; Security</h2>
+      <p>Webhook integrations let you send data to any external service when events happen in IncentiveSwift.</p>
+
+      <h3>Webhook Security</h3>
+      <p>All webhook targets are protected by a security layer:</p>
+      <ul>
+        <li><strong>Domain Allowlist</strong> — Only webhooks to approved domains are sent. Configure allowed domains per integration target.</li>
+        <li><strong>Daily Limit</strong> — Set a maximum number of webhook calls per day to prevent abuse.</li>
+        <li><strong>Delivery Log</strong> — Every webhook call is logged with status (sent, failed, blocked) and timestamp.</li>
+        <li><strong>Rate Monitoring</strong> — The daily reset happens automatically. Exceeded limits block further dispatches until reset.</li>
+      </ul>
+
+      <h2 id="analytics">📈 Analytics</h2>
+      <p>The Analytics section provides deep insights into your campaigns and surveys. Access it from the sidebar.</p>
+
+      <h3>Analytics Dashboard</h3>
+      <ul>
+        <li><strong>Overview KPIs</strong> — Total entries, unique participants, conversion rates, win rates, average score</li>
+        <li><strong>Campaign Analytics</strong> — Per-campaign breakdown with entries over time, source attribution, prize distribution</li>
+        <li><strong>Source Tracking</strong> — See where your entries come from (direct, referral, UTM sources, UTM medium, UTM campaign)</li>
+        <li><strong>Hourly Heatmap</strong> — When are users most active? Heatmap shows engagement by hour of day</li>
+        <li><strong>Loyalty Metrics</strong> — Track returning participants, multi-entry users, repeat engagement</li>
+        <li><strong>CSV Export</strong> — Export any analytics view to CSV for offline analysis</li>
+      </ul>
+
+      <h3>Source Tracking Fields</h3>
+      <p>IncentiveSwift automatically captures these fields for every entry:</p>
+      <table>
+        <thead><tr><th>Field</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td><code>utm_source</code></td><td>URL parameter on the play page or embed</td></tr>
+          <tr><td><code>utm_medium</code></td><td>URL parameter on the play page or embed</td></tr>
+          <tr><td><code>utm_campaign</code></td><td>URL parameter on the play page or embed</td></tr>
+          <tr><td><code>referrer_url</code></td><td><code>document.referrer</code> from the user's browser</td></tr>
+          <tr><td><code>page_url</code></td><td>Where the campaign was embedded or played</td></tr>
+          <tr><td><code>user_agent</code></td><td>Browser user-agent string</td></tr>
+          <tr><td><code>ip_address</code></td><td>Request IP (anonymized in reports)</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="settings">⚙️ Settings</h2>
+      <p>Configure your account and workspace settings from the sidebar's gear icon.</p>
+
+      <h3>Profile Settings</h3>
+      <ul>
+        <li><strong>Name &amp; Email</strong> — Update your profile information</li>
+        <li><strong>Password</strong> — Change your login password</li>
+        <li><strong>SEO Settings</strong> — Configure page title, description, and keywords for your campaign pages</li>
+      </ul>
+
+      <h3>Integration Provider Keys</h3>
+      <p>Manage API keys for third-party services used by the Integration Hub. Keys are encrypted at rest and never exposed in logs.</p>
+
+      <h2 id="faq">❓ Frequently Asked Questions</h2>
+
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Can I use IQS surveys without a campaign?</button>
+        <div class="faq-a">Yes! IQS funnels work as stand-alone surveys. Share the play link directly, embed via the popup widget, or use the API to integrate into your own flow.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">How are scores calculated for qualified/disqualified?</button>
+        <div class="faq-a">Total score = sum of all answered question option scores. Maximum score = sum of the highest possible score per question. Percentage = (total / max) × 100. If percentage ≥ qualified threshold (default 60%), the respondent is Qualified. Otherwise, Disqualified.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">What happens when a conditional question is hidden?</button>
+        <div class="faq-a">Hidden questions are skipped entirely — they don't affect scoring, aren't validated, and aren't required. The maximum possible score is recalculated to exclude hidden questions so the percentage remains fair.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Can I change classification ranges after the survey is live?</button>
+        <div class="faq-a">Yes — classification ranges are evaluated at submission time, not stored per-respondent. Changing the ranges updates all future submissions. Historical submissions keep their original classification.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">How do I reset the daily webhook limit?</button>
+        <div class="faq-a">The daily limit resets automatically based on the configured interval (default 24 hours from first dispatch). To manually reset, edit the integration target and adjust the daily_limit field.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Can I export my campaign analytics to Excel?</button>
+        <div class="faq-a">Yes — from the Analytics page, click the CSV Export button for any view. You'll download a CSV file compatible with Excel, Google Sheets, and other spreadsheet tools.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Does IncentiveSwift integrate with CoreSwift CRM?</button>
+        <div class="faq-a">Yes — all survey submissions and campaign entries are automatically synced to CoreSwift CRM. Contacts are created/updated with their score, tags, classification, and source data. No manual configuration needed.</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<script>
+function toggleMobileSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+function closeMobile() {
+  if (window.innerWidth <= 900) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebarOverlay').classList.remove('open');
+  }
+}
+</script>
+      <hr style="border-color: var(--border); margin: 40px 0;">
+      <h2 id="affiliates">🤝 Affiliate Program</h2>
+      <div class="alert alert-success"><strong>Earn commissions!</strong> Refer other businesses to this service and earn a percentage of their subscription fees. The affiliate system is managed through FunnelSwift — ask your account manager to set up your affiliate account.</div>
+
+      <h3>How It Works</h3>
+      <ol class="step-list">
+        <li><strong>Get Your Affiliate Link</strong><p>Your affiliate manager provides a unique tracking link (or you can generate one in the FunnelSwift affiliate portal).</p></li>
+        <li><strong>Share It</strong><p>Post the link on your website, in emails, on social media, or wherever your audience is.</p></li>
+        <li><strong>They Sign Up &amp; Pay</strong><p>When someone clicks your link and later completes a paid purchase, the system tracks the conversion.</p></li>
+        <li><strong>You Earn Commission</strong><p>Commissions are calculated based on your affiliate rate and credited to your account automatically.</p></li>
+      </ol>
+
+      <h3>Products You Can Promote</h3>
+      <table>
+        <thead><tr><th>Service</th><th>Plan</th><th>Price</th><th>Commission</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="3"><strong>ADASwift</strong></td><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
+          <tr><td rowspan="2"><strong>MissedCall Respondr</strong></td><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
+          <tr><td>Credit Packs</td><td>$10–$40</td><td>10%</td></tr>
+          <tr><td rowspan="3"><strong>WorkflowSwift</strong></td><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
+          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Affiliate Products (All Services)</h3>
+      <p>The full list of all 13 affiliate products across all SwiftSoftware services:</p>
+      <table>
+        <thead><tr><th>Service</th><th>Product</th><th>Price</th><th>Commission</th></tr></thead>
+        <tbody>
+          <tr><td rowspan="4"><strong>ADASwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Pro Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+          <tr><td>Monthly Scan</td><td>$29/mo</td><td>15%</td></tr>
+          <tr><td rowspan="5"><strong>MissedCall</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Pro Plan</td><td>$49/mo</td><td>10%</td></tr>
+          <tr><td>Credit Pack - 1,000</td><td>$10</td><td>10%</td></tr>
+          <tr><td>Credit Pack - 5,000</td><td>$40</td><td>10%</td></tr>
+          <tr><td>Phone Number</td><td>$5/mo</td><td>5%</td></tr>
+          <tr><td rowspan="4"><strong>WorkflowSwift</strong></td><td>Free Plan</td><td>$0</td><td>10%</td></tr>
+          <tr><td>Starter Plan</td><td>$29/mo</td><td>10%</td></tr>
+          <tr><td>Professional Plan</td><td>$79/mo</td><td>10%</td></tr>
+          <tr><td>Enterprise Plan</td><td>$199/mo</td><td>10%</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Conversion Tracking</h3>
+      <p>When a referred lead completes a purchase, the conversion is tracked automatically:</p>
+      <ol class="step-list">
+        <li><strong>Checkout Metadata</strong><p>The system stores <code>affiliate_id</code> and/or <code>cookie_id</code> in the checkout session metadata.</p></li>
+        <li><strong>Webhook Fires</strong><p>On successful payment, the Stripe/PayPal webhook fires a conversion event to FunnelSwift.</p></li>
+        <li><strong>Commission Recorded</strong><p>FunnelSwift records the conversion and attributes commission based on the affiliate's rate.</p></li>
+      </ol>
+      <p>This is fully automatic. As long as the affiliate link is used at checkout, nothing extra is needed.</p>
+
+      <h3>Managing Affiliates</h3>
+      <p>Affiliates are managed through the <strong>FunnelSwift Admin</strong> portal:</p>
+      <ul>
+        <li><strong>Affiliate Admin</strong> — full CRUD for affiliate products, categories, links, and conversion history</li>
+        <li><strong>Affiliates</strong> — add, edit, and manage affiliate partners with commission rates</li>
+        <li><strong>Affiliate Products</strong> — configure which products can be promoted and at what commission rate</li>
+        <li><strong>Affiliate Links</strong> — create tracking links that pair an affiliate with a specific product</li>
+      </ul>
+      <p>To access, log in to FunnelSwift and navigate to <strong>Super Admin → Affiliate Admin</strong>.</p>
+
+</body>
+</html>
