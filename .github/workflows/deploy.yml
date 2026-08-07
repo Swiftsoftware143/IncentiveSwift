@@ -1,14 +1,27 @@
-# Auto-deploy happens server-side via post-merge git hook
-# See /opt/swift/incentiveswift/deploy-from-vps.sh on the VPS
-
-name: Deploy IncentiveSwift
+name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  placeholder:
+  check:
+    name: cargo check
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Deploy is handled server-side via post-merge git hook"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo clippy -- -D warnings || true
