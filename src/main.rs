@@ -26,6 +26,7 @@ pub mod delivery;
 pub mod mechanics;
 pub mod access;
 pub mod security;
+pub mod iqs_validation;
 
 use axum::{
     routing::{get, post, put, delete, patch},
@@ -243,6 +244,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/admin/portfolio-sync", post(crate::handlers::admin_handler::portfolio_sync))
         .route("/api/v1/admin/impersonate", post(crate::handlers::admin_handler::impersonate))
         .route("/api/v1/admin/stop-impersonation", post(crate::handlers::admin_handler::stop_impersonation))
+        .route("/api/v1/admin/allcampaigns", get(crate::handlers::admin_handler::admin_list_all_campaigns))
         .route("/api/v1/admin/tenants", get(crate::handlers::admin_handler::list_all_tenants))
         .route("/api/v1/admin/tenants/:id", delete(crate::handlers::admin_handler::delete_tenant))
         .route("/api/v1/admin/tenants/:tenant_id/credits-rate", get(crate::handlers::admin_handler::get_credit_rate).put(crate::handlers::admin_handler::update_credit_rate))

@@ -857,7 +857,7 @@ pub async fn submit_funnel(
         // Validate field type — skip validation for empty answers on non-required questions
         if question.required || !ans.value.is_empty() || question.question_type == "field_consent" {
             let mut validation_config = question.config.clone();
-            if question.options.as_array().map_or(false, |o| !o.is_empty()) {
+            if question.options.as_array().is_some_and(|o| !o.is_empty()) {
                 validation_config["options"] = question.options.clone();
             }
             crate::iqs_validation::validate_field(&question.question_type, &validation_config, &ans.value)?;
@@ -1172,7 +1172,7 @@ pub async fn upload_file(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("bin");
-        let stored_name = format!("{}-{}.{}", Uuid::new_v4(), slugify(&file_name.trim_end_matches(&format!(".{}", ext))), ext);
+        let stored_name = format!("{}-{}.{}", Uuid::new_v4(), slugify(file_name.trim_end_matches(&format!(".{}", ext))), ext);
         let file_path = format!("{}/{}", upload_dir, stored_name);
         let public_url = format!("{}/{}", public_url_base, stored_name);
 

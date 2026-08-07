@@ -19,7 +19,7 @@
 //! | `multiple_choice`  | Accepts comma-separated values, each must match  | —                             |
 
 use crate::error::AppError;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 /// Validate a single answer value against a question's field-type rules.
 /// `question_type` – the `question_type` column on `iqs_questions`
@@ -154,20 +154,19 @@ fn validate_date(value: &str, config: &Value) -> Result<(), AppError> {
     }
     let include_time = config.get("include_time").and_then(|v| v.as_bool()).unwrap_or(false);
     if include_time {
-        // Try datetime format
-        if chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M").is_err()
-            && chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M").is_err()
-        {
+        // Accept both date-only (YYYY-MM-DD) and datetime formats
+        let is_valid = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").is_ok()
+            || chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M").is_ok()
+            || chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M").is_ok();
+        if !is_valid {
             return Err(AppError::BadRequest(format!(
-                "'{}' is not a valid datetime. Use format YYYY-MM-DD HH:MM", trimmed
+                "'{}' is not a valid date/datetime. Use format YYYY-MM-DD or YYYY-MM-DD HH:MM", trimmed
             )));
         }
-    } else {
-        if chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").is_err() {
-            return Err(AppError::BadRequest(format!(
-                "'{}' is not a valid date. Use format YYYY-MM-DD", trimmed
-            )));
-        }
+    } else if chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").is_err() {
+        return Err(AppError::BadRequest(format!(
+            "'{}' is not a valid date. Use format YYYY-MM-DD", trimmed
+        )));
     }
     Ok(())
 }

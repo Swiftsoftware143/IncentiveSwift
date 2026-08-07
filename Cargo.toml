@@ -15,7 +15,7 @@ panic = "abort"
 [dependencies]
 argon2 = "0.5"
 rand = "0.8"
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "timeout"] }
@@ -39,6 +39,7 @@ base64 = "0.22"
 anyhow = "1"
 rust_decimal = { version = "1", features = ["serde"] }
 lettre = { version = "0.11", features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+regex-lite = "0.1.9"
 
 [dev-dependencies]
 tokio-test = "0.4"
