@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 80" width="100%" height="100%">
+ <defs>
+ <!-- Dynamic import of the modern geometric tech font directly into the vector engine -->
+ <style>
+ @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,800;1,500&amp;display=swap');
+ .brand-text {
+ font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+ font-size: 38px;
+ letter-spacing: -2.5px;
+ }
+ </style>
+ </defs>
+
+ <!-- Transparent Background -->
+ <rect width="100%" height="100%" fill="none"/>
+
+ <!-- Design Group -->
+ <g transform="translate(10, 10)">
+ <!-- Single unified text block with tight geometric kerning -->
+ <text x="0" y="48" class="brand-text">
+ <tspan font-weight="800" fill="#FFFFFF">Incentive</tspan>
+ <tspan font-weight="500" font-style="italic" fill="#00E5FF">Swift</tspan>
+ </text>
+
+ <!-- Sleek lightning bolt nested close to the text track -->
+ <path d="M232 16 L214 44 L229 44 L219 70 L242 38 L226 38 Z" fill="#00E5FF" stroke="#00E5FF" stroke-width="2" stroke-linejoin="round"/>
+ </g>
+</svg>

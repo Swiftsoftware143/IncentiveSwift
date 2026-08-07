@@ -51,6 +51,8 @@ pub struct Campaign {
     pub loyalty_points_per_play: i32,
     /// Auto-enroll players into the loyalty program when they play
     pub auto_enroll_loyalty: bool,
+    /// Optional IQS funnel linked to this campaign
+    pub iqs_funnel_id: Option<uuid::Uuid>,
 }
 
 /// Validate mechanic type string.
@@ -72,7 +74,8 @@ pub async fn get_campaign_by_slug(
                   account_id,
                   loyalty_program_id,
                   loyalty_points_per_play,
-                  auto_enroll_loyalty
+                  auto_enroll_loyalty,
+                  iqs_funnel_id
            FROM campaigns WHERE slug = $1"#
     )
     .bind(slug)
@@ -97,7 +100,8 @@ pub async fn list_campaigns(
                   account_id,
                   loyalty_program_id,
                   loyalty_points_per_play,
-                  auto_enroll_loyalty
+                  auto_enroll_loyalty,
+                  iqs_funnel_id
            FROM campaigns WHERE account_id = $1
            ORDER BY created_at DESC"#
     )
@@ -188,7 +192,8 @@ pub async fn get_campaign_by_id(
                   account_id,
                   loyalty_program_id,
                   loyalty_points_per_play,
-                  auto_enroll_loyalty
+                  auto_enroll_loyalty,
+                  iqs_funnel_id
            FROM campaigns WHERE id = $1"#
     )
     .bind(id)

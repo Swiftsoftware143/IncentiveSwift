@@ -207,6 +207,35 @@ All methods and headers are permitted. Update `ALLOWED_ORIGINS` in the environme
 | `/api/v1/admin/plans` | GET/POST | List/create plan tiers |
 | `/api/v1/admin/credits/adjust` | POST | Adjust user credits |
 
+### Admin Impersonation
+
+Admins can impersonate any portfolio company to manage their campaigns directly.
+
+**How to use:**
+1. Navigate to **Admin → Portfolio Co.** in the sidebar
+2. Find the company you want to manage
+3. Click the **👤 Login As** button in their row
+4. Confirm the impersonation dialog
+
+**What happens when you impersonate:**
+- You immediately switch to the company's view — their dashboard, campaigns, loyalty programs, etc.
+- A yellow ⚠️ banner appears at the top: *"Impersonating: [Company Name] | [Stop Impersonation]"*
+- All API calls are authenticated as the portfolio company until you stop
+
+**How to stop:**
+- Click the **❌ Stop Impersonation** button in the yellow banner
+- The page reloads and you return to your original admin account
+
+**Important notes:**
+- Impersonation tokens expire after **1 hour**
+- Your original admin token is preserved in browser storage and restored on stop
+- The banner persists across page navigation so you never lose track
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/admin/impersonate` | POST | Start impersonating (`{ account_id }` → returns JWT with `impersonating` claim) |
+| `/api/v1/admin/stop-impersonation` | POST | End impersonation, restore original identity |
+
 ### Spin / Prize Draw
 | Endpoint | Method | Description |
 |---|---|---|

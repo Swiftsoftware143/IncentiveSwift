@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Create Free Account — IncentiveSwift</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0a0b12;--surface:#13151f;--surface2:#1a1d2f;--border:#2a2d45;--text:#e1e4ed;--text2:#8b8fa3;--accent:#00E5FF;--accent2:#4df0ff;--purple:#a78bfa;--green:#34d399;--red:#ef4444;--radius:12px}
+body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.signup-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px;width:100%;max-width:460px;position:relative;overflow:hidden}
+.signup-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),#7c3aed)}
+.logo{display:flex;align-items:center;justify-content:center;gap:10px;font-size:22px;font-weight:800;margin-bottom:6px}
+.logo span{background:linear-gradient(135deg,var(--accent),#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.subtitle{text-align:center;color:var(--text2);font-size:14px;margin-bottom:28px}
+.feature-list{display:flex;flex-direction:column;gap:10px;margin-bottom:28px;padding:16px;background:var(--surface2);border-radius:var(--radius)}
+.feature-row{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text)}
+.feature-row .check{color:var(--green);font-weight:700;font-size:16px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.form-group input{width:100%;padding:14px 16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;transition:all .2s}
+.form-group input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,229,255,.1)}
+.form-group input::placeholder{color:var(--text2);opacity:.5}
+.submit-btn{width:100%;padding:16px;background:linear-gradient(135deg,var(--accent),#7c3aed);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;transition:all .3s}
+.submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 25px rgba(0,229,255,.2)}
+.submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.error-msg{display:none;padding:12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:8px;color:var(--red);font-size:13px;margin-bottom:16px}
+.success-msg{display:none;padding:12px;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);border-radius:8px;color:var(--green);font-size:13px;margin-bottom:16px;text-align:center}
+.terms{text-align:center;font-size:11px;color:var(--text2);margin-top:16px}
+.terms a{color:var(--accent);text-decoration:none}
+.terms a:hover{text-decoration:underline}
+.login-link{text-align:center;margin-top:20px;font-size:13px;color:var(--text2)}
+.login-link a{color:var(--accent);text-decoration:none;font-weight:600}
+.login-link a:hover{text-decoration:underline}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear;vertical-align:middle;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.plan-badge{display:inline-block;padding:4px 12px;border-radius:100px;font-size:11px;font-weight:700;background:rgba(0,229,255,.1);color:var(--accent);margin-left:8px}
+@media(max-width:480px){.signup-card{padding:28px 20px}}
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="signup-card">
+  <div class="logo"><svg width="24" height="24" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="13" stroke="#00E5FF" stroke-width="2"/><path d="M9 14l3 3 7-7" stroke="#00E5FF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg> <span>IncentiveSwift</span></div>
+  <p class="subtitle">Free account — no credit card required <span class="plan-badge">Free Plan</span></p>
+
+  <div class="feature-list">
+    <div class="feature-row"><span class="check">✓</span> Spin-to-Win, Raffles, Quizzes &amp; more</div>
+    <div class="feature-row"><span class="check">✓</span> Loyalty program builder</div>
+    <div class="feature-row"><span class="check">✓</span> API access &amp; webhook integrations</div>
+    <div class="feature-row"><span class="check">✓</span> Analytics dashboard with CSV export</div>
+    <div class="feature-row"><span class="check">✓</span> Embeddable widgets for any website</div>
+  </div>
+
+  <div id="signup-error" class="error-msg"></div>
+  <div id="signup-success" class="success-msg"></div>
+
+  <form id="signup-form" onsubmit="handleSignup(event)">
+    <div class="form-group">
+      <label>Full Name</label>
+      <input type="text" id="signup-name" placeholder="Your name or company" required>
+    </div>
+    <div class="form-group">
+      <label>Email Address</label>
+      <input type="email" id="signup-email" placeholder="you@company.com" required>
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="signup-password" placeholder="At least 6 characters" minlength="6" required>
+    </div>
+    <button type="submit" id="signup-btn" class="submit-btn">Create Free Account →</button>
+  </form>
+
+  <p class="terms">By signing up, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</p>
+  <p class="login-link">Already have an account? <a href="https://app.incentiveswift.com/">Sign In →</a></p>
+</div>
+
+<script>
+async function handleSignup(e) {
+  e.preventDefault();
+  const name = document.getElementById('signup-name').value.trim();
+  const email = document.getElementById('signup-email').value.trim();
+  const password = document.getElementById('signup-password').value;
+  const btn = document.getElementById('signup-btn');
+  const errDiv = document.getElementById('signup-error');
+  const sucDiv = document.getElementById('signup-success');
+
+  errDiv.style.display = 'none';
+  sucDiv.style.display = 'none';
+
+  if (!email || !password) {
+    errDiv.textContent = 'Please fill in all required fields';
+    errDiv.style.display = 'block';
+    return;
+  }
+  if (password.length < 6) {
+    errDiv.textContent = 'Password must be at least 6 characters';
+    errDiv.style.display = 'block';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Creating account...';
+
+  try {
+    const res = await fetch('/api/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.message || data.error || 'Registration failed');
+    }
+
+    // Success — show message then redirect to app with token
+    sucDiv.textContent = '✅ Account created! Redirecting to your dashboard...';
+    sucDiv.style.display = 'block';
+
+    // Store token and redirect to the app subdomain
+    setTimeout(() => {
+      window.location.href = 'https://app.incentiveswift.com/#token=' + encodeURIComponent(data.token);
+    }, 1000);
+  } catch (e) {
+    errDiv.textContent = e.message;
+    errDiv.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Create Free Account →';
+  }
+}
+</script>
+</body>
+</html>

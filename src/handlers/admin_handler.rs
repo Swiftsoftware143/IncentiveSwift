@@ -3,6 +3,7 @@
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use uuid::Uuid;
 use axum::{
     extract::{Path, State},
     Json,
@@ -363,6 +364,44 @@ pub async fn get_purchase_pin(
     Ok(Json(json!({
         "pin": pin
     })))
+}
+
+/// GET /api/v1/admin/campaigns
+/// List ALL campaigns across every account (admin only).
+pub async fn admin_list_all_campaigns(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    if user.role != "admin" {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
+
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, String, String, String)>(
+        r#"SELECT c.id, c.account_id, COALESCE(pc.name, a.name, 'Unknown') as owner_name,
+               c.name, c.slug, c.type, c.status, c.created_at::text
+         FROM campaigns c
+         LEFT JOIN accounts a ON a.id = c.account_id
+         LEFT JOIN portfolio_companies pc ON pc.id = c.account_id
+         ORDER BY c.created_at DESC
+         LIMIT 200"#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let campaigns: Vec<Value> = rows.iter().map(|(id, account_id, owner_name, name, slug, ctype, status, created_at)| {
+        json!({
+            "id": id.to_string(),
+            "account_id": account_id.to_string(),
+            "owner_name": owner_name,
+            "name": name,
+            "slug": slug,
+            "type": ctype,
+            "status": status,
+            "created_at": created_at,
+        })
+    }).collect();
+
+    Ok(Json(json!({"campaigns": campaigns, "total": campaigns.len()})))
 }
 
 // Note: purchase_pin is auto-generated on account creation. Only read endpoint is exposed.

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Login — IncentiveSwift</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:#070A10;min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 0%,#0B0F19 0%,#070A10 70%)}
+.login-card{background:#0B0F19;border:1px solid rgba(0,178,204,.2);border-radius:16px;padding:40px;width:400px;max-width:90%}
+.logo{font-size:30px;font-weight:800;color:#fff;text-align:center;margin-bottom:2px;letter-spacing:-.5px}
+.logo span{color:#00E5FF}
+.logo .sub{display:block;font-size:12px;font-weight:400;color:#64748b;letter-spacing:.05em}
+.badge{text-align:center;margin-bottom:24px}
+.badge span{display:inline-block;background:rgba(0,178,204,.15);color:#00E5FF;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;padding:3px 10px;border-radius:100px}
+h1{font-size:22px;font-weight:700;text-align:center;color:#fff;margin-bottom:4px}
+p.sub{text-align:center;color:#94a3b8;font-size:14px;margin-bottom:28px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px}
+.field input{width:100%;padding:10px 14px;border:1px solid rgba(0,178,204,.3);border-radius:8px;font-size:14px;background:#070A10;color:#fff;outline:none;transition:border-color .2s}
+.field input:focus{border-color:#00E5FF}
+.btn{width:100%;padding:12px;background:linear-gradient(135deg,#00B2CC,#00E5FF);color:#070A10;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.9}
+.btn:disabled{opacity:.5;cursor:default}
+.error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#fca5a5;font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:16px;display:none}
+.footer{text-align:center;margin-top:20px;font-size:12px;color:#475569}
+.footer a{color:#00E5FF;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">Incentive<span>Swift</span></div>
+  <div class="badge"><span>Admin</span></div>
+  <h1>Welcome back</h1>
+  <p class="sub">Sign in to manage campaigns & rewards</p>
+  <div class="error" id="login-error"></div>
+  <form id="login-form">
+    <div class="field"><label>Email</label><input type="email" id="email" placeholder="admin@example.com" autocomplete="email"></div>
+    <div class="field"><label>Password</label><input type="password" id="password" placeholder="••••••••" autocomplete="current-password"></div>
+    <button type="submit" class="btn" id="login-btn">Sign In</button>
+  </form>
+  <div class="footer"><a href="https://incentiveswift.com">incentiveswift.com</a></div>
+</div>
+<script>
+document.getElementById('login-form').addEventListener('submit',function(e){
+  e.preventDefault();var btn=document.getElementById('login-btn');btn.disabled=true;btn.textContent='Signing in...';
+  fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})})
+  .then(function(r){return r.json()}).then(function(d){
+    if(d.access_token){localStorage.setItem('is_token',d.access_token);window.location.href='/admin'}
+    else{document.getElementById('login-error').textContent=d.error||'Login failed';document.getElementById('login-error').style.display='block';btn.disabled=false;btn.textContent='Sign In'}
+  }).catch(function(){document.getElementById('login-error').textContent='Connection error';document.getElementById('login-error').style.display='block';btn.disabled=false;btn.textContent='Sign In'})
+});
+</script>
+</body>
+</html>
