@@ -273,6 +273,11 @@ async fn main() -> anyhow::Result<()> {
         // B2B Supplier milestones
         .route("/api/v1/loyalty/supplier/milestone", post(handlers::supplier_handler::record_milestone))
         .route("/api/v1/loyalty/supplier/milestones/:business_id", get(handlers::supplier_handler::get_milestones))
+        // Clearinghouse configuration
+        .route("/api/v1/admin/clearinghouse/config", get(handlers::clearinghouse_config_handler::get_treasury_config).put(handlers::clearinghouse_config_handler::update_treasury_config))
+        .route("/api/v1/admin/clearinghouse/caps", get(handlers::clearinghouse_config_handler::get_category_caps).put(handlers::clearinghouse_config_handler::update_category_cap))
+        .route("/api/v1/admin/clearinghouse/supplier-config", get(handlers::clearinghouse_config_handler::get_supplier_config))
+        .route("/api/v1/admin/clearinghouse/supplier-config/:id", put(handlers::clearinghouse_config_handler::update_supplier_config))
 
         // Loyalty Badge endpoints (Phase 1)
         .route(

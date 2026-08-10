@@ -48,6 +48,7 @@ pub mod loyalty_plans;
 pub mod treasury_handler;
 pub mod point_expiry_handler;
 pub mod supplier_handler;
+pub mod clearinghouse_config_handler;
 pub mod stripe_webhook;
 pub mod offers_handler;
 pub mod tag_provision_handler;
