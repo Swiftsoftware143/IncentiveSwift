@@ -1,7 +1,6 @@
 //! Auth handlers — login, me, change password, forgot/reset password.
 
 use crate::error::AppError;
-use crate::features;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use argon2::{

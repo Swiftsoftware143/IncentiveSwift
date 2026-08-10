@@ -490,9 +490,9 @@ async fn generate_ai_reply(
         .header(
             "Authorization",
             if provider == "anthropic" {
-                format!("Bearer {}", &key)
+                format!("Bearer {}", key)
             } else {
-                format!("Bearer {}", &key)
+                format!("Bearer {}", key)
             },
         )
         .header("Content-Type", "application/json")
@@ -552,7 +552,7 @@ async fn send_telnyx_sms(state: &AppState, to: &str, message: &str) -> Result<()
     let client = Client::new();
     let resp = client
         .post("https://api.telnyx.com/v2/messages")
-        .header("Authorization", format!("Bearer {}", &api_key))
+        .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&payload)
         .timeout(std::time::Duration::from_secs(10))
