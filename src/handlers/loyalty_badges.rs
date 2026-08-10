@@ -504,6 +504,8 @@ pub struct ScanRequest {
     pub purchase_amount: Option<rust_decimal::Decimal>,
     pub deal_applied: Option<String>,
     pub notes: Option<String>,
+    pub business_category: Option<String>,
+    pub transaction_id: Option<String>,
 }
 
 /// POST /api/v1/loyalty/scan
@@ -527,14 +529,106 @@ pub async fn scan_member(
     let (member_id, program_id, _contact_id, current_balance) = member;
 
     let scan_type = req.scan_type.as_deref().unwrap_or("checkin");
-    let points_awarded = match scan_type {
-        "checkin" => 10,
-        "purchase" => req
-            .purchase_amount
-            .map(|a| a.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32)
-            .unwrap_or(0),
-        "redemption" | "reward_claim" => 0,
-        _ => 10,
+
+    // ── CLEARINGHOUSE: points awarded based on scan type ──
+    let mut points_awarded: i32 = 0;
+    let transaction_amount: Option<rust_decimal::Decimal> = req.purchase_amount;
+
+    match scan_type {
+        "checkin" => {
+            // Standard check-in: fixed 10 points, no billing
+            points_awarded = 10;
+        }
+        "purchase" => {
+            // Purchase: 1 point per $1 spent (configurable earn rate)
+            if let Some(amount) = transaction_amount {
+                let earn_rate: f64 = sqlx::query_scalar(
+                    "SELECT COALESCE(purchase_credit_rate, 1.0) FROM loyalty_programs WHERE id = $1"
+                )
+                .bind(program_id)
+                .fetch_optional(&state.db)
+                .await?
+                .unwrap_or(1.0);
+
+                points_awarded = (amount.to_string().parse::<f64>().unwrap_or(0.0) * earn_rate).floor() as i32;
+            }
+        }
+        "redemption" => {
+            // Redemption: deduct points, check category caps
+            if let Some(amount) = transaction_amount {
+                let points_to_redeem = amount.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32;
+                
+                // Check category cap
+                let category = req.business_category.as_deref().unwrap_or("Default");
+                let cap_percent: f64 = sqlx::query_scalar(
+                    "SELECT max_redeem_percent FROM category_redeem_caps WHERE category_name = $1 AND is_active = true"
+                )
+                .bind(category)
+                .fetch_optional(&state.db)
+                .await?
+                .map(|p: rust_decimal::Decimal| p.to_string().parse::<f64>().unwrap_or(25.0))
+                .unwrap_or(25.0);
+
+                let max_redeemable = (current_balance as f64).min(
+                    (amount.to_string().parse::<f64>().unwrap_or(0.0) * cap_percent / 100.0).floor()
+                ) as i32;
+                
+                points_awarded = -(points_to_redeem.min(max_redeemable));
+
+                // ── CLEARINGHOUSE: Log redemption for reimbursement ──
+                let biz_name = req.business_name.clone().unwrap_or_default();
+                let reimbursement = (points_awarded.abs() as f64 * 0.008) as f64;
+                let tx_id: Option<Uuid> = req.transaction_id.as_ref()
+                    .and_then(|s| Uuid::parse_str(s).ok());
+
+                sqlx::query(
+                    "INSERT INTO point_redemption_log (redeeming_business_id, business_name, member_id, points_redeemed, reimbursement_rate_cents, total_reimbursement, transaction_amount, max_redeem_percent, transaction_id, program_id)
+                     VALUES ($1, $2, $3, $4, 0.008, $5, $6, $7, $8, $9)"
+                )
+                .bind(req.business_id)
+                .bind(&biz_name)
+                .bind(member_id)
+                .bind(points_awarded.abs())
+                .bind(reimbursement)
+                .bind(req.purchase_amount.map(|d| d.to_string().parse::<f64>().unwrap_or(0.0)))
+                .bind(cap_percent)
+                .bind(tx_id)
+                .bind(program_id)
+                .execute(&state.db)
+                .await?;
+
+                // Update business ledger
+                let month_key = chrono::Utc::now().format("%Y-%m").to_string();
+                sqlx::query(
+                    "INSERT INTO business_point_ledger (business_id, business_name, points_redeemed_this_month, total_reimbursed_this_month, net_position, month_key)
+                     VALUES ($1, $2, $3, $4, $4, $5)
+                     ON CONFLICT (business_id, month_key) DO UPDATE SET
+                     points_redeemed_this_month = business_point_ledger.points_redeemed_this_month + $3,
+                     total_reimbursed_this_month = business_point_ledger.total_reimbursed_this_month + $4,
+                     net_position = business_point_ledger.net_position + $4,
+                     updated_at = NOW()"
+                )
+                .bind(req.business_id)
+                .bind(&biz_name)
+                .bind(points_awarded.abs())
+                .bind(reimbursement)
+                .bind(&month_key)
+                .execute(&state.db)
+                .await?;
+
+                // Update treasury
+                sqlx::query(
+                    "UPDATE point_treasury SET total_points_redeemed = total_points_redeemed + $1, total_reimbursements_paid = total_reimbursements_paid + $2, outstanding_liability = outstanding_liability - $2, updated_at = NOW()"
+                )
+                .bind(points_awarded.abs() as i64)
+                .bind(reimbursement)
+                .execute(&state.db)
+                .await?;
+            }
+        }
+        _ => {
+            points_awarded = 10;
+        }
     };
 
     let new_balance = current_balance + points_awarded;
@@ -547,16 +641,70 @@ pub async fn scan_member(
     .execute(&state.db)
     .await?;
 
+    // ── CLEARINGHOUSE: If purchase/checkin, log issuance + bill business ──
+    if points_awarded > 0 {
+        let biz_name = req.business_name.clone().unwrap_or_default();
+        let bill_amount = points_awarded as f64 * 0.01;
+        let tx_id: Option<Uuid> = req.transaction_id.as_ref()
+            .and_then(|s| Uuid::parse_str(s).ok());
+
+        sqlx::query(
+            "INSERT INTO point_issuance_log (issuing_business_id, business_name, member_id, points_issued, bill_rate_cents, total_billed, transaction_id, program_id, issuance_type)
+             VALUES ($1, $2, $3, $4, 0.01, $5, $6, $7, $8)"
+        )
+        .bind(req.business_id)
+        .bind(&biz_name)
+        .bind(member_id)
+        .bind(points_awarded)
+        .bind(bill_amount)
+        .bind(tx_id)
+        .bind(program_id)
+        .bind(scan_type)
+        .execute(&state.db)
+        .await?;
+
+        // Update business ledger
+        let month_key = chrono::Utc::now().format("%Y-%m").to_string();
+        sqlx::query(
+            "INSERT INTO business_point_ledger (business_id, business_name, points_issued_this_month, total_billed_this_month, net_position, month_key)
+             VALUES ($1, $2, $3, $4, -$4, $5)
+             ON CONFLICT (business_id, month_key) DO UPDATE SET
+             points_issued_this_month = business_point_ledger.points_issued_this_month + $3,
+             total_billed_this_month = business_point_ledger.total_billed_this_month + $4,
+             net_position = business_point_ledger.net_position - $4,
+             updated_at = NOW()"
+        )
+        .bind(req.business_id)
+        .bind(&biz_name)
+        .bind(points_awarded)
+        .bind(bill_amount)
+        .bind(&month_key)
+        .execute(&state.db)
+        .await?;
+
+        // Update treasury
+        sqlx::query(
+            "UPDATE point_treasury SET total_points_issued = total_points_issued + $1, total_revenue_collected = total_revenue_collected + $2, outstanding_liability = outstanding_liability + $2, updated_at = NOW()"
+        )
+        .bind(points_awarded as i64)
+        .bind(bill_amount)
+        .execute(&state.db)
+        .await?;
+    }
+
     let scan_id = Uuid::new_v4();
     let metadata = serde_json::json!({
         "scan_type": scan_type,
         "business_id": req.business_id.to_string(),
+        "business_category": req.business_category,
+        "transaction_amount": transaction_amount,
+        "clearinghouse_processed": true,
         "notes": req.notes,
     });
 
     sqlx::query(
-        r#"INSERT INTO loyalty_scans (id, member_id, business_id, business_name, program_id, scan_type, points_awarded, points_balance, deal_applied, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+        r#"INSERT INTO loyalty_scans (id, member_id, business_id, business_name, program_id, scan_type, points_awarded, points_balance, deal_applied, metadata, transaction_amount, business_category, clearinghouse_processed)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true)"#
     )
     .bind(scan_id)
     .bind(member_id)
@@ -568,15 +716,15 @@ pub async fn scan_member(
     .bind(new_balance)
     .bind(&req.deal_applied)
     .bind(&metadata)
+    .bind(req.purchase_amount)
+    .bind(&req.business_category)
     .execute(&state.db)
     .await?;
 
     tracing::info!(
-        "[scan] Member {} scanned at business {} — {} points, balance: {}",
-        member_id,
-        req.business_id,
-        points_awarded,
-        new_balance
+        "[clearinghouse] Member {} scanned at {} — {} points, balance: {}, clearinghouse: {}",
+        member_id, req.business_id, points_awarded, new_balance,
+        if points_awarded > 0 { "issuance+billed" } else if points_awarded < 0 { "redemption+reimbursed" } else { "no-op" }
     );
 
     Ok(Json(json!({
@@ -588,7 +736,14 @@ pub async fn scan_member(
         "points_awarded": points_awarded,
         "previous_balance": current_balance,
         "new_balance": new_balance,
-        "message": format!("Scanned — {} points {}", points_awarded,
+        "transaction_amount": transaction_amount,
+        "business_category": req.business_category,
+        "clearinghouse": {
+            "processed": true,
+            "issuance_billed": if points_awarded > 0 { points_awarded as f64 * 0.01 } else { 0.0 },
+            "redemption_reimbursed": if points_awarded < 0 { points_awarded.abs() as f64 * 0.008 } else { 0.0 },
+        },
+        "message": format!("Scanned — {} points {}", points_awarded.abs(),
             if points_awarded >= 0 { "awarded" } else { "deducted" }),
     })))
 }
