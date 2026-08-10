@@ -45,5 +45,6 @@ pub use external_grants::*;
 pub mod business_handler;
 pub mod loyalty_badges;
 pub mod loyalty_plans;
+pub mod stripe_webhook;
 pub mod offers_handler;
 pub mod tag_provision_handler;
