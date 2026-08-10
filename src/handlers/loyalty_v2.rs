@@ -11,10 +11,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::state::AppState;
 use crate::error::AppError;
 use crate::handlers::campaign_integrations;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 
 // ── Purchase Verification ──
 
@@ -32,7 +32,7 @@ pub async fn generate_pin(
     Json(req): Json<GeneratePinRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1"
+        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
     )
     .bind(&req.campaign_slug)
     .fetch_optional(&s.db)
@@ -94,13 +94,12 @@ pub async fn verify_purchase(
     .ok_or_else(|| AppError::NotFound("Invalid or expired PIN".into()))?;
 
     // Check if contact exists before linking
-    let contact_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)"
-    )
-    .bind(req.contact_id)
-    .fetch_one(&s.db)
-    .await
-    .unwrap_or(false);
+    let contact_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)")
+            .bind(req.contact_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(false);
 
     if contact_exists {
         sqlx::query(
@@ -119,16 +118,15 @@ pub async fn verify_purchase(
         .await?;
     }
 
-    let business_name = if verification.3.is_empty() { "Business".to_string() } else { verification.3.clone() };
+    let business_name = if verification.3.is_empty() {
+        "Business".to_string()
+    } else {
+        verification.3.clone()
+    };
 
     // Auto-issue a rotating voucher from cross-promotion group (only if contact exists)
     let voucher = if contact_exists {
-        issue_rotation_voucher(
-            &s.db,
-            &verification.1,
-            &req.contact_id,
-            &verification.2,
-        ).await?
+        issue_rotation_voucher(&s.db, &verification.1, &req.contact_id, &verification.2).await?
     } else {
         None
     };
@@ -143,24 +141,21 @@ pub async fn verify_purchase(
             if int_val > 0 {
                 credit_amount = int_val;
                 // Get current balance
-                let cur_balance: i32 = sqlx::query_scalar(
-                    "SELECT credits_balance FROM accounts WHERE id = $1"
-                )
-                .bind(account_id)
-                .fetch_optional(&s.db)
-                .await?
-                .unwrap_or(0);
+                let cur_balance: i32 =
+                    sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
+                        .bind(account_id)
+                        .fetch_optional(&s.db)
+                        .await?
+                        .unwrap_or(0);
 
                 let new_balance = cur_balance + credit_amount;
 
                 // Update balance
-                sqlx::query(
-                    "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
-                )
-                .bind(new_balance)
-                .bind(account_id)
-                .execute(&s.db)
-                .await?;
+                sqlx::query("UPDATE accounts SET credits_balance = $1 WHERE id = $2")
+                    .bind(new_balance)
+                    .bind(account_id)
+                    .execute(&s.db)
+                    .await?;
 
                 // Log transaction
                 sqlx::query(
@@ -216,7 +211,7 @@ pub async fn issue_voucher(
     Json(req): Json<IssueVoucherRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1"
+        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
     )
     .bind(&req.campaign_slug)
     .fetch_optional(&s.db)
@@ -252,7 +247,7 @@ pub async fn issue_voucher(
 
     // Look up contact info for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT email, first_name, last_name FROM contacts WHERE id = $1"
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1",
     )
     .bind(req.contact_id)
     .fetch_optional(&s.db)
@@ -276,12 +271,8 @@ pub async fn issue_voucher(
         "first_name": mb_first_name,
         "last_name": mb_last_name,
     });
-    campaign_integrations::fire_marketing_boost(
-        &s,
-        &campaign.0,
-        "voucher_issued",
-        &mb_payload,
-    ).await;
+    campaign_integrations::fire_marketing_boost(&s, &campaign.0, "voucher_issued", &mb_payload)
+        .await;
 
     Ok(Json(json!({
         "voucher_id": voucher_id,
@@ -296,22 +287,38 @@ pub async fn list_my_vouchers(
     State(s): State<AppState>,
     Path(contact_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    let vouchers = sqlx::query_as::<_, (Uuid, String, String, String, String, String, Option<chrono::DateTime<chrono::Utc>>)>(
+    let vouchers = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status,
                   COALESCE(b.name, '') as business_name, v.expires_at
            FROM vouchers v
            LEFT JOIN businesses b ON b.id = v.target_business_id
            WHERE v.issued_to_contact_id = $1
-           ORDER BY v.created_at DESC"#
+           ORDER BY v.created_at DESC"#,
     )
     .bind(contact_id)
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<serde_json::Value> = vouchers.into_iter().map(|v| json!({
-        "id": v.0, "discount": v.1, "type": v.2, "code": v.3, "status": v.4,
-        "business": v.5, "expires_at": v.6
-    })).collect();
+    let result: Vec<serde_json::Value> = vouchers
+        .into_iter()
+        .map(|v| {
+            json!({
+                "id": v.0, "discount": v.1, "type": v.2, "code": v.3, "status": v.4,
+                "business": v.5, "expires_at": v.6
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"vouchers": result})))
 }
@@ -337,25 +344,23 @@ pub async fn claim_voucher(
     .ok_or_else(|| AppError::NotFound("Voucher not found".into()))?;
 
     if voucher.2 != "active" {
-        return Err(AppError::BadRequest("Voucher already used or expired".into()));
+        return Err(AppError::BadRequest(
+            "Voucher already used or expired".into(),
+        ));
     }
 
-    sqlx::query(
-        "UPDATE vouchers SET status = 'used', used_at = NOW() WHERE id = $1"
-    )
-    .bind(voucher.0)
-    .execute(&s.db)
-    .await?;
+    sqlx::query("UPDATE vouchers SET status = 'used', used_at = NOW() WHERE id = $1")
+        .bind(voucher.0)
+        .execute(&s.db)
+        .await?;
 
     Ok(Json(json!({"status": "claimed", "discount": voucher.1})))
 }
 
 /// POST /api/v1/loyalty/expire-vouchers — expire old vouchers (cron)
-pub async fn expire_vouchers(
-    State(s): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+pub async fn expire_vouchers(State(s): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let result = sqlx::query(
-        "UPDATE vouchers SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()"
+        "UPDATE vouchers SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()",
     )
     .execute(&s.db)
     .await?;
@@ -382,13 +387,11 @@ pub async fn create_pledge(
     State(s): State<AppState>,
     Json(req): Json<CreatePledgeRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 LIMIT 1"
-    )
-    .bind(&req.campaign_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
+    let campaign = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM campaigns WHERE slug = $1 LIMIT 1")
+        .bind(&req.campaign_slug)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
 
     let pledge_id = Uuid::new_v4();
     sqlx::query(
@@ -408,7 +411,9 @@ pub async fn create_pledge(
     .execute(&s.db)
     .await?;
 
-    Ok(Json(json!({"id": pledge_id, "status": "pending", "message": "Your pledge is under review. The directory team will approve it shortly."})))
+    Ok(Json(
+        json!({"id": pledge_id, "status": "pending", "message": "Your pledge is under review. The directory team will approve it shortly."}),
+    ))
 }
 
 /// GET /api/v1/business/pledges — list pledges for a business
@@ -423,10 +428,15 @@ pub async fn list_business_pledges(
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<serde_json::Value> = pledges.into_iter().map(|p| json!({
-        "id": p.0, "offer_type": p.1, "offer_value": p.2,
-        "description": p.3, "status": p.4
-    })).collect();
+    let result: Vec<serde_json::Value> = pledges
+        .into_iter()
+        .map(|p| {
+            json!({
+                "id": p.0, "offer_type": p.1, "offer_value": p.2,
+                "description": p.3, "status": p.4
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"pledges": result})))
 }
@@ -447,7 +457,9 @@ pub async fn review_pledge(
 ) -> Result<impl IntoResponse, AppError> {
     let valid_statuses = ["approved", "rejected"];
     if !valid_statuses.contains(&req.status.as_str()) {
-        return Err(AppError::BadRequest("Status must be 'approved' or 'rejected'".into()));
+        return Err(AppError::BadRequest(
+            "Status must be 'approved' or 'rejected'".into(),
+        ));
     }
 
     sqlx::query(
@@ -473,10 +485,15 @@ pub async fn list_pending_pledges(
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<serde_json::Value> = pledges.into_iter().map(|p| json!({
-        "id": p.0, "business": p.1, "offer_type": p.2, "offer_value": p.3,
-        "description": p.4, "phone": p.5, "status": p.6
-    })).collect();
+    let result: Vec<serde_json::Value> = pledges
+        .into_iter()
+        .map(|p| {
+            json!({
+                "id": p.0, "business": p.1, "offer_type": p.2, "offer_value": p.3,
+                "description": p.4, "phone": p.5, "status": p.6
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"pending_pledges": result})))
 }
@@ -494,7 +511,7 @@ pub async fn issue_rotation_voucher(
     // Find active rotation configs for this campaign
     let configs = sqlx::query_as::<_, (Uuid, String, i32, String, i32)>(
         "SELECT id, name, group_size, rotation_frequency, max_vouchers_per_rotation
-         FROM rotation_configs WHERE campaign_id = $1 AND is_active = true LIMIT 5"
+         FROM rotation_configs WHERE campaign_id = $1 AND is_active = true LIMIT 5",
     )
     .bind(campaign_id)
     .fetch_all(pool)
@@ -508,7 +525,7 @@ pub async fn issue_rotation_voucher(
              JOIN rotation_configs rc ON rc.id = rgm.rotation_config_id
              WHERE rgm.rotation_config_id = $1 AND rgm.is_active = true
              AND rgm.business_id != $2
-             ORDER BY rgm.rotation_order ASC"
+             ORDER BY rgm.rotation_order ASC",
         )
         .bind(config_id)
         .bind(source_business_id)
@@ -527,7 +544,7 @@ pub async fn issue_rotation_voucher(
         let pledge = sqlx::query_as::<_, (String, String, Option<String>)>(
             "SELECT offer_type, offer_value, offer_description FROM business_pledges
              WHERE business_id = $1 AND status = 'active' AND is_active = true
-             LIMIT 1"
+             LIMIT 1",
         )
         .bind(target_id)
         .fetch_optional(pool)
@@ -601,13 +618,11 @@ pub async fn create_rotation_config(
     State(s): State<AppState>,
     Json(req): Json<CreateRotationConfigRequest>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 LIMIT 1"
-    )
-    .bind(&req.campaign_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
+    let campaign = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM campaigns WHERE slug = $1 LIMIT 1")
+        .bind(&req.campaign_slug)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
 
     let id = Uuid::new_v4();
     sqlx::query(
@@ -685,16 +700,21 @@ pub async fn list_rotation_configs(
          FROM rotation_configs rc
          JOIN campaigns c ON c.id = rc.campaign_id
          WHERE c.slug = $1
-         ORDER BY rc.created_at DESC"
+         ORDER BY rc.created_at DESC",
     )
     .bind(&campaign_slug)
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<Value> = configs.into_iter().map(|c| json!({
-        "id": c.0, "name": c.1, "description": c.2, "group_size": c.3,
-        "frequency": c.4, "validity_days": c.5, "is_active": c.6
-    })).collect();
+    let result: Vec<Value> = configs
+        .into_iter()
+        .map(|c| {
+            json!({
+                "id": c.0, "name": c.1, "description": c.2, "group_size": c.3,
+                "frequency": c.4, "validity_days": c.5, "is_active": c.6
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"rotation_configs": result})))
 }
@@ -707,15 +727,20 @@ pub async fn list_rotation_members(
     let members = sqlx::query_as::<_, (Uuid, String, Option<String>, i32, bool)>(
         "SELECT business_id, business_name, business_category, rotation_order, is_active
          FROM rotation_group_members WHERE rotation_config_id = $1
-         ORDER BY rotation_order ASC"
+         ORDER BY rotation_order ASC",
     )
     .bind(config_id)
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<Value> = members.into_iter().map(|m| json!({
-        "id": m.0, "name": m.1, "category": m.2, "order": m.3, "active": m.4
-    })).collect();
+    let result: Vec<Value> = members
+        .into_iter()
+        .map(|m| {
+            json!({
+                "id": m.0, "name": m.1, "category": m.2, "order": m.3, "active": m.4
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"members": result})))
 }
@@ -766,7 +791,8 @@ pub async fn redeem_reward(
 
     if balance < tier.2 {
         return Err(AppError::BadRequest(format!(
-            "Insufficient points. You have {} but need {}.", balance, tier.2
+            "Insufficient points. You have {} but need {}.",
+            balance, tier.2
         )));
     }
 
@@ -807,7 +833,8 @@ pub async fn redeem_reward(
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
         let client = reqwest::Client::new();
-        let _ = client.post(&webhook_url)
+        let _ = client
+            .post(&webhook_url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(5))
             .send()
@@ -816,7 +843,7 @@ pub async fn redeem_reward(
 
     // Look up contact info for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT email, first_name, last_name FROM contacts WHERE id = $1"
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1",
     )
     .bind(req.contact_id)
     .fetch_optional(&s.db)
@@ -843,8 +870,9 @@ pub async fn redeem_reward(
         &campaign.0,
         "reward_redeemed",
         &mb_payload,
-        tier.6.as_ref(),  // tier.6 = marketing_boost column
-    ).await;
+        tier.6.as_ref(), // tier.6 = marketing_boost column
+    )
+    .await;
 
     Ok(Json(json!({
         "status": "redeemed",
@@ -859,20 +887,34 @@ pub async fn list_rewards_earned(
     State(s): State<AppState>,
     Path(contact_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let rewards = sqlx::query_as::<_, (Uuid, String, i32, String, Option<chrono::DateTime<chrono::Utc>>)>(
+    let rewards = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            i32,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"SELECT lre.id, lrt.name, lre.points_spent, lre.status, lre.created_at
            FROM loyalty_rewards_earned lre
            JOIN loyalty_reward_tiers lrt ON lrt.id = lre.reward_tier_id
            WHERE lre.contact_id = $1
-           ORDER BY lre.created_at DESC LIMIT 50"#
+           ORDER BY lre.created_at DESC LIMIT 50"#,
     )
     .bind(contact_id)
     .fetch_all(&s.db)
     .await?;
 
-    let result: Vec<Value> = rewards.into_iter().map(|r| json!({
-        "id": r.0, "reward": r.1, "points": r.2, "status": r.3, "earned_at": r.4
-    })).collect();
+    let result: Vec<Value> = rewards
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.0, "reward": r.1, "points": r.2, "status": r.3, "earned_at": r.4
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"rewards": result})))
 }
@@ -887,39 +929,71 @@ pub async fn external_tag_contact(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("");
-    let first_name = body.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+    let first_name = body
+        .get("first_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let last_name = body.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
     let phone = body.get("phone").and_then(|v| v.as_str()).unwrap_or("");
-    let tags: Vec<String> = body.get("tags")
+    let tags: Vec<String> = body
+        .get("tags")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    let source = body.get("source").and_then(|v| v.as_str()).unwrap_or("external");
+    let source = body
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("external");
 
     if email.is_empty() && phone.is_empty() && first_name.is_empty() && last_name.is_empty() {
-        return Err(AppError::BadRequest("At least one contact identifier required".into()));
+        return Err(AppError::BadRequest(
+            "At least one contact identifier required".into(),
+        ));
     }
 
     // Upsert the contact — find by email first, then by phone, or create
-    let contact_id = crate::db::contacts::upsert_contact(&s.db, &crate::db::contacts::ContactInput {
-        first_name: if first_name.is_empty() { None } else { Some(first_name.to_string()) },
-        last_name: if last_name.is_empty() { None } else { Some(last_name.to_string()) },
-        email: if email.is_empty() { None } else { Some(email.to_string()) },
-        phone: if phone.is_empty() { None } else { Some(phone.to_string()) },
-        business_name: None,
-        website: None,
-    }).await?;
+    let contact_id = crate::db::contacts::upsert_contact(
+        &s.db,
+        &crate::db::contacts::ContactInput {
+            first_name: if first_name.is_empty() {
+                None
+            } else {
+                Some(first_name.to_string())
+            },
+            last_name: if last_name.is_empty() {
+                None
+            } else {
+                Some(last_name.to_string())
+            },
+            email: if email.is_empty() {
+                None
+            } else {
+                Some(email.to_string())
+            },
+            phone: if phone.is_empty() {
+                None
+            } else {
+                Some(phone.to_string())
+            },
+            business_name: None,
+            website: None,
+        },
+    )
+    .await?;
 
     // Apply tags as notes2 (comma-separated, deduplicated)
     if !tags.is_empty() {
-        let existing_notes: Option<String> = sqlx::query_scalar(
-            "SELECT notes2 FROM contacts WHERE id = $1"
-        )
-        .bind(contact_id)
-        .fetch_optional(&s.db)
-        .await
-        .ok()
-        .flatten();
+        let existing_notes: Option<String> =
+            sqlx::query_scalar("SELECT notes2 FROM contacts WHERE id = $1")
+                .bind(contact_id)
+                .fetch_optional(&s.db)
+                .await
+                .ok()
+                .flatten();
 
         let mut all_tags: Vec<String> = existing_notes
             .as_deref()
@@ -946,7 +1020,10 @@ pub async fn external_tag_contact(
 
     tracing::info!(
         "[tag-sync] IncentiveSwift tag-contact: contact={} email={} tags={:?} source={}",
-        contact_id, email, tags, source
+        contact_id,
+        email,
+        tags,
+        source
     );
 
     Ok(Json(json!({
@@ -962,10 +1039,10 @@ pub async fn external_tag_contact(
 #[derive(Debug, Deserialize)]
 pub struct PurchaseVerifyRequest {
     pub contact_id: Uuid,
-    pub amount: f64,                    // Total receipt amount (for logging/display)
+    pub amount: f64, // Total receipt amount (for logging/display)
     pub pin: String,
     pub offer_id: Option<Uuid>,
-    pub subtotal_amount: Option<f64>,   // Portion eligible for earning (excludes deal items)
+    pub subtotal_amount: Option<f64>, // Portion eligible for earning (excludes deal items)
     pub deal_description: Option<String>, // Human-readable: "Free dessert — rest of meal earns"
 }
 
@@ -992,7 +1069,7 @@ pub async fn purchase_verify(
 
     // Get the account's tenant_id and purchase_pin
     let account_info = sqlx::query_as::<_, (Option<Uuid>, String)>(
-        "SELECT tenant_id, purchase_pin FROM accounts WHERE id = $1"
+        "SELECT tenant_id, purchase_pin FROM accounts WHERE id = $1",
     )
     .bind(business_account_id)
     .fetch_optional(&s.db)
@@ -1007,26 +1084,25 @@ pub async fn purchase_verify(
     }
 
     // Check loyalty plan status for pool gating
-    let loyalty_plan_status: Option<String> = sqlx::query_scalar(
-        "SELECT loyalty_plan_status FROM accounts WHERE id = $1"
-    )
-    .bind(business_account_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    let loyalty_plan_status: Option<String> =
+        sqlx::query_scalar("SELECT loyalty_plan_status FROM accounts WHERE id = $1")
+            .bind(business_account_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
 
     // If business has a loyalty plan but it's not active, block purchase verification
-    let loyalty_plan: Option<String> = sqlx::query_scalar(
-        "SELECT loyalty_plan FROM accounts WHERE id = $1"
-    )
-    .bind(business_account_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    let loyalty_plan: Option<String> =
+        sqlx::query_scalar("SELECT loyalty_plan FROM accounts WHERE id = $1")
+            .bind(business_account_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
 
     if loyalty_plan.is_some() && loyalty_plan_status.as_deref() != Some("active") {
         return Err(AppError::BadRequest(
-            "Business loyalty plan is not active. Please subscribe to continue earning ZaarCash.".into()
+            "Business loyalty plan is not active. Please subscribe to continue earning ZaarCash."
+                .into(),
         ));
     }
 
@@ -1044,30 +1120,30 @@ pub async fn purchase_verify(
     };
 
     // Verify contact exists
-    let contact_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)"
-    )
-    .bind(req.contact_id)
-    .fetch_one(&s.db)
-    .await
-    .unwrap_or(false);
+    let contact_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)")
+            .bind(req.contact_id)
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(false);
 
     if !contact_exists {
         return Err(AppError::NotFound("Customer contact not found".into()));
     }
 
     // ── Read tenant-level ZaarCash guardrails ───────────────────────────
-    let (tenant_redemption_cap_pct, tenant_min_redemption): (i32, i32) = if let Some(tid) = tenant_id {
-        sqlx::query_as::<_, (i32, i32)>(
-            "SELECT redemption_cap_pct, min_redemption_credits FROM accounts WHERE id = $1"
-        )
-        .bind(tid)
-        .fetch_optional(&s.db)
-        .await?
-        .unwrap_or((10, 100))
-    } else {
-        (10, 100) // defaults: 10% cap, 100 ZC min to redeem
-    };
+    let (tenant_redemption_cap_pct, tenant_min_redemption): (i32, i32) =
+        if let Some(tid) = tenant_id {
+            sqlx::query_as::<_, (i32, i32)>(
+                "SELECT redemption_cap_pct, min_redemption_credits FROM accounts WHERE id = $1",
+            )
+            .bind(tid)
+            .fetch_optional(&s.db)
+            .await?
+            .unwrap_or((10, 100))
+        } else {
+            (10, 100) // defaults: 10% cap, 100 ZC min to redeem
+        };
 
     // ZC value: 100 ZaarCash = $1 (1 cent per credit)
     const ZC_PER_DOLLAR: i32 = 100;
@@ -1096,18 +1172,18 @@ pub async fn purchase_verify(
         // Cap in ZC: cap_dollars converted to credits (e.g. $5 off = 500 ZC)
         let max_discount_credits = cap_dollars * ZC_PER_DOLLAR;
 
-        let customer_balance: i32 = sqlx::query_scalar(
-            "SELECT credits_balance FROM accounts WHERE id = $1"
-        )
-        .bind(req.contact_id)
-        .fetch_optional(&s.db)
-        .await?
-        .unwrap_or(0);
+        let customer_balance: i32 =
+            sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
+                .bind(req.contact_id)
+                .fetch_optional(&s.db)
+                .await?
+                .unwrap_or(0);
 
         // Customer must have enough ZC to redeem the offer
         if customer_balance < max_discount_credits {
             return Err(AppError::BadRequest(format!(
-                "Insufficient ZaarCash. Offer needs {} ZC but you have {}.", max_discount_credits, customer_balance
+                "Insufficient ZaarCash. Offer needs {} ZC but you have {}.",
+                max_discount_credits, customer_balance
             )));
         }
 
@@ -1120,17 +1196,20 @@ pub async fn purchase_verify(
     let earnable_amount = req.subtotal_amount.unwrap_or(req.amount);
     let credit_amount = ((earnable_amount.max(0.0) * credit_rate as f64).floor() as i32).max(0);
     // If no earnable amount (e.g. fully redeemed deal), still award minimum 1 point
-    let credit_amount = if credit_amount == 0 && earnable_amount > 0.0 { 1 } else { credit_amount };
+    let credit_amount = if credit_amount == 0 && earnable_amount > 0.0 {
+        1
+    } else {
+        credit_amount
+    };
     let deal_discount = req.amount - earnable_amount;
 
     // Update the contact's account credits
     // First check if contact has an account by same UUID
-    let account_credits: Option<i32> = sqlx::query_scalar(
-        "SELECT credits_balance FROM accounts WHERE id = $1"
-    )
-    .bind(req.contact_id)
-    .fetch_optional(&s.db)
-    .await?;
+    let account_credits: Option<i32> =
+        sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
+            .bind(req.contact_id)
+            .fetch_optional(&s.db)
+            .await?;
 
     if let Some(balance) = account_credits {
         // Contact UUID matches an account
@@ -1143,13 +1222,12 @@ pub async fn purchase_verify(
         let new_balance = (balance + net_change).max(0);
 
         // Check ZC pool for business loyalty plan gating
-        let zc_pool: i32 = sqlx::query_scalar(
-            "SELECT zc_pool_remaining FROM accounts WHERE id = $1"
-        )
-        .bind(business_account_id)
-        .fetch_optional(&s.db)
-        .await?
-        .unwrap_or(0);
+        let zc_pool: i32 =
+            sqlx::query_scalar("SELECT zc_pool_remaining FROM accounts WHERE id = $1")
+                .bind(business_account_id)
+                .fetch_optional(&s.db)
+                .await?
+                .unwrap_or(0);
 
         if zc_pool > 0 && zc_pool < credit_amount {
             return Err(AppError::BadRequest(
@@ -1166,17 +1244,18 @@ pub async fn purchase_verify(
                 .await;
         }
 
-        sqlx::query(
-            "UPDATE accounts SET credits_balance = $1 WHERE id = $2"
-        )
-        .bind(new_balance)
-        .bind(req.contact_id)
-        .execute(&s.db)
-        .await?;
+        sqlx::query("UPDATE accounts SET credits_balance = $1 WHERE id = $2")
+            .bind(new_balance)
+            .bind(req.contact_id)
+            .execute(&s.db)
+            .await?;
 
         // Log transaction(s)
         let tx_id = Uuid::new_v4();
-        let mut desc = format!("Purchase verified -- {} credits earned (${:.2} total, ${:.2} earnable)", credit_amount, req.amount, earnable_amount);
+        let mut desc = format!(
+            "Purchase verified -- {} credits earned (${:.2} total, ${:.2} earnable)",
+            credit_amount, req.amount, earnable_amount
+        );
 
         if deal_discount > 0.01 {
             desc = format!("{}, ${:.2} deal discount excluded", desc, deal_discount);
@@ -1188,9 +1267,11 @@ pub async fn purchase_verify(
         if redeemed_credits > 0 {
             desc = format!(
                 "{} credits earned, {} redeemed via '{}' offer (${:.2} total, ${:.2} earnable)",
-                credit_amount, redeemed_credits,
+                credit_amount,
+                redeemed_credits,
                 offer_name.as_deref().unwrap_or("Offer"),
-                req.amount, earnable_amount
+                req.amount,
+                earnable_amount
             );
         }
 
@@ -1221,27 +1302,51 @@ pub async fn purchase_verify(
 
         // ZC value info for UI display
         resp.insert("zc_per_dollar".to_string(), json!(ZC_PER_DOLLAR));
-        resp.insert("zc_value_display".to_string(), json!(format!("{} ZC = $1", ZC_PER_DOLLAR)));
-        resp.insert("redemption_cap_pct".to_string(), json!(tenant_redemption_cap_pct));
-        resp.insert("max_redeemable_this_visit".to_string(), json!(
-            ((req.amount * tenant_redemption_cap_pct as f64 / 100.0) * ZC_PER_DOLLAR as f64).floor() as i32
-        ));
+        resp.insert(
+            "zc_value_display".to_string(),
+            json!(format!("{} ZC = $1", ZC_PER_DOLLAR)),
+        );
+        resp.insert(
+            "redemption_cap_pct".to_string(),
+            json!(tenant_redemption_cap_pct),
+        );
+        resp.insert(
+            "max_redeemable_this_visit".to_string(),
+            json!(
+                ((req.amount * tenant_redemption_cap_pct as f64 / 100.0) * ZC_PER_DOLLAR as f64)
+                    .floor() as i32
+            ),
+        );
 
         if redeemed_credits > 0 {
             let zc_dollars = redeemed_credits as f64 / ZC_PER_DOLLAR as f64;
             resp.insert("credits_redeemed".to_string(), json!(redeemed_credits));
             resp.insert("offer_applied".to_string(), json!(offer_name));
-            resp.insert("zc_redeemed_value".to_string(), json!(format!("${:.2}", zc_dollars)));
+            resp.insert(
+                "zc_redeemed_value".to_string(),
+                json!(format!("${:.2}", zc_dollars)),
+            );
         }
 
         let zc_value = credit_amount as f64 / ZC_PER_DOLLAR as f64;
         let msg = if deal_discount > 0.01 {
-            format!("${:.2} deal excluded! Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend{}",
-                deal_discount, credit_amount, zc_value, earnable_amount,
-                if let Some(ref n) = req.deal_description { format!(" ({})", n) } else { String::new() })
+            format!(
+                "${:.2} deal excluded! Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend{}",
+                deal_discount,
+                credit_amount,
+                zc_value,
+                earnable_amount,
+                if let Some(ref n) = req.deal_description {
+                    format!(" ({})", n)
+                } else {
+                    String::new()
+                }
+            )
         } else {
-            format!("Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend",
-                credit_amount, zc_value, earnable_amount)
+            format!(
+                "Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend",
+                credit_amount, zc_value, earnable_amount
+            )
         };
         resp.insert("message".to_string(), json!(msg));
 
@@ -1275,17 +1380,16 @@ pub async fn get_referrals(
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Get account's referrer_code
-    let code_row = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT referrer_code FROM accounts WHERE id = $1"
-    )
-    .bind(account_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    let code_row =
+        sqlx::query_scalar::<_, Option<String>>("SELECT referrer_code FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
 
     // Count referrals across ALL campaigns that reference this account's contact
     let referral_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM campaign_referrals WHERE referrer_contact_id = $1::uuid"
+        "SELECT COUNT(*) FROM campaign_referrals WHERE referrer_contact_id = $1::uuid",
     )
     .bind(account_id)
     .fetch_optional(&s.db)
@@ -1302,19 +1406,24 @@ pub async fn get_referrals(
     .fetch_all(&s.db)
     .await?;
 
-    let referral_list: Vec<Value> = referrals.into_iter().map(|r| json!({
-        "id": r.0,
-        "campaign_id": r.1,
-        "referrer_contact_id": r.2,
-        "referee_contact_id": r.3,
-        "referral_code": r.4,
-        "source": r.5,
-        "converted": r.6,
-        "converted_at": r.7,
-        "click_count": r.8,
-        "points_earned": r.9,
-        "created_at": r.10,
-    })).collect();
+    let referral_list: Vec<Value> = referrals
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.0,
+                "campaign_id": r.1,
+                "referrer_contact_id": r.2,
+                "referee_contact_id": r.3,
+                "referral_code": r.4,
+                "source": r.5,
+                "converted": r.6,
+                "converted_at": r.7,
+                "click_count": r.8,
+                "points_earned": r.9,
+                "created_at": r.10,
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "code": code_row,
@@ -1330,29 +1439,26 @@ pub async fn account_create_referral(
 ) -> Result<Json<Value>, AppError> {
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
-    
-    let existing = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT referrer_code FROM accounts WHERE id = $1"
-    )
-    .bind(account_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
-    
+
+    let existing =
+        sqlx::query_scalar::<_, Option<String>>("SELECT referrer_code FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
+
     if let Some(code) = existing {
         return Ok(Json(json!({"code": code, "message": "exists"})));
     }
-    
+
     let code = format!("REF{:06}", rand::thread_rng().gen_range(0..999999));
-    
-    sqlx::query(
-        "UPDATE accounts SET referrer_code = $1 WHERE id = $2"
-    )
-    .bind(&code)
-    .bind(account_id)
-    .execute(&s.db)
-    .await?;
-    
+
+    sqlx::query("UPDATE accounts SET referrer_code = $1 WHERE id = $2")
+        .bind(&code)
+        .bind(account_id)
+        .execute(&s.db)
+        .await?;
+
     Ok(Json(json!({"code": code, "message": "created"})))
 }
 
@@ -1369,19 +1475,24 @@ pub async fn get_rewards(
            FROM loyalty_reward_tiers lrt
            JOIN loyalty_programs lp ON lp.id = lrt.program_id
            WHERE lp.is_active = true
-           ORDER BY lrt.points_required ASC"#
+           ORDER BY lrt.points_required ASC"#,
     )
     .bind(account_id)
     .fetch_all(&s.db)
     .await?;
 
-    let rewards_list: Vec<Value> = tiers.into_iter().map(|t| json!({
-        "id": t.0,
-        "program_name": t.1,
-        "name": t.2,
-        "cost": t.3,
-        "requires_approval": t.4,
-    })).collect();
+    let rewards_list: Vec<Value> = tiers
+        .into_iter()
+        .map(|t| {
+            json!({
+                "id": t.0,
+                "program_name": t.1,
+                "name": t.2,
+                "cost": t.3,
+                "requires_approval": t.4,
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "rewards": rewards_list,
@@ -1398,24 +1509,39 @@ pub async fn get_vouchers(
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Try account_id as contact_id (vouchers are issued to contacts)
-    let vouchers = sqlx::query_as::<_, (Uuid, String, String, String, String, Option<chrono::DateTime<chrono::Utc>>)>(
+    let vouchers = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status, v.expires_at
            FROM vouchers v
            WHERE v.issued_to_contact_id = $1
-           ORDER BY v.created_at DESC LIMIT 50"#
+           ORDER BY v.created_at DESC LIMIT 50"#,
     )
     .bind(account_id)
     .fetch_all(&s.db)
     .await?;
 
-    let voucher_list: Vec<Value> = vouchers.into_iter().map(|v| json!({
-        "id": v.0,
-        "discount": v.1,
-        "type": v.2,
-        "code": v.3,
-        "status": v.4,
-        "expires_at": v.5,
-    })).collect();
+    let voucher_list: Vec<Value> = vouchers
+        .into_iter()
+        .map(|v| {
+            json!({
+                "id": v.0,
+                "discount": v.1,
+                "type": v.2,
+                "code": v.3,
+                "status": v.4,
+                "expires_at": v.5,
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "vouchers": voucher_list,
@@ -1446,14 +1572,12 @@ pub async fn survey_response(
 
     // Find the campaign
     let campaign = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1"
+        "SELECT id, name FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
     )
     .bind(&campaign_slug)
     .fetch_optional(&s.db)
     .await?
-    .ok_or_else(|| AppError::NotFound(
-        format!("Campaign not found for slug: {}", campaign_slug)
-    ))?;
+    .ok_or_else(|| AppError::NotFound(format!("Campaign not found for slug: {}", campaign_slug)))?;
 
     let campaign_id = campaign.0;
     let campaign_name = campaign.1;
@@ -1461,26 +1585,23 @@ pub async fn survey_response(
     // If we have a visitor email, find or create the contact
     let contact_id = if let Some(ref email) = payload.visitor_email {
         // Try to find existing contact
-        let existing = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM contacts WHERE email = $1 LIMIT 1"
-        )
-        .bind(email)
-        .fetch_optional(&s.db)
-        .await?;
+        let existing =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM contacts WHERE email = $1 LIMIT 1")
+                .bind(email)
+                .fetch_optional(&s.db)
+                .await?;
 
         match existing {
             Some(cid) => cid,
             None => {
                 // Create new contact
                 let new_id = Uuid::new_v4();
-                sqlx::query(
-                    "INSERT INTO contacts (id, email, notes2) VALUES ($1, $2, $3)"
-                )
-                .bind(new_id)
-                .bind(email)
-                .bind(payload.applied_tags.as_ref().map(|t| t.join(", ")))
-                .execute(&s.db)
-                .await?;
+                sqlx::query("INSERT INTO contacts (id, email, notes2) VALUES ($1, $2, $3)")
+                    .bind(new_id)
+                    .bind(email)
+                    .bind(payload.applied_tags.as_ref().map(|t| t.join(", ")))
+                    .execute(&s.db)
+                    .await?;
                 new_id
             }
         }
@@ -1491,7 +1612,7 @@ pub async fn survey_response(
     // Ensure this contact is enrolled in the ZaarHub Local Pass loyalty program
     // and the city-specific loyalty program
     let local_pass_program = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM loyalty_programs WHERE slug = 'zaarhub-local-pass' LIMIT 1"
+        "SELECT id FROM loyalty_programs WHERE slug = 'zaarhub-local-pass' LIMIT 1",
     )
     .fetch_optional(&s.db)
     .await?;
@@ -1502,12 +1623,11 @@ pub async fn survey_response(
 
     // Also enroll in the city-specific loyalty program if one exists
     let city_program_slug = format!("directory-{}", payload.directory_slug);
-    let city_program: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM loyalty_programs WHERE slug = $1 LIMIT 1"
-    )
-    .bind(&city_program_slug)
-    .fetch_optional(&s.db)
-    .await?;
+    let city_program: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM loyalty_programs WHERE slug = $1 LIMIT 1")
+            .bind(&city_program_slug)
+            .fetch_optional(&s.db)
+            .await?;
 
     if let Some(program_id) = city_program {
         let _ = crate::db::loyalty::find_or_create_member(&s.db, &program_id, &contact_id).await;
@@ -1516,7 +1636,7 @@ pub async fn survey_response(
     // Award 100 Zaarcash — upsert campaign_points_balance
     let existing_balance = sqlx::query_scalar::<_, i32>(
         "SELECT points_balance FROM campaign_points_balance 
-         WHERE campaign_id = $1 AND contact_id = $2"
+         WHERE campaign_id = $1 AND contact_id = $2",
     )
     .bind(campaign_id)
     .bind(contact_id)
@@ -1541,7 +1661,7 @@ pub async fn survey_response(
              SET points_balance = points_balance + 100, 
                  lifetime_points = lifetime_points + 100,
                  updated_at = NOW()
-             WHERE campaign_id = $1 AND contact_id = $2"
+             WHERE campaign_id = $1 AND contact_id = $2",
         )
         .bind(campaign_id)
         .bind(contact_id)
@@ -1557,10 +1677,12 @@ pub async fn survey_response(
         use rand::Rng;
         const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
         let mut rng = rand::thread_rng();
-        (0..8).map(|_| {
-            let idx = rng.gen_range(0..CHARSET.len());
-            CHARSET[idx] as char
-        }).collect()
+        (0..8)
+            .map(|_| {
+                let idx = rng.gen_range(0..CHARSET.len());
+                CHARSET[idx] as char
+            })
+            .collect()
     };
 
     let thirty_days = chrono::Duration::days(30);
@@ -1569,7 +1691,7 @@ pub async fn survey_response(
     sqlx::query(
         "INSERT INTO vouchers (id, campaign_id, issued_to_contact_id, voucher_type, 
          discount_value, redemption_code, expires_at, status)
-         VALUES ($1, $2, $3, 'restaurant_card', '$50.00', $4, $5, 'active')"
+         VALUES ($1, $2, $3, 'restaurant_card', '$50.00', $4, $5, 'active')",
     )
     .bind(voucher_id)
     .bind(campaign_id)
@@ -1581,7 +1703,7 @@ pub async fn survey_response(
 
     // Look up contact name for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT first_name, last_name FROM contacts WHERE id = $1"
+        "SELECT first_name, last_name FROM contacts WHERE id = $1",
     )
     .bind(contact_id)
     .fetch_optional(&s.db)
@@ -1610,7 +1732,8 @@ pub async fn survey_response(
         &campaign_id,
         "voucher_issued",
         &mb_payload,
-    ).await;
+    )
+    .await;
 
     Ok(Json(json!({
         "status": "ok",

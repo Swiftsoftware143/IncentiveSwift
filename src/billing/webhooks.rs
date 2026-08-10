@@ -7,18 +7,14 @@
 use crate::email;
 use crate::error::AppError;
 use crate::state::AppState;
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{extract::State, http::HeaderMap, Json};
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use serde_json::{json, Value};
-use sqlx::Row;
-use uuid::Uuid;
 use rand::Rng;
+use serde_json::{json, Value};
+use sha2::Sha256;
+use sqlx::Row;
 use tracing;
+use uuid::Uuid;
 
 // Re-export these for use outside billing (e.g. admin handler)
 pub use crate::billing::providers::lookup_webhook_secret;
@@ -30,9 +26,9 @@ pub use crate::billing::providers::lookup_webhook_secret;
 /// Verify a Stripe-style HMAC-SHA256 signature header against a known secret.
 fn verify_stripe_signature(payload: &str, sig_header: &str, secret: &str) -> Result<(), AppError> {
     // Stripe v1 signatures are hex-encoded HMAC-SHA256 prefixed with "v1="
-    let sig_value = sig_header
-        .strip_prefix("v1=")
-        .ok_or_else(|| AppError::BadRequest("Missing v1= prefix in signature header".to_string()))?;
+    let sig_value = sig_header.strip_prefix("v1=").ok_or_else(|| {
+        AppError::BadRequest("Missing v1= prefix in signature header".to_string())
+    })?;
 
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .map_err(|_| AppError::Internal("HMAC key initialization failed".to_string()))?;
@@ -43,7 +39,9 @@ fn verify_stripe_signature(payload: &str, sig_header: &str, secret: &str) -> Res
 
     // Constant-time comparison via hex string equality (bounded by hex length)
     if computed_hex != sig_value {
-        return Err(AppError::BadRequest("Invalid webhook signature".to_string()));
+        return Err(AppError::BadRequest(
+            "Invalid webhook signature".to_string(),
+        ));
     }
     Ok(())
 }
@@ -146,7 +144,8 @@ pub async fn paypal_webhook(
 
 /// Generate a random temporary password (12 characters)
 pub fn generate_temp_password() -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
+    const CHARSET: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
     let mut rng = rand::thread_rng();
     (0..12)
         .map(|_| {
@@ -180,12 +179,11 @@ async fn deliver_credentials(
     plan_name: &str,
 ) -> Result<(), AppError> {
     // Look for existing account by email
-    let existing_account = sqlx::query(
-        "SELECT id, password_hash, name FROM accounts WHERE email = $1"
-    )
-    .bind(email)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing_account =
+        sqlx::query("SELECT id, password_hash, name FROM accounts WHERE email = $1")
+            .bind(email)
+            .fetch_optional(&state.db)
+            .await?;
 
     if let Some(account_row) = existing_account {
         let account_id: Uuid = account_row.try_get("id")?;
@@ -195,8 +193,19 @@ async fn deliver_credentials(
         match existing_hash {
             Some(hash) if !hash.is_empty() => {
                 // Account exists with password → send purchase confirmed
-                if let Err(e) = email::send_purchase_confirmed_email(&state.db, email, &existing_name, plan_name).await {
-                    tracing::warn!("Failed to send purchase confirmed email to {}: {}", email, e);
+                if let Err(e) = email::send_purchase_confirmed_email(
+                    &state.db,
+                    email,
+                    &existing_name,
+                    plan_name,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "Failed to send purchase confirmed email to {}: {}",
+                        email,
+                        e
+                    );
                 }
             }
             _ => {
@@ -210,14 +219,24 @@ async fn deliver_credentials(
                     .execute(&state.db)
                     .await?;
 
-                if let Err(e) = email::send_welcome_email(&state.db, email, &existing_name, &temp_password).await {
+                if let Err(e) =
+                    email::send_welcome_email(&state.db, email, &existing_name, &temp_password)
+                        .await
+                {
                     tracing::warn!("Failed to send welcome email to {}: {}", email, e);
                 }
             }
         }
     } else {
         // No account found → create one
-        let slug = format!("acct-{}", Uuid::new_v4().to_string().split('-').next().unwrap_or("new"));
+        let slug = format!(
+            "acct-{}",
+            Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("new")
+        );
         let temp_password = generate_temp_password();
         let hash = hash_password(&temp_password)?;
         let account_id = Uuid::new_v4();
@@ -256,7 +275,9 @@ async fn deliver_credentials(
                 .await?;
         }
 
-        if let Err(e) = email::send_welcome_email(&state.db, email, customer_name, &temp_password).await {
+        if let Err(e) =
+            email::send_welcome_email(&state.db, email, customer_name, &temp_password).await
+        {
             tracing::warn!("Failed to send welcome email to {}: {}", email, e);
         }
     }
@@ -268,10 +289,7 @@ async fn deliver_credentials(
 // Webhook event handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_stripe_checkout_completed(
-    state: &AppState,
-    event: &Value,
-) -> Result<(), AppError> {
+async fn handle_stripe_checkout_completed(state: &AppState, event: &Value) -> Result<(), AppError> {
     tracing::info!("Stripe checkout.session.completed — processing...");
 
     let session = &event["data"]["object"];
@@ -292,32 +310,43 @@ async fn handle_stripe_checkout_completed(
     if result.rows_affected() > 0 {
         // Credential delivery
         let email = session["customer_details"]["email"].as_str();
-        let customer_name = session["customer_details"]["name"].as_str()
+        let customer_name = session["customer_details"]["name"]
+            .as_str()
             .or_else(|| email.and_then(|e| e.split('@').next()))
             .unwrap_or("Customer");
 
         // Get account info from stripe_checkout_sessions
         let session_info = sqlx::query(
-            "SELECT account_id, credits FROM stripe_checkout_sessions WHERE stripe_session_id = $1"
+            "SELECT account_id, credits FROM stripe_checkout_sessions WHERE stripe_session_id = $1",
         )
         .bind(provider_session_id)
         .fetch_optional(&state.db)
         .await?;
 
-        let account_id = session_info.as_ref()
+        let account_id = session_info
+            .as_ref()
             .and_then(|r| r.try_get::<Uuid, _>("account_id").ok())
             .unwrap_or_else(Uuid::new_v4);
 
         let metadata = session.get("metadata");
-    let is_loyalty_sub = metadata.and_then(|m| m.get("loyalty_subscription")).and_then(|v| v.as_str()).unwrap_or("") == "true";
-    let plan_name = if is_loyalty_sub {
-        metadata.and_then(|m| m.get("plan_name")).and_then(|v| v.as_str()).unwrap_or("Plan")
-    } else {
-        "Plan"
-    };
+        let is_loyalty_sub = metadata
+            .and_then(|m| m.get("loyalty_subscription"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            == "true";
+        let plan_name = if is_loyalty_sub {
+            metadata
+                .and_then(|m| m.get("plan_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Plan")
+        } else {
+            "Plan"
+        };
 
         if let Some(email_str) = email {
-            if let Err(e) = deliver_credentials(state, email_str, customer_name, account_id, plan_name).await {
+            if let Err(e) =
+                deliver_credentials(state, email_str, customer_name, account_id, plan_name).await
+            {
                 tracing::warn!("Credential delivery failed for {}: {}", email_str, e);
             }
         }
@@ -334,18 +363,12 @@ async fn handle_stripe_payment_succeeded(
     Ok(())
 }
 
-async fn handle_stripe_payment_failed(
-    _state: &AppState,
-    _event: &Value,
-) -> Result<(), AppError> {
+async fn handle_stripe_payment_failed(_state: &AppState, _event: &Value) -> Result<(), AppError> {
     tracing::info!("Stripe payment_intent.payment_failed — processing...");
     Ok(())
 }
 
-async fn handle_paypal_payment_completed(
-    state: &AppState,
-    event: &Value,
-) -> Result<(), AppError> {
+async fn handle_paypal_payment_completed(state: &AppState, event: &Value) -> Result<(), AppError> {
     tracing::info!("PayPal payment completed — processing...");
 
     let resource = &event["resource"];
@@ -365,7 +388,8 @@ async fn handle_paypal_payment_completed(
 
     if result.rows_affected() > 0 {
         let email = resource["payer"]["email_address"].as_str();
-        let customer_name = resource["payer"]["name"]["given_name"].as_str()
+        let customer_name = resource["payer"]["name"]["given_name"]
+            .as_str()
             .or_else(|| email.and_then(|e| e.split('@').next()))
             .unwrap_or("Customer");
 
@@ -373,7 +397,9 @@ async fn handle_paypal_payment_completed(
         let plan_name = "Plan";
 
         if let Some(email_str) = email {
-            if let Err(e) = deliver_credentials(state, email_str, customer_name, account_id, plan_name).await {
+            if let Err(e) =
+                deliver_credentials(state, email_str, customer_name, account_id, plan_name).await
+            {
                 tracing::warn!("Credential delivery failed for {}: {}", email_str, e);
             }
         }
@@ -382,10 +408,7 @@ async fn handle_paypal_payment_completed(
     Ok(())
 }
 
-async fn handle_paypal_payment_failed(
-    _state: &AppState,
-    _event: &Value,
-) -> Result<(), AppError> {
+async fn handle_paypal_payment_failed(_state: &AppState, _event: &Value) -> Result<(), AppError> {
     tracing::info!("PayPal payment failed/refunded — processing...");
     Ok(())
 }

@@ -37,18 +37,14 @@ pub struct Contact {
 /// If found, update last_seen_at and increment total_entries.
 /// If not found, insert a new record.
 /// Returns the contact id.
-pub async fn upsert_contact(
-    pool: &PgPool,
-    input: &ContactInput,
-) -> Result<Uuid, AppError> {
+pub async fn upsert_contact(pool: &PgPool, input: &ContactInput) -> Result<Uuid, AppError> {
     // First try to find by email (case-insensitive)
     if let Some(ref email) = input.email {
-        let existing: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM contacts WHERE lower(email) = lower($1)"
-        )
-        .bind(email)
-        .fetch_optional(pool)
-        .await?;
+        let existing: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM contacts WHERE lower(email) = lower($1)")
+                .bind(email)
+                .fetch_optional(pool)
+                .await?;
 
         if let Some(id) = existing {
             // Update last_seen_at and increment total_entries
@@ -64,12 +60,10 @@ pub async fn upsert_contact(
 
     // Fallback: try by phone
     if let Some(ref phone) = input.phone {
-        let existing: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM contacts WHERE phone = $1"
-        )
-        .bind(phone)
-        .fetch_optional(pool)
-        .await?;
+        let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM contacts WHERE phone = $1")
+            .bind(phone)
+            .fetch_optional(pool)
+            .await?;
 
         if let Some(id) = existing {
             sqlx::query(
@@ -86,7 +80,7 @@ pub async fn upsert_contact(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name, website)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
     .bind(id)
     .bind(&input.first_name)
@@ -141,10 +135,7 @@ pub async fn list_contacts(
 }
 
 /// Get a single contact by ID with entry history.
-pub async fn get_contact(
-    pool: &PgPool,
-    contact_id: &uuid::Uuid,
-) -> Result<Contact, AppError> {
+pub async fn get_contact(pool: &PgPool, contact_id: &uuid::Uuid) -> Result<Contact, AppError> {
     let contact = sqlx::query_as::<_, Contact>(
         r#"SELECT id, first_name, last_name, email, phone, business_name, website,
                   first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
@@ -160,16 +151,13 @@ pub async fn get_contact(
 
 /// Create a standalone contact (not via entry).
 /// Checks for existing contact by email first to avoid unique constraint violations.
-pub async fn create_contact(
-    pool: &PgPool,
-    input: &ContactInput,
-) -> Result<Contact, AppError> {
+pub async fn create_contact(pool: &PgPool, input: &ContactInput) -> Result<Contact, AppError> {
     // Check for existing contact by email (case-insensitive)
     if let Some(ref email) = input.email {
         let existing: Option<Contact> = sqlx::query_as::<_, Contact>(
             r#"SELECT id, first_name, last_name, email, phone, business_name, website,
                       first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
-               FROM contacts WHERE lower(email) = lower($1)"#
+               FROM contacts WHERE lower(email) = lower($1)"#,
         )
         .bind(email)
         .fetch_optional(pool)
@@ -184,7 +172,7 @@ pub async fn create_contact(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name, website)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
     .bind(id)
     .bind(&input.first_name)
@@ -208,11 +196,20 @@ pub async fn update_contact(
     let existing = get_contact(pool, contact_id).await?;
 
     // Use input values where provided, fall back to existing values
-    let new_first_name = input.first_name.clone().or_else(|| existing.first_name.clone());
-    let new_last_name = input.last_name.clone().or_else(|| existing.last_name.clone());
+    let new_first_name = input
+        .first_name
+        .clone()
+        .or_else(|| existing.first_name.clone());
+    let new_last_name = input
+        .last_name
+        .clone()
+        .or_else(|| existing.last_name.clone());
     let new_email = input.email.clone().or_else(|| existing.email.clone());
     let new_phone = input.phone.clone().or_else(|| existing.phone.clone());
-    let new_business_name = input.business_name.clone().or_else(|| existing.business_name.clone());
+    let new_business_name = input
+        .business_name
+        .clone()
+        .or_else(|| existing.business_name.clone());
     let new_website = input.website.clone().or_else(|| existing.website.clone());
 
     sqlx::query(
@@ -234,10 +231,7 @@ pub async fn update_contact(
 }
 
 /// Delete a contact by id.
-pub async fn delete_contact(
-    pool: &PgPool,
-    contact_id: &Uuid,
-) -> Result<bool, AppError> {
+pub async fn delete_contact(pool: &PgPool, contact_id: &Uuid) -> Result<bool, AppError> {
     let result = sqlx::query("DELETE FROM contacts WHERE id = $1")
         .bind(contact_id)
         .execute(pool)

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IncentiveSwift — Admin Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body{font-family:Inter,system-ui,sans-serif;background:#f8fafc}.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}.btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}.btn-sm{padding:5px 12px;font-size:13px}.btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}.btn-green{background:#059669}.btn-green:hover{background:#047857}.btn-outline{background:0 0;border:1px solid #cbd5e1;color:#475569}.btn-outline:hover{background:#f1f5f9}.btn-blue{background:#7c3aed}.btn-blue:hover{background:#6d28d9}.input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;width:100%;font-size:14px;outline:0}.input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}.modal-content{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:480px;max-height:80vh;overflow-y:auto}.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500}.badge-green{background:#d1fae5;color:#065f46}.badge-red{background:#fee2e2;color:#991b1b}.badge-yellow{background:#fef3c7;color:#92400e}.badge-blue{background:#dbeafe;color:#1e40af}.nav-item{padding:10px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:10px;color:#64748b;font-size:14px;font-weight:500}.nav-item:hover{background:#f1f5f9;color:#1e293b}.nav-item.active{background:#2563eb;color:#fff}.table{width:100%;border-collapse:collapse}.table th{text-align:left;padding:10px 12px;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #e2e8f0}.table td{padding:10px 12px;font-size:14px;border-bottom:1px solid #f1f5f9}.table tr:hover td{background:#f8fafc}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-value{font-size:28px;font-weight:700;color:#1e293b}.stat-label{font-size:13px;color:#64748b;margin-top:4px}.dropdown-item{padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px}.dropdown-item:hover{background:#f1f5f9}.text-red-500{color:#ef4444}@media(max-width:768px){.sidebar{width:60px!important}.sidebar .nav-text{display:none}.sidebar .nav-item{justify-content:center;padding:10px}.main{margin-left:60px!important}}</style>
+</head>
+<body class="min-h-screen">
+<div id="app" class="flex min-h-screen"></div>
+
+<script type="module">
+import { h, render } from 'https://esm.sh/preact@10.26.4';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(h);
+
+const API = (() => {
+  const base = window.location.origin + '/api/v1';
+  let token = sessionStorage.getItem('is_token');
+  let user = JSON.parse(sessionStorage.getItem('is_user') || 'null');
+
+  const headers = () => ({ 'Content-Type': 'application/json', ...(token ? { 'Authorization': 'Bearer ' + token } : {}) });
+  const handle = async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error || d.message || 'Request failed'); return d; };
+  const login = (e, p) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:e,password:p}) }).then(handle);
+  const get = (p) => fetch(base + p, {headers:headers()}).then(handle).catch(e => { console.error(e); throw e; });
+  const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), body:JSON.stringify(b)}).then(handle);
+  const put = (p, b) => fetch(base + p, {method:'PUT', headers:headers(), body:JSON.stringify(b)}).then(handle);
+  const del = (p) => fetch(base + p, {method:'DELETE', headers:headers()}).then(handle);
+  return {
+    login, get, post, put, del,
+    get token(){ return token; },
+    get user(){ return user; },
+    setAuth(t, u){ token = t; user = u; sessionStorage.setItem('is_token', t); sessionStorage.setItem('is_user', JSON.stringify(u)); },
+    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user'); }
+  };
+})();
+
+const S = { view: 'dashboard', loading: false, error: null, views: {} };
+const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
+
+// ---- LOGIN ----
+const LoginView = () => {
+  let email = '', pw = '';
+  const submit = async (e) => { e.preventDefault(); S.loading = true; S.error = null; renderApp();
+    try { const r = await API.login(email, pw); API.setAuth(r.token, r.user); S.view = 'dashboard'; } catch(err) { S.error = err.message; }
+    S.loading = false; renderApp();
+  };
+  return html`<div class="flex items-center justify-center min-h-screen w-full">
+    <div class="card w-full max-w-sm mx-4">
+      <div class="text-center mb-6">
+        <div class="text-3xl mb-2">🎯</div>
+        <h1 class="text-xl font-bold text-gray-800">IncentiveSwift</h1>
+        <p class="text-sm text-gray-500 mt-1">Incentive & Loyalty Platform</p>
+      </div>
+      <form onSubmit=${submit} class="space-y-4">
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Email</label><input type="email" class="input" value=${email} onInput=${e => email = e.target.value} placeholder="admin@company.com" required /></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Password</label><input type="password" class="input" value=${pw} onInput=${e => pw = e.target.value} placeholder="......" required /></div>
+        ${S.error && html`<div class="text-red-600 text-sm bg-red-50 p-2 rounded-lg">${S.error}</div>`}
+        <button type="submit" class="btn w-full">Sign In</button>
+      </form>
+    </div>
+  </div>`;
+};
+
+// ---- DASHBOARD ----
+const Dashboard = () => {
+  const st = viewState('dashboard', {});
+  if (!st._loaded) { st._loaded = true;
+    API.get('/dashboard/stats').then(s => { Object.assign(st, s); renderApp(); }).catch(() => {});
+  }
+  return html`<div>
+    <h2 class="text-xl font-bold mb-4">Dashboard</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="stat-card"><div class="stat-value">${st.total_plans ?? '...'}</div><div class="stat-label">Plans</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_programs ?? '...'}</div><div class="stat-label">Loyalty Programs</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_users ?? '...'}</div><div class="stat-label">Users</div></div>
+    </div>
+  </div>`;
+};
+
+// ---- PORTFOLIO ----
+const Portfolio = () => {
+  const st = viewState('portfolio', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/portfolio'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { try { const data2 = await API.get('/portfolio-companies'); st.list = Array.isArray(data2) ? data2 : []; renderApp(); } catch(e2) { console.error(e2); } } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/portfolio/' + st.editItem.id, data); else await API.post('/portfolio', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete this portfolio company?')) return; await API.del('/portfolio/' + id); load(); };
+  const impersonate = async (company) => {
+    if(!confirm('Impersonate as ' + company.name + '?')) return;
+    try {
+      const r = await API.post('/admin/impersonate', { account_id: company.tenant_id || company.id });
+      sessionStorage.setItem('impersonate_token', r.token);
+      sessionStorage.setItem('impersonate_company', JSON.stringify(company));
+      window.open('https://incentiveswift.com', '_blank');
+    } catch(e) { alert('Impersonation failed: ' + e.message); }
+  };
+
+  const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()) || (c.slug||'').toLowerCase().includes(st.search.toLowerCase()) || (c.domain||'').toLowerCase().includes(st.search.toLowerCase()));
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Company</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(c => html`<tr>
+          <td class="font-medium">${c.name}</td><td class="text-gray-500">${c.slug || c.domain || '-'}</td>
+          <td><button class="btn btn-sm btn-blue" onClick=${() => impersonate(c)} title="Impersonate">🔑 Impersonate</button><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No portfolio companies yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Portfolio Company</h3>
+        ${(() => { let name = st.editItem?.name||'', slug = st.editItem?.slug||'';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Company Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Slug</label><input class="input" value=${slug} onInput=${e => slug = e.target.value} /></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name,slug})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- PLANS ----
+const Plans = () => {
+  const st = viewState('plans', { list: [], showModal: false, editItem: null });
+  const load = async () => { try { const data = await API.get('/plans'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/plans/' + st.editItem.id, data); else await API.post('/plans', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Price</th><th>Interval</th><th>Actions</th></tr></thead>
+        <tbody>${st.list.map(p => html`<tr>
+          <td class="font-medium">${p.name}</td>
+          <td class="text-gray-500">${p.price ? '$' + p.price : '-'}</td>
+          <td class="text-gray-500">${p.interval || '-'}</td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
+        </tr>`)}
+        ${st.list.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
+        ${(() => { let name = st.editItem?.name||'', price = st.editItem?.price||'', interval = st.editItem?.interval||'monthly';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Price</label><input type="number" class="input" value=${price} onInput=${e => price = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Interval</label><select class="input" value=${interval} onChange=${e => interval = e.target.value}><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One Time</option></select></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name,price,interval})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- CAMPAIGNS ----
+const Campaigns = () => {
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/campaigns/' + st.editItem.id, data); else await API.post('/campaigns', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/campaigns/' + id); load(); };
+
+  const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(c => html`<tr>
+          <td class="font-medium">${c.name}</td>
+          <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Campaign</h3>
+        ${(() => { let name = st.editItem?.name||'';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- LOYALTY PROGRAMS ----
+const LoyaltyPrograms = () => {
+  const st = viewState('loyalty', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/loyalty-programs'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/loyalty-programs/' + st.editItem.id, data); else await API.post('/loyalty-programs', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/loyalty-programs/' + id); load(); };
+
+  const filtered = st.list.filter(p => !st.search || (p.name||'').toLowerCase().includes(st.search.toLowerCase()));
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Programs</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(p => html`<tr>
+          <td class="font-medium">${p.name}</td>
+          <td><span class="badge ${p.status === 'active' ? 'badge-green' : 'badge-yellow'}">${p.status || 'draft'}</span></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(p.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No loyalty programs yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Loyalty Program</h3>
+        ${(() => { let name = st.editItem?.name||'';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- SHELL ----
+const App = () => {
+  if(!API.token) return html`<${LoginView} />`;
+
+  const nav = [
+    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    { id: 'portfolio', label: 'Portfolio', icon: '🏢' },
+    { id: 'plans', label: 'Plans', icon: '💳' },
+    { id: 'campaigns', label: 'Campaigns', icon: '📢' },
+    { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' }
+  ];
+
+  const views = { dashboard: Dashboard, portfolio: Portfolio, plans: Plans, campaigns: Campaigns, loyalty: LoyaltyPrograms };
+  const CurrentView = views[S.view] || Dashboard;
+
+  return html`<div class="flex w-full">
+    <div class="sidebar w-56 bg-white border-r border-gray-200 min-h-screen p-3 flex flex-col" style="flex-shrink:0">
+      <div class="flex items-center gap-2 px-3 py-4 mb-2">
+        <span class="text-2xl">🎯</span>
+        <span class="nav-text font-bold text-gray-800">IncentiveSwift</span>
+      </div>
+      <div class="flex-1 space-y-1">
+        ${nav.map(n => html`<div class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; renderApp(); }}>
+          <span>${n.icon}</span><span class="nav-text">${n.label}</span>
+        </div>`)}
+      </div>
+      <div class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }}>
+        <span>🚪</span><span class="nav-text">Logout</span>
+      </div>
+    </div>
+    <div class="main flex-1 p-6 overflow-auto">
+      <${CurrentView} />
+    </div>
+  </div>`;
+};
+
+const renderApp = () => render(html`<${App} />`, document.getElementById('app'));
+renderApp();
+</script>
+</body>
+</html>

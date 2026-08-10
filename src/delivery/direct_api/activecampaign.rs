@@ -38,7 +38,10 @@ pub async fn push_to_activecampaign(
         )));
     }
 
-    tracing::info!("ActiveCampaign contact push successful for {}", payload.contact.email.as_deref().unwrap_or("unknown"));
+    tracing::info!(
+        "ActiveCampaign contact push successful for {}",
+        payload.contact.email.as_deref().unwrap_or("unknown")
+    );
     Ok(())
 }
 

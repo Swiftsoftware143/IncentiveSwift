@@ -1,8 +1,8 @@
 //! Integration target handlers — CRUD for integration_targets table.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -61,7 +61,7 @@ pub async fn list_integration_targets(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active, created_at, updated_at
            FROM integration_targets
-           ORDER BY name"#
+           ORDER BY name"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -78,7 +78,8 @@ pub async fn create_integration_target(
     let id = Uuid::new_v4();
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
-    let portfolio_company_id = body.portfolio_company_id
+    let portfolio_company_id = body
+        .portfolio_company_id
         .and_then(|s| Uuid::parse_str(&s).ok());
     let provider = body.provider.unwrap_or_else(|| "webhook".to_string());
     let events = body.events.unwrap_or_default();
@@ -103,7 +104,7 @@ pub async fn create_integration_target(
     let target = sqlx::query_as::<_, IntegrationTarget>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active, created_at, updated_at
-           FROM integration_targets WHERE id = $1"#
+           FROM integration_targets WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -119,12 +120,12 @@ pub async fn update_integration_target(
     user: AuthenticatedUser,
     Json(body): Json<UpdateIntegrationTargetInput>,
 ) -> Result<Json<Value>, AppError> {
-    let target_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
+    let target_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
 
     let existing = sqlx::query(
         r#"SELECT name, provider, webhook_url, api_key, events, is_active
-           FROM integration_targets WHERE id = $1"#
+           FROM integration_targets WHERE id = $1"#,
     )
     .bind(target_id)
     .fetch_optional(&state.db)
@@ -133,13 +134,18 @@ pub async fn update_integration_target(
 
     let name = body.name.unwrap_or_else(|| existing.get("name"));
     let provider = body.provider.unwrap_or_else(|| existing.get("provider"));
-    let webhook_url = body.webhook_url.unwrap_or_else(|| existing.get("webhook_url"));
+    let webhook_url = body
+        .webhook_url
+        .unwrap_or_else(|| existing.get("webhook_url"));
     let api_key: Option<String> = body.api_key.or_else(|| existing.get("api_key"));
     let events: Vec<String> = body.events.unwrap_or_else(|| existing.get("events"));
     let is_active = body.is_active.unwrap_or_else(|| existing.get("is_active"));
 
     let portfolio_company_id: Option<Uuid> = if let Some(ref pcid) = body.portfolio_company_id {
-        Some(Uuid::parse_str(pcid).map_err(|_| AppError::BadRequest("Invalid portfolio_company_id".to_string()))?)
+        Some(
+            Uuid::parse_str(pcid)
+                .map_err(|_| AppError::BadRequest("Invalid portfolio_company_id".to_string()))?,
+        )
     } else {
         sqlx::query_scalar("SELECT portfolio_company_id FROM integration_targets WHERE id = $1")
             .bind(target_id)
@@ -152,7 +158,7 @@ pub async fn update_integration_target(
         r#"UPDATE integration_targets SET
                name = $1, provider = $2, webhook_url = $3, api_key = $4,
                events = $5, is_active = $6, portfolio_company_id = $7, updated_at = now()
-           WHERE id = $8"#
+           WHERE id = $8"#,
     )
     .bind(&name)
     .bind(&provider)
@@ -168,7 +174,7 @@ pub async fn update_integration_target(
     let target = sqlx::query_as::<_, IntegrationTarget>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active, created_at, updated_at
-           FROM integration_targets WHERE id = $1"#
+           FROM integration_targets WHERE id = $1"#,
     )
     .bind(target_id)
     .fetch_one(&state.db)
@@ -183,8 +189,8 @@ pub async fn delete_integration_target(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let target_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
+    let target_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
 
     let result = sqlx::query("DELETE FROM integration_targets WHERE id = $1")
         .bind(target_id)
@@ -192,7 +198,9 @@ pub async fn delete_integration_target(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Integration target not found".to_string()));
+        return Err(AppError::NotFound(
+            "Integration target not found".to_string(),
+        ));
     }
 
     Ok(Json(json!({ "status": "deleted", "id": id })))

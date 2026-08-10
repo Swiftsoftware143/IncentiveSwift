@@ -3,15 +3,12 @@
 
 use axum::{
     body::Body,
-    http::{Request, HeaderValue, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
     middleware::Next,
     response::Response,
 };
 
-pub async fn add_security_headers(
-    req: Request<Body>,
-    next: Next,
-) -> Result<Response, StatusCode> {
+pub async fn add_security_headers(req: Request<Body>, next: Next) -> Result<Response, StatusCode> {
     let mut response = next.run(req).await;
 
     let headers = response.headers_mut();
@@ -20,18 +17,12 @@ pub async fn add_security_headers(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(
-        "X-Frame-Options",
-        HeaderValue::from_static("DENY"),
-    );
+    headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     headers.insert(
         "Referrer-Policy",
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
-    headers.insert(
-        "X-XSS-Protection",
-        HeaderValue::from_static("0"),
-    );
+    headers.insert("X-XSS-Protection", HeaderValue::from_static("0"));
     headers.insert(
         "Strict-Transport-Security",
         HeaderValue::from_static("max-age=63072000; includeSubDomains; preload"),

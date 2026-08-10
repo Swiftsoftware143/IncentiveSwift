@@ -36,9 +36,18 @@ pub async fn push_contact_to_coreswift(
     }
 
     // Query contact details from IncentiveSwift
-    let contact = match sqlx::query_as::<_, (String, String, Option<String>, Option<String>, Option<String>)>(
+    let contact = match sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         r#"SELECT first_name, last_name, email, phone, business_name
-           FROM contacts WHERE id = $1"#
+           FROM contacts WHERE id = $1"#,
     )
     .bind(contact_id)
     .fetch_optional(&state.db)
@@ -81,7 +90,8 @@ pub async fn push_contact_to_coreswift(
     let url = format!("{}/api/v1/webhooks/cross-app/tag-sync", coreswift_url);
     let internal_key = &state.config.internal_sync_key;
 
-    let mut req = state.http_client
+    let mut req = state
+        .http_client
         .post(&url)
         .json(&payload)
         .timeout(std::time::Duration::from_secs(10));
@@ -96,21 +106,28 @@ pub async fn push_contact_to_coreswift(
             if status.is_success() {
                 tracing::info!(
                     "CoreSwift push successful for contact {} ({}), triggered_by={}",
-                    contact_id, email_str, triggered_by
+                    contact_id,
+                    email_str,
+                    triggered_by
                 );
             } else {
-                let body = resp.text().await.unwrap_or_default().chars().take(300).collect::<String>();
+                let body = resp
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(300)
+                    .collect::<String>();
                 tracing::warn!(
                     "CoreSwift push returned {} for contact {}: {}",
-                    status, contact_id, body
+                    status,
+                    contact_id,
+                    body
                 );
             }
         }
         Err(e) => {
-            tracing::warn!(
-                "CoreSwift push failed for contact {}: {}",
-                contact_id, e
-            );
+            tracing::warn!("CoreSwift push failed for contact {}: {}", contact_id, e);
         }
     }
 }
@@ -125,7 +142,7 @@ pub async fn get_contact_tags(state: &AppState, contact_id: &Uuid) -> Vec<String
         r#"SELECT DISTINCT unnest(tags_applied) AS tag
            FROM entries
            WHERE contact_id = $1 AND tags_applied IS NOT NULL
-           ORDER BY tag"#
+           ORDER BY tag"#,
     )
     .bind(contact_id)
     .fetch_all(&state.db)
@@ -139,12 +156,10 @@ pub async fn get_tag_names(state: &AppState, tag_uuids: &[Uuid]) -> Vec<String> 
     if tag_uuids.is_empty() {
         return vec![];
     }
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM tags WHERE id = ANY($1)"
-    )
-    .bind(tag_uuids)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    let names: Vec<String> = sqlx::query_scalar("SELECT name FROM tags WHERE id = ANY($1)")
+        .bind(tag_uuids)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
     names
 }

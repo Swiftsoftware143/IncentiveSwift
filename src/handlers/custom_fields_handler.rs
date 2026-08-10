@@ -1,9 +1,12 @@
 //! Campaign custom fields — CRUD for per-campaign entry form fields
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
-use axum::{extract::{Path, State}, Json};
+use crate::state::AppState;
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;

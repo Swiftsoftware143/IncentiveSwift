@@ -13,8 +13,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 use tracing;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -98,13 +98,12 @@ pub async fn register_business(
     let biz_name = req.name;
 
     // Check if account already exists by email
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE email = $1 LIMIT 1"
-    )
-    .bind(&req.email)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1 LIMIT 1")
+            .bind(&req.email)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
 
     if let Some(id) = existing {
         // Return existing key prefix
@@ -116,19 +115,23 @@ pub async fn register_business(
         .await?
         .flatten();
 
-        return Ok((StatusCode::OK, Json(json!(RegisterBusinessResponse {
-            business_id: id,
-            api_key: "".to_string(), // don't re-expose existing key
-            api_key_prefix: prefix.unwrap_or_default(),
-            name: biz_name,
-            slug: biz_slug,
-            message: "Business account already exists. Using existing account.".into(),
-        }))));
+        return Ok((
+            StatusCode::OK,
+            Json(json!(RegisterBusinessResponse {
+                business_id: id,
+                api_key: "".to_string(), // don't re-expose existing key
+                api_key_prefix: prefix.unwrap_or_default(),
+                name: biz_name,
+                slug: biz_slug,
+                message: "Business account already exists. Using existing account.".into(),
+            })),
+        ));
     }
 
     // Create account (tenant)
     let business_id = Uuid::new_v4();
-    let slug: String = biz_slug.chars()
+    let slug: String = biz_slug
+        .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-')
         .take(50)
         .collect();
@@ -158,7 +161,7 @@ pub async fn register_business(
     });
     sqlx::query(
         r#"INSERT INTO portfolio_companies (id, account_id, name, slug, settings)
-           VALUES ($1, $2, $3, $4, $5)"#
+           VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(pf_id)
     .bind(business_id)
@@ -185,27 +188,41 @@ pub async fn register_business(
 
     sqlx::query(
         r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, true)"#
+           VALUES ($1, $2, $3, $4, $5, $6, true)"#,
     )
     .bind(business_id)
     .bind(business_id)
     .bind(&format!("{} API Key", biz_name))
     .bind(&key_hash)
     .bind(&key_prefix)
-    .bind(&json!(["campaigns:read","campaigns:write","contacts:read","contacts:write","stats:read"]))
+    .bind(&json!([
+        "campaigns:read",
+        "campaigns:write",
+        "contacts:read",
+        "contacts:write",
+        "stats:read"
+    ]))
     .execute(&s.db)
     .await?;
 
-    tracing::info!("[business] Registered business '{}' ({}), prefix={}", biz_name, business_id, key_prefix);
-
-    Ok((StatusCode::CREATED, Json(json!(RegisterBusinessResponse {
+    tracing::info!(
+        "[business] Registered business '{}' ({}), prefix={}",
+        biz_name,
         business_id,
-        api_key,
-        api_key_prefix: key_prefix,
-        name: biz_name.clone(),
-        slug,
-        message: format!("Business '{}' registered successfully.", biz_name),
-    }))))
+        key_prefix
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!(RegisterBusinessResponse {
+            business_id,
+            api_key,
+            api_key_prefix: key_prefix,
+            name: biz_name.clone(),
+            slug,
+            message: format!("Business '{}' registered successfully.", biz_name),
+        })),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -222,7 +239,7 @@ pub async fn get_business_stats(
 
     // Get account info
     let biz: (Uuid, String, Option<String>, Option<Value>) = sqlx::query_as(
-        "SELECT id, name, slug, NULL::jsonb as settings FROM accounts WHERE id = $1"
+        "SELECT id, name, slug, NULL::jsonb as settings FROM accounts WHERE id = $1",
     )
     .bind(business_id)
     .fetch_optional(&s.db)
@@ -241,12 +258,11 @@ pub async fn get_business_stats(
     .unwrap_or(0);
 
     // Total checkins (loyalty activity at this business)
-    let total_checkins: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(COUNT(*), 0) FROM loyalty_checkins WHERE 1=0"
-    )
-    .fetch_one(&s.db)
-    .await
-    .unwrap_or(0);
+    let total_checkins: i64 =
+        sqlx::query_scalar("SELECT COALESCE(COUNT(*), 0) FROM loyalty_checkins WHERE 1=0")
+            .fetch_one(&s.db)
+            .await
+            .unwrap_or(0);
 
     // Total rewards redeemed
     let total_redemptions: i64 = sqlx::query_scalar(
@@ -258,7 +274,7 @@ pub async fn get_business_stats(
 
     // Active campaigns
     let active_campaigns: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(COUNT(*), 0) FROM campaigns WHERE account_id = $1 AND status = 'active'"
+        "SELECT COALESCE(COUNT(*), 0) FROM campaigns WHERE account_id = $1 AND status = 'active'",
     )
     .bind(biz_id)
     .fetch_one(&s.db)
@@ -267,20 +283,40 @@ pub async fn get_business_stats(
 
     // Campaign summaries
     let campaigns: Vec<BusinessCampaignSummary> = if query.include_campaigns.unwrap_or(true) {
-        let rows: Vec<(Uuid, String, String, String, String, Option<i64>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+        let rows: Vec<(
+            Uuid,
+            String,
+            String,
+            String,
+            String,
+            Option<i64>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
             r#"SELECT c.id, c.name, c.slug, c.type, c.status,
                       (SELECT COUNT(*) FROM entries e WHERE e.campaign_id = c.id) as entry_count,
                       c.created_at
                FROM campaigns c WHERE c.account_id = $1
-               ORDER BY c.created_at DESC LIMIT 20"#
+               ORDER BY c.created_at DESC LIMIT 20"#,
         )
         .bind(biz_id)
         .fetch_all(&s.db)
         .await?;
-        rows.into_iter().map(|(id, name, slug, ctype, status, count, created)| {
-            BusinessCampaignSummary { id, name, slug, campaign_type: ctype, status, entry_count: count, created_at: created }
-        }).collect()
-    } else { vec![] };
+        rows.into_iter()
+            .map(
+                |(id, name, slug, ctype, status, count, created)| BusinessCampaignSummary {
+                    id,
+                    name,
+                    slug,
+                    campaign_type: ctype,
+                    status,
+                    entry_count: count,
+                    created_at: created,
+                },
+            )
+            .collect()
+    } else {
+        vec![]
+    };
 
     Ok(Json(json!(BusinessStats {
         business_id: biz_id,
@@ -334,7 +370,9 @@ pub async fn get_campaign_widget(
         }),
     };
 
-    Ok(Json(json!({ "campaign_id": id, "campaign_slug": cslug, "widget": widget })))
+    Ok(Json(
+        json!({ "campaign_id": id, "campaign_slug": cslug, "widget": widget }),
+    ))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -345,72 +383,99 @@ pub async fn admin_list_businesses(
     State(s): State<AppState>,
     Query(query): Query<BusinessListQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    let rows: Vec<(Uuid, String, String, Option<Value>, Option<chrono::DateTime<chrono::Utc>>)> = if let Some(ref dir) = query.directory_slug {
+    let rows: Vec<(
+        Uuid,
+        String,
+        String,
+        Option<Value>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = if let Some(ref dir) = query.directory_slug {
         sqlx::query_as(
             r#"SELECT pf.id, pf.name, pf.slug, pf.settings, pf.created_at
                FROM portfolio_companies pf
                WHERE pf.settings->>'source' = 'multidirectory'
                  AND pf.settings->>'directory_slug' = $1
-               ORDER BY pf.created_at DESC"#
-        ).bind(dir).fetch_all(&s.db).await?
+               ORDER BY pf.created_at DESC"#,
+        )
+        .bind(dir)
+        .fetch_all(&s.db)
+        .await?
     } else {
         sqlx::query_as(
             r#"SELECT pf.id, pf.name, pf.slug, pf.settings, pf.created_at
                FROM portfolio_companies pf
                WHERE pf.settings->>'source' = 'multidirectory'
-               ORDER BY pf.created_at DESC"#
-        ).fetch_all(&s.db).await?
+               ORDER BY pf.created_at DESC"#,
+        )
+        .fetch_all(&s.db)
+        .await?
     };
 
-    let businesses: Vec<Value> = rows.into_iter().map(|(id, name, slug, settings, created)| {
-        let cfg = settings.unwrap_or(json!({}));
-        json!({
-            "id": id, "name": name, "slug": slug,
-            "email": cfg.get("email"),
-            "business_type": cfg.get("business_type"),
-            "directory_slug": cfg.get("directory_slug"),
-            "phone": cfg.get("phone"),
-            "listing_id": cfg.get("listing_id"),
-            "created_at": created,
+    let businesses: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, name, slug, settings, created)| {
+            let cfg = settings.unwrap_or(json!({}));
+            json!({
+                "id": id, "name": name, "slug": slug,
+                "email": cfg.get("email"),
+                "business_type": cfg.get("business_type"),
+                "directory_slug": cfg.get("directory_slug"),
+                "phone": cfg.get("phone"),
+                "listing_id": cfg.get("listing_id"),
+                "created_at": created,
+            })
         })
-    }).collect();
+        .collect();
 
-    Ok(Json(json!({ "businesses": businesses, "total": businesses.len() })))
+    Ok(Json(
+        json!({ "businesses": businesses, "total": businesses.len() }),
+    ))
 }
 
 pub async fn admin_get_business(
     State(s): State<AppState>,
     Path(business_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    let biz: Option<(Uuid, String, String, Option<Value>, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-        "SELECT id, name, slug, settings, created_at FROM portfolio_companies WHERE id = $1"
+    let biz: Option<(
+        Uuid,
+        String,
+        String,
+        Option<Value>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT id, name, slug, settings, created_at FROM portfolio_companies WHERE id = $1",
     )
     .bind(business_id)
     .fetch_optional(&s.db)
     .await?;
 
-    let (id, name, slug, settings, created) = biz
-        .ok_or(AppError::NotFound("Business not found".into()))?;
+    let (id, name, slug, settings, created) =
+        biz.ok_or(AppError::NotFound("Business not found".into()))?;
 
     let biz_settings = settings.unwrap_or(json!({}));
 
     // Get account_id from portfolio_company
-    let account_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT account_id FROM portfolio_companies WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten();
+    let account_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT account_id FROM portfolio_companies WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten();
 
-    let api_key_info: Option<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = if let Some(aid) = account_id {
+    let api_key_info: Option<(String, bool, Option<chrono::DateTime<chrono::Utc>>)> = if let Some(
+        aid,
+    ) =
+        account_id
+    {
         sqlx::query_as(
             "SELECT prefix, is_active, created_at FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1"
         )
         .bind(aid)
         .fetch_optional(&s.db)
         .await?
-    } else { None };
+    } else {
+        None
+    };
 
     let (total_leads, active_campaigns): (i64, i64) = if let Some(aid) = account_id {
         let leads: i64 = sqlx::query_scalar(
@@ -420,7 +485,9 @@ pub async fn admin_get_business(
             "SELECT COALESCE(COUNT(*), 0) FROM campaigns WHERE account_id = $1 AND status = 'active'"
         ).bind(aid).fetch_one(&s.db).await.unwrap_or(0);
         (leads, active)
-    } else { (0, 0) };
+    } else {
+        (0, 0)
+    };
 
     Ok(Json(json!({
         "id": id, "name": name, "slug": slug,
@@ -444,14 +511,13 @@ pub async fn admin_rotate_business_key(
     Path(pf_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     // Get the account_id from portfolio_company
-    let account_id: Uuid = sqlx::query_scalar(
-        "SELECT account_id FROM portfolio_companies WHERE id = $1"
-    )
-    .bind(pf_id)
-    .fetch_optional(&s.db)
-    .await?
-    .flatten()
-    .ok_or(AppError::NotFound("Business not found".into()))?;
+    let account_id: Uuid =
+        sqlx::query_scalar("SELECT account_id FROM portfolio_companies WHERE id = $1")
+            .bind(pf_id)
+            .fetch_optional(&s.db)
+            .await?
+            .flatten()
+            .ok_or(AppError::NotFound("Business not found".into()))?;
 
     // Deactivate old keys
     sqlx::query("UPDATE api_keys SET is_active = false, updated_at = NOW() WHERE tenant_id = $1")
@@ -480,14 +546,20 @@ pub async fn admin_rotate_business_key(
 
     sqlx::query(
         r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, true)"#
+           VALUES ($1, $2, $3, $4, $5, $6, true)"#,
     )
     .bind(account_id)
     .bind(account_id)
     .bind(&format!("{} API Key", biz_name))
     .bind(&key_hash)
     .bind(&key_prefix)
-    .bind(&json!(["campaigns:read","campaigns:write","contacts:read","contacts:write","stats:read"]))
+    .bind(&json!([
+        "campaigns:read",
+        "campaigns:write",
+        "contacts:read",
+        "contacts:write",
+        "stats:read"
+    ]))
     .execute(&s.db)
     .await?;
 
@@ -514,7 +586,9 @@ async fn verify_business_auth(
         .unwrap_or_else(|_| "internal-sync-key-placeholder".to_string());
 
     if let Some(key) = headers.get("X-Internal-Key").and_then(|v| v.to_str().ok()) {
-        if key == internal_key { return Ok(()); }
+        if key == internal_key {
+            return Ok(());
+        }
     }
 
     if let Some(auth) = headers.get("Authorization").and_then(|v| v.to_str().ok()) {

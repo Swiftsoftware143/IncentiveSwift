@@ -48,7 +48,7 @@ pub async fn get_active_milestones(
                   cooldown_hours, is_active, sort_order, created_at
            FROM campaign_milestones
            WHERE campaign_id = $1 AND is_active = true
-           ORDER BY points_required ASC"#
+           ORDER BY points_required ASC"#,
     )
     .bind(campaign_id)
     .fetch_all(pool)
@@ -67,7 +67,7 @@ pub async fn get_achieved_milestones(
         r#"SELECT id, milestone_id, campaign_id, contact_id,
                   action_executed, action_result, achieved_at
            FROM campaign_milestones_achieved
-           WHERE campaign_id = $1 AND contact_id = $2"#
+           WHERE campaign_id = $1 AND contact_id = $2"#,
     )
     .bind(campaign_id)
     .bind(contact_id)
@@ -89,7 +89,7 @@ async fn record_achieved(
         r#"INSERT INTO campaign_milestones_achieved
            (milestone_id, campaign_id, contact_id, action_executed, action_result)
            VALUES ($1, $2, $3, true, $4)
-           ON CONFLICT (milestone_id, contact_id) DO NOTHING"#
+           ON CONFLICT (milestone_id, contact_id) DO NOTHING"#,
     )
     .bind(milestone_id)
     .bind(campaign_id)
@@ -115,7 +115,8 @@ pub async fn check_milestones(
     }
 
     let achieved = get_achieved_milestones(&state.db, campaign_id, contact_id).await?;
-    let achieved_set: std::collections::HashSet<Uuid> = achieved.iter().map(|a| a.milestone_id).collect();
+    let achieved_set: std::collections::HashSet<Uuid> =
+        achieved.iter().map(|a| a.milestone_id).collect();
 
     let mut triggered = Vec::new();
 
@@ -159,7 +160,11 @@ async fn fire_award_coupon(
     milestone: &CampaignMilestone,
 ) -> Result<Option<Value>, AppError> {
     let coupon_code = format!("MS-{:06x}", Uuid::new_v4().as_u128() % 0xFFFFFF);
-    let value = milestone.action_config.get("value").and_then(|v| v.as_i64()).unwrap_or(0);
+    let value = milestone
+        .action_config
+        .get("value")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
 
     sqlx::query(
         r#"INSERT INTO campaign_wins (campaign_id, contact_id, prize_label, coupon_code, is_redeemed)
@@ -183,12 +188,16 @@ async fn fire_bonus_entry(
     contact_id: &Uuid,
     milestone: &CampaignMilestone,
 ) -> Result<Option<Value>, AppError> {
-    let spin_count = milestone.action_config.get("spin_count").and_then(|v| v.as_i64()).unwrap_or(1);
+    let spin_count = milestone
+        .action_config
+        .get("spin_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1);
 
     for _ in 0..spin_count {
         sqlx::query(
             r#"INSERT INTO entries (campaign_id, contact_id, source, is_bonus)
-               VALUES ($1, $2, 'milestone', true)"#
+               VALUES ($1, $2, 'milestone', true)"#,
         )
         .bind(campaign_id)
         .bind(contact_id)
@@ -206,7 +215,9 @@ async fn fire_webhook_action(
     contact_id: &Uuid,
     milestone: &CampaignMilestone,
 ) -> Result<Option<Value>, AppError> {
-    let url = milestone.action_config.get("url")
+    let url = milestone
+        .action_config
+        .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
@@ -268,7 +279,7 @@ pub async fn create_milestone(
         r#"INSERT INTO campaign_milestones
            (id, campaign_id, name, description, points_required, action_type, action_config,
             is_repeatable, max_repeats, cooldown_hours)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
     )
     .bind(id)
     .bind(campaign_id)
@@ -284,13 +295,12 @@ pub async fn create_milestone(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    let milestone = sqlx::query_as::<_, CampaignMilestone>(
-        "SELECT * FROM campaign_milestones WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    let milestone =
+        sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
     Ok(milestone)
 }
@@ -304,21 +314,41 @@ pub async fn update_milestone(
     // Use placeholders array; each entry corresponds to a bind
     let mut fields: Vec<String> = Vec::new();
 
-    if input.name.is_some() { fields.push("name".to_string()); }
-    if input.description.is_some() { fields.push("description".to_string()); }
-    if input.points_required.is_some() { fields.push("points_required".to_string()); }
-    if input.action_type.is_some() { fields.push("action_type".to_string()); }
-    if input.action_config.is_some() { fields.push("action_config".to_string()); }
-    if input.is_repeatable.is_some() { fields.push("is_repeatable".to_string()); }
-    if input.max_repeats.is_some() { fields.push("max_repeats".to_string()); }
-    if input.cooldown_hours.is_some() { fields.push("cooldown_hours".to_string()); }
-    if input.is_active.is_some() { fields.push("is_active".to_string()); }
+    if input.name.is_some() {
+        fields.push("name".to_string());
+    }
+    if input.description.is_some() {
+        fields.push("description".to_string());
+    }
+    if input.points_required.is_some() {
+        fields.push("points_required".to_string());
+    }
+    if input.action_type.is_some() {
+        fields.push("action_type".to_string());
+    }
+    if input.action_config.is_some() {
+        fields.push("action_config".to_string());
+    }
+    if input.is_repeatable.is_some() {
+        fields.push("is_repeatable".to_string());
+    }
+    if input.max_repeats.is_some() {
+        fields.push("max_repeats".to_string());
+    }
+    if input.cooldown_hours.is_some() {
+        fields.push("cooldown_hours".to_string());
+    }
+    if input.is_active.is_some() {
+        fields.push("is_active".to_string());
+    }
 
     if fields.is_empty() {
         return Err(AppError::BadRequest("No fields to update".to_string()));
     }
 
-    let set_clauses: Vec<String> = fields.iter().enumerate()
+    let set_clauses: Vec<String> = fields
+        .iter()
+        .enumerate()
         .map(|(i, name)| format!("{} = ${}", name, i + 1))
         .collect();
     let set_clause = set_clauses.join(", ");
@@ -330,36 +360,51 @@ pub async fn update_milestone(
 
     let mut query = sqlx::query(&sql);
 
-    if let Some(v) = &input.name { query = query.bind(v); }
-    if let Some(v) = &input.description { query = query.bind(v); }
-    if let Some(v) = input.points_required { query = query.bind(v); }
-    if let Some(v) = &input.action_type { query = query.bind(v); }
-    if let Some(v) = &input.action_config { query = query.bind(v); }
-    if let Some(v) = input.is_repeatable { query = query.bind(v); }
-    if let Some(v) = input.max_repeats { query = query.bind(v); }
-    if let Some(v) = input.cooldown_hours { query = query.bind(v); }
-    if let Some(v) = input.is_active { query = query.bind(v); }
+    if let Some(v) = &input.name {
+        query = query.bind(v);
+    }
+    if let Some(v) = &input.description {
+        query = query.bind(v);
+    }
+    if let Some(v) = input.points_required {
+        query = query.bind(v);
+    }
+    if let Some(v) = &input.action_type {
+        query = query.bind(v);
+    }
+    if let Some(v) = &input.action_config {
+        query = query.bind(v);
+    }
+    if let Some(v) = input.is_repeatable {
+        query = query.bind(v);
+    }
+    if let Some(v) = input.max_repeats {
+        query = query.bind(v);
+    }
+    if let Some(v) = input.cooldown_hours {
+        query = query.bind(v);
+    }
+    if let Some(v) = input.is_active {
+        query = query.bind(v);
+    }
 
-    query.bind(milestone_id)
+    query
+        .bind(milestone_id)
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-    let milestone = sqlx::query_as::<_, CampaignMilestone>(
-        "SELECT * FROM campaign_milestones WHERE id = $1"
-    )
-    .bind(milestone_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    let milestone =
+        sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")
+            .bind(milestone_id)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
 
     Ok(milestone)
 }
 
-pub async fn delete_milestone(
-    pool: &sqlx::PgPool,
-    milestone_id: &Uuid,
-) -> Result<(), AppError> {
+pub async fn delete_milestone(pool: &sqlx::PgPool, milestone_id: &Uuid) -> Result<(), AppError> {
     sqlx::query("DELETE FROM campaign_milestones WHERE id = $1")
         .bind(milestone_id)
         .execute(pool)
@@ -378,7 +423,7 @@ pub async fn list_milestones(
                   cooldown_hours, is_active, sort_order, created_at
            FROM campaign_milestones
            WHERE campaign_id = $1
-           ORDER BY sort_order ASC, points_required ASC"#
+           ORDER BY sort_order ASC, points_required ASC"#,
     )
     .bind(campaign_id)
     .fetch_all(pool)

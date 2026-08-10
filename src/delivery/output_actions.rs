@@ -59,18 +59,34 @@ pub async fn execute_output_actions(
 
         if !webhook_url.is_empty() {
             let payload = build_entry_payload(
-                campaign_name, campaign_slug, campaign_type,
-                contact_first_name, contact_last_name, contact_email, contact_phone,
-                contact_website, contact_business_name,
-                outcome, tags, score, answers,
-                utm_source, utm_medium, utm_campaign, referrer_url, page_url,
+                campaign_name,
+                campaign_slug,
+                campaign_type,
+                contact_first_name,
+                contact_last_name,
+                contact_email,
+                contact_phone,
+                contact_website,
+                contact_business_name,
+                outcome,
+                tags,
+                score,
+                answers,
+                utm_source,
+                utm_medium,
+                utm_campaign,
+                referrer_url,
+                page_url,
             );
             let _ = fire_webhook(&state.http_client, webhook_url, &payload).await;
         }
 
         // Also fire legacy CoreSwift sync
         let _ = crate::delivery::coreswift_sync::sync_entry_to_coreswift(
-            state, campaign_id, campaign_name, campaign_slug,
+            state,
+            campaign_id,
+            campaign_name,
+            campaign_slug,
             contact_id,
             &Some(contact_first_name.to_string()),
             &Some(contact_last_name.to_string()),
@@ -78,40 +94,78 @@ pub async fn execute_output_actions(
             &Some(contact_phone.to_string()),
             &Some(contact_website.to_string()),
             &Some(contact_business_name.to_string()),
-            account_id, outcome, answers, utm_source,
-        ).await;
+            account_id,
+            outcome,
+            answers,
+            utm_source,
+        )
+        .await;
 
         return;
     }
 
     // Execute each action
     for action in &actions {
-        let enabled = action.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-        if !enabled { continue; }
+        let enabled = action
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if !enabled {
+            continue;
+        }
 
-        let action_type = action.get("action_type").and_then(|v| v.as_str()).unwrap_or("");
-        let action_config = action.get("config").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        let action_type = action
+            .get("action_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let action_config = action
+            .get("config")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
         let action_config_val = action.get("config").cloned().unwrap_or_default();
 
         let payload = build_entry_payload(
-            campaign_name, campaign_slug, campaign_type,
-            contact_first_name, contact_last_name, contact_email, contact_phone,
-            contact_website, contact_business_name,
-            outcome, tags, score, answers,
-            utm_source, utm_medium, utm_campaign, referrer_url, page_url,
+            campaign_name,
+            campaign_slug,
+            campaign_type,
+            contact_first_name,
+            contact_last_name,
+            contact_email,
+            contact_phone,
+            contact_website,
+            contact_business_name,
+            outcome,
+            tags,
+            score,
+            answers,
+            utm_source,
+            utm_medium,
+            utm_campaign,
+            referrer_url,
+            page_url,
         );
 
         match action_type {
             "webhook" => {
-                let url = action_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let url = action_config
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !url.is_empty() {
-                    let method = action_config.get("method").and_then(|v| v.as_str()).unwrap_or("POST");
+                    let method = action_config
+                        .get("method")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("POST");
                     fire_webhook_with_method(&state.http_client, url, method, &payload).await;
                 }
             }
             "coreswift_contact" => {
                 let _ = crate::delivery::coreswift_sync::sync_entry_to_coreswift(
-                    state, campaign_id, campaign_name, campaign_slug,
+                    state,
+                    campaign_id,
+                    campaign_name,
+                    campaign_slug,
                     contact_id,
                     &Some(contact_first_name.to_string()),
                     &Some(contact_last_name.to_string()),
@@ -119,26 +173,48 @@ pub async fn execute_output_actions(
                     &Some(contact_phone.to_string()),
                     &Some(contact_website.to_string()),
                     &Some(contact_business_name.to_string()),
-                    account_id, outcome, answers, utm_source,
-                ).await;
+                    account_id,
+                    outcome,
+                    answers,
+                    utm_source,
+                )
+                .await;
 
                 // Also add to list if configured
-                let list_id = action_config.get("list_id").and_then(|v| v.as_str()).unwrap_or("");
+                let list_id = action_config
+                    .get("list_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !list_id.is_empty() {
                     add_contact_to_coreswift_list(state, account_id, contact_id, list_id).await;
                 }
 
                 // Also apply tag if configured
-                let tag_name = action_config.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let tag_name = action_config
+                    .get("tag")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !tag_name.is_empty() {
                     apply_tag_to_coreswift_contact(state, account_id, contact_id, tag_name).await;
                 }
             }
             "email" => {
-                let subject = action_config.get("subject").and_then(|v| v.as_str()).unwrap_or("New campaign entry");
-                let body = action_config.get("body").and_then(|v| v.as_str()).unwrap_or("A new entry was received.");
-                let to = action_config.get("to").and_then(|v| v.as_str()).unwrap_or(contact_email);
-                let from_name = action_config.get("from_name").and_then(|v| v.as_str()).unwrap_or("IncentiveSwift");
+                let subject = action_config
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("New campaign entry");
+                let body = action_config
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("A new entry was received.");
+                let to = action_config
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(contact_email);
+                let from_name = action_config
+                    .get("from_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("IncentiveSwift");
 
                 // Render body with template variables
                 let rendered_body = render_template(body, &payload);
@@ -150,21 +226,35 @@ pub async fn execute_output_actions(
                     to,
                     &rendered_subject,
                     &rendered_body,
-                ).await;
+                )
+                .await;
             }
             "sms" => {
-                let message = action_config.get("message").and_then(|v| v.as_str()).unwrap_or("You have a new campaign entry!");
-                let phone = action_config.get("to").and_then(|v| v.as_str()).unwrap_or(contact_phone);
+                let message = action_config
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("You have a new campaign entry!");
+                let phone = action_config
+                    .get("to")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(contact_phone);
                 if !phone.is_empty() {
                     let rendered = render_template(message, &payload);
                     let _ = send_sms_via_telnyx(state, account_id, phone, &rendered).await;
                 }
             }
             "n8n" => {
-                let webhook_url = action_config.get("webhook_url").and_then(|v| v.as_str()).unwrap_or("");
+                let webhook_url = action_config
+                    .get("webhook_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !webhook_url.is_empty() {
                     let mut req = state.http_client.post(webhook_url).json(&payload);
-                    if let Some(api_key) = action_config.get("n8n_api_key").and_then(|v| v.as_str()).filter(|k| !k.is_empty()) {
+                    if let Some(api_key) = action_config
+                        .get("n8n_api_key")
+                        .and_then(|v| v.as_str())
+                        .filter(|k| !k.is_empty())
+                    {
                         req = req.header("X-API-Key", api_key);
                     }
                     let _ = req
@@ -252,7 +342,11 @@ fn flatten_json(value: &Value, prefix: &str) -> Vec<(String, String)> {
     match value {
         Value::Object(map) => {
             for (k, v) in map {
-                let key = if prefix.is_empty() { k.clone() } else { format!("{}.{}", prefix, k) };
+                let key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{}.{}", prefix, k)
+                };
                 result.extend(flatten_json(v, &key));
             }
         }
@@ -266,12 +360,13 @@ fn flatten_json(value: &Value, prefix: &str) -> Vec<(String, String)> {
             result.push((prefix.to_string(), b.to_string()));
         }
         Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(|v| {
-                match v {
+            let items: Vec<String> = arr
+                .iter()
+                .map(|v| match v {
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
-                }
-            }).collect();
+                })
+                .collect();
             result.push((prefix.to_string(), items.join(", ")));
         }
         Value::Null => {
@@ -327,19 +422,28 @@ async fn add_contact_to_coreswift_list(
     let creds = sqlx::query_as::<_, (String, Option<String>)>(
         r#"SELECT api_key, base_url FROM provider_keys
            WHERE provider = 'coreswift' AND account_id = $1 AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(account_id)
     .fetch_optional(&state.db)
     .await;
 
-    let Ok(Some((jwt, base_url))) = creds else { return; };
-    if jwt.is_empty() { return; }
+    let Ok(Some((jwt, base_url))) = creds else {
+        return;
+    };
+    if jwt.is_empty() {
+        return;
+    }
 
     let base = base_url.unwrap_or_else(|| "https://coreswiftcrm.com".to_string());
 
-    let resp = state.http_client
-        .post(format!("{}/api/lists/{}/members", base.trim_end_matches('/'), list_id))
+    let resp = state
+        .http_client
+        .post(format!(
+            "{}/api/lists/{}/members",
+            base.trim_end_matches('/'),
+            list_id
+        ))
         .header("Authorization", format!("Bearer {}", jwt))
         .json(&json!({"contact_id": contact_id}))
         .timeout(std::time::Duration::from_secs(10))
@@ -364,20 +468,29 @@ async fn apply_tag_to_coreswift_contact(
     let creds = sqlx::query_as::<_, (String, Option<String>)>(
         r#"SELECT api_key, base_url FROM provider_keys
            WHERE provider = 'coreswift' AND account_id = $1 AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(account_id)
     .fetch_optional(&state.db)
     .await;
 
-    let Ok(Some((jwt, base_url))) = creds else { return; };
-    if jwt.is_empty() { return; }
+    let Ok(Some((jwt, base_url))) = creds else {
+        return;
+    };
+    if jwt.is_empty() {
+        return;
+    }
 
     let base = base_url.unwrap_or_else(|| "https://coreswiftcrm.com".to_string());
 
     // Try: PATCH /api/contacts/:id with tag in metadata
-    let resp = state.http_client
-        .patch(format!("{}/api/contacts/{}", base.trim_end_matches('/'), contact_id))
+    let resp = state
+        .http_client
+        .patch(format!(
+            "{}/api/contacts/{}",
+            base.trim_end_matches('/'),
+            contact_id
+        ))
         .header("Authorization", format!("Bearer {}", jwt))
         .json(&json!({"tags": [tag_name]}))
         .timeout(std::time::Duration::from_secs(10))
@@ -385,39 +498,46 @@ async fn apply_tag_to_coreswift_contact(
         .await;
 
     match resp {
-        Ok(r) => tracing::info!("CoreSwift tag '{}' applied to contact {} (status={})", tag_name, contact_id, r.status()),
+        Ok(r) => tracing::info!(
+            "CoreSwift tag '{}' applied to contact {} (status={})",
+            tag_name,
+            contact_id,
+            r.status()
+        ),
         Err(e) => tracing::warn!("CoreSwift tag apply failed: {}", e),
     }
 }
 
 /// Send an SMS via Telnyx (reuses the existing SMS handler logic)
-async fn send_sms_via_telnyx(
-    state: &AppState,
-    account_id: &Uuid,
-    to: &str,
-    message: &str,
-) {
+async fn send_sms_via_telnyx(state: &AppState, account_id: &Uuid, to: &str, message: &str) {
     // Get Telnyx credentials
     let creds = sqlx::query_as::<_, (String, Option<String>, Option<Value>)>(
         r#"SELECT api_key, base_url, metadata
            FROM provider_keys
            WHERE provider = 'telnyx_sms' AND account_id = $1 AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(account_id)
     .fetch_optional(&state.db)
     .await;
 
-    let Ok(Some((api_key, _base_url, meta))) = creds else { return; };
-    if api_key.is_empty() { return; }
+    let Ok(Some((api_key, _base_url, meta))) = creds else {
+        return;
+    };
+    if api_key.is_empty() {
+        return;
+    }
 
     // Get the from number from metadata or settings
-    let from_number = meta.as_ref()
+    let from_number = meta
+        .as_ref()
         .and_then(|m| m.get("from_number"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if from_number.is_empty() { return; }
+    if from_number.is_empty() {
+        return;
+    }
 
     let telnyx_payload = json!({
         "from": from_number,
@@ -425,7 +545,8 @@ async fn send_sms_via_telnyx(
         "text": message,
     });
 
-    let resp = state.http_client
+    let resp = state
+        .http_client
         .post("https://api.telnyx.com/v2/messages")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")

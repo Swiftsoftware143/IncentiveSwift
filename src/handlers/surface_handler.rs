@@ -1,15 +1,19 @@
 //! Surface handlers — widget, tablet, play, embed views, and domain management.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
 };
 
 fn esc_html(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -113,7 +117,7 @@ pub async fn get_widget_js(
 ) -> Result<Json<Value>, AppError> {
     let snippet = sqlx::query_as::<_, WidgetSnippet>(
         r#"SELECT id, campaign_id, snippet_hash, is_active, created_at
-           FROM widget_snippets WHERE snippet_hash = $1 AND is_active = true"#
+           FROM widget_snippets WHERE snippet_hash = $1 AND is_active = true"#,
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -141,7 +145,7 @@ pub async fn get_widget_config(
 ) -> Result<Json<Value>, AppError> {
     let snippet = sqlx::query_as::<_, WidgetSnippet>(
         r#"SELECT ws.id, ws.campaign_id, ws.snippet_hash, ws.is_active, ws.created_at
-           FROM widget_snippets ws WHERE ws.snippet_hash = $1 AND ws.is_active = true"#
+           FROM widget_snippets ws WHERE ws.snippet_hash = $1 AND ws.is_active = true"#,
     )
     .bind(&hash)
     .fetch_optional(&state.db)
@@ -151,7 +155,7 @@ pub async fn get_widget_config(
     // Get the campaign config for widget settings
     let campaign = sqlx::query(
         r#"SELECT id, name, slug, type, config, surface_config, outcome_tags
-           FROM campaigns WHERE id = $1"#
+           FROM campaigns WHERE id = $1"#,
     )
     .bind(snippet.campaign_id)
     .fetch_optional(&state.db)
@@ -190,7 +194,7 @@ pub async fn get_tablet_view(
     let session = sqlx::query_as::<_, TabletSession>(
         r#"SELECT id, campaign_id, tenant_id, device_id, interaction_count,
                   last_interaction_at, created_at
-           FROM tablet_sessions WHERE id = $1"#
+           FROM tablet_sessions WHERE id = $1"#,
     )
     .bind(session_id)
     .fetch_optional(&state.db)
@@ -200,7 +204,7 @@ pub async fn get_tablet_view(
     // Get campaign info for the tablet view
     let campaign = sqlx::query(
         r#"SELECT name, slug, type, config, surface_config
-           FROM campaigns WHERE id = $1"#
+           FROM campaigns WHERE id = $1"#,
     )
     .bind(session.campaign_id)
     .fetch_optional(&state.db)
@@ -236,7 +240,7 @@ pub async fn tablet_interaction(
     let result = sqlx::query(
         r#"UPDATE tablet_sessions
            SET interaction_count = interaction_count + 1, last_interaction_at = now()
-           WHERE id = $1"#
+           WHERE id = $1"#,
     )
     .bind(session_id)
     .execute(&state.db)
@@ -249,7 +253,7 @@ pub async fn tablet_interaction(
     let session = sqlx::query_as::<_, TabletSession>(
         r#"SELECT id, campaign_id, tenant_id, device_id, interaction_count,
                   last_interaction_at, created_at
-           FROM tablet_sessions WHERE id = $1"#
+           FROM tablet_sessions WHERE id = $1"#,
     )
     .bind(session_id)
     .fetch_one(&state.db)
@@ -271,17 +275,20 @@ pub async fn get_play_view(
     // Resolve account_id from subdomain if provided
     let account_filter = if let Some(company) = params.get("company").and_then(|v| v.as_str()) {
         let filter = sqlx::query_scalar::<_, Uuid>(
-            "SELECT account_id FROM portfolio_companies WHERE subdomain = $1 OR domain = $1"
+            "SELECT account_id FROM portfolio_companies WHERE subdomain = $1 OR domain = $1",
         )
         .bind(company)
-        .fetch_optional(&state.db).await?;
+        .fetch_optional(&state.db)
+        .await?;
         filter
     } else {
         None
     };
 
     // Fetch company info for branding
-    let company_info: Option<serde_json::Value> = if let Some(company) = params.get("company").and_then(|v| v.as_str()) {
+    let company_info: Option<serde_json::Value> = if let Some(company) =
+        params.get("company").and_then(|v| v.as_str())
+    {
         let row = sqlx::query_scalar(
             "SELECT jsonb_build_object('name', name, 'slug', slug, 'subdomain', subdomain, 'domain', domain, 'settings', COALESCE(settings, '{}'::jsonb)) FROM portfolio_companies WHERE subdomain = $1 OR domain = $1"
         )
@@ -298,30 +305,39 @@ pub async fn get_play_view(
             let mut q = String::from(
                 "SELECT id, name, slug, type, status, config, surface_config,
                        tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
-                FROM campaigns WHERE id = $1 AND status = 'active'"
+                FROM campaigns WHERE id = $1 AND status = 'active'",
             );
             if let Some(aid) = account_filter {
                 q.push_str(" AND account_id = $2");
-                sqlx::query(&q).bind(cid).bind(aid).fetch_optional(&state.db).await?
+                sqlx::query(&q)
+                    .bind(cid)
+                    .bind(aid)
+                    .fetch_optional(&state.db)
+                    .await?
             } else {
                 sqlx::query(&q).bind(cid).fetch_optional(&state.db).await?
             }
-        },
+        }
         Err(_) => {
             let mut q = String::from(
                 "SELECT id, name, slug, type, status, config, surface_config,
                        tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
-                FROM campaigns WHERE slug = $1 AND status = 'active'"
+                FROM campaigns WHERE slug = $1 AND status = 'active'",
             );
             if let Some(aid) = account_filter {
                 q.push_str(" AND account_id = $2");
-                sqlx::query(&q).bind(&id).bind(aid).fetch_optional(&state.db).await?
+                sqlx::query(&q)
+                    .bind(&id)
+                    .bind(aid)
+                    .fetch_optional(&state.db)
+                    .await?
             } else {
                 sqlx::query(&q).bind(&id).fetch_optional(&state.db).await?
             }
         }
     };
-    let campaign = campaign.ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;
+    let campaign =
+        campaign.ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;
 
     let cid: Uuid = campaign.get("id");
     let name: String = campaign.get("name");
@@ -367,7 +383,7 @@ pub async fn get_loyalty_dashboard(
     let program_row = sqlx::query(
         r#"SELECT id, name, recognition_method, points_per_checkin,
                   max_checkins_per_day, point_decay_days, is_active
-           FROM loyalty_programs WHERE campaign_id = $1 AND is_active = true"#
+           FROM loyalty_programs WHERE campaign_id = $1 AND is_active = true"#,
     )
     .bind(campaign_id)
     .fetch_optional(&state.db)
@@ -385,7 +401,7 @@ pub async fn get_loyalty_dashboard(
             let reward_tiers: Vec<RewardTierRow> = sqlx::query_as(
                 r#"SELECT id, name, points_required, requires_approval, reward_tag, sort_order
                    FROM loyalty_reward_tiers WHERE program_id = $1
-                   ORDER BY sort_order, points_required"#
+                   ORDER BY sort_order, points_required"#,
             )
             .bind(program_id)
             .fetch_all(&state.db)
@@ -393,7 +409,7 @@ pub async fn get_loyalty_dashboard(
 
             // Get member count
             let member_count: i64 = sqlx::query_scalar::<_, Option<i64>>(
-                "SELECT COUNT(*) FROM loyalty_members WHERE program_id = $1"
+                "SELECT COUNT(*) FROM loyalty_members WHERE program_id = $1",
             )
             .bind(program_id)
             .fetch_one(&state.db)
@@ -416,7 +432,7 @@ pub async fn get_loyalty_dashboard(
                    FROM loyalty_members lm
                    WHERE lm.program_id = $1
                    ORDER BY lm.points_balance DESC
-                   LIMIT 10"#
+                   LIMIT 10"#,
             )
             .bind(program_id)
             .fetch_all(&state.db)
@@ -453,7 +469,7 @@ pub async fn get_embed_view(
 
     let campaign = sqlx::query(
         r#"SELECT id, name, slug, type, config, surface_config, outcome_tags
-           FROM campaigns WHERE id = $1 AND status = 'active'"#
+           FROM campaigns WHERE id = $1 AND status = 'active'"#,
     )
     .bind(campaign_id)
     .fetch_optional(&state.db)
@@ -472,7 +488,10 @@ pub async fn get_embed_view(
     let embed_html = format!(
         r#"<div id="is-embed-{}" data-campaign="{}" data-type="{}"></div>
 <script src="/api/v1/widget/{}/config" async></script>"#,
-        &cid.to_string()[..8], &slug, &campaign_type, &slug
+        &cid.to_string()[..8],
+        &slug,
+        &campaign_type,
+        &slug
     );
 
     Ok(Json(json!({
@@ -498,17 +517,15 @@ pub async fn get_surface_config(
     let campaign_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
 
-    let surface_config: Option<Value> = sqlx::query_scalar(
-        "SELECT surface_config FROM campaigns WHERE id = $1"
-    )
-    .bind(campaign_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+    let surface_config: Option<Value> =
+        sqlx::query_scalar("SELECT surface_config FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
 
     Ok(Json(json!({ "surface_config": surface_config })))
 }
-
 
 /// GET /api/v1/embed/campaign/all — List all active campaigns for public embed lobby
 pub async fn get_embed_campaign_list(
@@ -520,7 +537,7 @@ pub async fn get_embed_campaign_list(
            FROM campaigns c
            JOIN accounts a ON a.id = c.account_id
            WHERE c.status = 'active'
-           ORDER BY c.created_at DESC"#
+           ORDER BY c.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -557,7 +574,7 @@ pub async fn get_campaign_embed(
 ) -> Result<Json<Value>, AppError> {
     let campaign = sqlx::query(
         r#"SELECT id, name, slug, type, config, created_at
-           FROM campaigns WHERE slug = $1"#
+           FROM campaigns WHERE slug = $1"#,
     )
     .bind(&slug)
     .fetch_optional(&state.db)
@@ -625,13 +642,11 @@ pub async fn update_surface_config(
     let campaign_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
 
-    sqlx::query(
-        "UPDATE campaigns SET surface_config = $1 WHERE id = $2"
-    )
-    .bind(&body.surface_config)
-    .bind(campaign_id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE campaigns SET surface_config = $1 WHERE id = $2")
+        .bind(&body.surface_config)
+        .bind(campaign_id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({
         "status": "updated",
@@ -648,20 +663,19 @@ pub async fn list_domains(
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     // Get the account's tenant_id
-    let tenant_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let tenant_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     let domains = if let Some(tid) = tenant_id {
         sqlx::query_as::<_, CustomDomain>(
             r#"SELECT id, tenant_id, domain, target_type, verification_token,
                       verified_at, ssl_provisioned_at, is_active, created_at, updated_at
                FROM custom_domains WHERE tenant_id = $1
-               ORDER BY created_at DESC"#
+               ORDER BY created_at DESC"#,
         )
         .bind(tid)
         .fetch_all(&state.db)
@@ -682,19 +696,20 @@ pub async fn register_domain(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid = sqlx::query_scalar(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await?;
+    let tenant_id: Uuid =
+        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
 
     let id = Uuid::new_v4();
-    let target_type = body.target_type.unwrap_or_else(|| "incentiveswift".to_string());
+    let target_type = body
+        .target_type
+        .unwrap_or_else(|| "incentiveswift".to_string());
 
     sqlx::query(
         r#"INSERT INTO custom_domains (id, tenant_id, domain, target_type)
-           VALUES ($1, $2, $3, $4)"#
+           VALUES ($1, $2, $3, $4)"#,
     )
     .bind(id)
     .bind(tenant_id)
@@ -706,7 +721,7 @@ pub async fn register_domain(
     let domain = sqlx::query_as::<_, CustomDomain>(
         r#"SELECT id, tenant_id, domain, target_type, verification_token,
                   verified_at, ssl_provisioned_at, is_active, created_at, updated_at
-           FROM custom_domains WHERE id = $1"#
+           FROM custom_domains WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -727,25 +742,22 @@ pub async fn remove_domain(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let domain_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
+    let domain_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid = sqlx::query_scalar(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await?;
+    let tenant_id: Uuid =
+        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
 
-    let result = sqlx::query(
-        "DELETE FROM custom_domains WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(domain_id)
-    .bind(tenant_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM custom_domains WHERE id = $1 AND tenant_id = $2")
+        .bind(domain_id)
+        .bind(tenant_id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Domain not found".to_string()));
@@ -760,21 +772,20 @@ pub async fn verify_domain(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let domain_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
+    let domain_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid domain ID".to_string()))?;
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid = sqlx::query_scalar(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1"
-    )
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await?;
+    let tenant_id: Uuid =
+        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
 
     let domain = sqlx::query(
         r#"SELECT id, domain, verification_token, verified_at, is_active
-           FROM custom_domains WHERE id = $1 AND tenant_id = $2"#
+           FROM custom_domains WHERE id = $1 AND tenant_id = $2"#,
     )
     .bind(domain_id)
     .bind(tenant_id)
@@ -800,7 +811,7 @@ pub async fn verify_domain(
         sqlx::query(
             r#"UPDATE custom_domains
                SET verified_at = now(), is_active = true, updated_at = now()
-               WHERE id = $1"#
+               WHERE id = $1"#,
         )
         .bind(domain_id)
         .execute(&state.db)
@@ -859,17 +870,15 @@ pub async fn check_plan_domains(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let plan_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
+    let plan_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
     // Get plan to find matching plan_tier
-    let plan = sqlx::query(
-        "SELECT slug FROM plans WHERE id = $1"
-    )
-    .bind(plan_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
+    let plan = sqlx::query("SELECT slug FROM plans WHERE id = $1")
+        .bind(plan_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
 
     let plan_slug: String = plan.get("slug");
 
@@ -883,7 +892,7 @@ pub async fn check_plan_domains(
     .flatten();
 
     let (allowed, limit) = match domain_limit {
-        Some(-1) => (true, -1_i64),   // unlimited
+        Some(-1) => (true, -1_i64), // unlimited
         Some(l) if l > 0 => (true, l as i64),
         Some(_) => (false, 0_i64),
         None => (false, 0_i64),

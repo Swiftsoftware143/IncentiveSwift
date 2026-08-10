@@ -4,18 +4,15 @@
 //!   - Query program info
 //! Authenticated via X-API-Key header (system API key stored in provider_keys).
 
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 use tracing;
+use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::handlers::credits_handler::add_credits_internal;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct GrantCreditsRequest {
@@ -67,7 +64,12 @@ pub async fn grant_credits(
     let account_id = find_or_create_account(&state.db, &req.email).await?;
 
     // 4. Grant credits
-    let credit_description = format!("{} — {}: {} credits", req.reason, req.program.as_deref().unwrap_or("zaarhub"), req.amount);
+    let credit_description = format!(
+        "{} — {}: {} credits",
+        req.reason,
+        req.program.as_deref().unwrap_or("zaarhub"),
+        req.amount
+    );
     let new_balance = add_credits_internal(
         &state.db,
         account_id,
@@ -76,11 +78,16 @@ pub async fn grant_credits(
         Some("referral"),
         None,
         &Some(credit_description),
-    ).await.map_err(AppError::Internal)?;
+    )
+    .await
+    .map_err(AppError::Internal)?;
 
     tracing::info!(
         "Granted {} credits to account {} (email: {}) for reason: {}",
-        req.amount, account_id, req.email, req.reason
+        req.amount,
+        account_id,
+        req.email,
+        req.reason
     );
 
     Ok(Json(json!({
@@ -94,17 +101,12 @@ pub async fn grant_credits(
 
 /// Find an account by email, or create a minimal one if it doesn't exist.
 /// Returns the account UUID.
-async fn find_or_create_account(
-    db: &sqlx::PgPool,
-    email: &str,
-) -> Result<Uuid, AppError> {
+async fn find_or_create_account(db: &sqlx::PgPool, email: &str) -> Result<Uuid, AppError> {
     // First try to find existing account
-    let existing = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM accounts WHERE email = $1"
-    )
-    .bind(email)
-    .fetch_optional(db)
-    .await?;
+    let existing = sqlx::query_scalar::<_, Uuid>("SELECT id FROM accounts WHERE email = $1")
+        .bind(email)
+        .fetch_optional(db)
+        .await?;
 
     if let Some(id) = existing {
         return Ok(id);
@@ -145,8 +147,8 @@ pub async fn get_external_program(
 
     validate_system_api_key(&state, api_key).await?;
 
-    let program_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
@@ -182,16 +184,13 @@ pub async fn get_external_program(
 }
 
 /// Validate a system API key against provider_keys table.
-async fn validate_system_api_key(
-    state: &AppState,
-    key: &str,
-) -> Result<(), AppError> {
+async fn validate_system_api_key(state: &AppState, key: &str) -> Result<(), AppError> {
     let valid = sqlx::query_scalar::<_, i64>(
         r#"SELECT COUNT(*) FROM provider_keys
            WHERE provider = 'system_api_key'
              AND api_key = $1
              AND is_active = true
-             AND (scope = 'internal' OR scope = 'external')"#
+             AND (scope = 'internal' OR scope = 'external')"#,
     )
     .bind(key)
     .fetch_one(&state.db)
@@ -199,7 +198,9 @@ async fn validate_system_api_key(
     .map_err(|_| AppError::Internal("DB error validating API key".to_string()))?;
 
     if valid == 0 {
-        return Err(AppError::Unauthorized("Invalid or inactive API key".to_string()));
+        return Err(AppError::Unauthorized(
+            "Invalid or inactive API key".to_string(),
+        ));
     }
 
     Ok(())
@@ -213,7 +214,7 @@ pub struct RegisterMemberRequest {
     pub first_name: Option<String>,
     pub last_name: Option<String>,
     pub phone: Option<String>,
-    pub member_type: String,       // "visitor", "supplier", "business_owner"
+    pub member_type: String, // "visitor", "supplier", "business_owner"
     pub business_type: Option<String>, // supplier subtype: farm, wholesaler, etc.
     pub directory_slug: Option<String>, // which city directory (optional for network-wide)
     pub tags: Option<Vec<String>>,
@@ -264,7 +265,10 @@ pub async fn register_member(
         ("zaarhub-local-pass", "zaarhub-local-pass")
     };
 
-    let lookup_slug = req.directory_slug.as_deref().unwrap_or(fallback_program_slug);
+    let lookup_slug = req
+        .directory_slug
+        .as_deref()
+        .unwrap_or(fallback_program_slug);
 
     // 4. Look up loyalty program by slug
     let program = sqlx::query_as::<_, (Uuid, String, bool)>(
@@ -295,11 +299,12 @@ pub async fn register_member(
             business_name: None,
             website: None,
         },
-    ).await?;
+    )
+    .await?;
 
     // 6. Check if already a loyalty member in this program
     let existing_member: Option<(Uuid, bool)> = sqlx::query_as(
-        "SELECT id, true FROM loyalty_members WHERE program_id = $1 AND contact_id = $2 LIMIT 1"
+        "SELECT id, true FROM loyalty_members WHERE program_id = $1 AND contact_id = $2 LIMIT 1",
     )
     .bind(program_id)
     .bind(contact_id)
@@ -310,7 +315,8 @@ pub async fn register_member(
         (mid, true)
     } else {
         // Enroll as loyalty member
-        let mid = crate::db::loyalty::find_or_create_member(&state.db, &program_id, &contact_id).await?;
+        let mid =
+            crate::db::loyalty::find_or_create_member(&state.db, &program_id, &contact_id).await?;
         (mid, false)
     };
 
@@ -329,7 +335,9 @@ pub async fn register_member(
             // Also enroll in the campaign's loyalty program if different from the main one
             if let Some(cp_id) = campaign_program_id {
                 if cp_id != program_id {
-                    let _ = crate::db::loyalty::find_or_create_member(&state.db, &cp_id, &contact_id).await;
+                    let _ =
+                        crate::db::loyalty::find_or_create_member(&state.db, &cp_id, &contact_id)
+                            .await;
                 }
             }
         }
@@ -349,23 +357,29 @@ pub async fn register_member(
 
     // 9. If business_owner, ensure an IS accounts entry exists for credit tracking
     let _account_id: Option<Uuid> = if req.member_type == "business_owner" {
-        let existing_acct: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM accounts WHERE email = $1 LIMIT 1"
-        )
-        .bind(&req.email)
-        .fetch_optional(&state.db)
-        .await?;
+        let existing_acct: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1 LIMIT 1")
+                .bind(&req.email)
+                .fetch_optional(&state.db)
+                .await?;
 
         match existing_acct {
             Some(id) => Some(id),
             None => {
                 let new_id = Uuid::new_v4();
                 let now = chrono::Utc::now();
-                let name = format!("{} {}",
+                let name = format!(
+                    "{} {}",
                     req.first_name.as_deref().unwrap_or(""),
                     req.last_name.as_deref().unwrap_or("")
-                ).trim().to_string();
-                let display_name = if name.is_empty() { req.email.clone() } else { name };
+                )
+                .trim()
+                .to_string();
+                let display_name = if name.is_empty() {
+                    req.email.clone()
+                } else {
+                    name
+                };
 
                 sqlx::query(
                     r#"INSERT INTO accounts (id, email, name, role, credits_balance, credits_lifetime_used, created_at, updated_at)

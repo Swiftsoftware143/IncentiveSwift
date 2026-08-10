@@ -43,17 +43,14 @@ pub async fn push_to_webhook(
                     success,
                     Some(status_code),
                     Some(body.clone()),
-                ).await;
+                )
+                .await;
 
                 if success {
                     // Update entry delivery status
-                    let _ = crate::db::entries::record_delivery(
-                        pool,
-                        entry_id,
-                        true,
-                        "webhook",
-                        url,
-                    ).await;
+                    let _ =
+                        crate::db::entries::record_delivery(pool, entry_id, true, "webhook", url)
+                            .await;
                     return Ok(());
                 }
 
@@ -68,10 +65,7 @@ pub async fn push_to_webhook(
                 }
             }
             Err(e) => {
-                last_error = Some(AppError::Internal(format!(
-                    "Webhook request failed: {}",
-                    e
-                )));
+                last_error = Some(AppError::Internal(format!("Webhook request failed: {}", e)));
             }
         }
 
@@ -89,8 +83,14 @@ pub async fn push_to_webhook(
         url,
         false,
         None,
-        Some(last_error.as_ref().map(|e| e.to_string()).unwrap_or_default()),
-    ).await;
+        Some(
+            last_error
+                .as_ref()
+                .map(|e| e.to_string())
+                .unwrap_or_default(),
+        ),
+    )
+    .await;
 
     // Don't fail the request — delivery is best-effort
     tracing::warn!(

@@ -1,14 +1,10 @@
 //! Entry handler — the core capture endpoint.
 
+use crate::db::{campaigns, contacts, entries};
+use crate::delivery::{payload::ContactPayload, payload::DeliveryPayload, webhook};
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::db::{contacts, entries, campaigns};
-use crate::delivery::{payload::DeliveryPayload, webhook, payload::ContactPayload};
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -48,11 +44,7 @@ fn extract_source_headers(headers: &HeaderMap) -> (Option<String>, Option<String
     let ip_address = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-        })
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
         .map(|s| s.to_string());
     (user_agent, ip_address)
 }
@@ -78,8 +70,12 @@ pub async fn create_entry(
 
     // 3. Check daily spin limit (before creating entry)
     crate::mechanics::pity_timer::check_daily_limit(
-        &state.db, &campaign.id, &contact_id, &campaign.config
-    ).await?;
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        &campaign.config,
+    )
+    .await?;
 
     // 4. Determine outcome and tags
     let (mut outcome, mut tags) = determine_outcome(&campaign, body.score);
@@ -93,7 +89,8 @@ pub async fn create_entry(
         &campaign.tag_namespace,
         &outcome,
         &tags,
-    ).await?;
+    )
+    .await?;
     if pity_triggered {
         outcome = pity_outcome;
         tags = pity_tags;
@@ -145,7 +142,8 @@ pub async fn create_entry(
                 &entry_id.to_string(),
                 &body.campaign_slug,
                 points,
-            ).await;
+            )
+            .await;
             // Best-effort: don't fail the entry if loyalty checkin fails
         }
     }
@@ -153,7 +151,13 @@ pub async fn create_entry(
     // 8. If winning outcome and auto-email configured, trigger prize email via n8n
     //    Do this BEFORE consuming contact fields in the delivery payload.
     let is_win = outcome == "winner" || outcome == "grand_prize";
-    if is_win && campaign.config.get("email_prize").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if is_win
+        && campaign
+            .config
+            .get("email_prize")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
         let email_payload = json!({
             "event": "prize.won",
             "contact": {
@@ -172,8 +176,12 @@ pub async fn create_entry(
             "captured_at": chrono::Utc::now().to_rfc3339(),
         });
 
-        let n8n_url = format!("{}/api/prize-email", state.config.workflowswift_url.trim_end_matches('/'));
-        let _ = state.http_client
+        let n8n_url = format!(
+            "{}/api/prize-email",
+            state.config.workflowswift_url.trim_end_matches('/')
+        );
+        let _ = state
+            .http_client
             .post(&n8n_url)
             .json(&email_payload)
             .timeout(std::time::Duration::from_secs(10))
@@ -187,7 +195,8 @@ pub async fn create_entry(
         let push_contact_id = contact_id;
         let push_account_id = campaign.account_id;
         let push_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
-        let push_added: Vec<String> = tags_applied.iter()
+        let push_added: Vec<String> = tags_applied
+            .iter()
             .filter(|t| t.contains(" - Newsletter"))
             .cloned()
             .collect();
@@ -201,7 +210,8 @@ pub async fn create_entry(
                 &push_added,
                 &[],
                 "entry",
-            ).await;
+            )
+            .await;
         });
     }
 
@@ -219,7 +229,7 @@ pub async fn create_entry(
     let phone = body.contact.phone.as_deref().unwrap_or("");
     let website = body.contact.website.as_deref().unwrap_or("");
     let business_name = body.contact.business_name.as_deref().unwrap_or("");
-    
+
     tokio::spawn({
         let state = state.clone();
         let campaign_id = campaign.id;
@@ -246,15 +256,31 @@ pub async fn create_entry(
         let bn1 = business_name.to_string();
         async move {
             crate::delivery::output_actions::execute_output_actions(
-                &state, &campaign_id, &campaign_name, &campaign_slug, &campaign_type, &campaign_config,
+                &state,
+                &campaign_id,
+                &campaign_name,
+                &campaign_slug,
+                &campaign_type,
+                &campaign_config,
                 &contact_id,
-                &fn1, &ln1, &em1, &ph1, &ws1, &bn1,
-                &account_id, &outcome, &tags,
+                &fn1,
+                &ln1,
+                &em1,
+                &ph1,
+                &ws1,
+                &bn1,
+                &account_id,
+                &outcome,
+                &tags,
                 score.map(|s| s as f64),
                 answers.as_ref(),
-                utm_source.as_deref(), utm_medium.as_deref(), utm_campaign.as_deref(),
-                referrer_url.as_deref(), page_url.as_deref(),
-            ).await;
+                utm_source.as_deref(),
+                utm_medium.as_deref(),
+                utm_campaign.as_deref(),
+                referrer_url.as_deref(),
+                page_url.as_deref(),
+            )
+            .await;
         }
     });
 
@@ -295,7 +321,8 @@ pub async fn create_entry(
         &payload,
         &state.db,
         &entry_id,
-    ).await?;
+    )
+    .await?;
 
     // 11. Return result
     Ok(Json(json!({
@@ -327,12 +354,17 @@ pub(crate) async fn dispatch_integrations(
 
     // LEGACY: also do any direct integrations specified in the campaign config
     // These are kept for backwards compat with existing campaigns
-    if let Some(integrations) = delivery_config.get("integrations").and_then(|v| v.as_array()) {
+    if let Some(integrations) = delivery_config
+        .get("integrations")
+        .and_then(|v| v.as_array())
+    {
         for integration in integrations {
-            let int_type = integration.get("type")
+            let int_type = integration
+                .get("type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let int_config = integration.get("config")
+            let int_config = integration
+                .get("config")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
 
@@ -341,49 +373,61 @@ pub(crate) async fn dispatch_integrations(
                     // Already handled by WorkflowSwift, skip
                 }
                 "mailchimp" => {
-                    let _api_key = int_config.get("api_key")
+                    let _api_key = int_config
+                        .get("api_key")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let _server_prefix = int_config.get("server_prefix")
+                    let _server_prefix = int_config
+                        .get("server_prefix")
                         .and_then(|v| v.as_str())
                         .unwrap_or("us1");
-                    let list_id = int_config.get("list_id")
+                    let list_id = int_config
+                        .get("list_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     // TODO: add Mailchimp direct push module
-                    tracing::info!("Mailchimp integration configured for {} — pushing to list {}",
-                        payload.contact.email.as_deref().unwrap_or("unknown"), list_id);
+                    tracing::info!(
+                        "Mailchimp integration configured for {} — pushing to list {}",
+                        payload.contact.email.as_deref().unwrap_or("unknown"),
+                        list_id
+                    );
                 }
                 "webhook" => {
-                    let url = int_config.get("url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let url = int_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     if !url.is_empty() {
                         webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
                     }
                 }
                 "hubspot" => {
-                    let api_key = int_config.get("api_key")
+                    let api_key = int_config
+                        .get("api_key")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload).await?;
+                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload)
+                        .await?;
                 }
                 "activecampaign" => {
-                    let api_key = int_config.get("api_key")
+                    let api_key = int_config
+                        .get("api_key")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(client, api_key, payload).await?;
+                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(
+                        client, api_key, payload,
+                    )
+                    .await?;
                 }
                 "gohighlevel" => {
-                    let api_key = int_config.get("api_key")
+                    let api_key = int_config
+                        .get("api_key")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(client, api_key, payload).await?;
+                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(
+                        client, api_key, payload,
+                    )
+                    .await?;
                 }
                 "n8n" => {
-                    let url = int_config.get("url")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let url = int_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     if !url.is_empty() {
                         webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
                     }
@@ -396,31 +440,42 @@ pub(crate) async fn dispatch_integrations(
     }
 
     // Fallback: legacy flat delivery_config pattern
-    let delivery_method = delivery_config.get("_method")
+    let delivery_method = delivery_config
+        .get("_method")
         .and_then(|v| v.as_str())
         .unwrap_or("webhook");
 
     match delivery_method {
         "direct_api" => {
-            let api_type = delivery_config.get("api_type")
+            let api_type = delivery_config
+                .get("api_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("webhook");
-            let api_key = delivery_config.get("api_key")
+            let api_key = delivery_config
+                .get("api_key")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
             match api_type {
                 "hubspot" => {
-                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload).await?;
+                    crate::delivery::direct_api::hubspot::push_to_hubspot(client, api_key, payload)
+                        .await?;
                 }
                 "activecampaign" => {
-                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(client, api_key, payload).await?;
+                    crate::delivery::direct_api::activecampaign::push_to_activecampaign(
+                        client, api_key, payload,
+                    )
+                    .await?;
                 }
                 "gohighlevel" => {
-                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(client, api_key, payload).await?;
+                    crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(
+                        client, api_key, payload,
+                    )
+                    .await?;
                 }
                 _ => {
-                    let url = delivery_config.get("webhook_url")
+                    let url = delivery_config
+                        .get("webhook_url")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !url.is_empty() {
@@ -430,7 +485,8 @@ pub(crate) async fn dispatch_integrations(
             }
         }
         _ => {
-            let url = delivery_config.get("webhook_url")
+            let url = delivery_config
+                .get("webhook_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !url.is_empty() {
@@ -443,7 +499,10 @@ pub(crate) async fn dispatch_integrations(
 }
 
 /// Determine outcome and tags based on campaign config and score.
-fn determine_outcome(campaign: &crate::db::campaigns::Campaign, score: Option<i32>) -> (String, Vec<String>) {
+fn determine_outcome(
+    campaign: &crate::db::campaigns::Campaign,
+    score: Option<i32>,
+) -> (String, Vec<String>) {
     let default_outcome = "entrant".to_string();
     let default_tags = vec![format!("{}_entrant", campaign.tag_namespace)];
 
@@ -458,9 +517,13 @@ fn determine_outcome(campaign: &crate::db::campaigns::Campaign, score: Option<i3
     let outcome_tags = &campaign.outcome_tags;
 
     // Check for winner outcome
-    if let Some(threshold) = outcome_tags.get("winner_threshold").and_then(|v| v.as_i64()) {
+    if let Some(threshold) = outcome_tags
+        .get("winner_threshold")
+        .and_then(|v| v.as_i64())
+    {
         if score >= threshold as i32 {
-            let tag = outcome_tags.get("winner")
+            let tag = outcome_tags
+                .get("winner")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&format!("{}_winner", tag_namespace))
                 .to_string();
@@ -468,9 +531,13 @@ fn determine_outcome(campaign: &crate::db::campaigns::Campaign, score: Option<i3
         }
     }
 
-    if let Some(threshold) = outcome_tags.get("runner_up_threshold").and_then(|v| v.as_i64()) {
+    if let Some(threshold) = outcome_tags
+        .get("runner_up_threshold")
+        .and_then(|v| v.as_i64())
+    {
         if score >= threshold as i32 {
-            let tag = outcome_tags.get("runner_up")
+            let tag = outcome_tags
+                .get("runner_up")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&format!("{}_runner_up", tag_namespace))
                 .to_string();
@@ -483,7 +550,10 @@ fn determine_outcome(campaign: &crate::db::campaigns::Campaign, score: Option<i3
 }
 
 /// Extract Q&A pairs from JSONB answers for the delivery payload.
-fn extract_qa_from_jsonb(answers: &Value, _questions: &[crate::db::questions_answers::QuestionAnswerPair]) -> Vec<crate::delivery::payload::QuestionAnswerPair> {
+fn extract_qa_from_jsonb(
+    answers: &Value,
+    _questions: &[crate::db::questions_answers::QuestionAnswerPair],
+) -> Vec<crate::delivery::payload::QuestionAnswerPair> {
     let mut pairs = vec![];
 
     if let Some(obj) = answers.as_object() {
@@ -493,7 +563,8 @@ fn extract_qa_from_jsonb(answers: &Value, _questions: &[crate::db::questions_ans
                 Value::String(s) => s.clone(),
                 Value::Number(n) => n.to_string(),
                 Value::Bool(b) => b.to_string(),
-                Value::Array(arr) => arr.iter()
+                Value::Array(arr) => arr
+                    .iter()
                     .filter_map(|v| v.as_str())
                     .collect::<Vec<_>>()
                     .join(", "),
@@ -509,18 +580,16 @@ fn extract_qa_from_jsonb(answers: &Value, _questions: &[crate::db::questions_ans
     pairs
 }
 
-
 /// POST /api/v1/campaigns/test-webhook — Send a test webhook POST to a URL
-pub async fn test_entry_webhook(
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, AppError> {
-    let webhook_url = body.get("webhook_url")
+pub async fn test_entry_webhook(Json(body): Json<Value>) -> Result<Json<Value>, AppError> {
+    let webhook_url = body
+        .get("webhook_url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("webhook_url is required".to_string()))?;
 
-    let contact = body.get("contact")
-        .cloned()
-        .unwrap_or_else(|| json!({"first_name":"Test","last_name":"User","email":"test@example.com"}));
+    let contact = body.get("contact").cloned().unwrap_or_else(
+        || json!({"first_name":"Test","last_name":"User","email":"test@example.com"}),
+    );
 
     let payload = json!({
         "event": "entry.created",
@@ -559,7 +628,13 @@ pub async fn test_entry_webhook(
     match result {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let body_text = resp.text().await.unwrap_or_default().chars().take(500).collect::<String>();
+            let body_text = resp
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(500)
+                .collect::<String>();
             Ok(Json(json!({
                 "success": (200..300).contains(&status),
                 "status": status,

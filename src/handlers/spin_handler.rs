@@ -2,12 +2,12 @@
 //!
 //! Includes prize delivery (email/redirect) and integration hub firing.
 
-use crate::error::AppError;
-use crate::state::AppState;
 use crate::db::campaigns;
 use crate::db::contacts;
-use crate::mechanics::prize_draw;
+use crate::error::AppError;
 use crate::handlers::campaign_integrations;
+use crate::mechanics::prize_draw;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -22,15 +22,20 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Available providers for prize delivery delivery_templates.
-const DELIVERY_PROVIDERS: &[&str] = &["mailgun", "sendgrid", "sendiio", "letterman", "nexweave", "sam_gov"];
+const DELIVERY_PROVIDERS: &[&str] = &[
+    "mailgun",
+    "sendgrid",
+    "sendiio",
+    "letterman",
+    "nexweave",
+    "sam_gov",
+];
 
 /// Generate a short random hex string for redemption codes.
 fn generate_redemption_code() -> String {
     use rand::Rng;
     let mut rng = rand::thread_rng();
-    let hex_bytes: String = (0..4)
-        .map(|_| format!("{:02x}", rng.gen::<u8>()))
-        .collect();
+    let hex_bytes: String = (0..4).map(|_| format!("{:02x}", rng.gen::<u8>())).collect();
     format!("REDEEM-{}", hex_bytes.to_uppercase())
 }
 
@@ -97,10 +102,7 @@ pub struct RedeemBody {
 // Helper: resolve contact by id, email, or phone
 // ---------------------------------------------------------------------------
 
-async fn resolve_contact(
-    state: &AppState,
-    body: &SpinRequestBody,
-) -> Result<Uuid, AppError> {
+async fn resolve_contact(state: &AppState, body: &SpinRequestBody) -> Result<Uuid, AppError> {
     if let Some(cid) = body.contact_id {
         // Verify contact exists
         contacts::get_contact(&state.db, &cid).await?;
@@ -112,7 +114,7 @@ async fn resolve_contact(
 
     if email.is_none() && phone.is_none() {
         return Err(AppError::BadRequest(
-            "Either contact_id, email, or phone is required".to_string()
+            "Either contact_id, email, or phone is required".to_string(),
         ));
     }
 
@@ -146,7 +148,8 @@ pub struct PrizeDeliveryConfig {
 
 /// Extract delivery config from a prize's config, or return default.
 fn get_prize_delivery(prize_json: &serde_json::Value) -> PrizeDeliveryConfig {
-    prize_json.get("delivery")
+    prize_json
+        .get("delivery")
         .and_then(|d| serde_json::from_value(d.clone()).ok())
         .unwrap_or(PrizeDeliveryConfig {
             method: "none".to_string(),
@@ -195,11 +198,7 @@ pub async fn spin(
     let ip_address = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-        })
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
         .map(|s| s.to_string());
 
     // Clone source tracking fields before move into apply_prize_draw
@@ -235,11 +234,18 @@ pub async fn spin(
         page_url,
         user_agent,
         ip_address,
-    ).await?;
+    )
+    .await?;
 
     tracing::info!(
         "Spin: contact={} campaign={} prize={} won={} pity={} streak={} total={}",
-        contact_id, campaign.slug, result.prize_label, result.won, result.was_pity, result.streak, result.total_spins
+        contact_id,
+        campaign.slug,
+        result.prize_label,
+        result.won,
+        result.was_pity,
+        result.streak,
+        result.total_spins
     );
 
     // If won, handle delivery + redemption code + integrations
@@ -256,7 +262,7 @@ pub async fn spin(
                    SELECT id FROM entries
                    WHERE contact_id = $2 AND campaign_id = $3
                    ORDER BY created_at DESC LIMIT 1
-               )"#
+               )"#,
         )
         .bind(answers)
         .bind(contact_id)
@@ -271,7 +277,7 @@ pub async fn spin(
     let campaign_name = campaign.name.clone();
     let campaign_slug = campaign.slug.clone();
     let campaign_type = campaign.r#type.clone();
-    
+
     let fn1 = contact.first_name.as_deref().unwrap_or("").to_string();
     let ln1 = contact.last_name.as_deref().unwrap_or("").to_string();
     let em1 = contact.email.as_deref().unwrap_or("").to_string();
@@ -279,7 +285,7 @@ pub async fn spin(
     let ws1 = contact.website.as_deref().unwrap_or("").to_string();
     let bn1 = contact.business_name.as_deref().unwrap_or("").to_string();
     let outcome_str = outcome.to_string();
-    
+
     tokio::spawn({
         let state = state.clone();
         let campaign_id = campaign.id;
@@ -293,15 +299,31 @@ pub async fn spin(
         let page_url = body.page_url.clone();
         async move {
             crate::delivery::output_actions::execute_output_actions(
-                &state, &campaign_id, &campaign_name, &campaign_slug, &campaign_type, &campaign_config,
+                &state,
+                &campaign_id,
+                &campaign_name,
+                &campaign_slug,
+                &campaign_type,
+                &campaign_config,
                 &contact_id,
-                &fn1, &ln1, &em1, &ph1, &ws1, &bn1,
-                &account_id, &outcome_str, &[],
+                &fn1,
+                &ln1,
+                &em1,
+                &ph1,
+                &ws1,
+                &bn1,
+                &account_id,
+                &outcome_str,
+                &[],
                 None,
                 answers.as_ref(),
-                utm_source.as_deref(), utm_medium.as_deref(), utm_campaign.as_deref(),
-                referrer_url.as_deref(), page_url.as_deref(),
-            ).await;
+                utm_source.as_deref(),
+                utm_medium.as_deref(),
+                utm_campaign.as_deref(),
+                referrer_url.as_deref(),
+                page_url.as_deref(),
+            )
+            .await;
         }
     });
 
@@ -317,20 +339,23 @@ pub async fn spin(
             &contact_id,
             &result.prize_id,
             &code,
-        ).await;
+        )
+        .await;
 
         // Check prize delivery config from campaign config
         if let Some(prize_pool) = campaign.config.get("prize_pool") {
             if let Some(prizes) = prize_pool.get("prizes").and_then(|p| p.as_array()) {
-                if let Some(prize_json) = prizes.iter().find(|p| {
-                    p.get("id").and_then(|id| id.as_str()) == Some(&result.prize_id)
-                }) {
+                if let Some(prize_json) = prizes
+                    .iter()
+                    .find(|p| p.get("id").and_then(|id| id.as_str()) == Some(&result.prize_id))
+                {
                     let delivery = get_prize_delivery(prize_json);
 
                     match delivery.method.as_str() {
                         "email" => {
                             // Fire email delivery via webhook to configured email provider
-                            let subject = delivery.subject
+                            let subject = delivery
+                                .subject
                                 .unwrap_or_else(|| format!("You won: {}!", result.prize_label));
                             let body_template = delivery.body
                                 .unwrap_or_else(|| "Congratulations! You won {prize_label}. Use code {code} to redeem.".to_string());
@@ -339,13 +364,19 @@ pub async fn spin(
                             let body = body_template
                                 .replace("{code}", &code)
                                 .replace("{prize_label}", &result.prize_label)
-                                .replace("{contact_name}", contact.first_name.as_deref().unwrap_or("there"))
+                                .replace(
+                                    "{contact_name}",
+                                    contact.first_name.as_deref().unwrap_or("there"),
+                                )
                                 .replace("{prize_type}", &result.prize_type);
 
                             let subject_final = subject
                                 .replace("{prize_label}", &result.prize_label)
                                 .replace("{code}", &code)
-                                .replace("{contact_name}", contact.first_name.as_deref().unwrap_or("there"));
+                                .replace(
+                                    "{contact_name}",
+                                    contact.first_name.as_deref().unwrap_or("there"),
+                                );
 
                             delivery_info = Some(json!({
                                 "method": "email",
@@ -358,7 +389,10 @@ pub async fn spin(
                             // In a full implementation, this would use a provider key to send email
                             tracing::info!(
                                 "Prize email delivery: contact={} slug={} prize={} code={}",
-                                contact_id, slug, result.prize_label, code
+                                contact_id,
+                                slug,
+                                result.prize_label,
+                                code
                             );
                         }
                         "redirect" => {
@@ -431,7 +465,7 @@ pub async fn spin(
         // Look up prize-level marketing_boost from campaign_prize_inventory
         let prize_marketing_boost: Option<serde_json::Value> = sqlx::query_scalar(
             r#"SELECT marketing_boost FROM campaign_prize_inventory
-               WHERE campaign_id = $1 AND prize_id = $2"#
+               WHERE campaign_id = $1 AND prize_id = $2"#,
         )
         .bind(campaign.id)
         .bind(&result.prize_id)
@@ -458,7 +492,8 @@ pub async fn spin(
                 result.was_pity,
                 result.streak,
                 result.total_spins,
-            ).await;
+            )
+            .await;
 
             // Also fire Marketing Boost direct API send if configured
             // Per-prize marketing_boost takes priority over campaign-level config
@@ -476,11 +511,10 @@ pub async fn spin(
                 "on_win",
                 &mb_payload,
                 mb_override.as_ref(),
-            ).await;
+            )
+            .await;
         });
     }
-
-
 
     // Build response
     let mut response = json!({
@@ -539,16 +573,12 @@ pub async fn spin_status(
         contacts::upsert_contact(&state.db, &input).await?
     } else {
         return Err(AppError::BadRequest(
-            "Either contact_id, email, or phone query parameter is required".to_string()
+            "Either contact_id, email, or phone query parameter is required".to_string(),
         ));
     };
 
-    let status = prize_draw::get_spin_status(
-        &state.db,
-        &campaign.id,
-        &contact_id,
-        &campaign.config,
-    ).await?;
+    let status =
+        prize_draw::get_spin_status(&state.db, &campaign.id, &contact_id, &campaign.config).await?;
 
     Ok(Json(json!({
         "status": status,
@@ -577,7 +607,7 @@ pub async fn list_wins(
                FROM campaign_wins
                WHERE campaign_id = $1 AND redeemed = true
                ORDER BY created_at DESC
-               LIMIT $2 OFFSET $3"#
+               LIMIT $2 OFFSET $3"#,
         )
         .bind(campaign.id)
         .bind(limit)
@@ -592,7 +622,7 @@ pub async fn list_wins(
                FROM campaign_wins
                WHERE campaign_id = $1
                ORDER BY created_at DESC
-               LIMIT $2 OFFSET $3"#
+               LIMIT $2 OFFSET $3"#,
         )
         .bind(campaign.id)
         .bind(limit)
@@ -601,12 +631,11 @@ pub async fn list_wins(
         .await?
     };
 
-    let total_count: i64 = sqlx::query_scalar(
-        r#"SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1"#
-    )
-    .bind(campaign.id)
-    .fetch_one(&state.db)
-    .await?;
+    let total_count: i64 =
+        sqlx::query_scalar(r#"SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1"#)
+            .bind(campaign.id)
+            .fetch_one(&state.db)
+            .await?;
 
     Ok(Json(json!({
         "wins": wins,
@@ -630,7 +659,7 @@ pub async fn redeem_win(
     let result = sqlx::query(
         r#"UPDATE campaign_wins
            SET redeemed = true, redeemed_at = now()
-           WHERE id = $1 AND campaign_id = $2 AND redeemed = false"#
+           WHERE id = $1 AND campaign_id = $2 AND redeemed = false"#,
     )
     .bind(win_uuid)
     .bind(campaign.id)
@@ -638,7 +667,9 @@ pub async fn redeem_win(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Win not found or already redeemed".to_string()));
+        return Err(AppError::NotFound(
+            "Win not found or already redeemed".to_string(),
+        ));
     }
 
     Ok(Json(json!({ "status": "redeemed" })))

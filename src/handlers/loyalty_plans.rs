@@ -1,15 +1,12 @@
 //! Loyalty plans — subscription tiers for business loyalty program
 
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{extract::State, Json};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::state::AppState;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct LoyaltyPlan {
@@ -35,9 +32,7 @@ pub struct PlanStatusResponse {
 
 /// GET /api/v1/loyalty/plans
 /// Returns all active loyalty subscription plans available for business enrollment.
-pub async fn list_plans(
-    State(s): State<AppState>,
-) -> Result<Json<Vec<LoyaltyPlan>>, AppError> {
+pub async fn list_plans(State(s): State<AppState>) -> Result<Json<Vec<LoyaltyPlan>>, AppError> {
     let plans = sqlx::query_as::<_, LoyaltyPlan>(
         "SELECT id, name, slug, monthly_price, monthly_zc_pool, features, description, how_it_works FROM loyalty_plans WHERE is_active = true ORDER BY monthly_price ASC"
     )
@@ -113,12 +108,11 @@ pub async fn subscribe(
     .ok_or_else(|| AppError::NotFound(format!("Plan '{}' not found", req.plan_slug)))?;
 
     // Check if already has an active plan
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT loyalty_plan_status FROM accounts WHERE id = $1"
-    )
-    .bind(&account_id)
-    .fetch_optional(&s.db)
-    .await?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT loyalty_plan_status FROM accounts WHERE id = $1")
+            .bind(&account_id)
+            .fetch_optional(&s.db)
+            .await?;
 
     if existing.as_deref() == Some("active") {
         return Ok(Json(SubscribeResponse {
@@ -132,7 +126,7 @@ pub async fn subscribe(
 
     // Get Stripe key
     let stripe_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND is_active = true LIMIT 1"
+        "SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND is_active = true LIMIT 1",
     )
     .fetch_optional(&s.db)
     .await?;
@@ -150,9 +144,14 @@ pub async fn subscribe(
         }
     };
 
-    let base_url = std::env::var("APP_BASE_URL").unwrap_or_else(|_| "https://app.workflowswift.com".to_string());
-    let success_url = req.success_url.unwrap_or_else(|| format!("{}/business-portal?loyalty=success", base_url));
-    let cancel_url = req.cancel_url.unwrap_or_else(|| format!("{}/business-portal?loyalty=cancelled", base_url));
+    let base_url = std::env::var("APP_BASE_URL")
+        .unwrap_or_else(|_| "https://app.workflowswift.com".to_string());
+    let success_url = req
+        .success_url
+        .unwrap_or_else(|| format!("{}/business-portal?loyalty=success", base_url));
+    let cancel_url = req
+        .cancel_url
+        .unwrap_or_else(|| format!("{}/business-portal?loyalty=cancelled", base_url));
 
     let plan_name = plan.name.clone();
     let monthly_price = plan.monthly_price;
@@ -163,9 +162,18 @@ pub async fn subscribe(
         ("mode", "subscription"),
         ("payment_method_types[]", "card"),
         ("line_items[0][price_data][currency]", "usd"),
-        ("line_items[0][price_data][unit_amount]", &monthly_price.to_string()),
+        (
+            "line_items[0][price_data][unit_amount]",
+            &monthly_price.to_string(),
+        ),
         ("line_items[0][price_data][recurring][interval]", "month"),
-        ("line_items[0][price_data][product_data][name]", &format!("ZaarHub Loyalty — {} ({} ZC/mo)", plan_name, monthly_zc_pool)),
+        (
+            "line_items[0][price_data][product_data][name]",
+            &format!(
+                "ZaarHub Loyalty — {} ({} ZC/mo)",
+                plan_name, monthly_zc_pool
+            ),
+        ),
         ("line_items[0][quantity]", "1"),
         ("success_url", &success_url),
         ("cancel_url", &cancel_url),
@@ -175,7 +183,8 @@ pub async fn subscribe(
         ("metadata[loyalty_subscription]", "true"),
     ];
 
-    let resp = client.post("https://api.stripe.com/v1/checkout/sessions")
+    let resp = client
+        .post("https://api.stripe.com/v1/checkout/sessions")
         .header("Authorization", format!("Bearer {}", stripe_key))
         .form(&params)
         .send()
@@ -183,7 +192,10 @@ pub async fn subscribe(
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            let json: serde_json::Value = r.json().await.map_err(|e| AppError::Internal(e.to_string()))?;
+            let json: serde_json::Value = r
+                .json()
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?;
             let stripe_session_id = json["id"].as_str().unwrap_or("").to_string();
             let checkout_url = json["url"].as_str().unwrap_or("").to_string();
 

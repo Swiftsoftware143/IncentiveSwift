@@ -39,11 +39,9 @@ impl AppConfig {
                 .unwrap_or_else(|_| "5".to_string())
                 .parse()
                 .map_err(|e| ConfigError::InvalidValue(format!("DB_MIN_CONNECTIONS: {}", e)))?,
-            jwt_secret: std::env::var("JWT_SECRET")
-                .expect("JWT_SECRET is required"),
+            jwt_secret: std::env::var("JWT_SECRET").expect("JWT_SECRET is required"),
 
-            internal_sync_key: std::env::var("INTERNAL_SYNC_KEY")
-                .unwrap_or_else(|_| String::new()),
+            internal_sync_key: std::env::var("INTERNAL_SYNC_KEY").unwrap_or_else(|_| String::new()),
 
             coreswift_url: std::env::var("CORESWIFT_URL")
                 .unwrap_or_else(|_| "http://localhost:8084".to_string()),

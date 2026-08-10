@@ -1,13 +1,13 @@
 //! Credit system handler — balance, deduction, top-up, history
 
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CreditTransaction {
@@ -37,7 +37,7 @@ pub async fn get_balance(
     let pool = &state.db;
 
     let row = sqlx::query_as::<_, (i32, i32)>(
-        "SELECT credits_balance, credits_lifetime_used FROM accounts WHERE id = $1"
+        "SELECT credits_balance, credits_lifetime_used FROM accounts WHERE id = $1",
     )
     .bind(account_id)
     .fetch_optional(pool)
@@ -55,7 +55,11 @@ pub async fn get_balance(
             .await;
 
             let (credits_monthly, credits_overdraft, plan_name) = match plan_info {
-                Ok(Some((cm, co, pn))) => (cm.unwrap_or(0), co.unwrap_or(0), pn.unwrap_or_else(|| "Unknown".to_string())),
+                Ok(Some((cm, co, pn))) => (
+                    cm.unwrap_or(0),
+                    co.unwrap_or(0),
+                    pn.unwrap_or_else(|| "Unknown".to_string()),
+                ),
                 _ => (0, 0, "Unknown".to_string()),
             };
 
@@ -110,7 +114,7 @@ pub async fn get_history(
     };
 
     let total = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM credit_transactions WHERE account_id = $1"
+        "SELECT COUNT(*) FROM credit_transactions WHERE account_id = $1",
     )
     .bind(account_id)
     .fetch_one(pool)
@@ -119,9 +123,32 @@ pub async fn get_history(
 
     match rows {
         Ok(rows) => {
-            let transactions: Vec<CreditTransaction> = rows.into_iter().map(|(id, amount, balance_after, action, reference_type, reference_id, description, created_at)| {
-                CreditTransaction { id, amount, balance_after, action, reference_type, reference_id, description, created_at }
-            }).collect();
+            let transactions: Vec<CreditTransaction> = rows
+                .into_iter()
+                .map(
+                    |(
+                        id,
+                        amount,
+                        balance_after,
+                        action,
+                        reference_type,
+                        reference_id,
+                        description,
+                        created_at,
+                    )| {
+                        CreditTransaction {
+                            id,
+                            amount,
+                            balance_after,
+                            action,
+                            reference_type,
+                            reference_id,
+                            description,
+                            created_at,
+                        }
+                    },
+                )
+                .collect();
 
             Json(serde_json::json!({
                 "success": true,
@@ -147,7 +174,7 @@ pub async fn deduct_credits(
         "SELECT COALESCE(a.credits_balance, 0),
                 COALESCE((p.features->>'credits_monthly')::int, 0),
                 COALESCE((p.features->>'credits_overdraft')::int, 0)
-         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $1"
+         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $1",
     )
     .bind(account_id)
     .fetch_optional(pool)
@@ -214,7 +241,7 @@ pub async fn check_credits(
 ) -> Result<(bool, i32, i32), String> {
     let info = sqlx::query_as::<_, (i32, Option<i32>)>(
         "SELECT a.credits_balance, (p.features->>$1)::int
-         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $2"
+         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $2",
     )
     .bind(format!("cost_{}", action))
     .bind(account_id)
@@ -256,13 +283,27 @@ pub async fn create_topup_checkout(
     match stripe_key {
         Ok(Some(key)) => {
             let account_id = auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil());
-            let success_url = format!("https://app.incentiveswift.com/admin/credits?checkout=success&credits={}", credits);
-            let cancel_url = "https://app.incentiveswift.com/admin/credits?checkout=cancel".to_string();
+            let success_url = format!(
+                "https://app.incentiveswift.com/admin/credits?checkout=success&credits={}",
+                credits
+            );
+            let cancel_url =
+                "https://app.incentiveswift.com/admin/credits?checkout=cancel".to_string();
 
-            match create_stripe_session(&key, amount, &success_url, &cancel_url, account_id, credits as i32).await {
+            match create_stripe_session(
+                &key,
+                amount,
+                &success_url,
+                &cancel_url,
+                account_id,
+                credits as i32,
+            )
+            .await
+            {
                 Some(session_url) => {
                     // Store pending checkout
-                    let stripe_session_id = session_url.split('/').next_back().unwrap_or("").to_string();
+                    let stripe_session_id =
+                        session_url.split('/').next_back().unwrap_or("").to_string();
                     sqlx::query(
                         "INSERT INTO stripe_checkout_sessions (account_id, stripe_session_id, amount, credits, status)
                          VALUES ($1, $2, $3, $4, 'pending')"
@@ -303,10 +344,16 @@ pub async fn stripe_webhook(
 
     match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(event) => {
-            let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let event_type = event
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
 
             if let Some(session_id) = extract_session_id(&event) {
-                let amount = event.pointer("/data/object/amount_total").and_then(|v| v.as_i64()).unwrap_or(0);
+                let amount = event
+                    .pointer("/data/object/amount_total")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
                 let _credits = (amount / 100) as i32 * 10;
 
                 // Update session and credit account
@@ -330,7 +377,8 @@ pub async fn stripe_webhook(
 }
 
 fn extract_session_id(event: &serde_json::Value) -> Option<String> {
-    event.pointer("/data/object/id")
+    event
+        .pointer("/data/object/id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
 }
@@ -348,14 +396,21 @@ async fn create_stripe_session(
         ("mode", "payment"),
         ("payment_method_types[]", "card"),
         ("line_items[0][price_data][currency]", "usd"),
-        ("line_items[0][price_data][unit_amount]", &amount_cents.to_string()),
-        ("line_items[0][price_data][product_data][name]", &format!("{} Credits", _credits)),
+        (
+            "line_items[0][price_data][unit_amount]",
+            &amount_cents.to_string(),
+        ),
+        (
+            "line_items[0][price_data][product_data][name]",
+            &format!("{} Credits", _credits),
+        ),
         ("line_items[0][quantity]", "1"),
         ("success_url", success_url),
         ("cancel_url", cancel_url),
     ];
 
-    let resp = client.post("https://api.stripe.com/v1/checkout/sessions")
+    let resp = client
+        .post("https://api.stripe.com/v1/checkout/sessions")
         .header("Authorization", format!("Bearer {}", api_key))
         .form(&params)
         .send()
@@ -363,7 +418,9 @@ async fn create_stripe_session(
         .ok()?;
 
     let json: serde_json::Value = resp.json().await.ok()?;
-    json.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
+    json.get("url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// POST /api/v1/admin/credits/adjust — admin adjusts a user's credits
@@ -373,27 +430,35 @@ pub async fn admin_adjust_credits(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     // Verify admin role
-    let is_admin = sqlx::query_scalar::<_, String>(
-        "SELECT role FROM accounts WHERE id = $1"
-    )
-    .bind(auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil()))
-    .fetch_optional(&state.db)
-    .await;
+    let is_admin = sqlx::query_scalar::<_, String>("SELECT role FROM accounts WHERE id = $1")
+        .bind(auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil()))
+        .fetch_optional(&state.db)
+        .await;
 
     match is_admin {
         Ok(Some(ref role)) if role == "admin" || role == "super_admin" => {
-            let target_id = body.get("account_id")
+            let target_id = body
+                .get("account_id")
                 .and_then(|v| v.as_str())
                 .and_then(|s| Uuid::parse_str(s).ok());
             let amount = body.get("amount").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-            let reason = body.get("reason").and_then(|v| v.as_str()).unwrap_or("Admin adjustment");
+            let reason = body
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Admin adjustment");
 
             match (target_id, amount) {
                 (Some(tid), amt) if amt != 0 => {
                     let result = add_credits_internal(
-                        &state.db, tid, amt, "admin_adjust", None, None,
-                        &Some(reason.to_string())
-                    ).await;
+                        &state.db,
+                        tid,
+                        amt,
+                        "admin_adjust",
+                        None,
+                        None,
+                        &Some(reason.to_string()),
+                    )
+                    .await;
                     match result {
                         Ok(balance) => Json(serde_json::json!({
                             "success": true,
@@ -403,7 +468,9 @@ pub async fn admin_adjust_credits(
                         Err(e) => Json(serde_json::json!({"success": false, "error": e})),
                     }
                 }
-                _ => Json(serde_json::json!({"success": false, "error": "Invalid account_id or amount"})),
+                _ => Json(
+                    serde_json::json!({"success": false, "error": "Invalid account_id or amount"}),
+                ),
             }
         }
         _ => Json(serde_json::json!({"success": false, "error": "Admin access required"})),
@@ -423,7 +490,7 @@ pub async fn add_credits_internal(
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     let current = sqlx::query_scalar::<_, i32>(
-        "SELECT credits_balance FROM accounts WHERE id = $1 FOR UPDATE"
+        "SELECT credits_balance FROM accounts WHERE id = $1 FOR UPDATE",
     )
     .bind(account_id)
     .fetch_optional(&mut *tx)
@@ -469,26 +536,33 @@ pub async fn sms_inbound_webhook(
 ) -> Json<serde_json::Value> {
     let pool = &state.db;
 
-    let event_type = body.pointer("/data/event_type")
+    let event_type = body
+        .pointer("/data/event_type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    let message_id = body.pointer("/data/payload/id")
+    let message_id = body
+        .pointer("/data/payload/id")
         .or_else(|| body.pointer("/data/id"))
         .and_then(|v| v.as_str());
 
-    let from = body.pointer("/data/payload/from/phone_number")
+    let from = body
+        .pointer("/data/payload/from/phone_number")
         .or_else(|| body.pointer("/data/payload/from"))
         .and_then(|v| v.as_str());
 
-    let to = body.pointer("/data/payload/to/0/phone_number")
+    let to = body
+        .pointer("/data/payload/to/0/phone_number")
         .or_else(|| body.pointer("/data/payload/to"))
         .and_then(|v| v.as_str());
 
-    let text = body.pointer("/data/payload/text")
-        .and_then(|v| v.as_str());
+    let text = body.pointer("/data/payload/text").and_then(|v| v.as_str());
 
-    let direction = if event_type.contains("whatsapp") { "inbound_whatsapp" } else { "inbound" };
+    let direction = if event_type.contains("whatsapp") {
+        "inbound_whatsapp"
+    } else {
+        "inbound"
+    };
 
     if let (Some(from_num), Some(to_num)) = (from, to) {
         let from_clean = from_num.trim_start_matches('+').to_string();
@@ -497,7 +571,7 @@ pub async fn sms_inbound_webhook(
         sqlx::query(
             "INSERT INTO inbound_messages (message_id, from_number, to_number, body, direction)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (message_id) DO NOTHING"
+             ON CONFLICT (message_id) DO NOTHING",
         )
         .bind(message_id)
         .bind(&from_clean)

@@ -69,8 +69,7 @@ pub async fn push_to_workflowswift(
         req_builder = req_builder.header("X-Internal-Key", &internal_key);
     }
 
-    match req_builder.send().await
-    {
+    match req_builder.send().await {
         Ok(resp) => {
             let status = resp.status();
             if status.is_success() {
@@ -80,11 +79,7 @@ pub async fn push_to_workflowswift(
                 );
             } else {
                 let body_text = resp.text().await.unwrap_or_default();
-                tracing::warn!(
-                    "WorkflowSwift push returned {}: {}",
-                    status,
-                    body_text
-                );
+                tracing::warn!("WorkflowSwift push returned {}: {}", status, body_text);
             }
             Ok(())
         }

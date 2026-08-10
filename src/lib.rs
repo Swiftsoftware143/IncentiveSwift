@@ -1,4 +1,3 @@
-
 //! This library serves as the main crate for IncentiveSwift.
 #![allow(unused_variables, dead_code)]
 #![allow(clippy::too_many_arguments)]
@@ -14,15 +13,15 @@
 //! Integration tests use `incentiveswift_api::*` to access public types and functions.
 //! Keep the module structure identical to main.rs so tests can reference everything.
 
-pub mod config;
-pub mod features;
-pub mod state;
-pub mod error;
-pub mod db;
-pub mod handlers;
-pub mod delivery;
-pub mod mechanics;
 pub mod access;
-pub mod security;
-pub mod iqs_validation;
+pub mod config;
+pub mod db;
+pub mod delivery;
 mod email;
+pub mod error;
+pub mod features;
+pub mod handlers;
+pub mod iqs_validation;
+pub mod mechanics;
+pub mod security;
+pub mod state;

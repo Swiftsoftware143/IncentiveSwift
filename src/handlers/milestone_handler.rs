@@ -1,9 +1,9 @@
 //! Phase 2: Admin handlers for Campaign Milestones CRUD
 
 use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::mechanics::milestone_engine;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -82,7 +82,7 @@ pub async fn list_achieved_milestones(
            FROM campaign_milestones_achieved ma
            WHERE ma.campaign_id = $1
            ORDER BY ma.achieved_at DESC
-           LIMIT 100"#
+           LIMIT 100"#,
     )
     .bind(campaign.id)
     .fetch_all(&state.db)

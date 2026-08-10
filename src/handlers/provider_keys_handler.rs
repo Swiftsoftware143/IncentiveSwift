@@ -7,8 +7,8 @@
 //!   GET  /api/v1/available-providers    - list all available provider types
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -24,7 +24,7 @@ fn mask_key(key: &str) -> String {
         return "***".to_string();
     }
     let first = &key[..3];
-    let last = &key[key.len()-3..];
+    let last = &key[key.len() - 3..];
     format!("{}...{}", first, last)
 }
 
@@ -45,29 +45,32 @@ pub async fn list_provider_keys(
         LEFT JOIN available_providers ap ON ap.key = pk.provider
         WHERE pk.account_id = $1
         ORDER BY pk.provider
-        "#
+        "#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<Value> = rows.iter().map(|row| {
-        let raw_key: String = row.get("api_key");
-        json!({
-            "id": row.get::<Uuid, _>("id"),
-            "account_id": row.get::<Uuid, _>("account_id"),
-            "provider": row.get::<String, _>("provider"),
-            "api_key_masked": mask_key(&raw_key),
-            "base_url": row.get::<Option<String>, _>("base_url"),
-            "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
-            "is_active": row.get::<bool, _>("is_active"),
-            "scope": row.get::<String, _>("scope"),
-            "provider_name": row.get::<Option<String>, _>("provider_name"),
-            "provider_description": row.get::<Option<String>, _>("provider_description"),
-            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let raw_key: String = row.get("api_key");
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "account_id": row.get::<Uuid, _>("account_id"),
+                "provider": row.get::<String, _>("provider"),
+                "api_key_masked": mask_key(&raw_key),
+                "base_url": row.get::<Option<String>, _>("base_url"),
+                "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
+                "is_active": row.get::<bool, _>("is_active"),
+                "scope": row.get::<String, _>("scope"),
+                "provider_name": row.get::<Option<String>, _>("provider_name"),
+                "provider_description": row.get::<Option<String>, _>("provider_description"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }
@@ -82,12 +85,10 @@ pub async fn upsert_provider_key(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     // Validate provider exists
-    let provider_exists = sqlx::query(
-        "SELECT 1 FROM available_providers WHERE key = $1"
-    )
-    .bind(&body.provider)
-    .fetch_optional(&state.db)
-    .await?;
+    let provider_exists = sqlx::query("SELECT 1 FROM available_providers WHERE key = $1")
+        .bind(&body.provider)
+        .fetch_optional(&state.db)
+        .await?;
 
     if provider_exists.is_none() {
         return Err(AppError::BadRequest(format!(
@@ -156,13 +157,11 @@ pub async fn delete_provider_key(
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let result = sqlx::query(
-        "DELETE FROM provider_keys WHERE account_id = $1 AND provider = $2"
-    )
-    .bind(account_id)
-    .bind(&provider)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM provider_keys WHERE account_id = $1 AND provider = $2")
+        .bind(account_id)
+        .bind(&provider)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!(
@@ -184,16 +183,19 @@ pub async fn list_available_providers(
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<Value> = rows.iter().map(|row| {
-        json!({
-            "key": row.get::<String, _>("key"),
-            "name": row.get::<String, _>("name"),
-            "description": row.get::<Option<String>, _>("description"),
-            "requires_base_url": row.get::<bool, _>("requires_base_url"),
-            "requires_metadata": row.get::<serde_json::Value, _>("requires_metadata"),
-            "icon": row.get::<Option<String>, _>("icon"),
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "key": row.get::<String, _>("key"),
+                "name": row.get::<String, _>("name"),
+                "description": row.get::<Option<String>, _>("description"),
+                "requires_base_url": row.get::<bool, _>("requires_base_url"),
+                "requires_metadata": row.get::<serde_json::Value, _>("requires_metadata"),
+                "icon": row.get::<Option<String>, _>("icon"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }

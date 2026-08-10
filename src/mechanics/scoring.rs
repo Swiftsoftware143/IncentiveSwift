@@ -11,9 +11,7 @@ use serde_json::Value;
 pub fn calculate_score(campaign_type: &str, answers: &Value) -> i32 {
     match campaign_type {
         "score_reveal" => calculate_score_reveal(answers),
-        "calculator" => {
-            0
-        }
+        "calculator" => 0,
         "personality" => calculate_personality(answers),
         _ => 0,
     }

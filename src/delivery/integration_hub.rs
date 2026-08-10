@@ -24,11 +24,11 @@
 //! }
 //! ```
 
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
-use reqwest::Client as HttpClient;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -202,10 +202,7 @@ pub struct DeliveryContext {
 }
 
 /// Execute all delivery actions for a mechanic outcome.
-pub async fn execute_delivery(
-    pool: &PgPool,
-    ctx: &DeliveryContext,
-) -> DeliveryResult {
+pub async fn execute_delivery(pool: &PgPool, ctx: &DeliveryContext) -> DeliveryResult {
     let mut result = DeliveryResult {
         email_sent: false,
         redirect_url: None,
@@ -239,8 +236,10 @@ pub async fn execute_delivery(
         }
         // Add standard params
         let sep = if url.contains('?') { "&" } else { "?" };
-        url = format!("{}{}cid={}&pid={}",
-            url, sep,
+        url = format!(
+            "{}{}cid={}&pid={}",
+            url,
+            sep,
             ctx.contact.id,
             ctx.outcome.prize_id.as_deref().unwrap_or(""),
         );
@@ -260,7 +259,9 @@ pub async fn execute_delivery(
         for target_id_str in &delivery.webhooks {
             match deliver_to_integration_target(pool, target_id_str, ctx).await {
                 Ok(res) => result.webhooks_fired.push(res),
-                Err(e) => result.errors.push(format!("Webhook {}: {}", target_id_str, e)),
+                Err(e) => result
+                    .errors
+                    .push(format!("Webhook {}: {}", target_id_str, e)),
             }
         }
     }
@@ -288,20 +289,34 @@ async fn send_prize_email(
     outcome: &OutcomePayload,
     email_cfg: &EmailDelivery,
 ) -> Result<(), String> {
-    let to = contact.email.as_ref()
+    let to = contact
+        .email
+        .as_ref()
         .ok_or_else(|| "Contact has no email address".to_string())?;
 
-    let subject = email_cfg.subject.clone()
+    let subject = email_cfg
+        .subject
+        .clone()
         .unwrap_or_else(|| format!("🎉 You won from {}!", campaign.name));
 
-    let body_text = email_cfg.body_text.clone()
+    let body_text = email_cfg
+        .body_text
+        .clone()
         .unwrap_or_else(|| build_default_email_body(outcome));
 
     // Resolve template variables
-    let body_text = resolve_template(&body_text, &DeliveryContext_placeholder(campaign, contact, outcome));
-    let subject = resolve_template(&subject, &DeliveryContext_placeholder(campaign, contact, outcome));
+    let body_text = resolve_template(
+        &body_text,
+        &DeliveryContext_placeholder(campaign, contact, outcome),
+    );
+    let subject = resolve_template(
+        &subject,
+        &DeliveryContext_placeholder(campaign, contact, outcome),
+    );
 
-    let from_name = email_cfg.from_name.clone()
+    let from_name = email_cfg
+        .from_name
+        .clone()
         .unwrap_or_else(|| "IncentiveSwift".to_string());
 
     // Log the email delivery
@@ -328,7 +343,9 @@ async fn send_prize_email(
 
     tracing::info!(
         "Prize email queued for {}: '{}' (prize: {})",
-        to, subject, outcome.prize_label.as_deref().unwrap_or("unknown")
+        to,
+        subject,
+        outcome.prize_label.as_deref().unwrap_or("unknown")
     );
 
     // Note: actual SMTP/API send happens async via n8n or email service.
@@ -380,7 +397,7 @@ async fn deliver_to_integration_target(
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active
-           FROM integration_targets WHERE id = $1"#
+           FROM integration_targets WHERE id = $1"#,
     )
     .bind(target_id)
     .fetch_optional(pool)
@@ -400,7 +417,12 @@ async fn deliver_to_integration_target(
 
     // Build webhook payload
     let payload = WebhookPayload {
-        event: if ctx.outcome.won { "prize.won" } else { "prize.lost" }.to_string(),
+        event: if ctx.outcome.won {
+            "prize.won"
+        } else {
+            "prize.lost"
+        }
+        .to_string(),
         contact: ContactPayload {
             id: ctx.contact.id.to_string(),
             email: ctx.contact.email.clone(),
@@ -425,7 +447,11 @@ async fn deliver_to_integration_target(
             redemption_url: ctx.outcome.redemption_url.clone(),
         },
         timestamp: chrono::Utc::now().to_rfc3339(),
-        custom: ctx.delivery_config.on_win.custom_payload.clone()
+        custom: ctx
+            .delivery_config
+            .on_win
+            .custom_payload
+            .clone()
             .or_else(|| ctx.delivery_config.on_lose.custom_payload.clone()),
     };
 
@@ -433,7 +459,10 @@ async fn deliver_to_integration_target(
     let payload = if target.provider == "marketing_boost" && target.portfolio_company_id.is_some() {
         let mut p = serde_json::to_value(&payload).unwrap_or_else(|_| json!({}));
         if let Some(obj) = p.as_object_mut() {
-            obj.insert("portfolio_company_id".to_string(), json!(target.portfolio_company_id.map(|id| id.to_string())));
+            obj.insert(
+                "portfolio_company_id".to_string(),
+                json!(target.portfolio_company_id.map(|id| id.to_string())),
+            );
         }
         p
     } else {
@@ -449,7 +478,7 @@ async fn deliver_to_integration_target(
         // Look up the portfolio company's Marketing Boost API key
         let pc_api_key: Option<String> = sqlx::query_scalar(
             r#"SELECT settings->>'marketing_boost_api_key'
-               FROM portfolio_companies WHERE id = $1"#
+               FROM portfolio_companies WHERE id = $1"#,
         )
         .bind(target.portfolio_company_id)
         .fetch_optional(pool)
@@ -463,7 +492,8 @@ async fn deliver_to_integration_target(
 
     // Send webhook
     let client = HttpClient::new();
-    let mut request = client.post(&target.webhook_url)
+    let mut request = client
+        .post(&target.webhook_url)
         .header("Content-Type", "application/json")
         .header("User-Agent", "IncentiveSwift-IntegrationHub/1.0");
 
@@ -471,10 +501,7 @@ async fn deliver_to_integration_target(
         request = request.header("Authorization", format!("Bearer {}", key));
     }
 
-    let response = request
-        .json(&payload)
-        .send()
-        .await;
+    let response = request.json(&payload).send().await;
 
     match response {
         Ok(resp) => {
@@ -513,7 +540,7 @@ async fn deliver_to_integration_target(
             let error_msg = format!("HTTP request failed: {}", e);
             let _ = sqlx::query(
                 r#"INSERT INTO delivery_log (id, entry_id, method, target, success, response_body)
-                   VALUES ($1, $2, 'webhook', $3, false, $4)"#
+                   VALUES ($1, $2, 'webhook', $3, false, $4)"#,
             )
             .bind(Uuid::new_v4())
             .bind(Uuid::new_v4())
@@ -540,10 +567,7 @@ async fn deliver_to_integration_target(
 /// Fire an autoresponder for the contact on win/lose.
 /// This checks the account's configured autoresponder integration and sends
 /// the contact + outcome data to trigger a sequence.
-async fn fire_autoresponder(
-    pool: &PgPool,
-    ctx: &DeliveryContext,
-) -> Result<(), String> {
+async fn fire_autoresponder(pool: &PgPool, ctx: &DeliveryContext) -> Result<(), String> {
     // Check if the campaign's account has an autoresponder integration configured
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
@@ -583,7 +607,8 @@ async fn fire_autoresponder(
     });
 
     let client = HttpClient::new();
-    let mut request = client.post(&target.webhook_url)
+    let mut request = client
+        .post(&target.webhook_url)
         .header("Content-Type", "application/json")
         .header("User-Agent", "IncentiveSwift-IntegrationHub/1.0");
 
@@ -591,7 +616,10 @@ async fn fire_autoresponder(
         request = request.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let response = request.json(&payload).send().await
+    let response = request
+        .json(&payload)
+        .send()
+        .await
         .map_err(|e| format!("Autoresponder request failed: {}", e))?;
 
     if !response.status().is_success() {
@@ -617,24 +645,51 @@ fn resolve_template(template: &str, ctx: &DeliveryContext) -> String {
     let mut result = template.to_string();
 
     // Contact
-    result = result.replace("{{contact.email}}", ctx.contact.email.as_deref().unwrap_or(""));
-    result = result.replace("{{contact.phone}}", ctx.contact.phone.as_deref().unwrap_or(""));
-    result = result.replace("{{contact.first_name}}", ctx.contact.first_name.as_deref().unwrap_or(""));
-    result = result.replace("{{contact.last_name}}", ctx.contact.last_name.as_deref().unwrap_or(""));
+    result = result.replace(
+        "{{contact.email}}",
+        ctx.contact.email.as_deref().unwrap_or(""),
+    );
+    result = result.replace(
+        "{{contact.phone}}",
+        ctx.contact.phone.as_deref().unwrap_or(""),
+    );
+    result = result.replace(
+        "{{contact.first_name}}",
+        ctx.contact.first_name.as_deref().unwrap_or(""),
+    );
+    result = result.replace(
+        "{{contact.last_name}}",
+        ctx.contact.last_name.as_deref().unwrap_or(""),
+    );
 
     // Campaign
     result = result.replace("{{campaign.name}}", &ctx.campaign.name);
     result = result.replace("{{campaign.slug}}", &ctx.campaign.slug);
 
     // Prize
-    result = result.replace("{{prize.label}}", ctx.outcome.prize_label.as_deref().unwrap_or(""));
-    result = result.replace("{{prize.type}}", ctx.outcome.prize_type.as_deref().unwrap_or(""));
-    result = result.replace("{{prize.id}}", ctx.outcome.prize_id.as_deref().unwrap_or(""));
+    result = result.replace(
+        "{{prize.label}}",
+        ctx.outcome.prize_label.as_deref().unwrap_or(""),
+    );
+    result = result.replace(
+        "{{prize.type}}",
+        ctx.outcome.prize_type.as_deref().unwrap_or(""),
+    );
+    result = result.replace(
+        "{{prize.id}}",
+        ctx.outcome.prize_id.as_deref().unwrap_or(""),
+    );
 
     // Outcome
-    result = result.replace("{{outcome.won}}", if ctx.outcome.won { "true" } else { "false" });
+    result = result.replace(
+        "{{outcome.won}}",
+        if ctx.outcome.won { "true" } else { "false" },
+    );
     result = result.replace("{{outcome.streak}}", &ctx.outcome.streak.to_string());
-    result = result.replace("{{outcome.total_spins}}", &ctx.outcome.total_spins.to_string());
+    result = result.replace(
+        "{{outcome.total_spins}}",
+        &ctx.outcome.total_spins.to_string(),
+    );
 
     result
 }

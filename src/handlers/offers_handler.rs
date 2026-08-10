@@ -11,14 +11,14 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
-use crate::state::AppState;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 
 // ── Data Models ──
 
@@ -67,19 +67,15 @@ fn resolve_tenant_id(user: &AuthenticatedUser) -> Result<String, AppError> {
 }
 
 /// Look up the actual tenant UUID from the authenticated user's account.
-async fn get_tenant_id(
-    state: &AppState,
-    user: &AuthenticatedUser,
-) -> Result<Uuid, AppError> {
+async fn get_tenant_id(state: &AppState, user: &AuthenticatedUser) -> Result<Uuid, AppError> {
     let user_uuid = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user account ID".into()))?;
 
-    let tenant_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT tenant_id FROM accounts WHERE id = $1"
-    )
-    .bind(user_uuid)
-    .fetch_optional(&state.db)
-    .await?;
+    let tenant_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT tenant_id FROM accounts WHERE id = $1")
+            .bind(user_uuid)
+            .fetch_optional(&state.db)
+            .await?;
 
     match tenant_id {
         Some(tid) => Ok(tid),
@@ -106,7 +102,7 @@ pub async fn list_offers(
 
     let offers = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
-         FROM offers WHERE tenant_id = $1 ORDER BY created_at DESC"
+         FROM offers WHERE tenant_id = $1 ORDER BY created_at DESC",
     )
     .bind(tenant_id)
     .fetch_all(&s.db)
@@ -128,16 +124,20 @@ pub async fn create_offer(
         return Err(AppError::BadRequest("Offer name is required".into()));
     }
     if req.discount_percent <= 0 || req.discount_percent > 100 {
-        return Err(AppError::BadRequest("Discount percent must be between 1 and 100".into()));
+        return Err(AppError::BadRequest(
+            "Discount percent must be between 1 and 100".into(),
+        ));
     }
     if req.cap_dollars <= 0 {
-        return Err(AppError::BadRequest("Cap dollars must be greater than 0".into()));
+        return Err(AppError::BadRequest(
+            "Cap dollars must be greater than 0".into(),
+        ));
     }
 
     let offer_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO offers (id, tenant_id, name, discount_percent, cap_dollars)
-         VALUES ($1, $2, $3, $4, $5)"
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(offer_id)
     .bind(tenant_id)
@@ -149,13 +149,15 @@ pub async fn create_offer(
 
     let offer = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
-         FROM offers WHERE id = $1"
+         FROM offers WHERE id = $1",
     )
     .bind(offer_id)
     .fetch_one(&s.db)
     .await?;
 
-    Ok(Json(json!({ "offer": offer, "message": "Offer created successfully" })))
+    Ok(Json(
+        json!({ "offer": offer, "message": "Offer created successfully" }),
+    ))
 }
 
 /// GET /api/v1/admin/offers/:id — get one offer
@@ -168,7 +170,7 @@ pub async fn get_offer(
 
     let offer = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
-         FROM offers WHERE id = $1 AND tenant_id = $2"
+         FROM offers WHERE id = $1 AND tenant_id = $2",
     )
     .bind(offer_id)
     .bind(tenant_id)
@@ -189,14 +191,13 @@ pub async fn update_offer(
     let tenant_id = get_tenant_id(&s, &user).await?;
 
     // Verify offer exists and belongs to tenant
-    let existing = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM offers WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(offer_id)
-    .bind(tenant_id)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Offer not found".into()))?;
+    let existing =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM offers WHERE id = $1 AND tenant_id = $2")
+            .bind(offer_id)
+            .bind(tenant_id)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Offer not found".into()))?;
 
     // Build dynamic update
     if let Some(ref name) = req.name {
@@ -212,7 +213,9 @@ pub async fn update_offer(
 
     if let Some(dp) = req.discount_percent {
         if dp <= 0 || dp > 100 {
-            return Err(AppError::BadRequest("Discount percent must be between 1 and 100".into()));
+            return Err(AppError::BadRequest(
+                "Discount percent must be between 1 and 100".into(),
+            ));
         }
         sqlx::query("UPDATE offers SET discount_percent = $1 WHERE id = $2")
             .bind(dp)
@@ -223,7 +226,9 @@ pub async fn update_offer(
 
     if let Some(cap) = req.cap_dollars {
         if cap <= 0 {
-            return Err(AppError::BadRequest("Cap dollars must be greater than 0".into()));
+            return Err(AppError::BadRequest(
+                "Cap dollars must be greater than 0".into(),
+            ));
         }
         sqlx::query("UPDATE offers SET cap_dollars = $1 WHERE id = $2")
             .bind(cap)
@@ -248,13 +253,15 @@ pub async fn update_offer(
 
     let offer = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
-         FROM offers WHERE id = $1"
+         FROM offers WHERE id = $1",
     )
     .bind(offer_id)
     .fetch_one(&s.db)
     .await?;
 
-    Ok(Json(json!({ "offer": offer, "message": "Offer updated successfully" })))
+    Ok(Json(
+        json!({ "offer": offer, "message": "Offer updated successfully" }),
+    ))
 }
 
 /// DELETE /api/v1/admin/offers/:id — deactivate an offer (soft delete)
@@ -265,14 +272,13 @@ pub async fn delete_offer(
 ) -> Result<impl IntoResponse, AppError> {
     let tenant_id = get_tenant_id(&s, &user).await?;
 
-    let existing = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM offers WHERE id = $1 AND tenant_id = $2"
-    )
-    .bind(offer_id)
-    .bind(tenant_id)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Offer not found".into()))?;
+    let existing =
+        sqlx::query_as::<_, (Uuid,)>("SELECT id FROM offers WHERE id = $1 AND tenant_id = $2")
+            .bind(offer_id)
+            .bind(tenant_id)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Offer not found".into()))?;
 
     // Soft delete — set active = false
     sqlx::query("UPDATE offers SET active = false, updated_at = NOW() WHERE id = $1")

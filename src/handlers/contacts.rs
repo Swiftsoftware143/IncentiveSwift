@@ -1,9 +1,9 @@
 //! Contacts handlers — list and get contacts.
 
-use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::db::{contacts, entries, questions_answers};
+use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -46,8 +46,8 @@ pub async fn get_contact(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let contact_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+    let contact_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
     // Get contact
     let contact = contacts::get_contact(&state.db, &contact_id).await?;
@@ -58,7 +58,9 @@ pub async fn get_contact(
     // For each entry, get Q&A history
     let mut entries_with_qa: Vec<Value> = Vec::new();
     for entry in &entry_history {
-        let qa = questions_answers::get_questions_with_answers(&state.db, &entry.id).await.unwrap_or_default();
+        let qa = questions_answers::get_questions_with_answers(&state.db, &entry.id)
+            .await
+            .unwrap_or_default();
         entries_with_qa.push(json!({
             "entry": entry,
             "questions_and_answers": qa,
@@ -125,8 +127,8 @@ pub async fn update_contact(
     Path(id): Path<String>,
     Json(body): Json<ContactBody>,
 ) -> Result<Json<Value>, AppError> {
-    let contact_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+    let contact_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
     let input = body_to_input(body);
     let contact = contacts::update_contact(&state.db, &contact_id, &input).await?;
@@ -142,8 +144,8 @@ pub async fn delete_contact(
     user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let contact_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+    let contact_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
     let deleted = contacts::delete_contact(&state.db, &contact_id).await?;
     if !deleted {

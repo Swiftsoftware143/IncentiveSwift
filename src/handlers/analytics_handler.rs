@@ -3,8 +3,8 @@
 //! loyalty metrics, contact analytics, and CSV export.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::header,
@@ -13,8 +13,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Deserialize)]
 pub struct AnalyticsQuery {
@@ -33,15 +33,25 @@ pub async fn overview(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Total campaigns
-    let total_campaigns: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM campaigns WHERE account_id = $1")
-        .bind(uuid).fetch_one(&state.db).await.unwrap_or(0);
+    let total_campaigns: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM campaigns WHERE account_id = $1")
+            .bind(uuid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     // Active campaigns
-    let active_campaigns: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM campaigns WHERE account_id = $1 AND status = 'active'")
-        .bind(uuid).fetch_one(&state.db).await.unwrap_or(0);
+    let active_campaigns: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM campaigns WHERE account_id = $1 AND status = 'active'",
+    )
+    .bind(uuid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
 
     // Total entries
     let total_entries: i64 = sqlx::query_scalar(
@@ -115,11 +125,16 @@ pub async fn campaign_list(
     Query(query): Query<AnalyticsQuery>,
 ) -> Result<Json<Value>, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let sort_col = query.sort.as_deref().unwrap_or("total_entries");
     let order = query.order.as_deref().unwrap_or("desc");
-    let order_sql = if order.eq_ignore_ascii_case("asc") { "ASC" } else { "DESC" };
+    let order_sql = if order.eq_ignore_ascii_case("asc") {
+        "ASC"
+    } else {
+        "DESC"
+    };
 
     // Validate sort column to prevent SQL injection
     let sort_col = match sort_col {
@@ -147,10 +162,7 @@ pub async fn campaign_list(
         sort_col, order_sql
     );
 
-    let rows = sqlx::query(&sql)
-        .bind(uuid)
-        .fetch_all(&state.db)
-        .await?;
+    let rows = sqlx::query(&sql).bind(uuid).fetch_all(&state.db).await?;
 
     let mut campaigns: Vec<Value> = Vec::new();
     let mut campaign_ids: Vec<Uuid> = Vec::new();
@@ -170,7 +182,7 @@ pub async fn campaign_list(
                 FROM entries
                 WHERE campaign_id = ANY($1) AND utm_source IS NOT NULL AND utm_source != ''
                 GROUP BY campaign_id, utm_source
-            ) sub WHERE rn = 1"
+            ) sub WHERE rn = 1",
         )
         .bind(&campaign_ids[..])
         .fetch_all(&state.db)
@@ -211,7 +223,9 @@ pub async fn campaign_list(
         }));
     }
 
-    Ok(Json(json!({ "campaigns": campaigns, "total": campaigns.len() })))
+    Ok(Json(
+        json!({ "campaigns": campaigns, "total": campaigns.len() }),
+    ))
 }
 
 /// GET /api/v1/analytics/campaigns/{slug} — Single campaign drill-down
@@ -221,13 +235,14 @@ pub async fn campaign_detail(
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     // Get campaign
     let campaign_row = sqlx::query(
         "SELECT id, name, slug, type, status, config, created_at, account_id,
                 loyalty_program_id, auto_enroll_loyalty, loyalty_points_per_play
-         FROM campaigns WHERE slug = $1 AND account_id = $2"
+         FROM campaigns WHERE slug = $1 AND account_id = $2",
     )
     .bind(&slug)
     .bind(uuid)
@@ -253,7 +268,7 @@ pub async fn campaign_detail(
     let time_rows = sqlx::query(
         "SELECT created_at::date as date, COUNT(*) as count
          FROM entries WHERE campaign_id = $1
-         GROUP BY created_at::date ORDER BY date"
+         GROUP BY created_at::date ORDER BY date",
     )
     .bind(campaign_id)
     .fetch_all(&state.db)
@@ -276,7 +291,7 @@ pub async fn campaign_detail(
     let source_rows = sqlx::query(
         "SELECT COALESCE(NULLIF(utm_source, ''), 'direct') as source, COUNT(*) as count
          FROM entries WHERE campaign_id = $1
-         GROUP BY source ORDER BY count DESC"
+         GROUP BY source ORDER BY count DESC",
     )
     .bind(campaign_id)
     .fetch_all(&state.db)
@@ -286,7 +301,11 @@ pub async fn campaign_detail(
     let mut source_breakdown: Vec<Value> = Vec::new();
     for sr in &source_rows {
         let cnt: i64 = sr.get("count");
-        let pct = if source_total > 0 { (cnt as f64 / source_total as f64) * 100.0 } else { 0.0 };
+        let pct = if source_total > 0 {
+            (cnt as f64 / source_total as f64) * 100.0
+        } else {
+            0.0
+        };
         source_breakdown.push(json!({
             "source": sr.get::<String, _>("source"),
             "count": cnt,
@@ -298,69 +317,92 @@ pub async fn campaign_detail(
     let ref_rows = sqlx::query(
         "SELECT COALESCE(NULLIF(referrer_url, ''), 'direct') as domain, COUNT(*) as count
          FROM entries WHERE campaign_id = $1
-         GROUP BY domain ORDER BY count DESC"
+         GROUP BY domain ORDER BY count DESC",
     )
     .bind(campaign_id)
     .fetch_all(&state.db)
     .await?;
 
-    let referrer_breakdown: Vec<Value> = ref_rows.iter().map(|r| {
-        json!({
-            "domain": r.get::<String, _>("domain"),
-            "count": r.get::<i64, _>("count")
+    let referrer_breakdown: Vec<Value> = ref_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "domain": r.get::<String, _>("domain"),
+                "count": r.get::<i64, _>("count")
+            })
         })
-    }).collect();
+        .collect();
 
     // Hourly heatmap
     let hour_rows = sqlx::query(
         "SELECT EXTRACT(HOUR FROM created_at)::int as hour, COUNT(*) as count
          FROM entries WHERE campaign_id = $1
-         GROUP BY hour ORDER BY hour"
+         GROUP BY hour ORDER BY hour",
     )
     .bind(campaign_id)
     .fetch_all(&state.db)
     .await?;
 
-    let hourly_heatmap: Vec<Value> = hour_rows.iter().map(|r| {
-        json!({
-            "hour": r.get::<i32, _>("hour"),
-            "count": r.get::<i64, _>("count")
+    let hourly_heatmap: Vec<Value> = hour_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "hour": r.get::<i32, _>("hour"),
+                "count": r.get::<i64, _>("count")
+            })
         })
-    }).collect();
+        .collect();
 
     // Prize distribution (from campaign_wins)
     let prize_rows = sqlx::query(
         "SELECT prize_label, COUNT(*) as total
          FROM campaign_wins WHERE campaign_id = $1
-         GROUP BY prize_label ORDER BY total DESC"
+         GROUP BY prize_label ORDER BY total DESC",
     )
     .bind(campaign_id)
     .fetch_all(&state.db)
     .await?;
 
-    let win_rate_by_prize: Vec<Value> = prize_rows.iter().map(|r| {
-        json!({
-            "prize_label": r.get::<String, _>("prize_label"),
-            "total": r.get::<i64, _>("total")
+    let win_rate_by_prize: Vec<Value> = prize_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "prize_label": r.get::<String, _>("prize_label"),
+                "total": r.get::<i64, _>("total")
+            })
         })
-    }).collect();
+        .collect();
 
     // Performance metrics
-    let total_wins_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1"
-    ).bind(campaign_id).fetch_one(&state.db).await.unwrap_or(0);
+    let total_wins_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1")
+            .bind(campaign_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
-    let _total_entries_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM entries WHERE campaign_id = $1"
-    ).bind(campaign_id).fetch_one(&state.db).await.unwrap_or(0);
+    let _total_entries_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM entries WHERE campaign_id = $1")
+            .bind(campaign_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     let total_redemptions: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1 AND redeemed = true"
-    ).bind(campaign_id).fetch_one(&state.db).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM campaign_wins WHERE campaign_id = $1 AND redeemed = true",
+    )
+    .bind(campaign_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
 
     let avg_score: Option<f64> = sqlx::query_scalar(
-        "SELECT AVG(score::float) FROM entries WHERE campaign_id = $1 AND score IS NOT NULL"
-    ).bind(campaign_id).fetch_one(&state.db).await.unwrap_or(None);
+        "SELECT AVG(score::float) FROM entries WHERE campaign_id = $1 AND score IS NOT NULL",
+    )
+    .bind(campaign_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(None);
 
     let redemption_rate: f64 = if total_wins_count > 0 {
         (total_redemptions as f64 / total_wins_count as f64) * 100.0
@@ -383,7 +425,7 @@ pub async fn campaign_detail(
          LEFT JOIN loyalty_programs lp ON lp.id = c.loyalty_program_id
          LEFT JOIN loyalty_members lm ON lm.program_id = lp.id
          WHERE c.id = $1
-         GROUP BY c.id, c.auto_enroll_loyalty, c.loyalty_points_per_play"
+         GROUP BY c.id, c.auto_enroll_loyalty, c.loyalty_points_per_play",
     )
     .bind(campaign_id)
     .fetch_optional(&state.db)
@@ -423,7 +465,8 @@ pub async fn contacts_analytics(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let total_contacts: i64 = sqlx::query_scalar(
         "SELECT COUNT(DISTINCT e.contact_id) FROM entries e JOIN campaigns c ON c.id = e.campaign_id WHERE c.account_id = $1"
@@ -448,19 +491,22 @@ pub async fn contacts_analytics(
         "SELECT e.created_at::date as date, COUNT(DISTINCT e.contact_id) as new_contacts
          FROM entries e JOIN campaigns c ON c.id = e.campaign_id
          WHERE c.account_id = $1 AND e.created_at >= now() - interval '30 days'
-         GROUP BY date ORDER BY date"
+         GROUP BY date ORDER BY date",
     )
     .bind(uuid)
     .fetch_all(&state.db)
     .await?;
 
-    let growth_by_day: Vec<Value> = growth_rows.iter().map(|r| {
-        let date: chrono::NaiveDate = r.get("date");
-        json!({
-            "date": date.format("%Y-%m-%d").to_string(),
-            "new_contacts": r.get::<i64, _>("new_contacts")
+    let growth_by_day: Vec<Value> = growth_rows
+        .iter()
+        .map(|r| {
+            let date: chrono::NaiveDate = r.get("date");
+            json!({
+                "date": date.format("%Y-%m-%d").to_string(),
+                "new_contacts": r.get::<i64, _>("new_contacts")
+            })
         })
-    }).collect();
+        .collect();
 
     // Top contacts (by entry count)
     let top_rows = sqlx::query(
@@ -474,15 +520,18 @@ pub async fn contacts_analytics(
     .fetch_all(&state.db)
     .await?;
 
-    let top_contacts: Vec<Value> = top_rows.iter().map(|r| {
-        json!({
-            "id": r.get::<Uuid, _>("contact_id"),
-            "first_name": r.get::<Option<String>, _>("first_name"),
-            "last_name": r.get::<Option<String>, _>("last_name"),
-            "email": r.get::<Option<String>, _>("email"),
-            "entry_count": r.get::<i64, _>("entry_count")
+    let top_contacts: Vec<Value> = top_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("contact_id"),
+                "first_name": r.get::<Option<String>, _>("first_name"),
+                "last_name": r.get::<Option<String>, _>("last_name"),
+                "email": r.get::<Option<String>, _>("email"),
+                "entry_count": r.get::<i64, _>("entry_count")
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "total_contacts": total_contacts,
@@ -500,7 +549,8 @@ pub async fn loyalty_analytics(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let total_programs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM loyalty_programs p JOIN campaigns c ON c.id = p.campaign_id WHERE c.account_id = $1"
@@ -527,22 +577,25 @@ pub async fn loyalty_analytics(
          JOIN campaigns c ON c.id = p.campaign_id
          LEFT JOIN loyalty_members m ON m.program_id = p.id
          WHERE c.account_id = $1
-         GROUP BY p.id, p.name, p.points_per_checkin, p.is_active"
+         GROUP BY p.id, p.name, p.points_per_checkin, p.is_active",
     )
     .bind(uuid)
     .fetch_all(&state.db)
     .await?;
 
-    let programs: Vec<Value> = prog_rows.iter().map(|r| {
-        json!({
-            "id": r.get::<Uuid, _>("id"),
-            "name": r.get::<String, _>("name"),
-            "points_per_checkin": r.get::<i32, _>("points_per_checkin"),
-            "is_active": r.get::<bool, _>("is_active"),
-            "member_count": r.get::<i64, _>("member_count"),
-            "avg_balance": r.get::<i32, _>("avg_balance")
+    let programs: Vec<Value> = prog_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "name": r.get::<String, _>("name"),
+                "points_per_checkin": r.get::<i32, _>("points_per_checkin"),
+                "is_active": r.get::<bool, _>("is_active"),
+                "member_count": r.get::<i64, _>("member_count"),
+                "avg_balance": r.get::<i32, _>("avg_balance")
+            })
         })
-    }).collect();
+        .collect();
 
     // Top members
     let top_rows = sqlx::query(
@@ -552,22 +605,25 @@ pub async fn loyalty_analytics(
          JOIN campaigns c ON c.id = p.campaign_id
          JOIN contacts ct ON ct.id = m.contact_id
          WHERE c.account_id = $1
-         ORDER BY m.lifetime_points DESC LIMIT 10"
+         ORDER BY m.lifetime_points DESC LIMIT 10",
     )
     .bind(uuid)
     .fetch_all(&state.db)
     .await?;
 
-    let top_members: Vec<Value> = top_rows.iter().map(|r| {
-        json!({
-            "id": r.get::<Uuid, _>("id"),
-            "points_balance": r.get::<i32, _>("points_balance"),
-            "lifetime_points": r.get::<i32, _>("lifetime_points"),
-            "first_name": r.get::<Option<String>, _>("first_name"),
-            "last_name": r.get::<Option<String>, _>("last_name"),
-            "email": r.get::<Option<String>, _>("email")
+    let top_members: Vec<Value> = top_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "points_balance": r.get::<i32, _>("points_balance"),
+                "lifetime_points": r.get::<i32, _>("lifetime_points"),
+                "first_name": r.get::<Option<String>, _>("first_name"),
+                "last_name": r.get::<Option<String>, _>("last_name"),
+                "email": r.get::<Option<String>, _>("email")
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "total_programs": total_programs,
@@ -586,14 +642,17 @@ pub async fn export_csv(
     Query(query): Query<ExportQuery>,
 ) -> Result<axum::response::Response, AppError> {
     let account_id = user.account_id.clone();
-    let uuid = Uuid::parse_str(&account_id).map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let uuid = Uuid::parse_str(&account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let export_type = query.r#type.as_deref().unwrap_or("campaigns");
     let mut csv = String::new();
 
     match export_type {
         "contacts" => {
-            csv.push_str("Contact ID,First Name,Last Name,Email,Total Entries,First Seen,Last Seen\n");
+            csv.push_str(
+                "Contact ID,First Name,Last Name,Email,Total Entries,First Seen,Last Seen\n",
+            );
             let rows = sqlx::query(
                 "SELECT DISTINCT e.contact_id, ct.first_name, ct.last_name, ct.email,
                         COUNT(*) OVER (PARTITION BY e.contact_id) as total_entries,
@@ -603,7 +662,7 @@ pub async fn export_csv(
                  JOIN campaigns c ON c.id = e.campaign_id
                  JOIN contacts ct ON ct.id = e.contact_id
                  WHERE c.account_id = $1
-                 ORDER BY total_entries DESC"
+                 ORDER BY total_entries DESC",
             )
             .bind(uuid)
             .fetch_all(&state.db)
@@ -617,7 +676,16 @@ pub async fn export_csv(
                 let te: i64 = r.get("total_entries");
                 let fs: chrono::DateTime<chrono::Utc> = r.get("first_seen");
                 let ls: chrono::DateTime<chrono::Utc> = r.get("last_seen");
-                csv.push_str(&format!("{},{},{},{},{},{},{}\n", id, esc_csv(&fn_), esc_csv(&ln), esc_csv(&em), te, fs.format("%Y-%m-%d %H:%M"), ls.format("%Y-%m-%d %H:%M")));
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{}\n",
+                    id,
+                    esc_csv(&fn_),
+                    esc_csv(&ln),
+                    esc_csv(&em),
+                    te,
+                    fs.format("%Y-%m-%d %H:%M"),
+                    ls.format("%Y-%m-%d %H:%M")
+                ));
             }
         }
         "entries" => {
@@ -629,7 +697,7 @@ pub async fn export_csv(
                  JOIN campaigns c ON c.id = e.campaign_id
                  JOIN contacts ct ON ct.id = e.contact_id
                  WHERE c.account_id = $1
-                 ORDER BY e.created_at DESC"
+                 ORDER BY e.created_at DESC",
             )
             .bind(uuid)
             .fetch_all(&state.db)
@@ -645,8 +713,11 @@ pub async fn export_csv(
                 let ru: Option<String> = r.get("referrer_url");
                 let pu: Option<String> = r.get("page_url");
                 let ca: chrono::DateTime<chrono::Utc> = r.get("created_at");
-                csv.push_str(&format!("{},{},{},{},{},{},{},{},{}\n",
-                    id, esc_csv(&cn), esc_csv(&ce.unwrap_or_default()),
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{}\n",
+                    id,
+                    esc_csv(&cn),
+                    esc_csv(&ce.unwrap_or_default()),
                     sc.map(|s| s.to_string()).unwrap_or_default(),
                     oc.unwrap_or_default(),
                     us.unwrap_or_default(),
@@ -670,7 +741,7 @@ pub async fn export_csv(
                  LEFT JOIN campaign_wins w ON w.campaign_id = c.id
                  WHERE c.account_id = $1
                  GROUP BY c.id, c.name, c.type, c.status, c.created_at
-                 ORDER BY c.created_at DESC"
+                 ORDER BY c.created_at DESC",
             )
             .bind(uuid)
             .fetch_all(&state.db)
@@ -683,17 +754,36 @@ pub async fn export_csv(
                 let te: i64 = r.get("total_entries");
                 let uc: i64 = r.get("unique_contacts");
                 let tw: i64 = r.get("total_wins");
-                let wr = if te > 0 { (tw as f64 / te as f64) * 100.0 } else { 0.0 };
+                let wr = if te > 0 {
+                    (tw as f64 / te as f64) * 100.0
+                } else {
+                    0.0
+                };
                 let ca: chrono::DateTime<chrono::Utc> = r.get("created_at");
-                csv.push_str(&format!("{},{},{},{},{},{},{:.1},{}\n",
-                    esc_csv(&name), type_, status, te, uc, tw, wr, ca.format("%Y-%m-%d %H:%M")));
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{:.1},{}\n",
+                    esc_csv(&name),
+                    type_,
+                    status,
+                    te,
+                    uc,
+                    tw,
+                    wr,
+                    ca.format("%Y-%m-%d %H:%M")
+                ));
             }
         }
     }
 
     let response = axum::response::Response::builder()
         .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
-        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"analytics-{}-export.csv\"", export_type))
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!(
+                "attachment; filename=\"analytics-{}-export.csv\"",
+                export_type
+            ),
+        )
         .body(axum::body::Body::from(csv))
         .map_err(|e| AppError::Internal(format!("Failed to build CSV response: {}", e)))?;
 

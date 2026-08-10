@@ -1,7 +1,7 @@
 //! Raffle draw tests — seeded Fisher-Yates determinism.
 
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// Seeded Fisher-Yates shuffle implementation (inline for tests).
 fn seeded_fisher_yates(entries: &[String], seed: u64) -> Option<String> {
@@ -55,7 +55,10 @@ fn test_different_seed_different_winner() {
     let entries: Vec<String> = (1..=100).map(|i| format!("entry-{}", i)).collect();
     let winner1 = seeded_fisher_yates(&entries, 42);
     let winner2 = seeded_fisher_yates(&entries, 99);
-    assert_ne!(winner1, winner2, "Different seeds should produce different winners");
+    assert_ne!(
+        winner1, winner2,
+        "Different seeds should produce different winners"
+    );
 }
 
 /// Test empty entries returns None.

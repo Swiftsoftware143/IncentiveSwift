@@ -8,8 +8,8 @@
 //! - Seeded RNG per draw for auditability
 
 use crate::error::AppError;
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
@@ -216,7 +216,7 @@ async fn decrement_inventory(
            claimed = claimed + 1,
            updated_at = now()
            WHERE campaign_id = $1 AND prize_id = $2
-           AND (remaining IS NULL OR remaining > 0)"#
+           AND (remaining IS NULL OR remaining > 0)"#,
     )
     .bind(campaign_id)
     .bind(prize_id)
@@ -239,7 +239,7 @@ async fn read_streaks(
     let row = sqlx::query_as::<_, (i32, i32)>(
         r#"SELECT COALESCE(loss_streak, 0), COALESCE(total_spins, 0)
            FROM campaign_streaks
-           WHERE contact_id = $1 AND campaign_id = $2"#
+           WHERE contact_id = $1 AND campaign_id = $2"#,
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -311,7 +311,7 @@ async fn check_daily_spin_limit(
     let today_count: i32 = sqlx::query_scalar(
         r#"SELECT COALESCE(entry_count, 0)
            FROM campaign_daily_limits
-           WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#
+           WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#,
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -344,7 +344,7 @@ async fn check_campaign_spin_limit(
     let total: i32 = sqlx::query_scalar(
         r#"SELECT COALESCE(total_spins, 0)
            FROM campaign_streaks
-           WHERE contact_id = $1 AND campaign_id = $2"#
+           WHERE contact_id = $1 AND campaign_id = $2"#,
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -373,7 +373,7 @@ async fn record_daily_spin(
         r#"INSERT INTO campaign_daily_limits (contact_id, campaign_id, entry_date, entry_count)
            VALUES ($1, $2, CURRENT_DATE, 1)
            ON CONFLICT (contact_id, campaign_id, entry_date)
-           DO UPDATE SET entry_count = campaign_daily_limits.entry_count + 1"#
+           DO UPDATE SET entry_count = campaign_daily_limits.entry_count + 1"#,
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -400,7 +400,7 @@ pub async fn set_redemption_code(
            SET redemption_code = $1
            WHERE campaign_id = $2 AND contact_id = $3 AND prize_id = $4
              AND redemption_code IS NULL
-        "#
+        "#,
     )
     .bind(code)
     .bind(campaign_id)
@@ -439,7 +439,7 @@ pub async fn record_win(
     sqlx::query(
         r#"INSERT INTO entries (id, contact_id, campaign_id, answers, outcome, tags_applied,
             utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address)
-           VALUES ($1, $2, $3, $4, 'winner', $5, $6, $7, $8, $9, $10, $11, $12)"#
+           VALUES ($1, $2, $3, $4, 'winner', $5, $6, $7, $8, $9, $10, $11, $12)"#,
     )
     .bind(entry_id)
     .bind(contact_id)
@@ -500,7 +500,7 @@ pub async fn record_loss(
     sqlx::query(
         r#"INSERT INTO entries (id, contact_id, campaign_id, answers, outcome, tags_applied,
             utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address)
-           VALUES ($1, $2, $3, $4, 'entrant', $5, $6, $7, $8, $9, $10, $11, $12)"#
+           VALUES ($1, $2, $3, $4, 'entrant', $5, $6, $7, $8, $9, $10, $11, $12)"#,
     )
     .bind(entry_id)
     .bind(contact_id)
@@ -568,22 +568,25 @@ pub async fn apply_prize_draw(
     let prize_pool_config: PrizePoolConfig = match campaign_config.get("prize_pool") {
         Some(pp) => serde_json::from_value(pp.clone())
             .map_err(|e| AppError::BadRequest(format!("Invalid prize_pool config: {}", e)))?,
-        None => return Err(AppError::BadRequest(
-            "Campaign has no prize_pool configured".to_string()
-        )),
+        None => {
+            return Err(AppError::BadRequest(
+                "Campaign has no prize_pool configured".to_string(),
+            ))
+        }
     };
 
     let pity_config: PityTimerConfig = match campaign_config.get("pity_timer") {
-        Some(pt) => serde_json::from_value(pt.clone())
-            .unwrap_or_default(),
+        Some(pt) => serde_json::from_value(pt.clone()).unwrap_or_default(),
         None => PityTimerConfig::default(),
     };
 
-    let max_spins_per_day = campaign_config.get("max_spins_per_day")
+    let max_spins_per_day = campaign_config
+        .get("max_spins_per_day")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    let max_spins_per_campaign = campaign_config.get("max_spins_per_campaign")
+    let max_spins_per_campaign = campaign_config
+        .get("max_spins_per_campaign")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
@@ -611,7 +614,8 @@ pub async fn apply_prize_draw(
     let (current_streak, _total_spins) = read_streaks(pool, campaign_id, contact_id).await?;
 
     // --- Determine if pity timer should trigger ---
-    let pity_should_trigger = pity_config.enabled && (current_streak + 1) >= pity_config.threshold as i32;
+    let pity_should_trigger =
+        pity_config.enabled && (current_streak + 1) >= pity_config.threshold as i32;
 
     // --- Determine which prizes are available (not exhausted) ---
     let exhausted_prize_ids = if inventory_tracking {
@@ -622,10 +626,13 @@ pub async fn apply_prize_draw(
 
     // --- Build available prize list ---
     let make_available = |prizes: &[PrizeConfig]| -> Vec<PrizeConfig> {
-        prizes.iter()
+        prizes
+            .iter()
             .filter(|p| {
-                if inventory_tracking && !allow_when_exhausted
-                    && p.inventory.is_some() && exhausted_prize_ids.contains(&p.id)
+                if inventory_tracking
+                    && !allow_when_exhausted
+                    && p.inventory.is_some()
+                    && exhausted_prize_ids.contains(&p.id)
                 {
                     return false;
                 }
@@ -638,11 +645,15 @@ pub async fn apply_prize_draw(
     // --- Select prize ---
     let (selected_prize, was_pity) = if pity_should_trigger {
         // Pity: force a win from non-lose available prizes
-        let available: Vec<PrizeConfig> = prize_pool_config.prizes.iter()
+        let available: Vec<PrizeConfig> = prize_pool_config
+            .prizes
+            .iter()
             .filter(|p| p.prize_type != "lose")
             .filter(|p| {
-                if inventory_tracking && !allow_when_exhausted
-                    && p.inventory.is_some() && exhausted_prize_ids.contains(&p.id)
+                if inventory_tracking
+                    && !allow_when_exhausted
+                    && p.inventory.is_some()
+                    && exhausted_prize_ids.contains(&p.id)
                 {
                     return false;
                 }
@@ -653,7 +664,9 @@ pub async fn apply_prize_draw(
 
         let eligible = if available.is_empty() {
             // Fallback: any non-lose prize, even if exhausted
-            prize_pool_config.prizes.iter()
+            prize_pool_config
+                .prizes
+                .iter()
                 .find(|p| p.prize_type != "lose")
                 .cloned()
                 .unwrap_or_else(|| prize_pool_config.prizes[0].clone())
@@ -670,7 +683,7 @@ pub async fn apply_prize_draw(
 
         if available.is_empty() {
             return Err(AppError::Forbidden(
-                "All prizes are exhausted. No spins available.".to_string()
+                "All prizes are exhausted. No spins available.".to_string(),
             ));
         }
 
@@ -691,7 +704,7 @@ pub async fn apply_prize_draw(
                 // Allow the win anyway — inventory may go negative
             } else {
                 return Err(AppError::Forbidden(
-                    "Prize inventory exhausted. Please try again.".to_string()
+                    "Prize inventory exhausted. Please try again.".to_string(),
                 ));
             }
         }
@@ -703,14 +716,37 @@ pub async fn apply_prize_draw(
     // --- Record entry (always) ---
     if won {
         record_win(
-            pool, campaign_id, contact_id, &selected_prize, new_streak, was_pity,
-            utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address,
-        ).await?;
+            pool,
+            campaign_id,
+            contact_id,
+            &selected_prize,
+            new_streak,
+            was_pity,
+            utm_source,
+            utm_medium,
+            utm_campaign,
+            referrer_url,
+            page_url,
+            user_agent,
+            ip_address,
+        )
+        .await?;
     } else {
         record_loss(
-            pool, campaign_id, contact_id, &selected_prize, new_streak,
-            utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address,
-        ).await?;
+            pool,
+            campaign_id,
+            contact_id,
+            &selected_prize,
+            new_streak,
+            utm_source,
+            utm_medium,
+            utm_campaign,
+            referrer_url,
+            page_url,
+            user_agent,
+            ip_address,
+        )
+        .await?;
     }
 
     // --- Record daily spin ---
@@ -721,7 +757,7 @@ pub async fn apply_prize_draw(
         let today_count_i: i32 = sqlx::query_scalar(
             r#"SELECT COALESCE(entry_count, 0)
                FROM campaign_daily_limits
-               WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#
+               WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#,
         )
         .bind(contact_id)
         .bind(campaign_id)
@@ -741,7 +777,11 @@ pub async fn apply_prize_draw(
     };
 
     let color = selected_prize.color.clone().unwrap_or_else(|| {
-        if won { "#22c55e".to_string() } else { "#6b7280".to_string() }
+        if won {
+            "#22c55e".to_string()
+        } else {
+            "#6b7280".to_string()
+        }
     });
 
     Ok(PrizeDrawResult {
@@ -767,11 +807,13 @@ pub async fn get_spin_status(
 ) -> Result<PrizeDrawResult, AppError> {
     let (streak, total_spins) = read_streaks(pool, campaign_id, contact_id).await?;
 
-    let max_per_day = campaign_config.get("max_spins_per_day")
+    let max_per_day = campaign_config
+        .get("max_spins_per_day")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    let max_per_campaign = campaign_config.get("max_spins_per_campaign")
+    let max_per_campaign = campaign_config
+        .get("max_spins_per_campaign")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
@@ -779,7 +821,7 @@ pub async fn get_spin_status(
         let today_count_i: i32 = sqlx::query_scalar(
             r#"SELECT COALESCE(entry_count, 0)
                FROM campaign_daily_limits
-               WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#
+               WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"#,
         )
         .bind(contact_id)
         .bind(campaign_id)

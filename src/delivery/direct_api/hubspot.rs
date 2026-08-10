@@ -53,6 +53,9 @@ pub async fn push_to_hubspot(
         )));
     }
 
-    tracing::info!("HubSpot contact push successful for {}", payload.contact.email.as_deref().unwrap_or("unknown"));
+    tracing::info!(
+        "HubSpot contact push successful for {}",
+        payload.contact.email.as_deref().unwrap_or("unknown")
+    );
     Ok(())
 }

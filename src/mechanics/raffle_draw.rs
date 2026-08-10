@@ -4,8 +4,8 @@
 //! The random_seed is stored permanently in the database and never overwritten,
 //! guaranteeing auditability.
 
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 /// Perform a seeded Fisher-Yates shuffle and return the first (winning) entry.
 /// # Arguments
@@ -63,7 +63,10 @@ mod tests {
         let winner1 = seeded_fisher_yates(&entries, 42);
         let winner2 = seeded_fisher_yates(&entries, 99);
 
-        assert_ne!(winner1, winner2, "Different seeds should (likely) produce different winners");
+        assert_ne!(
+            winner1, winner2,
+            "Different seeds should (likely) produce different winners"
+        );
     }
 
     #[test]

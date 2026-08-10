@@ -10,10 +10,10 @@
 //!   `{"label": "Yes", "value": "yes", "tag": "interested_in_premium"}`
 //! When the user selects that answer, the tag is applied to the contact.
 
+use crate::delivery::coreswift_push::{get_contact_tags, push_contact_to_coreswift};
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
-use crate::delivery::coreswift_push::{push_contact_to_coreswift, get_contact_tags};
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -223,36 +223,37 @@ pub async fn create_funnel(
     Json(body): Json<CreateFunnelInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
-    let slug = body.slug.unwrap_or_else(|| {
-        slugify(&body.name)
-    });
+    let slug = body.slug.unwrap_or_else(|| slugify(&body.name));
     let funnel_type = body.funnel_type.unwrap_or_else(|| "survey".to_string());
-    let theme = body.theme.unwrap_or_else(|| json!({
-        "preset": "dark_modern",
-        "bg_gradient": "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
-        "accent_color": "#8b5cf6",
-        "font_family": "Inter",
-        "logo_url": null,
-        "button_style": "rounded"
-    }));
-    let config = body.config.unwrap_or_else(|| json!({
-        "show_progress_bar": true,
-        "allow_skip": false,
-        "collect_email": true,
-        "collect_name": true,
-        "collect_phone": false,
-        "redirect_url": null,
-        "passing_score": 70,
-        "max_attempts": 1
-    }));
+    let theme = body.theme.unwrap_or_else(|| {
+        json!({
+            "preset": "dark_modern",
+            "bg_gradient": "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
+            "accent_color": "#8b5cf6",
+            "font_family": "Inter",
+            "logo_url": null,
+            "button_style": "rounded"
+        })
+    });
+    let config = body.config.unwrap_or_else(|| {
+        json!({
+            "show_progress_bar": true,
+            "allow_skip": false,
+            "collect_email": true,
+            "collect_name": true,
+            "collect_phone": false,
+            "redirect_url": null,
+            "passing_score": 70,
+            "max_attempts": 1
+        })
+    });
 
     // Check slug uniqueness
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT slug FROM iqs_funnels WHERE slug = $1",
-    )
-    .bind(&slug)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT slug FROM iqs_funnels WHERE slug = $1")
+            .bind(&slug)
+            .fetch_optional(&state.db)
+            .await?;
 
     if existing.is_some() {
         return Err(AppError::BadRequest(format!(
@@ -279,12 +280,10 @@ pub async fn create_funnel(
     .execute(&state.db)
     .await?;
 
-    let funnel = sqlx::query_as::<_, IqsFunnel>(
-        "SELECT * FROM iqs_funnels WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let funnel = sqlx::query_as::<_, IqsFunnel>("SELECT * FROM iqs_funnels WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": funnel, "slug": slug })))
 }
@@ -352,12 +351,10 @@ pub async fn update_funnel(
     .execute(&state.db)
     .await?;
 
-    let updated = sqlx::query_as::<_, IqsFunnel>(
-        "SELECT * FROM iqs_funnels WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let updated = sqlx::query_as::<_, IqsFunnel>("SELECT * FROM iqs_funnels WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": updated })))
 }
@@ -368,13 +365,11 @@ pub async fn delete_funnel(
     user: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let result = sqlx::query(
-        "DELETE FROM iqs_funnels WHERE id = $1 AND account_id = $2::uuid",
-    )
-    .bind(id)
-    .bind(&user.account_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM iqs_funnels WHERE id = $1 AND account_id = $2::uuid")
+        .bind(id)
+        .bind(&user.account_id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Funnel not found".into()));
@@ -418,7 +413,9 @@ pub async fn create_question(
     verify_funnel_ownership(&state.db, &user.account_id, id).await?;
 
     let qid = Uuid::new_v4();
-    let question_type = body.question_type.unwrap_or_else(|| "single_choice".to_string());
+    let question_type = body
+        .question_type
+        .unwrap_or_else(|| "single_choice".to_string());
     let required = body.required.unwrap_or(true);
     let options = body.options.unwrap_or_else(|| json!([]));
     let question_config = body.config.unwrap_or_else(|| json!({}));
@@ -455,12 +452,10 @@ pub async fn create_question(
     .execute(&state.db)
     .await?;
 
-    let question = sqlx::query_as::<_, IqsQuestion>(
-        "SELECT * FROM iqs_questions WHERE id = $1",
-    )
-    .bind(qid)
-    .fetch_one(&state.db)
-    .await?;
+    let question = sqlx::query_as::<_, IqsQuestion>("SELECT * FROM iqs_questions WHERE id = $1")
+        .bind(qid)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": question })))
 }
@@ -475,14 +470,12 @@ pub async fn reorder_questions(
     verify_funnel_ownership(&state.db, &user.account_id, id).await?;
 
     for (i, qid) in body.question_ids.iter().enumerate() {
-        sqlx::query(
-            "UPDATE iqs_questions SET sort_order = $1 WHERE id = $2 AND funnel_id = $3",
-        )
-        .bind(i as i32)
-        .bind(qid)
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE iqs_questions SET sort_order = $1 WHERE id = $2 AND funnel_id = $3")
+            .bind(i as i32)
+            .bind(qid)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
     Ok(Json(json!({ "reordered": true })))
@@ -533,12 +526,10 @@ pub async fn update_question(
     .execute(&state.db)
     .await?;
 
-    let updated = sqlx::query_as::<_, IqsQuestion>(
-        "SELECT * FROM iqs_questions WHERE id = $1",
-    )
-    .bind(qid)
-    .fetch_one(&state.db)
-    .await?;
+    let updated = sqlx::query_as::<_, IqsQuestion>("SELECT * FROM iqs_questions WHERE id = $1")
+        .bind(qid)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": updated })))
 }
@@ -625,12 +616,10 @@ pub async fn create_rule(
     .execute(&state.db)
     .await?;
 
-    let rule = sqlx::query_as::<_, IqsRule>(
-        "SELECT * FROM iqs_rules WHERE id = $1",
-    )
-    .bind(rid)
-    .fetch_one(&state.db)
-    .await?;
+    let rule = sqlx::query_as::<_, IqsRule>("SELECT * FROM iqs_rules WHERE id = $1")
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": rule })))
 }
@@ -675,12 +664,10 @@ pub async fn update_rule(
     .execute(&state.db)
     .await?;
 
-    let updated = sqlx::query_as::<_, IqsRule>(
-        "SELECT * FROM iqs_rules WHERE id = $1",
-    )
-    .bind(rid)
-    .fetch_one(&state.db)
-    .await?;
+    let updated = sqlx::query_as::<_, IqsRule>("SELECT * FROM iqs_rules WHERE id = $1")
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({ "data": updated })))
 }
@@ -774,26 +761,29 @@ pub async fn submit_funnel(
     .fetch_all(&state.db)
     .await?;
 
-    let question_map: std::collections::HashMap<Uuid, IqsQuestion> = questions
-        .into_iter()
-        .map(|q| (q.id, q))
-        .collect();
+    let question_map: std::collections::HashMap<Uuid, IqsQuestion> =
+        questions.into_iter().map(|q| (q.id, q)).collect();
 
     // 3. Upsert contact
-    let contact_id = crate::db::contacts::upsert_contact(&state.db, &crate::db::contacts::ContactInput {
-        first_name: body.contact.first_name.clone(),
-        last_name: body.contact.last_name.clone(),
-        email: body.contact.email.clone(),
-        phone: body.contact.phone.clone(),
-        business_name: None,
-        website: None,
-    }).await?;
+    let contact_id = crate::db::contacts::upsert_contact(
+        &state.db,
+        &crate::db::contacts::ContactInput {
+            first_name: body.contact.first_name.clone(),
+            last_name: body.contact.last_name.clone(),
+            email: body.contact.email.clone(),
+            phone: body.contact.phone.clone(),
+            business_name: None,
+            website: None,
+        },
+    )
+    .await?;
 
     // 4. Validate each answer against field-type rules and calculate score
     let mut total_score = 0i32;
     let mut answer_records = Vec::new();
     let mut collected_tags: Vec<String> = Vec::new();
-    let mut skipped_question_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut skipped_question_ids: std::collections::HashSet<Uuid> =
+        std::collections::HashSet::new();
 
     // Add source_tag from funnel if present
     if let Some(ref tag) = funnel.source_tag {
@@ -801,7 +791,8 @@ pub async fn submit_funnel(
     }
 
     // Build a map of question_key -> answer for show_if evaluation
-    let mut answers_by_key: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut answers_by_key: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for ans in &body.answers {
         if let Some(q) = question_map.get(&ans.question_id) {
             answers_by_key.insert(q.question_key.clone(), ans.value.clone());
@@ -816,7 +807,10 @@ pub async fn submit_funnel(
                 show_if.get("operator").and_then(|v| v.as_str()),
                 show_if.get("value").and_then(|v| v.as_str()),
             ) {
-                let dep_answer = answers_by_key.get(dep_key).map(|s| s.as_str()).unwrap_or("");
+                let dep_answer = answers_by_key
+                    .get(dep_key)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
                 let condition_met = match operator {
                     "equals" => dep_answer == required_val,
                     "not_equals" => dep_answer != required_val,
@@ -831,11 +825,12 @@ pub async fn submit_funnel(
     }
 
     for ans in &body.answers {
-        let question = question_map
-            .get(&ans.question_id)
-            .ok_or_else(|| AppError::BadRequest(format!(
-                "Question {} not found in this funnel", ans.question_id
-            )))?;
+        let question = question_map.get(&ans.question_id).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "Question {} not found in this funnel",
+                ans.question_id
+            ))
+        })?;
 
         // Skip questions that fail show_if conditions
         if skipped_question_ids.contains(&ans.question_id) {
@@ -848,11 +843,12 @@ pub async fn submit_funnel(
             }));
             continue;
         }
-        let question = question_map
-            .get(&ans.question_id)
-            .ok_or_else(|| AppError::BadRequest(format!(
-                "Question {} not found in this funnel", ans.question_id
-            )))?;
+        let question = question_map.get(&ans.question_id).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "Question {} not found in this funnel",
+                ans.question_id
+            ))
+        })?;
 
         // Validate field type — skip validation for empty answers on non-required questions
         if question.required || !ans.value.is_empty() || question.question_type == "field_consent" {
@@ -860,7 +856,11 @@ pub async fn submit_funnel(
             if question.options.as_array().is_some_and(|o| !o.is_empty()) {
                 validation_config["options"] = question.options.clone();
             }
-            crate::iqs_validation::validate_field(&question.question_type, &validation_config, &ans.value)?;
+            crate::iqs_validation::validate_field(
+                &question.question_type,
+                &validation_config,
+                &ans.value,
+            )?;
         }
 
         // Calculate score for this answer
@@ -868,7 +868,10 @@ pub async fn submit_funnel(
             // Auto-score: check if the selected value matches a scoring option
             if let Some(options) = question.options.as_array() {
                 for opt in options {
-                    if let (Some(val), Some(pts)) = (opt.get("value").and_then(|v| v.as_str()), opt.get("score").and_then(|s| s.as_i64())) {
+                    if let (Some(val), Some(pts)) = (
+                        opt.get("value").and_then(|v| v.as_str()),
+                        opt.get("score").and_then(|s| s.as_i64()),
+                    ) {
                         if val == ans.value {
                             return pts as i32;
                         }
@@ -883,7 +886,10 @@ pub async fn submit_funnel(
         // Check for answer→tag mapping
         if let Some(options) = question.options.as_array() {
             for opt in options {
-                if let (Some(val), Some(tag)) = (opt.get("value").and_then(|v| v.as_str()), opt.get("tag").and_then(|t| t.as_str())) {
+                if let (Some(val), Some(tag)) = (
+                    opt.get("value").and_then(|v| v.as_str()),
+                    opt.get("tag").and_then(|t| t.as_str()),
+                ) {
                     if val == ans.value && !tag.is_empty() {
                         collected_tags.push(tag.to_string());
                     }
@@ -901,18 +907,28 @@ pub async fn submit_funnel(
 
     // 5. Determine outcome based on passing_score
     let config = &funnel.config;
-    let passing_score = config.get("passing_score").and_then(|v| v.as_i64()).unwrap_or(70);
+    let passing_score = config
+        .get("passing_score")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(70);
     // Calculate the maximum possible score — sum of highest score per non-skipped question
-    let max_possible: i32 = question_map.values().filter_map(|q| {
-        if skipped_question_ids.contains(&q.id) {
-            return None;
-        }
-        if let Some(options) = q.options.as_array() {
-            options.iter().filter_map(|o| o.get("score").and_then(|s| s.as_i64())).max().map(|v| v as i32)
-        } else {
-            Some(0)
-        }
-    }).sum();
+    let max_possible: i32 = question_map
+        .values()
+        .filter_map(|q| {
+            if skipped_question_ids.contains(&q.id) {
+                return None;
+            }
+            if let Some(options) = q.options.as_array() {
+                options
+                    .iter()
+                    .filter_map(|o| o.get("score").and_then(|s| s.as_i64()))
+                    .max()
+                    .map(|v| v as i32)
+            } else {
+                Some(0)
+            }
+        })
+        .sum();
     let percentage = if max_possible > 0 {
         (total_score as f64 / max_possible as f64) * 100.0
     } else {
@@ -927,7 +943,10 @@ pub async fn submit_funnel(
 
     // 6. Auto-Classification (Hot/Warm/Cold) based on classification_ranges
     let mut classification: Option<String> = None;
-    if let Some(ranges) = config.get("classification_ranges").and_then(|v| v.as_array()) {
+    if let Some(ranges) = config
+        .get("classification_ranges")
+        .and_then(|v| v.as_array())
+    {
         for range in ranges {
             if let (Some(label), Some(min)) = (
                 range.get("label").and_then(|v| v.as_str()),
@@ -973,12 +992,10 @@ pub async fn submit_funnel(
     .await?;
 
     // 9. Increment response_count
-    sqlx::query(
-        "UPDATE iqs_funnels SET response_count = response_count + 1 WHERE id = $1",
-    )
-    .bind(funnel.id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE iqs_funnels SET response_count = response_count + 1 WHERE id = $1")
+        .bind(funnel.id)
+        .execute(&state.db)
+        .await?;
 
     // 10. Push to CoreSwift
     let contact_tags = get_contact_tags(&state, &contact_id).await;
@@ -990,7 +1007,8 @@ pub async fn submit_funnel(
         &collected_tags,
         &[],
         "iqs_submission",
-    ).await;
+    )
+    .await;
 
     Ok(Json(json!({
         "data": {
@@ -1029,7 +1047,7 @@ pub async fn get_campaign_iqs_questions(
                       loyalty_points_per_play,
                       auto_enroll_loyalty,
                       iqs_funnel_id
-               FROM campaigns WHERE id = $1 AND account_id = $2::uuid"#
+               FROM campaigns WHERE id = $1 AND account_id = $2::uuid"#,
         )
         .bind(id)
         .bind(&user.account_id)
@@ -1049,7 +1067,7 @@ pub async fn get_campaign_iqs_questions(
                       loyalty_points_per_play,
                       auto_enroll_loyalty,
                       iqs_funnel_id
-               FROM campaigns WHERE slug = $1 AND account_id = $2::uuid"#
+               FROM campaigns WHERE slug = $1 AND account_id = $2::uuid"#,
         )
         .bind(&slug)
         .bind(&user.account_id)
@@ -1060,23 +1078,25 @@ pub async fn get_campaign_iqs_questions(
 
     let funnel_id = match campaign.iqs_funnel_id {
         Some(fid) => fid,
-        None => return Err(AppError::BadRequest("Campaign has no IQS funnel attached".into())),
+        None => {
+            return Err(AppError::BadRequest(
+                "Campaign has no IQS funnel attached".into(),
+            ))
+        }
     };
 
     // Fetch the funnel
-    let funnel = sqlx::query_as::<_, IqsFunnel>(
-        "SELECT * FROM iqs_funnels WHERE id = $1",
-    )
-    .bind(funnel_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("IQS funnel not found".into()))?;
+    let funnel = sqlx::query_as::<_, IqsFunnel>("SELECT * FROM iqs_funnels WHERE id = $1")
+        .bind(funnel_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("IQS funnel not found".into()))?;
 
     // Fetch questions
     let questions = sqlx::query_as::<_, IqsQuestion>(
         r#"SELECT * FROM iqs_questions
             WHERE funnel_id = $1
-            ORDER BY sort_order ASC, created_at ASC"#
+            ORDER BY sort_order ASC, created_at ASC"#,
     )
     .bind(funnel_id)
     .fetch_all(&state.db)
@@ -1144,26 +1164,27 @@ pub async fn upload_file(
 
     let mut file_urls = Vec::new();
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        AppError::BadRequest(format!("Multipart error: {}", e))
-    })? {
-        let file_name = field
-            .file_name()
-            .unwrap_or("unknown")
-            .to_string();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let file_name = field.file_name().unwrap_or("unknown").to_string();
         let content_type = field
             .content_type()
             .unwrap_or("application/octet-stream")
             .to_string();
-        let data = field.bytes().await.map_err(|e| {
-            AppError::BadRequest(format!("Failed to read file: {}", e))
-        })?;
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Failed to read file: {}", e)))?;
 
         // Validate file size (max 10MB)
         let max_size: usize = 10 * 1024 * 1024;
         if data.len() > max_size {
             return Err(AppError::BadRequest(format!(
-                "File '{}' exceeds maximum size of 10MB", file_name
+                "File '{}' exceeds maximum size of 10MB",
+                file_name
             )));
         }
 
@@ -1172,17 +1193,20 @@ pub async fn upload_file(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("bin");
-        let stored_name = format!("{}-{}.{}", Uuid::new_v4(), slugify(file_name.trim_end_matches(&format!(".{}", ext))), ext);
+        let stored_name = format!(
+            "{}-{}.{}",
+            Uuid::new_v4(),
+            slugify(file_name.trim_end_matches(&format!(".{}", ext))),
+            ext
+        );
         let file_path = format!("{}/{}", upload_dir, stored_name);
         let public_url = format!("{}/{}", public_url_base, stored_name);
 
         // Write file
-        let mut f = std::fs::File::create(&file_path).map_err(|e| {
-            AppError::Internal(format!("Failed to save file: {}", e))
-        })?;
-        f.write_all(&data).map_err(|e| {
-            AppError::Internal(format!("Failed to write file: {}", e))
-        })?;
+        let mut f = std::fs::File::create(&file_path)
+            .map_err(|e| AppError::Internal(format!("Failed to save file: {}", e)))?;
+        f.write_all(&data)
+            .map_err(|e| AppError::Internal(format!("Failed to write file: {}", e)))?;
 
         file_urls.push(json!({
             "original_name": file_name,
@@ -1206,13 +1230,12 @@ async fn verify_funnel_ownership(
     account_id: &str,
     funnel_id: Uuid,
 ) -> Result<(), AppError> {
-    let exists: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM iqs_funnels WHERE id = $1 AND account_id = $2::uuid",
-    )
-    .bind(funnel_id)
-    .bind(account_id)
-    .fetch_optional(db)
-    .await?;
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM iqs_funnels WHERE id = $1 AND account_id = $2::uuid")
+            .bind(funnel_id)
+            .bind(account_id)
+            .fetch_optional(db)
+            .await?;
 
     if exists.is_none() {
         return Err(AppError::NotFound("Funnel not found".into()));
@@ -1224,7 +1247,13 @@ async fn verify_funnel_ownership(
 fn slugify(name: &str) -> String {
     name.to_lowercase()
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()

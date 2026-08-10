@@ -5,12 +5,9 @@
 //!   GET  /api/v1/checkout/sessions  — list checkout sessions
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
-use axum::{
-    extract::State,
-    Json,
-};
+use crate::state::AppState;
+use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -50,12 +47,15 @@ pub async fn create_checkout_session(
     let user_id = Uuid::new_v4();
 
     // Determine payment provider — explicit over plan's payment_provider over default (stripe)
-    let mut payment_provider = body.payment_provider.clone().unwrap_or_else(|| String::from("stripe"));
+    let mut payment_provider = body
+        .payment_provider
+        .clone()
+        .unwrap_or_else(|| String::from("stripe"));
     if payment_provider == "stripe" {
         if let Some(ref pid) = body.plan_id {
             if let Ok(uuid) = Uuid::parse_str(pid) {
                 if let Ok(pp) = sqlx::query_scalar::<_, Option<String>>(
-                    "SELECT payment_provider FROM plans WHERE id = $1"
+                    "SELECT payment_provider FROM plans WHERE id = $1",
                 )
                 .bind(uuid)
                 .fetch_one(&state.db)
@@ -74,14 +74,12 @@ pub async fn create_checkout_session(
         url.clone()
     } else if let Some(ref pid) = body.plan_id {
         if let Ok(uuid) = Uuid::parse_str(pid) {
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT thank_you_url FROM plans WHERE id = $1"
-            )
-            .bind(uuid)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten()
-            .unwrap_or_else(|| "/thank-you.html".to_string())
+            sqlx::query_scalar::<_, Option<String>>("SELECT thank_you_url FROM plans WHERE id = $1")
+                .bind(uuid)
+                .fetch_optional(&state.db)
+                .await?
+                .flatten()
+                .unwrap_or_else(|| "/thank-you.html".to_string())
         } else {
             "/thank-you.html".to_string()
         }
@@ -101,7 +99,7 @@ pub async fn create_checkout_session(
         RETURNING id, account_id, user_id, price_amount, price_currency, description,
                   success_url, cancel_url, metadata, status, payment_provider,
                   created_at, updated_at
-        "#
+        "#,
     )
     .bind(account_id)
     .bind(user_id)
@@ -157,27 +155,30 @@ pub async fn list_checkout_sessions(
         FROM checkout_sessions cs
         WHERE cs.account_id = $1
         ORDER BY cs.created_at DESC
-        "#
+        "#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<Value> = rows.iter().map(|row| {
-        json!({
-            "id": row.get::<Uuid, _>("id"),
-            "account_id": row.get::<Uuid, _>("account_id"),
-            "price_amount": row.get::<rust_decimal::Decimal, _>("price_amount"),
-            "price_currency": row.get::<String, _>("price_currency"),
-            "description": row.get::<Option<String>, _>("description"),
-            "status": row.get::<String, _>("status"),
-            "payment_provider": row.get::<String, _>("payment_provider"),
-            "payment_id": row.get::<Option<String>, _>("payment_id"),
-            "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
-            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "account_id": row.get::<Uuid, _>("account_id"),
+                "price_amount": row.get::<rust_decimal::Decimal, _>("price_amount"),
+                "price_currency": row.get::<String, _>("price_currency"),
+                "description": row.get::<Option<String>, _>("description"),
+                "status": row.get::<String, _>("status"),
+                "payment_provider": row.get::<String, _>("payment_provider"),
+                "payment_id": row.get::<Option<String>, _>("payment_id"),
+                "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }

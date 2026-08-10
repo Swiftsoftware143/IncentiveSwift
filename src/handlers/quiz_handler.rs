@@ -18,7 +18,9 @@ pub async fn list_campaign_questions(
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     let questions = questions_answers::get_campaign_questions(&state.db, &campaign.id).await?;
-    Ok(Json(json!({ "questions": questions, "campaign_id": campaign.id })))
+    Ok(Json(
+        json!({ "questions": questions, "campaign_id": campaign.id }),
+    ))
 }
 
 /// GET /api/v1/play/{campaign_id}/questions — public view (no correct_answer)
@@ -39,7 +41,9 @@ pub async fn create_question(
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
     let id = questions_answers::create_question(&state.db, &campaign.id, &input).await?;
-    Ok(Json(json!({ "id": id, "question_key": input.question_key })))
+    Ok(Json(
+        json!({ "id": id, "question_key": input.question_key }),
+    ))
 }
 
 /// PUT /api/v1/campaigns/{slug}/questions/{question_id} — update a question
@@ -239,34 +243,40 @@ pub async fn submit_quiz(
     }
 
     // Fire delivery integration with clean CRM payload (only crm_fields, not raw answers)
-    use crate::delivery::integration_hub::{self, DeliveryContext, CampaignInfo, ContactInfo, OutcomePayload, DeliveryConfig};
-    let _ = integration_hub::execute_delivery(&state.db, &DeliveryContext {
-        campaign: CampaignInfo {
-            id: campaign.id,
-            name: campaign.name.clone(),
-            slug: campaign.slug.clone(),
-            account_id: campaign.account_id,
+    use crate::delivery::integration_hub::{
+        self, CampaignInfo, ContactInfo, DeliveryConfig, DeliveryContext, OutcomePayload,
+    };
+    let _ = integration_hub::execute_delivery(
+        &state.db,
+        &DeliveryContext {
+            campaign: CampaignInfo {
+                id: campaign.id,
+                name: campaign.name.clone(),
+                slug: campaign.slug.clone(),
+                account_id: campaign.account_id,
+            },
+            contact: ContactInfo {
+                id: contact_id,
+                email: Some(input.contact.email.clone()),
+                phone: input.contact.phone.clone(),
+                first_name: input.contact.first_name.clone(),
+                last_name: input.contact.last_name.clone(),
+            },
+            outcome: OutcomePayload {
+                prize_id: None,
+                prize_label: if passed { Some(persona.clone()) } else { None },
+                prize_type: Some("quiz".to_string()),
+                won: passed,
+                was_pity: false,
+                streak: 0,
+                total_spins: 0,
+                redemption_url: None,
+            },
+            delivery_config: DeliveryConfig::default(),
+            crm_fields: Some(crm_fields.clone()),
         },
-        contact: ContactInfo {
-            id: contact_id,
-            email: Some(input.contact.email.clone()),
-            phone: input.contact.phone.clone(),
-            first_name: input.contact.first_name.clone(),
-            last_name: input.contact.last_name.clone(),
-        },
-        outcome: OutcomePayload {
-            prize_id: None,
-            prize_label: if passed { Some(persona.clone()) } else { None },
-            prize_type: Some("quiz".to_string()),
-            won: passed,
-            was_pity: false,
-            streak: 0,
-            total_spins: 0,
-            redemption_url: None,
-        },
-        delivery_config: DeliveryConfig::default(),
-        crm_fields: Some(crm_fields.clone()),
-    }).await;
+    )
+    .await;
 
     let result = QuizResult {
         score,

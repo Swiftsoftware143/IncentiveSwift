@@ -1,7 +1,7 @@
 //! Tag provision webhook — receives FunnelSwift system tag assignments.
 
-use axum::{extract::State, http::HeaderMap, Json};
 use axum::response::IntoResponse;
+use axum::{extract::State, http::HeaderMap, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -40,32 +40,67 @@ pub async fn handle_tag_provision(
     headers: HeaderMap,
     Json(req): Json<TagProvisionRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let expected = state.config.internal_sync_key.as_str();
     if key != expected {
         return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
 
-    let email = req.contact.email.as_deref().unwrap_or("").trim().to_lowercase();
-    let first_name = req.contact.first_name.as_deref().unwrap_or("").trim().to_string();
-    let last_name = req.contact.last_name.as_deref().unwrap_or("").trim().to_string();
-    let company_name = req.contact.company.as_deref().unwrap_or("").trim().to_string();
-    let phone = req.contact.phone.as_deref().unwrap_or("").trim().to_string();
+    let email = req
+        .contact
+        .email
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    let first_name = req
+        .contact
+        .first_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let last_name = req
+        .contact
+        .last_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let company_name = req
+        .contact
+        .company
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let phone = req
+        .contact
+        .phone
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     if !email.is_empty() {
-        let existing: Option<(Uuid,)> = sqlx::query_as(
-            r#"SELECT id FROM contacts WHERE email = $1 LIMIT 1"#
-        )
-        .bind(&email)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        let existing: Option<(Uuid,)> =
+            sqlx::query_as(r#"SELECT id FROM contacts WHERE email = $1 LIMIT 1"#)
+                .bind(&email)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| AppError::Database(e.to_string()))?;
 
         if let Some((contact_id,)) = existing {
-            return Ok((axum::http::StatusCode::OK, Json(json!({
-                "status": "already_exists",
-                "contact_id": contact_id.to_string(),
-            }))));
+            return Ok((
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "status": "already_exists",
+                    "contact_id": contact_id.to_string(),
+                })),
+            ));
         }
     }
 
@@ -87,10 +122,17 @@ pub async fn handle_tag_provision(
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    tracing::info!("tag_provision: created contact {} ({})", contact_id, first_name);
+    tracing::info!(
+        "tag_provision: created contact {} ({})",
+        contact_id,
+        first_name
+    );
 
-    Ok((axum::http::StatusCode::CREATED, Json(json!({
-        "status": "provisioned",
-        "contact_id": contact_id.to_string(),
-    }))))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(json!({
+            "status": "provisioned",
+            "contact_id": contact_id.to_string(),
+        })),
+    ))
 }

@@ -20,7 +20,7 @@ pub struct EarnChannel {
     pub points_per_click: i32,
     pub max_clicks_per_contact: i32,
     pub redirect_url: String,
-    pub verification_type: String,  /* auto_approve_all | auto_approve_answer | manual_approve */
+    pub verification_type: String, /* auto_approve_all | auto_approve_answer | manual_approve */
     pub expected_answer: Option<String>,
     pub verification_label: String,
     pub approval_notes: String,
@@ -37,7 +37,7 @@ pub async fn get_active_channel_by_code(
         r#"SELECT id, account_id, campaign_id, channel_code, label, description,
                   points_per_click, max_clicks_per_contact, redirect_url,
                   is_active, created_at, updated_at
-           FROM earn_channels WHERE channel_code = $1 AND is_active = true"#
+           FROM earn_channels WHERE channel_code = $1 AND is_active = true"#,
     )
     .bind(code)
     .fetch_optional(pool)
@@ -52,7 +52,7 @@ pub async fn count_contact_clicks_for_channel(
 ) -> Result<i32, AppError> {
     let count: (i64,) = sqlx::query_as(
         r#"SELECT COUNT(*) FROM earn_click_log
-           WHERE channel_id = $1 AND contact_id = $2"#
+           WHERE channel_id = $1 AND contact_id = $2"#,
     )
     .bind(channel_id)
     .bind(contact_id)
@@ -78,7 +78,7 @@ pub async fn log_earn_click(
         r#"INSERT INTO earn_click_log
            (channel_id, contact_id, campaign_id, ip_address, user_agent,
             referrer_url, utm_source, utm_medium, utm_campaign, points_awarded)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
     )
     .bind(channel_id)
     .bind(contact_id)
@@ -124,7 +124,7 @@ pub async fn find_referral_by_code(
                   referral_code, source, converted, converted_at,
                   click_count, points_earned, created_at
            FROM campaign_referrals
-           WHERE campaign_id = $1 AND referral_code = $2"#
+           WHERE campaign_id = $1 AND referral_code = $2"#,
     )
     .bind(campaign_id)
     .bind(code)
@@ -144,8 +144,11 @@ pub async fn generate_unique_referral_code(
         let code: String = (0..6)
             .map(|_| {
                 let idx = rng.gen_range(0..36);
-                if idx < 10 { (b'0' + idx as u8) as char }
-                else { (b'a' + (idx - 10) as u8) as char }
+                if idx < 10 {
+                    (b'0' + idx as u8) as char
+                } else {
+                    (b'a' + (idx - 10) as u8) as char
+                }
             })
             .collect();
         let exists: Option<(String,)> = sqlx::query_as(
@@ -174,7 +177,7 @@ pub async fn create_referral(
     sqlx::query(
         r#"INSERT INTO campaign_referrals
            (id, campaign_id, referrer_contact_id, referral_code, source)
-           VALUES ($1, $2, $3, $4, $5)"#
+           VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(id)
     .bind(campaign_id)
@@ -199,16 +202,11 @@ pub async fn create_referral(
     })
 }
 
-pub async fn increment_referral_click(
-    pool: &PgPool,
-    referral_id: &Uuid,
-) -> Result<(), AppError> {
-    sqlx::query(
-        r#"UPDATE campaign_referrals SET click_count = click_count + 1 WHERE id = $1"#
-    )
-    .bind(referral_id)
-    .execute(pool)
-    .await?;
+pub async fn increment_referral_click(pool: &PgPool, referral_id: &Uuid) -> Result<(), AppError> {
+    sqlx::query(r#"UPDATE campaign_referrals SET click_count = click_count + 1 WHERE id = $1"#)
+        .bind(referral_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -241,7 +239,7 @@ pub async fn log_referral_credit(
     sqlx::query(
         r#"INSERT INTO referral_credit_log
            (referral_id, referrer_contact_id, campaign_id, entry_id, action_type, points_awarded)
-           VALUES ($1, $2, $3, $4, $5, $6)"#
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
     )
     .bind(referral_id)
     .bind(referrer_contact_id)
@@ -254,7 +252,7 @@ pub async fn log_referral_credit(
 
     // Update referrer's total points earned
     sqlx::query(
-        r#"UPDATE campaign_referrals SET points_earned = points_earned + $1 WHERE id = $2"#
+        r#"UPDATE campaign_referrals SET points_earned = points_earned + $1 WHERE id = $2"#,
     )
     .bind(points_awarded)
     .bind(referral_id)
@@ -301,7 +299,7 @@ pub async fn get_campaign_points(
 ) -> Result<i32, AppError> {
     let result: Option<(i32,)> = sqlx::query_as(
         r#"SELECT points_balance FROM campaign_points_balance
-           WHERE campaign_id = $1 AND contact_id = $2"#
+           WHERE campaign_id = $1 AND contact_id = $2"#,
     )
     .bind(campaign_id)
     .bind(contact_id)
@@ -321,7 +319,7 @@ pub async fn get_campaign_leaderboard(
            FROM campaign_points_balance
            WHERE campaign_id = $1 AND lifetime_points > 0
            ORDER BY lifetime_points DESC
-           LIMIT $2"#
+           LIMIT $2"#,
     )
     .bind(campaign_id)
     .bind(limit)
@@ -353,7 +351,7 @@ pub async fn get_campaign_referral_stats(
                COUNT(*) FILTER (WHERE converted)::bigint AS total_conversions,
                COALESCE(SUM(points_earned), 0)::bigint AS total_points_awarded,
                COALESCE(SUM(click_count), 0)::bigint AS total_clicks
-           FROM campaign_referrals WHERE campaign_id = $1"#
+           FROM campaign_referrals WHERE campaign_id = $1"#,
     )
     .bind(campaign_id)
     .fetch_one(pool)
@@ -370,7 +368,7 @@ pub async fn list_campaign_earn_channels(
                   points_per_click, max_clicks_per_contact, redirect_url,
                   is_active, created_at, updated_at
            FROM earn_channels WHERE campaign_id = $1
-           ORDER BY created_at DESC"#
+           ORDER BY created_at DESC"#,
     )
     .bind(campaign_id)
     .fetch_all(pool)

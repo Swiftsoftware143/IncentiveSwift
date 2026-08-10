@@ -1,10 +1,10 @@
 //! Raffle handlers — enter, draw, redraw.
 
+use crate::db::{campaigns, contacts, raffles};
 use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
-use crate::db::{contacts, raffles, campaigns};
 use crate::mechanics::raffle_draw;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -28,7 +28,9 @@ pub async fn enter_raffle(
 ) -> Result<Json<Value>, AppError> {
     // Validate consent
     if !body.consent_gathered {
-        return Err(AppError::BadRequest("consent_gathered must be true to enter raffle".to_string()));
+        return Err(AppError::BadRequest(
+            "consent_gathered must be true to enter raffle".to_string(),
+        ));
     }
 
     // 1. Upsert contact
@@ -66,7 +68,9 @@ pub async fn draw(
 
     // Check if already drawn
     if raffles::has_existing_draw(&state.db, &campaign.id).await? {
-        return Err(AppError::BadRequest("This raffle has already been drawn. Use redraw instead.".to_string()));
+        return Err(AppError::BadRequest(
+            "This raffle has already been drawn. Use redraw instead.".to_string(),
+        ));
     }
 
     // Get all entries
@@ -113,7 +117,7 @@ pub async fn redraw(
 
     // Remove the current winner from the pool
     let current_winner_id: Option<uuid::Uuid> = sqlx::query_scalar(
-        "SELECT id FROM entries WHERE campaign_id = $1 AND outcome = 'winner' LIMIT 1"
+        "SELECT id FROM entries WHERE campaign_id = $1 AND outcome = 'winner' LIMIT 1",
     )
     .bind(campaign.id)
     .fetch_optional(&state.db)
@@ -124,21 +128,26 @@ pub async fn redraw(
     }
 
     if entry_ids.is_empty() {
-        return Err(AppError::BadRequest("No remaining entries to redraw from".to_string()));
+        return Err(AppError::BadRequest(
+            "No remaining entries to redraw from".to_string(),
+        ));
     }
 
     // Get existing seed
-    let seed_value: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT config->>'draw_seed' FROM campaigns WHERE id = $1"
-    )
-    .bind(campaign.id)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let seed_value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT config->>'draw_seed' FROM campaigns WHERE id = $1")
+            .bind(campaign.id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     let seed: u64 = match seed_value {
         Some(s) => s.as_str().unwrap_or("0").parse().unwrap_or(0),
-        None => return Err(AppError::BadRequest("No existing draw seed found. Must draw first.".to_string())),
+        None => {
+            return Err(AppError::BadRequest(
+                "No existing draw seed found. Must draw first.".to_string(),
+            ))
+        }
     };
 
     // Use a variant of the seed for redraw

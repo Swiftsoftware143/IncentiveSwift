@@ -13,7 +13,7 @@ pub async fn find_or_create_member(
 ) -> Result<Uuid, AppError> {
     // Try to find existing member
     let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM loyalty_members WHERE program_id = $1 AND contact_id = $2"
+        "SELECT id FROM loyalty_members WHERE program_id = $1 AND contact_id = $2",
     )
     .bind(program_id)
     .bind(contact_id)
@@ -28,7 +28,7 @@ pub async fn find_or_create_member(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO loyalty_members (id, program_id, contact_id, points_balance, lifetime_points)
-           VALUES ($1, $2, $3, 0, 0)"#
+           VALUES ($1, $2, $3, 0, 0)"#,
     )
     .bind(id)
     .bind(program_id)
@@ -41,10 +41,7 @@ pub async fn find_or_create_member(
 
 /// Count today's checkins for a member.
 #[allow(dead_code)]
-pub async fn count_daily_checkins(
-    pool: &PgPool,
-    member_id: &Uuid,
-) -> Result<i64, AppError> {
+pub async fn count_daily_checkins(pool: &PgPool, member_id: &Uuid) -> Result<i64, AppError> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM loyalty_checkins WHERE member_id = $1 AND checked_in_at::date = CURRENT_DATE"
     )
@@ -67,7 +64,7 @@ pub async fn record_checkin(
     let checkin_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO loyalty_checkins (id, member_id, points_awarded, method, entry_id)
-           VALUES ($1, $2, $3, $4, $5)"#
+           VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(checkin_id)
     .bind(member_id)
@@ -83,7 +80,7 @@ pub async fn record_checkin(
            SET points_balance = points_balance + $1,
                lifetime_points = lifetime_points + $1,
                last_checkin_at = now()
-           WHERE id = $2"#
+           WHERE id = $2"#,
     )
     .bind(points)
     .bind(member_id)
@@ -122,10 +119,7 @@ pub struct LoyaltyProgram {
 }
 
 /// Get a loyalty program by ID or slug.
-pub async fn get_program(
-    pool: &PgPool,
-    program_id: &Uuid,
-) -> Result<LoyaltyProgram, AppError> {
+pub async fn get_program(pool: &PgPool, program_id: &Uuid) -> Result<LoyaltyProgram, AppError> {
     let program = sqlx::query_as::<_, LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
                   points_per_checkin, max_checkins_per_day,
@@ -199,7 +193,7 @@ pub async fn create_reward(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO loyalty_rewards_earned (id, member_id, tier_id, status)
-           VALUES ($1, $2, $3, $4)"#
+           VALUES ($1, $2, $3, $4)"#,
     )
     .bind(id)
     .bind(member_id)
@@ -212,15 +206,11 @@ pub async fn create_reward(
 }
 
 /// Apply a reward tag to a contact (stored in contact notes).
-pub async fn apply_reward_tag(
-    pool: &PgPool,
-    contact_id: &Uuid,
-    tag: &str,
-) -> Result<(), AppError> {
+pub async fn apply_reward_tag(pool: &PgPool, contact_id: &Uuid, tag: &str) -> Result<(), AppError> {
     sqlx::query(
         r#"UPDATE contacts
            SET notes = COALESCE(notes || E'\n', '') || $1 || ' earned at ' || now()::text
-           WHERE id = $2"#
+           WHERE id = $2"#,
     )
     .bind(tag)
     .bind(contact_id)
@@ -242,10 +232,7 @@ pub struct RewardEarned {
     pub fulfilled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub async fn get_reward(
-    pool: &PgPool,
-    reward_id: &Uuid,
-) -> Result<RewardEarned, AppError> {
+pub async fn get_reward(pool: &PgPool, reward_id: &Uuid) -> Result<RewardEarned, AppError> {
     let reward = sqlx::query_as::<_, RewardEarned>(
         r#"SELECT id, member_id, tier_id, status, earned_at, approved_by, fulfilled_at
            FROM loyalty_rewards_earned WHERE id = $1"#,
@@ -269,7 +256,7 @@ pub async fn update_reward_status(
         sqlx::query(
             r#"UPDATE loyalty_rewards_earned
                SET status = $1, approved_by = $2, fulfilled_at = now()
-               WHERE id = $3"#
+               WHERE id = $3"#,
         )
         .bind(status)
         .bind(approved_by)
@@ -277,23 +264,18 @@ pub async fn update_reward_status(
         .execute(pool)
         .await?;
     } else {
-        sqlx::query(
-            "UPDATE loyalty_rewards_earned SET status = $1 WHERE id = $2"
-        )
-        .bind(status)
-        .bind(reward_id)
-        .execute(pool)
-        .await?;
+        sqlx::query("UPDATE loyalty_rewards_earned SET status = $1 WHERE id = $2")
+            .bind(status)
+            .bind(reward_id)
+            .execute(pool)
+            .await?;
     }
 
     Ok(())
 }
 
 /// Get reward tier by ID.
-pub async fn get_reward_tier(
-    pool: &PgPool,
-    tier_id: &Uuid,
-) -> Result<RewardTier, AppError> {
+pub async fn get_reward_tier(pool: &PgPool, tier_id: &Uuid) -> Result<RewardTier, AppError> {
     let tier = sqlx::query_as::<_, RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
                   reward_tag, sort_order
@@ -320,10 +302,7 @@ pub struct LoyaltyMember {
     pub last_checkin_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub async fn get_member(
-    pool: &PgPool,
-    member_id: &Uuid,
-) -> Result<LoyaltyMember, AppError> {
+pub async fn get_member(pool: &PgPool, member_id: &Uuid) -> Result<LoyaltyMember, AppError> {
     let member = sqlx::query_as::<_, LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at

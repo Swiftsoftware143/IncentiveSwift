@@ -13,9 +13,9 @@
 //! ```
 
 use crate::error::AppError;
+use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use uuid::Uuid;
-use serde_json::Value as JsonValue;
 
 /// Check pity timer: if the contact has hit the loss streak threshold,
 /// force a win and reset the streak. Otherwise increment the streak.
@@ -36,16 +36,22 @@ pub async fn apply_pity_timer(
         None => return Ok((false, base_outcome.to_string(), base_tags.to_vec())),
     };
 
-    let enabled = pity_config.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let enabled = pity_config
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !enabled {
         return Ok((false, base_outcome.to_string(), base_tags.to_vec()));
     }
 
-    let threshold = pity_config.get("threshold").and_then(|v| v.as_i64()).unwrap_or(5);
+    let threshold = pity_config
+        .get("threshold")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(5);
 
     // Read current streak
     let current_streak: Option<i32> = sqlx::query_scalar(
-        "SELECT loss_streak FROM campaign_streaks WHERE contact_id = $1 AND campaign_id = $2"
+        "SELECT loss_streak FROM campaign_streaks WHERE contact_id = $1 AND campaign_id = $2",
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -56,9 +62,8 @@ pub async fn apply_pity_timer(
     let streak = current_streak.unwrap_or(0);
 
     // Check if the current entry is already a win outcome
-    let is_win = base_outcome == "winner"
-        || base_outcome == "grand_prize"
-        || base_outcome == "runner_up";
+    let is_win =
+        base_outcome == "winner" || base_outcome == "grand_prize" || base_outcome == "runner_up";
 
     if is_win {
         // Win resets the streak
@@ -66,7 +71,7 @@ pub async fn apply_pity_timer(
             "INSERT INTO campaign_streaks (contact_id, campaign_id, loss_streak, last_entry_at)
              VALUES ($1, $2, 0, now())
              ON CONFLICT (contact_id, campaign_id)
-             DO UPDATE SET loss_streak = 0, last_entry_at = now()"
+             DO UPDATE SET loss_streak = 0, last_entry_at = now()",
         )
         .bind(contact_id)
         .bind(campaign_id)
@@ -78,11 +83,13 @@ pub async fn apply_pity_timer(
     // Not a win — check if pity timer should trigger
     if streak + 1 >= threshold as i32 {
         // Force win
-        let force_outcome = pity_config.get("force_win_outcome")
+        let force_outcome = pity_config
+            .get("force_win_outcome")
             .and_then(|v| v.as_str())
             .unwrap_or("winner")
             .to_string();
-        let force_tag = pity_config.get("force_win_tag")
+        let force_tag = pity_config
+            .get("force_win_tag")
             .and_then(|v| v.as_str())
             .map(|t| t.to_string())
             .unwrap_or_else(|| format!("{}_Winner", tag_namespace));
@@ -92,7 +99,7 @@ pub async fn apply_pity_timer(
             "INSERT INTO campaign_streaks (contact_id, campaign_id, loss_streak, last_entry_at)
              VALUES ($1, $2, 0, now())
              ON CONFLICT (contact_id, campaign_id)
-             DO UPDATE SET loss_streak = 0, last_entry_at = now()"
+             DO UPDATE SET loss_streak = 0, last_entry_at = now()",
         )
         .bind(contact_id)
         .bind(campaign_id)
@@ -101,7 +108,9 @@ pub async fn apply_pity_timer(
 
         tracing::info!(
             "Pity timer triggered for contact {} on campaign {} (streak {})",
-            contact_id, campaign_id, streak
+            contact_id,
+            campaign_id,
+            streak
         );
 
         return Ok((true, force_outcome, vec![force_tag]));
@@ -113,7 +122,7 @@ pub async fn apply_pity_timer(
         "INSERT INTO campaign_streaks (contact_id, campaign_id, loss_streak, last_entry_at)
          VALUES ($1, $2, $3, now())
          ON CONFLICT (contact_id, campaign_id)
-         DO UPDATE SET loss_streak = $3, last_entry_at = now()"
+         DO UPDATE SET loss_streak = $3, last_entry_at = now()",
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -143,7 +152,7 @@ pub async fn check_daily_limit(
 
     let today: i64 = sqlx::query_scalar(
         "SELECT entry_count FROM campaign_daily_limits
-         WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE"
+         WHERE contact_id = $1 AND campaign_id = $2 AND entry_date = CURRENT_DATE",
     )
     .bind(contact_id)
     .bind(campaign_id)
@@ -172,7 +181,7 @@ pub async fn record_daily_spin(
         "INSERT INTO campaign_daily_limits (contact_id, campaign_id, entry_date, entry_count)
          VALUES ($1, $2, CURRENT_DATE, 1)
          ON CONFLICT (contact_id, campaign_id, entry_date)
-         DO UPDATE SET entry_count = campaign_daily_limits.entry_count + 1"
+         DO UPDATE SET entry_count = campaign_daily_limits.entry_count + 1",
     )
     .bind(contact_id)
     .bind(campaign_id)

@@ -1,10 +1,10 @@
 //! Campaign handlers — list, get by slug, create.
 
-use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::access::feature_gate;
 use crate::db::campaigns;
+use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -68,10 +68,12 @@ pub async fn create_campaign(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let feature_key = format!("mechanic_{}", body.r#type);
-    let mut has_access = feature_gate::has_feature_access(&state, &user.account_id, &feature_key).await?;
+    let mut has_access =
+        feature_gate::has_feature_access(&state, &user.account_id, &feature_key).await?;
     // Also check the catch-all 'all_mechanics' feature
     if !has_access {
-        has_access = feature_gate::has_feature_access(&state, &user.account_id, "all_mechanics").await?;
+        has_access =
+            feature_gate::has_feature_access(&state, &user.account_id, "all_mechanics").await?;
     }
     if !has_access {
         return Err(AppError::Forbidden(format!(
@@ -149,7 +151,8 @@ pub async fn update_campaign(
         body.loyalty_program_id,
         body.loyalty_points_per_play,
         body.auto_enroll_loyalty,
-    ).await?;
+    )
+    .await?;
 
     Ok(Json(json!({ "campaign": campaign })))
 }

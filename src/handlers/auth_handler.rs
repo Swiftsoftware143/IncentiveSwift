@@ -1,17 +1,14 @@
 //! Auth handlers — login, me, change password, forgot/reset password.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::features;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -60,10 +57,14 @@ pub async fn register(
     Json(body): Json<RegisterInput>,
 ) -> Result<Json<Value>, AppError> {
     if body.email.is_empty() || body.password.is_empty() {
-        return Err(AppError::BadRequest("Email and password are required".to_string()));
+        return Err(AppError::BadRequest(
+            "Email and password are required".to_string(),
+        ));
     }
     if body.password.len() < 6 {
-        return Err(AppError::BadRequest("Password must be at least 6 characters".to_string()));
+        return Err(AppError::BadRequest(
+            "Password must be at least 6 characters".to_string(),
+        ));
     }
 
     // Check if account already exists
@@ -73,23 +74,23 @@ pub async fn register(
         .await?
         .flatten();
     if existing.is_some() {
-        return Err(AppError::BadRequest("An account with this email already exists".to_string()));
+        return Err(AppError::BadRequest(
+            "An account with this email already exists".to_string(),
+        ));
     }
 
     // Get the Free plan tier id
-    let free_plan_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM plans WHERE slug = 'free' LIMIT 1"
-    )
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| AppError::Internal("Free plan not configured".to_string()))?;
+    let free_plan_id: Uuid = sqlx::query_scalar("SELECT id FROM plans WHERE slug = 'free' LIMIT 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| AppError::Internal("Free plan not configured".to_string()))?;
 
     // Generate account id first (so we can use as tenant_id)
     let account_id = Uuid::new_v4();
     let password_hash = hash_password(&body.password)?;
-    let name = body.name.unwrap_or_else(|| {
-        body.email.split('@').next().unwrap_or("User").to_string()
-    });
+    let name = body
+        .name
+        .unwrap_or_else(|| body.email.split('@').next().unwrap_or("User").to_string());
 
     // Generate a unique slug from email
     let slug_base = body.email.split('@').next().unwrap_or("user");
@@ -134,19 +135,18 @@ pub async fn register(
 
     // Assign industry if provided; fall back to 'general'
     let industry_slug = body.industry_slug.as_deref().unwrap_or("general");
-    let industry_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM industries WHERE slug = $1 AND is_active = true"
-    )
-    .bind(industry_slug)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let industry_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM industries WHERE slug = $1 AND is_active = true")
+            .bind(industry_slug)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     if let Some(ind_id) = industry_id {
         sqlx::query(
             r#"INSERT INTO account_industries (account_id, industry_id, is_primary)
                VALUES ($1, $2, true)
-               ON CONFLICT (account_id, industry_id) DO NOTHING"#
+               ON CONFLICT (account_id, industry_id) DO NOTHING"#,
         )
         .bind(account_id)
         .bind(ind_id)
@@ -168,7 +168,7 @@ pub async fn register(
         let referrer = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
             r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                       member_since, last_checkin_at
-               FROM loyalty_members WHERE referral_code = $1"#
+               FROM loyalty_members WHERE referral_code = $1"#,
         )
         .bind(ref_code)
         .fetch_optional(&state.db)
@@ -184,21 +184,25 @@ pub async fn register(
                           streak_bonus, streak_days, referral_bonus, birthday_bonus,
                           points_expire_days, social_share_points, points_per_visit,
                           currency_name, currency_icon, currency_color
-                   FROM loyalty_programs WHERE id = $1 AND is_active = true"#
+                   FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
             )
             .bind(program_member.program_id)
             .fetch_optional(&state.db)
             .await?;
 
             if let Some(ref prog) = program {
-                let bonus = if prog.referral_bonus > 0 { prog.referral_bonus as i64 } else { 50i64 };
+                let bonus = if prog.referral_bonus > 0 {
+                    prog.referral_bonus as i64
+                } else {
+                    50i64
+                };
 
                 // Award points to referrer
                 sqlx::query(
                     r#"UPDATE loyalty_members
                        SET points_balance = points_balance + $1,
                            lifetime_points = lifetime_points + $1
-                       WHERE id = $2"#
+                       WHERE id = $2"#,
                 )
                 .bind(bonus)
                 .bind(program_member.id)
@@ -224,7 +228,7 @@ pub async fn register(
                 // Award points to referee (new user) — create a member record for them
                 // First find or create a contact for this new user
                 let contact_id = sqlx::query_scalar::<_, Uuid>(
-                    r#"SELECT id FROM contacts WHERE email = $1 AND tenant_id = $2 LIMIT 1"#
+                    r#"SELECT id FROM contacts WHERE email = $1 AND tenant_id = $2 LIMIT 1"#,
                 )
                 .bind(&body.email)
                 .bind(account_id)
@@ -263,8 +267,15 @@ pub async fn register(
     let cs_account_id = account_id;
     tokio::spawn(async move {
         crate::delivery::coreswift_push::push_contact_to_coreswift(
-            &cs_state, &cs_account_id, &cs_account_id, &["incentiveswift:Free".to_string()], &["incentiveswift:Free".to_string()], &[], "signup"
-        ).await;
+            &cs_state,
+            &cs_account_id,
+            &cs_account_id,
+            &["incentiveswift:Free".to_string()],
+            &["incentiveswift:Free".to_string()],
+            &[],
+            "signup",
+        )
+        .await;
     });
 
     Ok(Json(json!({
@@ -281,9 +292,9 @@ pub async fn register(
 
 /// Create a signed JWT token for an authenticated user.
 fn create_jwt(account_id: &str, email: &str, role: &str, secret: &str) -> Result<String, AppError> {
+    use base64::Engine;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    use base64::Engine;
 
     type HmacSha256 = Hmac<Sha256>;
 
@@ -322,7 +333,10 @@ fn create_jwt(account_id: &str, email: &str, role: &str, secret: &str) -> Result
 fn verify_password(password: &str, hash: &str) -> bool {
     // Try argon2 first
     if let Ok(parsed) = PasswordHash::new(hash) {
-        if Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok() {
+        if Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok()
+        {
             return true;
         }
     }
@@ -348,7 +362,7 @@ pub async fn login(
     // Look up account by email
     let row = sqlx::query(
         r#"SELECT id, email, password_hash, role
-           FROM accounts WHERE email = $1"#
+           FROM accounts WHERE email = $1"#,
     )
     .bind(&body.email)
     .fetch_optional(&state.db)
@@ -364,11 +378,15 @@ pub async fn login(
     match password_hash {
         Some(ref hash) => {
             if !verify_password(&body.password, hash) {
-                return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+                return Err(AppError::Unauthorized(
+                    "Invalid email or password".to_string(),
+                ));
             }
         }
         None => {
-            return Err(AppError::Unauthorized("Invalid email or password".to_string()));
+            return Err(AppError::Unauthorized(
+                "Invalid email or password".to_string(),
+            ));
         }
     }
 
@@ -415,7 +433,7 @@ pub async fn me(
                   p.price_annual
            FROM accounts a
            LEFT JOIN plans p ON a.plan_tier_id = p.id
-           WHERE a.id = $1"#
+           WHERE a.id = $1"#,
     )
     .bind(account_uuid)
     .fetch_optional(&state.db)
@@ -438,7 +456,7 @@ pub async fn me(
            FROM account_industries ai
            JOIN industries i ON i.id = ai.industry_id
            WHERE ai.account_id = $1
-           ORDER BY ai.is_primary DESC, i.sort_order"#
+           ORDER BY ai.is_primary DESC, i.sort_order"#,
     )
     .bind(account_uuid)
     .fetch_all(&state.db)
@@ -456,7 +474,10 @@ pub async fn me(
     .collect();
 
     // Industry limit from plan features
-    let industry_limit: i32 = features.get("industry_limit").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let industry_limit: i32 = features
+        .get("industry_limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1) as i32;
 
     Ok(Json(json!({
         "user": {
@@ -499,13 +520,12 @@ pub async fn update_profile(
     // Industry change: set as primary, swapping out previous primary if at limit
     if let Some(ref industry_slug) = body.industry_slug {
         // Get the industry ID
-        let industry_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM industries WHERE slug = $1 AND is_active = true"
-        )
-        .bind(industry_slug)
-        .fetch_optional(&state.db)
-        .await?
-        .flatten();
+        let industry_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM industries WHERE slug = $1 AND is_active = true")
+                .bind(industry_slug)
+                .fetch_optional(&state.db)
+                .await?
+                .flatten();
 
         if let Some(ind_id) = industry_id {
             // Check if already assigned — if so just make it primary
@@ -524,19 +544,20 @@ pub async fn update_profile(
                     r#"SELECT COALESCE(p.features::text, '{}')::jsonb
                        FROM accounts a
                        LEFT JOIN plans p ON a.plan_tier_id = p.id
-                       WHERE a.id = $1"#
+                       WHERE a.id = $1"#,
                 )
                 .bind(account_uuid)
                 .fetch_optional(&state.db)
                 .await?
                 .unwrap_or(serde_json::json!({}));
 
-                let industry_limit: i64 = plan_features.get("industry_limit")
+                let industry_limit: i64 = plan_features
+                    .get("industry_limit")
                     .and_then(|v| v.as_i64())
                     .unwrap_or(1);
 
                 let current_count = sqlx::query_scalar::<_, Option<i64>>(
-                    "SELECT COUNT(*) FROM account_industries WHERE account_id = $1"
+                    "SELECT COUNT(*) FROM account_industries WHERE account_id = $1",
                 )
                 .bind(account_uuid)
                 .fetch_one(&state.db)
@@ -553,7 +574,7 @@ pub async fn update_profile(
                 sqlx::query(
                     r#"INSERT INTO account_industries (account_id, industry_id, is_primary)
                        VALUES ($1, $2, true)
-                       ON CONFLICT (account_id, industry_id) DO UPDATE SET is_primary = true"#
+                       ON CONFLICT (account_id, industry_id) DO UPDATE SET is_primary = true"#,
                 )
                 .bind(account_uuid)
                 .bind(ind_id)
@@ -573,7 +594,7 @@ pub async fn update_profile(
             // Unset other primaries
             sqlx::query(
                 r#"UPDATE account_industries SET is_primary = false
-                   WHERE account_id = $1 AND industry_id != $2 AND is_primary = true"#
+                   WHERE account_id = $1 AND industry_id != $2 AND is_primary = true"#,
             )
             .bind(account_uuid)
             .bind(ind_id)
@@ -594,7 +615,7 @@ pub async fn update_profile(
                   p.price_annual
            FROM accounts a
            LEFT JOIN plans p ON a.plan_tier_id = p.id
-           WHERE a.id = $1"#
+           WHERE a.id = $1"#,
     )
     .bind(account_uuid)
     .fetch_optional(&state.db)
@@ -611,7 +632,7 @@ pub async fn update_profile(
            FROM account_industries ai
            JOIN industries i ON i.id = ai.industry_id
            WHERE ai.account_id = $1
-           ORDER BY ai.is_primary DESC, i.sort_order"#
+           ORDER BY ai.is_primary DESC, i.sort_order"#,
     )
     .bind(account_uuid)
     .fetch_all(&state.db)
@@ -628,7 +649,10 @@ pub async fn update_profile(
     })
     .collect();
 
-    let industry_limit: i32 = features.get("industry_limit").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+    let industry_limit: i32 = features
+        .get("industry_limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1) as i32;
 
     let plan_name: Option<String> = row.get("plan_name");
     let plan_slug: Option<String> = row.get("plan_slug");
@@ -666,24 +690,26 @@ pub async fn change_password(
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
 
     // Verify current password
-    let row = sqlx::query(
-        r#"SELECT password_hash FROM accounts WHERE id = $1"#
-    )
-    .bind(account_uuid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+    let row = sqlx::query(r#"SELECT password_hash FROM accounts WHERE id = $1"#)
+        .bind(account_uuid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
 
     let password_hash: Option<String> = row.get("password_hash");
 
     match password_hash {
         Some(ref hash) => {
             if !verify_password(&body.current_password, hash) {
-                return Err(AppError::Forbidden("Current password is incorrect".to_string()));
+                return Err(AppError::Forbidden(
+                    "Current password is incorrect".to_string(),
+                ));
             }
         }
         None => {
-            return Err(AppError::Forbidden("No password set for this account".to_string()));
+            return Err(AppError::Forbidden(
+                "No password set for this account".to_string(),
+            ));
         }
     }
 
@@ -704,13 +730,11 @@ pub async fn forgot_password(
     Json(body): Json<ForgotPasswordInput>,
 ) -> Result<Json<Value>, AppError> {
     // Check if account exists
-    let account_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE email = $1"
-    )
-    .bind(&body.email)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let account_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1")
+        .bind(&body.email)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten();
 
     // Always return success to prevent email enumeration
     if account_id.is_none() {
@@ -726,7 +750,7 @@ pub async fn forgot_password(
 
     sqlx::query(
         r#"INSERT INTO password_resets (account_id, token, expires_at)
-           VALUES ($1, $2, $3)"#
+           VALUES ($1, $2, $3)"#,
     )
     .bind(account_id)
     .bind(&token)
@@ -737,7 +761,9 @@ pub async fn forgot_password(
     // Try to send email, but log the token to server logs as fallback
     tracing::info!(
         "Password reset token for {}: {} (expires at {})",
-        body.email, token, expires_at
+        body.email,
+        token,
+        expires_at
     );
 
     // Attempt to send the email via configured provider
@@ -760,7 +786,7 @@ pub async fn reset_password(
     // Look up the reset token
     let row = sqlx::query(
         r#"SELECT account_id, expires_at, used
-           FROM password_resets WHERE token = $1"#
+           FROM password_resets WHERE token = $1"#,
     )
     .bind(&body.token)
     .fetch_optional(&state.db)
@@ -772,7 +798,9 @@ pub async fn reset_password(
     let used: bool = row.get("used");
 
     if used {
-        return Err(AppError::BadRequest("Reset token has already been used".to_string()));
+        return Err(AppError::BadRequest(
+            "Reset token has already been used".to_string(),
+        ));
     }
 
     if chrono::Utc::now() > expires_at {

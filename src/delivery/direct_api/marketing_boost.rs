@@ -35,9 +35,8 @@ impl DestinationCache {
     }
 }
 
-static DESTINATION_CACHE: LazyLock<Arc<Mutex<HashMap<String, DestinationCache>>>> = LazyLock::new(|| {
-    Arc::new(Mutex::new(HashMap::new()))
-});
+static DESTINATION_CACHE: LazyLock<Arc<Mutex<HashMap<String, DestinationCache>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 // ---------------------------------------------------------------------------
 // Request/Response types
@@ -139,7 +138,12 @@ pub async fn send_dining_voucher(
         .json(&body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Marketing Boost dining voucher request failed: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Marketing Boost dining voucher request failed: {}",
+                e
+            ))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -194,7 +198,12 @@ pub async fn send_hotel_savings_card(
         .json(&body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Marketing Boost hotel savings card request failed: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Marketing Boost hotel savings card request failed: {}",
+                e
+            ))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -244,7 +253,12 @@ pub async fn send_vacation_incentive(
         .json(&body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Marketing Boost vacation incentive request failed: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Marketing Boost vacation incentive request failed: {}",
+                e
+            ))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -274,7 +288,10 @@ pub async fn fetch_destinations(
         let cache = DESTINATION_CACHE.lock().await;
         if let Some(entry) = cache.get(sender) {
             if entry.is_fresh() {
-                tracing::debug!("Returning cached Marketing Boost destinations for sender {}", sender);
+                tracing::debug!(
+                    "Returning cached Marketing Boost destinations for sender {}",
+                    sender
+                );
                 return Ok(entry.destinations.clone());
             }
         }
@@ -287,7 +304,12 @@ pub async fn fetch_destinations(
         .headers(common_headers(api_key))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Marketing Boost destination list request failed: {}", e)))?;
+        .map_err(|e| {
+            AppError::Internal(format!(
+                "Marketing Boost destination list request failed: {}",
+                e
+            ))
+        })?;
 
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
@@ -300,7 +322,10 @@ pub async fn fetch_destinations(
     }
 
     let destinations: Value = serde_json::from_str(&text).map_err(|e| {
-        AppError::Internal(format!("Failed to parse Marketing Boost destination list: {}", e))
+        AppError::Internal(format!(
+            "Failed to parse Marketing Boost destination list: {}",
+            e
+        ))
     })?;
 
     // Update cache
@@ -324,5 +349,8 @@ pub async fn fetch_destinations(
 pub async fn invalidate_destination_cache(sender: &str) {
     let mut cache = DESTINATION_CACHE.lock().await;
     cache.remove(sender);
-    tracing::debug!("Invalidated Marketing Boost destination cache for sender {}", sender);
+    tracing::debug!(
+        "Invalidated Marketing Boost destination cache for sender {}",
+        sender
+    );
 }

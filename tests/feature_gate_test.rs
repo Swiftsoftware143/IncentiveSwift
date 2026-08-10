@@ -6,14 +6,26 @@ use incentiveswift_api::db::campaigns;
 #[test]
 fn test_all_mechanic_types_valid() {
     let valid_types = vec![
-        "score_reveal", "spin_wheel", "scratch_card", "personality",
-        "calculator", "mystery", "countdown", "poll", "chat",
-        "leaderboard", "raffle", "long_form_qualifier",
+        "score_reveal",
+        "spin_wheel",
+        "scratch_card",
+        "personality",
+        "calculator",
+        "mystery",
+        "countdown",
+        "poll",
+        "chat",
+        "leaderboard",
+        "raffle",
+        "long_form_qualifier",
     ];
 
     for t in &valid_types {
-        assert!(campaigns::validate_mechanic_type(t),
-            "{} should be a valid mechanic type", t);
+        assert!(
+            campaigns::validate_mechanic_type(t),
+            "{} should be a valid mechanic type",
+            t
+        );
     }
 }
 
@@ -56,7 +68,8 @@ fn test_feature_registry() {
                 || feature.starts_with("branding_")
                 || feature.starts_with("module_")
                 || feature.starts_with("limit_"),
-            "Feature key format: {}", feature
+            "Feature key format: {}",
+            feature
         );
     }
 

@@ -37,8 +37,7 @@ fn substitute_vars(formula: &str, vars: &HashMap<String, f64>) -> String {
     result
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum Token {
     Number(f64),
     Plus,
@@ -56,20 +55,42 @@ fn tokenize(s: &str) -> Result<Vec<Token>, String> {
 
     while i < chars.len() {
         match chars[i] {
-            ' ' => { i += 1; }
-            '+' => { tokens.push(Token::Plus); i += 1; }
-            '-' => { tokens.push(Token::Minus); i += 1; }
-            '*' => { tokens.push(Token::Star); i += 1; }
-            '/' => { tokens.push(Token::Slash); i += 1; }
-            '(' => { tokens.push(Token::LParen); i += 1; }
-            ')' => { tokens.push(Token::RParen); i += 1; }
+            ' ' => {
+                i += 1;
+            }
+            '+' => {
+                tokens.push(Token::Plus);
+                i += 1;
+            }
+            '-' => {
+                tokens.push(Token::Minus);
+                i += 1;
+            }
+            '*' => {
+                tokens.push(Token::Star);
+                i += 1;
+            }
+            '/' => {
+                tokens.push(Token::Slash);
+                i += 1;
+            }
+            '(' => {
+                tokens.push(Token::LParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(Token::RParen);
+                i += 1;
+            }
             c if c.is_ascii_digit() || c == '.' => {
                 let start = i;
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     i += 1;
                 }
                 let num_str: String = chars[start..i].iter().collect();
-                let num: f64 = num_str.parse().map_err(|_| format!("Invalid number: {}", num_str))?;
+                let num: f64 = num_str
+                    .parse()
+                    .map_err(|_| format!("Invalid number: {}", num_str))?;
                 tokens.push(Token::Number(num));
             }
             c => {

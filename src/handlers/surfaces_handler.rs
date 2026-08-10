@@ -2,15 +2,15 @@
 //! Auto-generated during endpoint restoration.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use serde_json::{json, Value};
+use sqlx::Row;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -53,7 +53,9 @@ pub async fn list(
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
-    Ok(Json(json!({ "items": items, "count": items.len(), "limit": limit, "offset": offset })))
+    Ok(Json(
+        json!({ "items": items, "count": items.len(), "limit": limit, "offset": offset }),
+    ))
 }
 
 /// POST /api/v1/surfaces
@@ -72,7 +74,7 @@ pub async fn create(
         .execute(&state.db)
         .await?;
     let item = sqlx::query_as::<_, Surfaces>(
-        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1"
+        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -89,7 +91,7 @@ pub async fn get(
     let item_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid item ID value".to_string()))?;
     let item = sqlx::query_as::<_, Surfaces>(
-        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1"
+        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1",
     )
     .bind(item_id)
     .fetch_optional(&state.db)
@@ -105,8 +107,8 @@ pub async fn update(
     user: AuthenticatedUser,
     Json(body): Json<UpdateInput>,
 ) -> Result<Json<Value>, AppError> {
-    let item_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
+    let item_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
     let row = sqlx::query("SELECT name FROM surfaces WHERE id = $1")
         .bind(item_id)
         .fetch_optional(&state.db)
@@ -119,7 +121,7 @@ pub async fn update(
         .execute(&state.db)
         .await?;
     let item = sqlx::query_as::<_, Surfaces>(
-        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1"
+        "SELECT id, account_id, name, created_at, updated_at FROM surfaces WHERE id = $1",
     )
     .bind(item_id)
     .fetch_one(&state.db)
@@ -133,8 +135,8 @@ pub async fn delete(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let item_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
+    let item_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid item ID".to_string()))?;
     let result = sqlx::query("DELETE FROM surfaces WHERE id = $1")
         .bind(item_id)
         .execute(&state.db)
