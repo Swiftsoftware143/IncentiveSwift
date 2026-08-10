@@ -124,7 +124,7 @@ pub async fn get_widget_js(
     .await?
     .ok_or_else(|| AppError::NotFound("Widget snippet not found".to_string()))?;
 
-    let widget_url = format!("/api/v1/widget/{}/config", &hash);
+    let widget_url = format!("/api/v1/widget/{}/config", hash);
     let js = WIDGET_JS_TEMPLATE
         .replace("WIDGET_URL", &widget_url)
         .replace("HASH", &hash);
@@ -489,9 +489,9 @@ pub async fn get_embed_view(
         r#"<div id="is-embed-{}" data-campaign="{}" data-type="{}"></div>
 <script src="/api/v1/widget/{}/config" async></script>"#,
         &cid.to_string()[..8],
-        &slug,
-        &campaign_type,
-        &slug
+        slug,
+        campaign_type,
+        slug
     );
 
     Ok(Json(json!({
@@ -609,8 +609,8 @@ pub async fn get_campaign_embed(
 "##,
         esc_html(&name),
         "",
-        &slug_str,
-        &slug_str
+        slug_str,
+        slug_str
     );
 
     let r = serde_json::json!({

@@ -528,6 +528,11 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::loyalty::program_qr),
         )
         .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
+        // Leads list
+        .route(
+            "/api/v1/leads",
+            get(handlers::dashboard_handler::list_leads),
+        )
         .route(
             "/api/v1/contacts",
             get(handlers::contacts::list_contacts).post(handlers::contacts::create_contact),
@@ -537,6 +542,11 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::contacts::get_contact)
                 .put(handlers::contacts::update_contact)
                 .delete(handlers::contacts::delete_contact),
+        )
+        // Tags list
+        .route(
+            "/api/v1/tags",
+            get(handlers::dashboard_handler::list_tags),
         )
         .route(
             "/api/v1/portfolio-companies",
@@ -637,6 +647,11 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::business_handler::admin_rotate_business_key),
         )
         // Admin plan management
+        // Public plans listing
+        .route(
+            "/api/v1/plans",
+            get(handlers::dashboard_handler::list_public_plans),
+        )
         .route(
             "/api/v1/admin/plans",
             get(crate::handlers::plans_handler::list_plans)
@@ -699,6 +714,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/dashboard/stats",
             get(handlers::dashboard_handler::dashboard_stats),
+        )
+        // Dashboard recent activity feed
+        .route(
+            "/api/v1/dashboard/activity",
+            get(handlers::dashboard_handler::dashboard_activity),
         )
         .route(
             "/api/v1/play/:id",
