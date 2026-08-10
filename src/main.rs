@@ -264,6 +264,8 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/subscribe",
             post(handlers::loyalty_plans::subscribe),
         )
+        .route("/api/v1/loyalty/webhook/stripe", post(handlers::stripe_webhook::stripe_webhook))
+
         // Loyalty Badge endpoints (Phase 1)
         .route(
             "/api/v1/loyalty/badge/business/:business_id",

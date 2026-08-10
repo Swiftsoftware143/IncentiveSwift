@@ -15,7 +15,7 @@ pub struct LoyaltyPlan {
     pub slug: String,
     pub monthly_price: i32,
     pub monthly_zc_pool: i32,
-    pub features: Option<Vec<String>>,
+    pub features: Option<serde_json::Value>,
     pub description: Option<String>,
     pub how_it_works: Option<String>,
 }
