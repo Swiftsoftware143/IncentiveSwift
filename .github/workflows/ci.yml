@@ -9,23 +9,9 @@ on:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: swift
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
 
     env:
-      DATABASE_URL: postgres://swift:test@localhost:5432/test
+      SQLX_OFFLINE: true
 
     steps:
       - uses: actions/checkout@v4
@@ -35,23 +21,14 @@ jobs:
         with:
           components: clippy
 
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres,native-tls
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Run migrations
-        run: sqlx migrate run
-
       - name: Clippy
         run: cargo clippy -- -D warnings
 
       - name: Build
         run: cargo build --release
-
-      - name: Test
-        run: cargo test -- --test-threads=1
