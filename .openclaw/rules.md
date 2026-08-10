@@ -89,3 +89,12 @@ After EVERY deploy, run through:
 `memory/deployment-checklist.md` (in SwiftSoftware CEO workspace)
 
 The 9 sections: Source Control → Build → Git Sync → Signup Flow → Admin UI → 402 Gating → Plan Management → Nginx Routing → Heartbeat
+
+
+### 9. Admin Login — NEVER BREAK
+- Admin credentials: `swiftsoftware143@yahoo.com` / `SwiftAdmin2026!`
+- After EVERY deploy: verify admin login works
+- For SaaS apps: `https://admin.{domain}/` must accept these credentials
+- For Multi-Directory: `https://directory.swiftsoftware.net/admin` must accept these credentials
+- If admin login returns 401/422/500 — deployment is BROKEN, roll back immediately
+- This applies across ALL 7 apps — no exceptions
