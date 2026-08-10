@@ -6,8 +6,8 @@
 //!   DELETE /api/v1/payment-providers/:provider_type — delete a provider
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -69,28 +69,31 @@ pub async fn list_payment_providers(
         FROM payment_providers pp
         WHERE pp.account_id = $1
         ORDER BY pp.provider_type
-        "#
+        "#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<Value> = rows.iter().map(|row| {
-        let raw_key: String = row.get("api_key");
-        let raw_webhook: String = row.get("webhook_secret");
-        json!({
-            "id": row.get::<Uuid, _>("id"),
-            "account_id": row.get::<Uuid, _>("account_id"),
-            "provider_type": row.get::<String, _>("provider_type"),
-            "api_key_masked": mask_key(&raw_key),
-            "webhook_secret_masked": mask_key(&raw_webhook),
-            "base_url": row.get::<Option<String>, _>("base_url"),
-            "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
-            "is_active": row.get::<bool, _>("is_active"),
-            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let raw_key: String = row.get("api_key");
+            let raw_webhook: String = row.get("webhook_secret");
+            json!({
+                "id": row.get::<Uuid, _>("id"),
+                "account_id": row.get::<Uuid, _>("account_id"),
+                "provider_type": row.get::<String, _>("provider_type"),
+                "api_key_masked": mask_key(&raw_key),
+                "webhook_secret_masked": mask_key(&raw_webhook),
+                "base_url": row.get::<Option<String>, _>("base_url"),
+                "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
+                "is_active": row.get::<bool, _>("is_active"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }
@@ -174,12 +177,10 @@ pub async fn delete_payment_provider(
         ));
     }
 
-    let result = sqlx::query(
-        "DELETE FROM payment_providers WHERE provider_type = $1"
-    )
-    .bind(&provider_type)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM payment_providers WHERE provider_type = $1")
+        .bind(&provider_type)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!(
@@ -188,7 +189,9 @@ pub async fn delete_payment_provider(
         )));
     }
 
-    Ok(Json(json!({ "status": "deleted", "provider_type": provider_type })))
+    Ok(Json(
+        json!({ "status": "deleted", "provider_type": provider_type }),
+    ))
 }
 
 /// Look up a payment provider's webhook secret from the database by provider type.

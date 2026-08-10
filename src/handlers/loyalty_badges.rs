@@ -5,8 +5,8 @@ use axum::{
     extract::{Path, Query, State},
     Json,
 };
-use serde::{Deserialize, Serialize};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ pub struct BadgeStatus {
     pub is_enrolled: bool,
     pub program_name: Option<String>,
     pub enrolled_at: Option<String>,
-    pub badge_visible: bool,  // true only when actively enrolled
+    pub badge_visible: bool, // true only when actively enrolled
 }
 
 /// GET /api/v1/loyalty/badge/business/:business_id
@@ -43,7 +43,7 @@ pub async fn get_business_badge(
              AND le.is_active = true
              AND lp.is_active = true
            ORDER BY le.enrolled_at DESC
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(business_id)
     .fetch_optional(&state.db)
@@ -84,7 +84,7 @@ pub async fn get_supplier_badge(
              AND le.is_active = true
              AND lp.is_active = true
            ORDER BY le.enrolled_at DESC
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(supplier_id)
     .fetch_optional(&state.db)
@@ -126,7 +126,7 @@ pub async fn get_member_badge(
              AND le.is_active = true
              AND lp.is_active = true
            ORDER BY le.enrolled_at DESC
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(contact_id)
     .fetch_optional(&state.db)
@@ -166,7 +166,7 @@ pub async fn get_program_badges(
     Query(query): Query<BulkBadgeQuery>,
 ) -> Result<Json<Value>, AppError> {
     let program = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1"
+        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1",
     )
     .bind(&program_slug)
     .fetch_optional(&state.db)
@@ -179,7 +179,7 @@ pub async fn get_program_badges(
         sqlx::query_as::<_, (String, Uuid, chrono::DateTime<chrono::Utc>)>(
             r#"SELECT entity_type, entity_id, enrolled_at
                FROM loyalty_enrollments
-               WHERE program_id = $1 AND is_active = true AND entity_type = $2"#
+               WHERE program_id = $1 AND is_active = true AND entity_type = $2"#,
         )
         .bind(program.0)
         .bind(et)
@@ -189,21 +189,24 @@ pub async fn get_program_badges(
         sqlx::query_as::<_, (String, Uuid, chrono::DateTime<chrono::Utc>)>(
             r#"SELECT entity_type, entity_id, enrolled_at
                FROM loyalty_enrollments
-               WHERE program_id = $1 AND is_active = true"#
+               WHERE program_id = $1 AND is_active = true"#,
         )
         .bind(program.0)
         .fetch_all(&state.db)
         .await?
     };
 
-    let badges: Vec<Value> = enrollments.into_iter().map(|(et, eid, at)| {
-        json!({
-            "entity_type": et,
-            "entity_id": eid.to_string(),
-            "enrolled_at": at.to_rfc3339(),
-            "badge_visible": true,
+    let badges: Vec<Value> = enrollments
+        .into_iter()
+        .map(|(et, eid, at)| {
+            json!({
+                "entity_type": et,
+                "entity_id": eid.to_string(),
+                "enrolled_at": at.to_rfc3339(),
+                "badge_visible": true,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "program_id": program.0.to_string(),
@@ -219,7 +222,7 @@ pub async fn get_program_badges(
 
 #[derive(Debug, Deserialize)]
 pub struct EnrollEntityRequest {
-    pub entity_type: String,        // "business", "supplier", "member"
+    pub entity_type: String, // "business", "supplier", "member"
     pub entity_id: Uuid,
     pub program_slug: String,
     pub metadata: Option<Value>,
@@ -244,12 +247,14 @@ pub async fn enroll_entity(
 
     // Look up program by slug
     let program = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1"
+        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1",
     )
     .bind(&req.program_slug)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("Loyalty program '{}' not found", req.program_slug)))?;
+    .ok_or_else(|| {
+        AppError::NotFound(format!("Loyalty program '{}' not found", req.program_slug))
+    })?;
 
     // Check if already enrolled
     let existing = sqlx::query_as::<_, (Uuid, bool)>(
@@ -310,7 +315,10 @@ pub async fn enroll_entity(
 
     tracing::info!(
         "[enroll] {} {} enrolled in {} (program={})",
-        req.entity_type, req.entity_id, program_name, req.program_slug
+        req.entity_type,
+        req.entity_id,
+        program_name,
+        req.program_slug
     );
 
     let msg = format!("Enrolled in {}", program_name);
@@ -340,12 +348,14 @@ pub async fn unenroll_entity(
     Json(req): Json<UnenrollRequest>,
 ) -> Result<Json<Value>, AppError> {
     let program = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1"
+        "SELECT id, name FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1",
     )
     .bind(&req.program_slug)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!("Loyalty program '{}' not found", req.program_slug)))?;
+    .ok_or_else(|| {
+        AppError::NotFound(format!("Loyalty program '{}' not found", req.program_slug))
+    })?;
 
     let result = sqlx::query(
         "UPDATE loyalty_enrollments SET is_active = false, deactivated_at = now() WHERE entity_type = $1 AND entity_id = $2 AND program_id = $3 AND is_active = true"
@@ -367,7 +377,9 @@ pub async fn unenroll_entity(
 
     tracing::info!(
         "[unenroll] {} {} removed from {}",
-        req.entity_type, req.entity_id, program.1
+        req.entity_type,
+        req.entity_id,
+        program.1
     );
 
     Ok(Json(json!({
@@ -392,11 +404,20 @@ pub async fn get_member_qr(
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     // Fetch member with program info
-    let member = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, String, Option<chrono::DateTime<chrono::Utc>>)>(
+    let member = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            Option<String>,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ),
+    >(
         r#"SELECT lm.id, lm.program_id, lm.qr_code, lp.name, lm.qr_code_generated_at
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           WHERE lm.id = $1"#
+           WHERE lm.id = $1"#,
     )
     .bind(member_id)
     .fetch_optional(&state.db)
@@ -434,7 +455,11 @@ pub async fn get_member_qr(
         .execute(&state.db)
         .await?;
 
-    tracing::info!("[qr] Generated QR for member {} in program {}", mid, program_name);
+    tracing::info!(
+        "[qr] Generated QR for member {} in program {}",
+        mid,
+        program_name
+    );
 
     Ok(Json(json!({
         "member_id": mid.to_string(),
@@ -454,10 +479,12 @@ pub async fn regenerate_member_qr(
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
     // Clear existing QR first
-    sqlx::query("UPDATE loyalty_members SET qr_code = NULL, qr_code_generated_at = NULL WHERE id = $1")
-        .bind(member_id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE loyalty_members SET qr_code = NULL, qr_code_generated_at = NULL WHERE id = $1",
+    )
+    .bind(member_id)
+    .execute(&state.db)
+    .await?;
 
     // Reuse the generation logic
     get_member_qr(State(state), Path(member_id)).await
@@ -489,7 +516,7 @@ pub async fn scan_member(
         r#"SELECT lm.id, lm.program_id, lm.contact_id, lm.points_balance
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           WHERE lm.qr_code = $1 AND lp.slug = $2 AND lp.is_active = true"#
+           WHERE lm.qr_code = $1 AND lp.slug = $2 AND lp.is_active = true"#,
     )
     .bind(&req.qr_code)
     .bind(&req.program_slug)
@@ -502,22 +529,23 @@ pub async fn scan_member(
     let scan_type = req.scan_type.as_deref().unwrap_or("checkin");
     let points_awarded = match scan_type {
         "checkin" => 10,
-        "purchase" => {
-            req.purchase_amount
-                .map(|a| a.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32)
-                .unwrap_or(0)
-        }
+        "purchase" => req
+            .purchase_amount
+            .map(|a| a.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32)
+            .unwrap_or(0),
         "redemption" | "reward_claim" => 0,
         _ => 10,
     };
 
     let new_balance = current_balance + points_awarded;
 
-    sqlx::query("UPDATE loyalty_members SET points_balance = $1, last_activity_date = now() WHERE id = $2")
-        .bind(new_balance)
-        .bind(member_id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE loyalty_members SET points_balance = $1, last_activity_date = now() WHERE id = $2",
+    )
+    .bind(new_balance)
+    .bind(member_id)
+    .execute(&state.db)
+    .await?;
 
     let scan_id = Uuid::new_v4();
     let metadata = serde_json::json!({
@@ -545,7 +573,10 @@ pub async fn scan_member(
 
     tracing::info!(
         "[scan] Member {} scanned at business {} — {} points, balance: {}",
-        member_id, req.business_id, points_awarded, new_balance
+        member_id,
+        req.business_id,
+        points_awarded,
+        new_balance
     );
 
     Ok(Json(json!({
@@ -588,18 +619,21 @@ pub async fn get_member_scans(
     .fetch_all(&state.db)
     .await?;
 
-    let history: Vec<Value> = scans.iter().map(|s| {
-        json!({
-            "scan_id": s.id.to_string(),
-            "business_id": s.business_id.map(|b| b.to_string()),
-            "business_name": &s.business_name,
-            "scan_type": &s.scan_type,
-            "points_awarded": s.points_awarded,
-            "points_balance": s.points_balance,
-            "deal_applied": &s.deal_applied,
-            "scanned_at": s.scanned_at.to_rfc3339(),
+    let history: Vec<Value> = scans
+        .iter()
+        .map(|s| {
+            json!({
+                "scan_id": s.id.to_string(),
+                "business_id": s.business_id.map(|b| b.to_string()),
+                "business_name": &s.business_name,
+                "scan_type": &s.scan_type,
+                "points_awarded": s.points_awarded,
+                "points_balance": s.points_balance,
+                "deal_applied": &s.deal_applied,
+                "scanned_at": s.scanned_at.to_rfc3339(),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "member_id": member_id.to_string(),
@@ -627,7 +661,7 @@ pub async fn get_business_scans(
 
     let scans: Vec<BizScanRow> = sqlx::query_as(
         r#"SELECT id, member_id, scan_type, points_awarded, points_balance, deal_applied, scanned_at
-           FROM loyalty_scans WHERE business_id = $1 ORDER BY scanned_at DESC LIMIT 100"#
+           FROM loyalty_scans WHERE business_id = $1 ORDER BY scanned_at DESC LIMIT 100"#,
     )
     .bind(business_id)
     .fetch_all(&state.db)
@@ -635,17 +669,20 @@ pub async fn get_business_scans(
 
     let total_points_awarded: i32 = scans.iter().map(|s| s.points_awarded).sum();
 
-    let history: Vec<Value> = scans.iter().map(|s| {
-        json!({
-            "scan_id": s.id.to_string(),
-            "member_id": s.member_id.to_string(),
-            "scan_type": &s.scan_type,
-            "points_awarded": s.points_awarded,
-            "points_balance": s.points_balance,
-            "deal_applied": &s.deal_applied,
-            "scanned_at": s.scanned_at.to_rfc3339(),
+    let history: Vec<Value> = scans
+        .iter()
+        .map(|s| {
+            json!({
+                "scan_id": s.id.to_string(),
+                "member_id": s.member_id.to_string(),
+                "scan_type": &s.scan_type,
+                "points_awarded": s.points_awarded,
+                "points_balance": s.points_balance,
+                "deal_applied": &s.deal_applied,
+                "scanned_at": s.scanned_at.to_rfc3339(),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "business_id": business_id.to_string(),
@@ -694,7 +731,7 @@ pub async fn member_dashboard(
                   lp.currency_name, lp.currency_icon
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           WHERE lm.id = $1"#
+           WHERE lm.id = $1"#,
     )
     .bind(member_id)
     .fetch_optional(&state.db)
@@ -747,7 +784,7 @@ pub async fn admin_dashboard(
     Path(program_slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let program = sqlx::query_as::<_, (Uuid, String, bool)>(
-        "SELECT id, name, is_active FROM loyalty_programs WHERE slug = $1 LIMIT 1"
+        "SELECT id, name, is_active FROM loyalty_programs WHERE slug = $1 LIMIT 1",
     )
     .bind(&program_slug)
     .fetch_optional(&state.db)
@@ -757,17 +794,16 @@ pub async fn admin_dashboard(
     let (program_id, program_name, _active) = program;
 
     // Total members
-    let total_members: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM loyalty_members WHERE program_id = $1"
-    )
-    .bind(program_id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let total_members: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM loyalty_members WHERE program_id = $1")
+            .bind(program_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     // Total points issued
     let total_points: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(points_balance), 0) FROM loyalty_members WHERE program_id = $1"
+        "SELECT COALESCE(SUM(points_balance), 0) FROM loyalty_members WHERE program_id = $1",
     )
     .bind(program_id)
     .fetch_one(&state.db)
@@ -838,10 +874,10 @@ pub async fn admin_dashboard(
 
 #[derive(Debug, Deserialize)]
 pub struct CreateIntegrationKeyRequest {
-    pub owner_type: String,      // "business", "supplier"
+    pub owner_type: String, // "business", "supplier"
     pub owner_id: Uuid,
-    pub service_type: String,    // "incentiveswift", "coreswift", "multidirectory"
-    pub label: String,           // human-readable name for this key
+    pub service_type: String, // "incentiveswift", "coreswift", "multidirectory"
+    pub label: String,        // human-readable name for this key
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -864,16 +900,24 @@ pub async fn create_integration_key(
 ) -> Result<Json<Value>, AppError> {
     let valid_owners = ["business", "supplier"];
     if !valid_owners.contains(&req.owner_type.as_str()) {
-        return Err(AppError::BadRequest("Invalid owner_type. Must be: business, supplier".into()));
+        return Err(AppError::BadRequest(
+            "Invalid owner_type. Must be: business, supplier".into(),
+        ));
     }
 
     let valid_services = ["incentiveswift", "coreswift", "multidirectory"];
     if !valid_services.contains(&req.service_type.as_str()) {
-        return Err(AppError::BadRequest("Invalid service_type. Must be: incentiveswift, coreswift, multidirectory".into()));
+        return Err(AppError::BadRequest(
+            "Invalid service_type. Must be: incentiveswift, coreswift, multidirectory".into(),
+        ));
     }
 
     let key_id = Uuid::new_v4();
-    let raw_key = format!("{}_live_{}", &req.service_type[..2], Uuid::new_v4().simple());
+    let raw_key = format!(
+        "{}_live_{}",
+        &req.service_type[..2],
+        Uuid::new_v4().simple()
+    );
     let key_prefix = format!("{}_live", &req.service_type[..2]);
 
     sqlx::query(
@@ -892,7 +936,10 @@ pub async fn create_integration_key(
 
     tracing::info!(
         "[integration-key] Created {} key for {} {} — label: {}",
-        req.service_type, req.owner_type, req.owner_id, req.label
+        req.service_type,
+        req.owner_type,
+        req.owner_id,
+        req.label
     );
 
     Ok(Json(json!({
@@ -916,24 +963,27 @@ pub async fn list_integration_keys(
 ) -> Result<Json<Value>, AppError> {
     let keys: Vec<ApiKeyRow> = sqlx::query_as::<_, ApiKeyRow>(
         r#"SELECT id, key_prefix, service_type, label, is_active, created_at, last_used_at
-           FROM api_keys WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at DESC"#
+           FROM api_keys WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at DESC"#,
     )
     .bind(&owner_type)
     .bind(owner_id)
     .fetch_all(&state.db)
     .await?;
 
-    let key_list: Vec<Value> = keys.iter().map(|k| {
-        json!({
-            "id": k.id.to_string(),
-            "key_prefix": k.key_prefix,
-            "service_type": k.service_type,
-            "label": k.label,
-            "is_active": k.is_active,
-            "created_at": k.created_at.to_rfc3339(),
-            "last_used_at": k.last_used_at.map(|d| d.to_rfc3339()),
+    let key_list: Vec<Value> = keys
+        .iter()
+        .map(|k| {
+            json!({
+                "id": k.id.to_string(),
+                "key_prefix": k.key_prefix,
+                "service_type": k.service_type,
+                "label": k.label,
+                "is_active": k.is_active,
+                "created_at": k.created_at.to_rfc3339(),
+                "last_used_at": k.last_used_at.map(|d| d.to_rfc3339()),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({
         "owner_type": owner_type,
@@ -949,12 +999,10 @@ pub async fn revoke_integration_key(
     State(state): State<AppState>,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    let result = sqlx::query(
-        "DELETE FROM api_keys WHERE id = $1"
-    )
-    .bind(key_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1")
+        .bind(key_id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Ok(Json(json!({

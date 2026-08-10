@@ -9,11 +9,14 @@
 //!   POST /api/v1/webhooks/stripe                -> webhooks::stripe
 //!   POST /api/v1/webhooks/paypal                -> webhooks::paypal
 
-use axum::{routing::{get, post, delete}, Router};
 use crate::state::AppState;
+use axum::{
+    routing::{delete, get, post},
+    Router,
+};
 
-pub mod providers;
 pub mod checkout;
+pub mod providers;
 pub mod webhooks;
 
 /// Build a router that nests all billing sub-routes under a shared state.
@@ -23,20 +26,25 @@ pub mod webhooks;
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         // Payment Providers
-        .route("/api/v1/payment-providers",
-            get(providers::list_payment_providers)
-            .post(providers::upsert_payment_provider))
-        .route("/api/v1/payment-providers/{provider_type}",
-            delete(providers::delete_payment_provider))
+        .route(
+            "/api/v1/payment-providers",
+            get(providers::list_payment_providers).post(providers::upsert_payment_provider),
+        )
+        .route(
+            "/api/v1/payment-providers/{provider_type}",
+            delete(providers::delete_payment_provider),
+        )
         // Checkout Sessions
-        .route("/api/v1/checkout/create",
-            post(checkout::create_checkout_session))
-        .route("/api/v1/checkout/sessions",
-            get(checkout::list_checkout_sessions))
+        .route(
+            "/api/v1/checkout/create",
+            post(checkout::create_checkout_session),
+        )
+        .route(
+            "/api/v1/checkout/sessions",
+            get(checkout::list_checkout_sessions),
+        )
         // Webhooks (public — no auth; signature verification in handler)
-        .route("/api/v1/webhooks/stripe",
-            post(webhooks::stripe_webhook))
-        .route("/api/v1/webhooks/paypal",
-            post(webhooks::paypal_webhook))
+        .route("/api/v1/webhooks/stripe", post(webhooks::stripe_webhook))
+        .route("/api/v1/webhooks/paypal", post(webhooks::paypal_webhook))
         .with_state(state)
 }

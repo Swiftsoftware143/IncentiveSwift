@@ -6,18 +6,18 @@
 //!   POST   /api/v1/campaigns/{slug}/integrations
 //!   DELETE /api/v1/campaigns/{slug}/integrations/{integration_id}
 
-use crate::error::AppError;
-use crate::state::AppState;
 use crate::db::campaigns;
+use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,7 +60,9 @@ pub struct LinkIntegrationInput {
     pub enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // ---------------------------------------------------------------------------
 // Upsert conflict: fetch by campaign+integration ID
@@ -76,7 +78,7 @@ async fn get_by_campaign_and_integration(
                   it.is_active
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
-           WHERE ci.campaign_id = $1 AND ci.integration_id = $2"#
+           WHERE ci.campaign_id = $1 AND ci.integration_id = $2"#,
     )
     .bind(campaign_id)
     .bind(integration_id)
@@ -105,7 +107,7 @@ pub async fn list_campaign_integrations(
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
            WHERE ci.campaign_id = $1
-           ORDER BY it.name"#
+           ORDER BY it.name"#,
     )
     .bind(campaign.id)
     .fetch_all(&state.db)
@@ -131,20 +133,21 @@ pub async fn link_campaign_integration(
         .map_err(|_| AppError::BadRequest("Invalid integration_id format".to_string()))?;
 
     // Verify integration target exists
-    let target_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM integration_targets WHERE id = $1)"
-    )
-    .bind(integration_id)
-    .fetch_one(&state.db)
-    .await?;
+    let target_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM integration_targets WHERE id = $1)")
+            .bind(integration_id)
+            .fetch_one(&state.db)
+            .await?;
 
     if !target_exists {
-        return Err(AppError::NotFound("Integration target not found".to_string()));
+        return Err(AppError::NotFound(
+            "Integration target not found".to_string(),
+        ));
     }
 
-    let trigger_events = body.trigger_events.unwrap_or_else(|| {
-        vec!["on_win".to_string()]
-    });
+    let trigger_events = body
+        .trigger_events
+        .unwrap_or_else(|| vec!["on_win".to_string()]);
 
     let id = Uuid::new_v4();
 
@@ -175,7 +178,7 @@ pub async fn link_campaign_integration(
                   it.is_active
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
-           WHERE ci.id = $1"#
+           WHERE ci.id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -205,7 +208,7 @@ pub async fn unlink_campaign_integration(
 
     let result = sqlx::query(
         r#"DELETE FROM campaign_integrations
-           WHERE campaign_id = $1 AND integration_id = $2"#
+           WHERE campaign_id = $1 AND integration_id = $2"#,
     )
     .bind(campaign.id)
     .bind(int_id)
@@ -216,7 +219,9 @@ pub async fn unlink_campaign_integration(
         return Err(AppError::NotFound("Integration link not found".to_string()));
     }
 
-    Ok(Json(json!({ "status": "unlinked", "campaign_slug": slug, "integration_id": integration_id })))
+    Ok(Json(
+        json!({ "status": "unlinked", "campaign_slug": slug, "integration_id": integration_id }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -283,19 +288,41 @@ pub async fn set_marketing_boost(
         m.insert("enabled".to_string(), json!(true));
 
         // Direct API fields
-        if let Some(ref v) = body.api_key { m.insert("api_key".to_string(), json!(v)); }
-        if let Some(ref v) = body.sender { m.insert("sender".to_string(), json!(v)); }
-        if let Some(ref v) = body.business { m.insert("business".to_string(), json!(v)); }
-        if let Some(ref v) = body.incentive_type { m.insert("incentive_type".to_string(), json!(v)); }
-        if let Some(v) = body.amount { m.insert("amount".to_string(), json!(v)); }
-        if let Some(v) = body.destination { m.insert("destination".to_string(), json!(v)); }
-        if let Some(ref v) = body.trigger_events { m.insert("trigger_events".to_string(), json!(v)); }
+        if let Some(ref v) = body.api_key {
+            m.insert("api_key".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.sender {
+            m.insert("sender".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.business {
+            m.insert("business".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.incentive_type {
+            m.insert("incentive_type".to_string(), json!(v));
+        }
+        if let Some(v) = body.amount {
+            m.insert("amount".to_string(), json!(v));
+        }
+        if let Some(v) = body.destination {
+            m.insert("destination".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.trigger_events {
+            m.insert("trigger_events".to_string(), json!(v));
+        }
 
         // Legacy webhook fields
-        if let Some(ref v) = body.webhook_url { m.insert("webhook_url".to_string(), json!(v)); }
-        if let Some(ref v) = body.auth_header_name { m.insert("auth_header_name".to_string(), json!(v)); }
-        if let Some(ref v) = body.auth_header_value { m.insert("auth_header_value".to_string(), json!(v)); }
-        if let Some(ref v) = body.events { m.insert("events".to_string(), json!(v)); }
+        if let Some(ref v) = body.webhook_url {
+            m.insert("webhook_url".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.auth_header_name {
+            m.insert("auth_header_name".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.auth_header_value {
+            m.insert("auth_header_value".to_string(), json!(v));
+        }
+        if let Some(ref v) = body.events {
+            m.insert("events".to_string(), json!(v));
+        }
 
         // Label
         let label = body.label.unwrap_or_else(|| "Marketing Boost".to_string());
@@ -309,7 +336,8 @@ pub async fn set_marketing_boost(
 
     // Merge into existing config
     let config = campaign.config.clone();
-    let mut new_map = config.as_object()
+    let mut new_map = config
+        .as_object()
         .cloned()
         .unwrap_or_else(serde_json::Map::new);
     if body.enabled {
@@ -385,12 +413,11 @@ pub async fn fire_marketing_boost_with_override(
     per_item_boost: Option<&serde_json::Value>,
 ) {
     // Fetch campaign config fresh
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT config FROM campaigns WHERE id = $1"
-    )
-    .bind(campaign_id)
-    .fetch_optional(&state.db)
-    .await;
+    let row =
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT config FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await;
 
     let config = match row {
         Ok(Some(c)) => c,
@@ -423,41 +450,65 @@ pub async fn fire_marketing_boost_with_override(
     // Check if this is direct API mode (has incentive_type) or legacy webhook mode
     if let Some(incentive_type) = boost.get("incentive_type").and_then(|v| v.as_str()) {
         // Direct API mode — fire the marketing boost incentive send
-        let trigger_events = boost.get("trigger_events")
+        let trigger_events = boost
+            .get("trigger_events")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_else(|| vec!["on_win".to_string(), "on_redeem".to_string()]);
 
         if !trigger_events.iter().any(|e| e == event) {
-            tracing::debug!("Marketing Boost: event '{}' not in trigger_events {:?}", event, trigger_events);
+            tracing::debug!(
+                "Marketing Boost: event '{}' not in trigger_events {:?}",
+                event,
+                trigger_events
+            );
             return;
         }
 
         // Extract contact info from payload
-        let first_name = payload.get("first_name")
-            .or_else(|| payload.get("contact_id")).and_then(|v| v.as_str())
-            .unwrap_or("");
-        let last_name = payload.get("last_name")
+        let first_name = payload
+            .get("first_name")
+            .or_else(|| payload.get("contact_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let email = payload.get("email")
+        let last_name = payload
+            .get("last_name")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let phone = payload.get("phone").and_then(|v| v.as_str()).map(String::from);
-        let countrycode = payload.get("countrycode").and_then(|v| v.as_str()).map(String::from);
-        let campaign_name = payload.get("campaign_name")
+        let email = payload.get("email").and_then(|v| v.as_str()).unwrap_or("");
+        let phone = payload
+            .get("phone")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let countrycode = payload
+            .get("countrycode")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let campaign_name = payload
+            .get("campaign_name")
             .or_else(|| payload.get("campaign_slug"))
             .and_then(|v| v.as_str())
             .unwrap_or("Campaign");
 
         // Check that we have enough info to send
         if email.is_empty() {
-            tracing::warn!("Marketing Boost: cannot send {} incentive without email", incentive_type);
+            tracing::warn!(
+                "Marketing Boost: cannot send {} incentive without email",
+                incentive_type
+            );
             return;
         }
 
         // Resolve credentials: per-boost config -> stored provider key -> env defaults
-        let api_key = if let Some(k) = boost.get("api_key").and_then(|v| v.as_str()).filter(|k| !k.is_empty()) {
+        let api_key = if let Some(k) = boost
+            .get("api_key")
+            .and_then(|v| v.as_str())
+            .filter(|k| !k.is_empty())
+        {
             k.to_string()
         } else {
             sqlx::query_scalar::<_, String>(
@@ -470,7 +521,11 @@ pub async fn fire_marketing_boost_with_override(
             .flatten()
             .unwrap_or_default()
         };
-        let sender = if let Some(s) = boost.get("sender").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        let sender = if let Some(s) = boost
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             s.to_string()
         } else {
             sqlx::query_scalar::<_, String>(
@@ -483,7 +538,11 @@ pub async fn fire_marketing_boost_with_override(
             .flatten()
             .unwrap_or_else(|| "3822-4706".to_string())
         };
-        let business = if let Some(b) = boost.get("business").and_then(|v| v.as_str()).filter(|b| !b.is_empty()) {
+        let business = if let Some(b) = boost
+            .get("business")
+            .and_then(|v| v.as_str())
+            .filter(|b| !b.is_empty())
+        {
             b.to_string()
         } else {
             sqlx::query_scalar::<_, String>(
@@ -496,8 +555,14 @@ pub async fn fire_marketing_boost_with_override(
             .flatten()
             .unwrap_or_else(|| "6111".to_string())
         };
-        let amount = boost.get("amount").and_then(|v| v.as_u64()).map(|v| v as u32);
-        let destination = boost.get("destination").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let amount = boost
+            .get("amount")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let destination = boost
+            .get("destination")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
 
         let client = &state.http_client;
 
@@ -505,23 +570,49 @@ pub async fn fire_marketing_boost_with_override(
             "dining_voucher" => {
                 let amt = amount.unwrap_or(50);
                 crate::delivery::direct_api::marketing_boost::send_dining_voucher(
-                    client, &api_key, &sender, &business,
-                    first_name, last_name, email, amt, campaign_name,
-                ).await
+                    client,
+                    &api_key,
+                    &sender,
+                    &business,
+                    first_name,
+                    last_name,
+                    email,
+                    amt,
+                    campaign_name,
+                )
+                .await
             }
             "hotel_savings_card" => {
                 let amt = amount.unwrap_or(200);
                 crate::delivery::direct_api::marketing_boost::send_hotel_savings_card(
-                    client, &api_key, &sender, &business,
-                    first_name, last_name, email, amt, campaign_name,
-                ).await
+                    client,
+                    &api_key,
+                    &sender,
+                    &business,
+                    first_name,
+                    last_name,
+                    email,
+                    amt,
+                    campaign_name,
+                )
+                .await
             }
             "vacation_incentive" => {
                 let dest = destination.unwrap_or(41);
                 crate::delivery::direct_api::marketing_boost::send_vacation_incentive(
-                    client, &api_key, &sender, &business,
-                    first_name, last_name, email, phone, countrycode, dest, campaign_name,
-                ).await
+                    client,
+                    &api_key,
+                    &sender,
+                    &business,
+                    first_name,
+                    last_name,
+                    email,
+                    phone,
+                    countrycode,
+                    dest,
+                    campaign_name,
+                )
+                .await
             }
             other => {
                 tracing::warn!("Marketing Boost: unknown incentive_type: {}", other);
@@ -530,7 +621,11 @@ pub async fn fire_marketing_boost_with_override(
         };
 
         match result {
-            Ok(resp) => tracing::info!("Marketing Boost {} incentive sent: {:?}", incentive_type, resp),
+            Ok(resp) => tracing::info!(
+                "Marketing Boost {} incentive sent: {:?}",
+                incentive_type,
+                resp
+            ),
             Err(e) => tracing::warn!("Marketing Boost {} incentive failed: {}", incentive_type, e),
         }
     } else {
@@ -541,20 +636,34 @@ pub async fn fire_marketing_boost_with_override(
         };
 
         // Check if this event is in the configured list
-        let allowed_events = boost.get("events").and_then(|v| v.as_array())
+        let allowed_events = boost
+            .get("events")
+            .and_then(|v| v.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec!["voucher_issued".to_string(), "reward_redeemed".to_string()]);
 
         if !allowed_events.iter().any(|e| e == event) {
-            tracing::debug!("Marketing Boost: event '{}' not in allowed list {:?}", event, allowed_events);
+            tracing::debug!(
+                "Marketing Boost: event '{}' not in allowed list {:?}",
+                event,
+                allowed_events
+            );
             return;
         }
 
         // Build the full webhook payload
-        let auth_header_name = boost.get("auth_header_name").and_then(|v| v.as_str()).map(String::from);
-        let auth_header_value = boost.get("auth_header_value").and_then(|v| v.as_str()).map(String::from);
+        let auth_header_name = boost
+            .get("auth_header_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let auth_header_value = boost
+            .get("auth_header_value")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let full_payload = json!({
             "event": event,
@@ -563,7 +672,9 @@ pub async fn fire_marketing_boost_with_override(
             "data": payload,
         });
 
-        let mut req = state.http_client.post(&webhook_url)
+        let mut req = state
+            .http_client
+            .post(&webhook_url)
             .json(&full_payload)
             .timeout(std::time::Duration::from_secs(10));
 
@@ -577,13 +688,25 @@ pub async fn fire_marketing_boost_with_override(
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    tracing::info!("Marketing Boost webhook sent for event '{}': {}", event, status);
+                    tracing::info!(
+                        "Marketing Boost webhook sent for event '{}': {}",
+                        event,
+                        status
+                    );
                 } else {
-                    tracing::warn!("Marketing Boost webhook returned {} for event '{}'", status, event);
+                    tracing::warn!(
+                        "Marketing Boost webhook returned {} for event '{}'",
+                        status,
+                        event
+                    );
                 }
             }
             Err(e) => {
-                tracing::warn!("Marketing Boost webhook failed for event '{}': {}", event, e);
+                tracing::warn!(
+                    "Marketing Boost webhook failed for event '{}': {}",
+                    event,
+                    e
+                );
             }
         }
     }
@@ -655,7 +778,7 @@ pub async fn fire_campaign_integrations(
            WHERE ci.campaign_id = $1
              AND ci.enabled = true
              AND it.is_active = true
-             AND $2 = ANY(ci.trigger_events)"#
+             AND $2 = ANY(ci.trigger_events)"#,
     )
     .bind(campaign_id)
     .bind(event_type)
@@ -671,7 +794,11 @@ pub async fn fire_campaign_integrations(
     };
 
     if integrations.is_empty() {
-        tracing::debug!("No enabled integrations for campaign {} on event {}", campaign_slug, event_type);
+        tracing::debug!(
+            "No enabled integrations for campaign {} on event {}",
+            campaign_slug,
+            event_type
+        );
         return;
     }
 
@@ -690,8 +817,7 @@ pub async fn fire_campaign_integrations(
         total_spins,
     };
 
-    let _payload_json = serde_json::to_value(&payload)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let _payload_json = serde_json::to_value(&payload).unwrap_or_else(|_| serde_json::json!({}));
 
     let client = &state.http_client;
 
@@ -701,7 +827,10 @@ pub async fn fire_campaign_integrations(
 
         tracing::info!(
             "Firing integration '{}' ({}) for campaign {} event {}",
-            integration_name, url, campaign_slug, event_type
+            integration_name,
+            url,
+            campaign_slug,
+            event_type
         );
 
         // Build a delivery-friendly payload compatible with the webhook delivery system
@@ -739,7 +868,8 @@ pub async fn fire_campaign_integrations(
         {
             tracing::warn!(
                 "Integration '{}' webhook delivery failed: {}",
-                integration_name, e
+                integration_name,
+                e
             );
         }
     }

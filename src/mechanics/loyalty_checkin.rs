@@ -138,7 +138,7 @@ async fn find_or_create_member(
 ) -> Result<String, AppError> {
     // Try to find existing member
     let existing: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM loyalty_members WHERE program_id = $1 AND contact_id = $2"
+        "SELECT id FROM loyalty_members WHERE program_id = $1 AND contact_id = $2",
     )
     .bind(program_id)
     .bind(contact_id)
@@ -166,7 +166,7 @@ async fn find_or_create_member(
 async fn count_daily_checkins(state: &AppState, member_id: &str) -> Result<i32, AppError> {
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM loyalty_checkins
-         WHERE member_id = $1 AND checked_in_at::date = CURRENT_DATE"
+         WHERE member_id = $1 AND checked_in_at::date = CURRENT_DATE",
     )
     .bind(member_id)
     .fetch_one(&state.db)
@@ -183,7 +183,7 @@ async fn record_checkin(
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO loyalty_checkins (member_id, points_awarded, method, checked_in_at)
-         VALUES ($1, $2, $3, now())"
+         VALUES ($1, $2, $3, now())",
     )
     .bind(member_id)
     .bind(points_awarded)
@@ -205,7 +205,7 @@ async fn update_points_balance(
              lifetime_points = lifetime_points + $1,
              last_checkin_at = now()
          WHERE id = $2
-         RETURNING points_balance"
+         RETURNING points_balance",
     )
     .bind(points)
     .bind(member_id)
@@ -231,7 +231,7 @@ async fn check_threshold_crossed(
                SELECT 1 FROM loyalty_rewards_earned re
                WHERE re.member_id = $3 AND re.tier_id = rt.id
            )
-         ORDER BY rt.points_required ASC"
+         ORDER BY rt.points_required ASC",
     )
     .bind(program_id)
     .bind(new_balance)
@@ -239,13 +239,16 @@ async fn check_threshold_crossed(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(rows.iter().map(|row| RewardTierInfo {
-        id: row.get("id"),
-        name: row.get("name"),
-        points_required: row.get("points_required"),
-        requires_approval: row.get("requires_approval"),
-        reward_tag: row.get("reward_tag"),
-    }).collect())
+    Ok(rows
+        .iter()
+        .map(|row| RewardTierInfo {
+            id: row.get("id"),
+            name: row.get("name"),
+            points_required: row.get("points_required"),
+            requires_approval: row.get("requires_approval"),
+            reward_tag: row.get("reward_tag"),
+        })
+        .collect())
 }
 
 async fn create_reward(
@@ -257,7 +260,7 @@ async fn create_reward(
     let row = sqlx::query(
         "INSERT INTO loyalty_rewards_earned (member_id, tier_id, status, earned_at)
          VALUES ($1, $2, $3, now())
-         RETURNING id"
+         RETURNING id",
     )
     .bind(member_id)
     .bind(tier_id)
@@ -268,20 +271,14 @@ async fn create_reward(
     Ok(row.get("id"))
 }
 
-async fn apply_reward_tag(
-    state: &AppState,
-    contact_id: &str,
-    tag: &str,
-) -> Result<(), AppError> {
+async fn apply_reward_tag(state: &AppState, contact_id: &str, tag: &str) -> Result<(), AppError> {
     // Update the contact's tags_applied or similar field
     // This depends on schema — here we update a hypothetical tags field
-    sqlx::query(
-        "UPDATE contacts SET notes = COALESCE(notes, '') || $1 WHERE id = $2"
-    )
-    .bind(format!("\n[Reward Tag: {}]", tag))
-    .bind(contact_id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE contacts SET notes = COALESCE(notes, '') || $1 WHERE id = $2")
+        .bind(format!("\n[Reward Tag: {}]", tag))
+        .bind(contact_id)
+        .execute(&state.db)
+        .await?;
 
     Ok(())
 }
@@ -293,7 +290,11 @@ async fn push_reward_notification(
 ) -> Result<(), AppError> {
     // In production, push notification via delivery system
     // For now, this is a placeholder
-    tracing::info!("Reward notification would be sent for: {} (contact: {})", _reward_name, contact_id);
+    tracing::info!(
+        "Reward notification would be sent for: {} (contact: {})",
+        _reward_name,
+        contact_id
+    );
     Ok(())
 }
 
@@ -374,7 +375,7 @@ async fn record_entry_checkin(
 ) -> Result<(), AppError> {
     sqlx::query(
         "INSERT INTO loyalty_checkins (member_id, points_awarded, method, entry_id, checked_in_at)
-         VALUES ($1, $2, $3, $4, now())"
+         VALUES ($1, $2, $3, $4, now())",
     )
     .bind(member_id)
     .bind(points_awarded)
@@ -401,7 +402,7 @@ pub async fn award_points_from_action(
     let notes = format!("earn:{}", _channel_code);
     sqlx::query(
         "INSERT INTO loyalty_checkins (member_id, points_awarded, method, checked_in_at, notes)
-         VALUES ($1, $2, $3, now(), $4)"
+         VALUES ($1, $2, $3, now(), $4)",
     )
     .bind(&member_id)
     .bind(points_to_award)
@@ -412,7 +413,9 @@ pub async fn award_points_from_action(
 
     let _new_balance = update_points_balance(state, &member_id, points_to_award).await?;
 
-    if let Ok(newly_crossed) = check_threshold_crossed(state, program_id, _new_balance, &member_id).await {
+    if let Ok(newly_crossed) =
+        check_threshold_crossed(state, program_id, _new_balance, &member_id).await
+    {
         for tier in newly_crossed {
             if !tier.requires_approval {
                 let _ = create_reward(state, &member_id, &tier.id, "approved").await;

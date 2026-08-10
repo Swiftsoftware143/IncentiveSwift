@@ -21,14 +21,11 @@ pub struct PlanTier {
 }
 
 /// Get a plan tier by ID.
-pub async fn get_plan_tier(
-    pool: &PgPool,
-    tier_id: &Uuid,
-) -> Result<PlanTier, AppError> {
+pub async fn get_plan_tier(pool: &PgPool, tier_id: &Uuid) -> Result<PlanTier, AppError> {
     let row = sqlx::query(
         r#"SELECT id, name, slug, price_monthly, price_annual, is_active,
                   sort_order, max_campaigns, max_entries_per_month, created_at
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(tier_id)
     .fetch_optional(pool)
@@ -59,7 +56,7 @@ pub async fn feature_enabled(
         r#"SELECT tf.enabled
            FROM tier_features tf
            JOIN features f ON f.id = tf.feature_id
-           WHERE tf.tier_id = $1 AND f.key = $2"#
+           WHERE tf.tier_id = $1 AND f.key = $2"#,
     )
     .bind(tier_id)
     .bind(feature_key)

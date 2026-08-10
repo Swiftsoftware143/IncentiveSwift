@@ -29,7 +29,10 @@ mod tests {
         assert_eq!(contact_body["phone"], "+14155550100");
 
         // Assert answers are well-formed
-        assert_eq!(answers["What's your biggest challenge?"], "Not enough customers");
+        assert_eq!(
+            answers["What's your biggest challenge?"],
+            "Not enough customers"
+        );
         assert_eq!(answers["Monthly revenue?"], 15000);
     }
 

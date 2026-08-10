@@ -5,12 +5,8 @@
 //! - JWTs: Decode header+payload, verify HMAC-SHA256 signature with Supabase anon key.
 
 use crate::error::AppError;
-use axum::{
-    extract::FromRequestParts,
-    http::{request::Parts},
-    async_trait,
-};
 use axum::extract::FromRef;
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use sqlx::Row;
 
 /// Authenticated user context extracted from request.
@@ -32,16 +28,15 @@ where
 {
     type Rejection = AppError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let token = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
-            .ok_or_else(|| AppError::Unauthorized("Missing or invalid Authorization header".to_string()))?;
+            .ok_or_else(|| {
+                AppError::Unauthorized("Missing or invalid Authorization header".to_string())
+            })?;
 
         let app_state = crate::state::AppState::from_ref(state);
 
@@ -51,15 +46,15 @@ where
         }
 
         // Fall back to local JWT validation
-        let claims = crate::security::jwt::verify_jwt(
-            token,
-            &app_state.config.jwt_secret,
-        )?;
+        let claims = crate::security::jwt::verify_jwt(token, &app_state.config.jwt_secret)?;
 
         Ok(AuthenticatedUser {
             account_id: claims.sub.clone().unwrap_or_default(),
             email: claims.email.clone().unwrap_or_default(),
-            role: claims.role.clone().unwrap_or_else(|| "authenticated".to_string()),
+            role: claims
+                .role
+                .clone()
+                .unwrap_or_else(|| "authenticated".to_string()),
             impersonating: claims.impersonating.clone(),
         })
     }
@@ -78,7 +73,7 @@ async fn validate_api_key(
         return Ok(None);
     }
 
-    let identifier = parts[1..parts.len()-1].join("_");
+    let identifier = parts[1..parts.len() - 1].join("_");
     let _secret = parts.last().unwrap_or(&"");
 
     // Look up the stored hash by identifier
@@ -86,7 +81,7 @@ async fn validate_api_key(
         "SELECT ac.key_hash, ac.account_id::text, a.email
          FROM api_credentials ac
          JOIN accounts a ON a.id = ac.account_id
-         WHERE ac.key_identifier = $1"
+         WHERE ac.key_identifier = $1",
     )
     .bind(&identifier)
     .fetch_optional(&state.db)
@@ -105,7 +100,7 @@ async fn validate_api_key(
                     account_id,
                     email,
                     role: "api_key".to_string(),
-                impersonating: None,
+                    impersonating: None,
                 })),
                 _ => Err(AppError::Unauthorized("Invalid API key".to_string())),
             }

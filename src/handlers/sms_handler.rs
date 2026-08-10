@@ -13,7 +13,7 @@
 //!      and fires output actions (CoreSwift sync, email, webhook, n8n, etc.)
 
 use crate::state::AppState;
-use axum::{Json, extract::State};
+use axum::{extract::State, Json};
 use reqwest::Client;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -26,27 +26,36 @@ pub async fn channel_inbound_webhook(
     let pool = &state.db;
 
     // Parse Telnyx webhook payload
-    let event_type = body.pointer("/data/event_type")
+    let event_type = body
+        .pointer("/data/event_type")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    let message_id = body.pointer("/data/payload/id")
+    let message_id = body
+        .pointer("/data/payload/id")
         .or_else(|| body.pointer("/data/id"))
         .and_then(|v| v.as_str());
 
-    let from = body.pointer("/data/payload/from/phone_number")
+    let from = body
+        .pointer("/data/payload/from/phone_number")
         .or_else(|| body.pointer("/data/payload/from"))
         .and_then(|v| v.as_str());
 
-    let to = body.pointer("/data/payload/to/0/phone_number")
+    let to = body
+        .pointer("/data/payload/to/0/phone_number")
         .or_else(|| body.pointer("/data/payload/to"))
         .and_then(|v| v.as_str());
 
-    let text = body.pointer("/data/payload/text")
+    let text = body
+        .pointer("/data/payload/text")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let direction = if event_type.contains("whatsapp") { "inbound_whatsapp" } else { "inbound" };
+    let direction = if event_type.contains("whatsapp") {
+        "inbound_whatsapp"
+    } else {
+        "inbound"
+    };
 
     if from.is_none() || to.is_none() {
         return Json(json!({"success": false, "error": "Missing from/to number"}));
@@ -63,7 +72,7 @@ pub async fn channel_inbound_webhook(
         sqlx::query(
             "INSERT INTO inbound_messages (message_id, from_number, to_number, body, direction)
              VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (message_id) DO NOTHING"
+             ON CONFLICT (message_id) DO NOTHING",
         )
         .bind(mid)
         .bind(&from_clean)
@@ -76,16 +85,17 @@ pub async fn channel_inbound_webhook(
     }
 
     // 2. Check if there's an active chat session for this phone number
-    let existing_session = sqlx::query_as::<_, (Uuid, String, String, i32, Option<Value>, Option<Uuid>)>(
-        r#"SELECT id, phone, campaign_slug, step, collected_data, campaign_id
+    let existing_session =
+        sqlx::query_as::<_, (Uuid, String, String, i32, Option<Value>, Option<Uuid>)>(
+            r#"SELECT id, phone, campaign_slug, step, collected_data, campaign_id
            FROM chat_sessions
            WHERE phone = $1 AND status = 'active'
            ORDER BY updated_at DESC
-           LIMIT 1"#
-    )
-    .bind(&from_clean)
-    .fetch_optional(pool)
-    .await;
+           LIMIT 1"#,
+        )
+        .bind(&from_clean)
+        .fetch_optional(pool)
+        .await;
 
     match existing_session {
         Ok(Some((session_id, _, campaign_slug, step, collected_data, campaign_id_opt))) => {
@@ -127,7 +137,7 @@ pub async fn channel_inbound_webhook(
                    WHERE type = 'chat'
                      AND status = 'active'
                      AND config->>'chat_keyword' ILIKE $1
-                   LIMIT 1"#
+                   LIMIT 1"#,
             )
             .bind(&text_upper)
             .fetch_optional(pool)
@@ -178,7 +188,17 @@ pub async fn channel_inbound_webhook(
                         let cid = campaign_id;
                         let sname = name.clone();
                         async move {
-                            send_bot_reply(&state, &phone, &cid, &slug_spawn, step, &cfg, &[], &sname).await;
+                            send_bot_reply(
+                                &state,
+                                &phone,
+                                &cid,
+                                &slug_spawn,
+                                step,
+                                &cfg,
+                                &[],
+                                &sname,
+                            )
+                            .await;
                         }
                     });
 
@@ -219,7 +239,7 @@ async fn route_to_chat_session(
 
     // Get campaign details
     let campaign = sqlx::query_as::<_, (String, Option<Value>)>(
-        "SELECT name, config FROM campaigns WHERE id = $1"
+        "SELECT name, config FROM campaigns WHERE id = $1",
     )
     .bind(campaign_id)
     .fetch_optional(pool)
@@ -229,28 +249,64 @@ async fn route_to_chat_session(
         // Campaign deleted — end session
         let _ = sqlx::query("UPDATE chat_sessions SET status = 'ended' WHERE id = $1")
             .bind(session_id)
-            .execute(pool).await;
+            .execute(pool)
+            .await;
         return;
     };
 
     let cfg = config.unwrap_or_default();
-    let chat_ai = cfg.get("chat_ai").and_then(|v| v.as_bool()).unwrap_or(false);
-    let chat_script = cfg.get("chat_script").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let collect_name = cfg.get("chat_collect_name").and_then(|v| v.as_bool()).unwrap_or(true);
-    let collect_email = cfg.get("chat_collect_email").and_then(|v| v.as_bool()).unwrap_or(true);
-    let collect_phone = cfg.get("chat_collect_phone").and_then(|v| v.as_bool()).unwrap_or(false);
+    let chat_ai = cfg
+        .get("chat_ai")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let chat_script = cfg
+        .get("chat_script")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let collect_name = cfg
+        .get("chat_collect_name")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let collect_email = cfg
+        .get("chat_collect_email")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let collect_phone = cfg
+        .get("chat_collect_phone")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Extract existing collected data
     let mut collected = collected_data.clone().unwrap_or_else(|| json!({}));
 
     // Try to extract info from the user's message
-    if collect_name && !collected.get("name").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+    if collect_name
+        && !collected
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    {
         collected["name"] = json!(message);
-    } else if collect_email && !collected.get("email").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+    } else if collect_email
+        && !collected
+            .get("email")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    {
         if message.contains('@') && message.contains('.') {
             collected["email"] = json!(message);
         }
-    } else if collect_phone && !collected.get("phone").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) && collect_email {
+    } else if collect_phone
+        && !collected
+            .get("phone")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+        && collect_email
+    {
         // After email, phone is the next piece
         collected["phone"] = json!(message);
     }
@@ -260,12 +316,28 @@ async fn route_to_chat_session(
 
     // Check if we've collected enough to complete the funnel
     let has_essential = if collect_name && collect_email {
-        collected.get("name").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)
-            && collected.get("email").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)
+        collected
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+            && collected
+                .get("email")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
     } else if collect_name {
-        collected.get("name").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)
+        collected
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     } else if collect_email {
-        collected.get("email").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false)
+        collected
+            .get("email")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     } else {
         true
     };
@@ -276,9 +348,13 @@ async fn route_to_chat_session(
     }
 
     // Update session
-    let status = if convo_complete { "completed" } else { "active" };
+    let status = if convo_complete {
+        "completed"
+    } else {
+        "active"
+    };
     let _ = sqlx::query(
-        "UPDATE chat_sessions SET step = $1, collected_data = $2::jsonb, status = $3 WHERE id = $4"
+        "UPDATE chat_sessions SET step = $1, collected_data = $2::jsonb, status = $3 WHERE id = $4",
     )
     .bind(new_step)
     .bind(json!(&collected).to_string())
@@ -289,10 +365,29 @@ async fn route_to_chat_session(
 
     if convo_complete {
         // Funnel complete — create entry and fire output actions
-        complete_chat_funnel(state, campaign_id, &campaign_name, &cfg, &collected, phone, campaign_slug).await;
+        complete_chat_funnel(
+            state,
+            campaign_id,
+            &campaign_name,
+            &cfg,
+            &collected,
+            phone,
+            campaign_slug,
+        )
+        .await;
     } else {
         // Send the next bot message
-        send_bot_reply(state, phone, campaign_id, campaign_slug, new_step, &cfg, &[], &campaign_name).await;
+        send_bot_reply(
+            state,
+            phone,
+            campaign_id,
+            campaign_slug,
+            new_step,
+            &cfg,
+            &[],
+            &campaign_name,
+        )
+        .await;
     }
 }
 
@@ -307,14 +402,28 @@ async fn send_bot_reply(
     _tags: &[String],
     campaign_name: &str,
 ) {
-    let chat_ai = config.get("chat_ai").and_then(|v| v.as_bool()).unwrap_or(false);
-    let chat_script = config.get("chat_script").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let chat_provider = config.get("chat_provider").and_then(|v| v.as_str()).unwrap_or("openai");
-    let chat_prompt = config.get("chat_prompt").and_then(|v| v.as_str()).unwrap_or("");
+    let chat_ai = config
+        .get("chat_ai")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let chat_script = config
+        .get("chat_script")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let chat_provider = config
+        .get("chat_provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("openai");
+    let chat_prompt = config
+        .get("chat_prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let message = if chat_ai {
         // Generate AI response (simplified — uses provider key)
-        generate_ai_reply(state, campaign_id, chat_provider, chat_prompt, "").await
+        generate_ai_reply(state, campaign_id, chat_provider, chat_prompt, "")
+            .await
             .unwrap_or_else(|| "Thanks for chatting! Can you tell me your name?".to_string())
     } else {
         // Use scripted messages
@@ -340,10 +449,11 @@ async fn generate_ai_reply(
     user_message: &str,
 ) -> Option<String> {
     // Get provider API key
-    let key = sqlx::query_as::<_, (String,)>( // Fixed: query_as for single column
+    let key = sqlx::query_as::<_, (String,)>(
+        // Fixed: query_as for single column
         r#"SELECT api_key FROM provider_keys
            WHERE provider = $1 AND account_id = $2 AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(provider)
     .bind(account_id)
@@ -353,7 +463,9 @@ async fn generate_ai_reply(
     .and_then(|r| r)
     .map(|(k,)| k)?;
 
-    if key.is_empty() { return None; }
+    if key.is_empty() {
+        return None;
+    }
 
     let url = match provider {
         "anthropic" => "https://api.anthropic.com/v1/messages",
@@ -375,11 +487,14 @@ async fn generate_ai_reply(
     let client = Client::new();
     let resp = client
         .post(url)
-        .header("Authorization", if provider == "anthropic" {
-            format!("Bearer {}", &key)
-        } else {
-            format!("Bearer {}", &key)
-        })
+        .header(
+            "Authorization",
+            if provider == "anthropic" {
+                format!("Bearer {}", &key)
+            } else {
+                format!("Bearer {}", &key)
+            },
+        )
         .header("Content-Type", "application/json")
         .header("anthropic-version", "2023-06-01")
         .json(&body)
@@ -391,27 +506,25 @@ async fn generate_ai_reply(
     let result: Value = resp.json().await.ok()?;
 
     if provider == "anthropic" {
-        result.pointer("/content/0/text")
+        result
+            .pointer("/content/0/text")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     } else {
-        result.pointer("/choices/0/message/content")
+        result
+            .pointer("/choices/0/message/content")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
 }
 
 /// Send an SMS via Telnyx API
-async fn send_telnyx_sms(
-    state: &AppState,
-    to: &str,
-    message: &str,
-) -> Result<(), String> {
+async fn send_telnyx_sms(state: &AppState, to: &str, message: &str) -> Result<(), String> {
     // Find Telnyx SMS credentials for any account (use first active one)
     let creds = sqlx::query_as::<_, (String, Option<Value>)>(
         r#"SELECT api_key, metadata FROM provider_keys
            WHERE provider = 'telnyx_sms' AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .fetch_optional(&state.db)
     .await
@@ -420,7 +533,8 @@ async fn send_telnyx_sms(
 
     let (api_key, meta) = creds;
 
-    let from_number = meta.as_ref()
+    let from_number = meta
+        .as_ref()
         .and_then(|m| m.get("from_number"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
@@ -463,20 +577,28 @@ async fn complete_chat_funnel(
 ) {
     let pool = &state.db;
 
-    let name = collected_data.get("name").and_then(|v| v.as_str()).unwrap_or("SMS Lead");
-    let email = collected_data.get("email").and_then(|v| v.as_str()).unwrap_or("");
-    let phone_val = collected_data.get("phone").and_then(|v| v.as_str()).unwrap_or(phone);
+    let name = collected_data
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("SMS Lead");
+    let email = collected_data
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let phone_val = collected_data
+        .get("phone")
+        .and_then(|v| v.as_str())
+        .unwrap_or(phone);
 
     // Find or create contact
     let contact_id = if !email.is_empty() {
-        let existing = sqlx::query_scalar::<_, Uuid>(
-            "SELECT id FROM contacts WHERE email = $1 LIMIT 1"
-        )
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+        let existing =
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM contacts WHERE email = $1 LIMIT 1")
+                .bind(email)
+                .fetch_optional(pool)
+                .await
+                .ok()
+                .flatten();
 
         match existing {
             Some(eid) => {
@@ -543,12 +665,11 @@ async fn complete_chat_funnel(
     .await;
 
     // Find the account_id for output actions
-    let account_info = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT account_id FROM campaigns WHERE id = $1"
-    )
-    .bind(campaign_id)
-    .fetch_optional(pool)
-    .await;
+    let account_info =
+        sqlx::query_as::<_, (Uuid,)>("SELECT account_id FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(pool)
+            .await;
 
     let account_id = match account_info {
         Ok(Some((aid,))) => aid,
@@ -569,16 +690,31 @@ async fn complete_chat_funnel(
         let state = state.clone();
         async move {
             crate::delivery::output_actions::execute_output_actions(
-                &state, &campaign_id_owned, &cname_owned, &campaign_slug_owned,
-                "chat", &cfg_owned,
+                &state,
+                &campaign_id_owned,
+                &cname_owned,
+                &campaign_slug_owned,
+                "chat",
+                &cfg_owned,
                 &contact_id,
-                &fn1_owned, "", &email_owned, &phone_owned, "", "",
-                &account_id, "completed", &[],
+                &fn1_owned,
+                "",
+                &email_owned,
+                &phone_owned,
+                "",
+                "",
+                &account_id,
+                "completed",
+                &[],
                 None,
                 Some(&cd_owned),
-                None, None, None,
-                None, None,
-            ).await;
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
         }
     });
 }

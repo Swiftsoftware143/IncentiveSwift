@@ -86,7 +86,7 @@ pub async fn create_question(
     sqlx::query(
         r#"INSERT INTO questions (id, campaign_id, question_key, question_text, question_type,
             sort_order, correct_answer, score_weight, options, crm_field, crm_field_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
     )
     .bind(id)
     .bind(campaign_id)
@@ -227,10 +227,7 @@ pub async fn get_campaign_questions_public(
 }
 
 /// Delete a question.
-pub async fn delete_question(
-    pool: &PgPool,
-    question_id: &Uuid,
-) -> Result<(), AppError> {
+pub async fn delete_question(pool: &PgPool, question_id: &Uuid) -> Result<(), AppError> {
     sqlx::query("DELETE FROM questions WHERE id = $1")
         .bind(question_id)
         .execute(pool)
@@ -277,9 +274,15 @@ pub fn determine_persona(percentage: f64, outcome_tags: &serde_json::Value) -> (
         let mut best = ("General".to_string(), "".to_string());
         for tag in tags {
             let min = tag.get("min_score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let max = tag.get("max_score").and_then(|v| v.as_f64()).unwrap_or(100.0);
+            let max = tag
+                .get("max_score")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(100.0);
             if percentage >= min && percentage <= max {
-                let label = tag.get("label").and_then(|v| v.as_str()).unwrap_or("General");
+                let label = tag
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("General");
                 let tag_str = tag.get("tag").and_then(|v| v.as_str()).unwrap_or("");
                 best = (label.to_string(), tag_str.to_string());
                 break;
@@ -316,7 +319,7 @@ pub async fn create_answer(
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO answers (id, entry_id, question_id, value, raw_value)
-           VALUES ($1, $2, $3, $4, $5)"#
+           VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(id)
     .bind(entry_id)

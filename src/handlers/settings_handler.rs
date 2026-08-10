@@ -5,12 +5,12 @@
 //!   PUT  /api/v1/settings          — upsert settings
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use serde_json::{json, Value};
+use sqlx::Row;
 use uuid::Uuid;
 
 /// A single setting entry.
@@ -34,19 +34,21 @@ pub async fn get_settings(
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let rows = sqlx::query(
-        r#"SELECT key, value FROM tenant_settings WHERE tenant_id = $1 ORDER BY key"#
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+    let rows =
+        sqlx::query(r#"SELECT key, value FROM tenant_settings WHERE tenant_id = $1 ORDER BY key"#)
+            .bind(account_id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 
-    let settings: Vec<Value> = rows.iter().map(|row| {
-        let key: String = row.get("key");
-        let value: serde_json::Value = row.get("value");
-        json!({ "key": key, "value": value })
-    }).collect();
+    let settings: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let key: String = row.get("key");
+            let value: serde_json::Value = row.get("value");
+            json!({ "key": key, "value": value })
+        })
+        .collect();
 
     Ok(Json(json!({ "settings": settings })))
 }
@@ -65,7 +67,7 @@ pub async fn update_settings(
             r#"INSERT INTO tenant_settings (tenant_id, key, value)
                VALUES ($1, $2, $3::jsonb)
                ON CONFLICT (tenant_id, key)
-               DO UPDATE SET value = $3::jsonb"#
+               DO UPDATE SET value = $3::jsonb"#,
         )
         .bind(account_id)
         .bind(&entry.key)

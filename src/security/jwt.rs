@@ -4,10 +4,10 @@
 //! The anon key (JWT secret) is used to verify the signature.
 
 use crate::error::AppError;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-use serde::Deserialize;
 use base64::Engine;
+use hmac::{Hmac, Mac};
+use serde::Deserialize;
+use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 

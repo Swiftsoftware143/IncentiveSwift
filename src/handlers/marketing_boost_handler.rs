@@ -13,10 +13,7 @@
 
 use crate::error::AppError;
 use crate::state::AppState;
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{extract::State, Json};
 use serde_json::{json, Value};
 
 /// GET /api/v1/marketing-boost/destinations
@@ -24,9 +21,7 @@ use serde_json::{json, Value};
 /// Requires `MB_API_KEY` and `MB_SENDER` environment variables or
 /// the first configured campaign's marketing_boost config credentials.
 /// The results are cached in memory for 1 hour.
-pub async fn get_destinations(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, AppError> {
+pub async fn get_destinations(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     tracing::info!("get_destinations called");
 
     // Try to get API key from environment first, then fall back to DB
@@ -41,16 +36,12 @@ pub async fn get_destinations(
         }
     };
 
-    let sender = std::env::var("MB_SENDER")
-        .unwrap_or_else(|_| "3822-4706".to_string());
+    let sender = std::env::var("MB_SENDER").unwrap_or_else(|_| "3822-4706".to_string());
 
     let client = &state.http_client;
-    let destinations = crate::delivery::direct_api::marketing_boost::fetch_destinations(
-        client,
-        &api_key,
-        &sender,
-    )
-    .await?;
+    let destinations =
+        crate::delivery::direct_api::marketing_boost::fetch_destinations(client, &api_key, &sender)
+            .await?;
 
     Ok(Json(json!({
         "sender": sender,
@@ -63,7 +54,7 @@ async fn get_marketing_boost_credentials_from_db(
     state: &AppState,
 ) -> Result<(String, String), AppError> {
     let row = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"SELECT config FROM campaigns WHERE config ? 'marketing_boost' LIMIT 1"#
+        r#"SELECT config FROM campaigns WHERE config ? 'marketing_boost' LIMIT 1"#,
     )
     .fetch_optional(&state.db)
     .await
@@ -71,16 +62,21 @@ async fn get_marketing_boost_credentials_from_db(
 
     match row {
         Some(config) => {
-            let boost = config.get("marketing_boost")
+            let boost = config
+                .get("marketing_boost")
                 .and_then(|v| v.as_object())
                 .ok_or_else(|| AppError::Internal("No marketing_boost config found".to_string()))?;
 
-            let api_key = boost.get("api_key")
+            let api_key = boost
+                .get("api_key")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| AppError::Internal("api_key not found in marketing_boost config".to_string()))?
+                .ok_or_else(|| {
+                    AppError::Internal("api_key not found in marketing_boost config".to_string())
+                })?
                 .to_string();
 
-            let sender = boost.get("sender")
+            let sender = boost
+                .get("sender")
                 .and_then(|v| v.as_str())
                 .unwrap_or("3822-4706")
                 .to_string();
@@ -88,7 +84,7 @@ async fn get_marketing_boost_credentials_from_db(
             Ok((api_key, sender))
         }
         None => Err(AppError::Internal(
-            "No campaign with Marketing Boost configuration found".to_string()
+            "No campaign with Marketing Boost configuration found".to_string(),
         )),
     }
 }
@@ -107,17 +103,19 @@ pub async fn send_marketing_boost_incentive(
     countrycode: Option<String>,
 ) {
     // Fetch campaign config
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT config FROM campaigns WHERE id = $1"
-    )
-    .bind(campaign_id)
-    .fetch_optional(&state.db)
-    .await;
+    let row =
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT config FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await;
 
     let config = match row {
         Ok(Some(c)) => c,
         _ => {
-            tracing::debug!("Marketing Boost: no campaign config found for {}", campaign_id);
+            tracing::debug!(
+                "Marketing Boost: no campaign config found for {}",
+                campaign_id
+            );
             return;
         }
     };
@@ -125,7 +123,10 @@ pub async fn send_marketing_boost_incentive(
     let boost = match config.get("marketing_boost") {
         Some(Value::Object(m)) => m.clone(),
         _ => {
-            tracing::debug!("Marketing Boost: no marketing_boost config on campaign {}", campaign_id);
+            tracing::debug!(
+                "Marketing Boost: no marketing_boost config on campaign {}",
+                campaign_id
+            );
             return;
         }
     };
@@ -140,17 +141,22 @@ pub async fn send_marketing_boost_incentive(
     let api_key = match boost.get("api_key").and_then(|v| v.as_str()) {
         Some(k) => k.to_string(),
         None => {
-            tracing::warn!("Marketing Boost: missing api_key on campaign {}", campaign_id);
+            tracing::warn!(
+                "Marketing Boost: missing api_key on campaign {}",
+                campaign_id
+            );
             return;
         }
     };
 
-    let sender = boost.get("sender")
+    let sender = boost
+        .get("sender")
         .and_then(|v| v.as_str())
         .unwrap_or("3822-4706")
         .to_string();
 
-    let business = boost.get("business")
+    let business = boost
+        .get("business")
         .and_then(|v| v.as_str())
         .unwrap_or("6111")
         .to_string();
@@ -158,17 +164,28 @@ pub async fn send_marketing_boost_incentive(
     let incentive_type = match boost.get("incentive_type").and_then(|v| v.as_str()) {
         Some(t) => t.to_string(),
         None => {
-            tracing::warn!("Marketing Boost: missing incentive_type on campaign {}", campaign_id);
+            tracing::warn!(
+                "Marketing Boost: missing incentive_type on campaign {}",
+                campaign_id
+            );
             return;
         }
     };
 
-    let amount = boost.get("amount").and_then(|v| v.as_u64()).map(|v| v as u32);
-    let destination = boost.get("destination").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let amount = boost
+        .get("amount")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let destination = boost
+        .get("destination")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
 
     tracing::info!(
         "Marketing Boost: sending {} incentive for campaign {} (contact: {})",
-        incentive_type, campaign_name, email
+        incentive_type,
+        campaign_name,
+        email
     );
 
     let client = &state.http_client;
@@ -177,24 +194,47 @@ pub async fn send_marketing_boost_incentive(
         "dining_voucher" => {
             let amt = amount.unwrap_or(50);
             crate::delivery::direct_api::marketing_boost::send_dining_voucher(
-                client, &api_key, &sender, &business,
-                first_name, last_name, email, amt, campaign_name,
+                client,
+                &api_key,
+                &sender,
+                &business,
+                first_name,
+                last_name,
+                email,
+                amt,
+                campaign_name,
             )
             .await
         }
         "hotel_savings_card" => {
             let amt = amount.unwrap_or(200);
             crate::delivery::direct_api::marketing_boost::send_hotel_savings_card(
-                client, &api_key, &sender, &business,
-                first_name, last_name, email, amt, campaign_name,
+                client,
+                &api_key,
+                &sender,
+                &business,
+                first_name,
+                last_name,
+                email,
+                amt,
+                campaign_name,
             )
             .await
         }
         "vacation_incentive" => {
             let dest = destination.unwrap_or(41);
             crate::delivery::direct_api::marketing_boost::send_vacation_incentive(
-                client, &api_key, &sender, &business,
-                first_name, last_name, email, phone, countrycode, dest, campaign_name,
+                client,
+                &api_key,
+                &sender,
+                &business,
+                first_name,
+                last_name,
+                email,
+                phone,
+                countrycode,
+                dest,
+                campaign_name,
             )
             .await
         }
@@ -208,13 +248,17 @@ pub async fn send_marketing_boost_incentive(
         Ok(resp) => {
             tracing::info!(
                 "Marketing Boost {} incentive sent successfully for {}: {:?}",
-                incentive_type, email, resp
+                incentive_type,
+                email,
+                resp
             );
         }
         Err(e) => {
             tracing::warn!(
                 "Marketing Boost {} incentive failed for {}: {}",
-                incentive_type, email, e
+                incentive_type,
+                email,
+                e
             );
         }
     }

@@ -1,8 +1,8 @@
 //! Dashboard handler — aggregate stats for the authenticated user's campaigns.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{extract::State, Json};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -17,7 +17,7 @@ pub async fn dashboard_stats(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let tenant_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1"
+        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -27,7 +27,7 @@ pub async fn dashboard_stats(
     // Count campaigns for this tenant
     let total_campaigns: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM campaigns c
-         WHERE c.account_id = $1"
+         WHERE c.account_id = $1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -38,7 +38,7 @@ pub async fn dashboard_stats(
     let total_participants: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(DISTINCT e.contact_id) FROM entries e
          JOIN campaigns c ON c.id = e.campaign_id
-         WHERE c.account_id = $1"
+         WHERE c.account_id = $1",
     )
     .bind(account_id)
     .fetch_one(&state.db)
@@ -49,7 +49,7 @@ pub async fn dashboard_stats(
     let total_entries: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM entries e
          JOIN campaigns c ON c.id = e.campaign_id
-         WHERE c.account_id = $1"
+         WHERE c.account_id = $1",
     )
     .bind(account_id)
     .fetch_one(&state.db)

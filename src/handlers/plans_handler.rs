@@ -1,17 +1,17 @@
 //! Plan management handlers — CRUD for plans table and admin plan assignment.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
 };
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
-use reqwest::Client as HttpClient;
 
 /// Notify the FunnelSwift affiliate system about a plan change.
 /// Calls FunnelSwift's conversion webhook endpoint to sync plan data.
@@ -55,7 +55,10 @@ async fn sync_plan_to_affiliate(
     plan_price_monthly: f64,
     is_active: bool,
 ) {
-    let url = format!("{}/api/v1/internal/sync-affiliate-plan", config.funnelswift_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/v1/internal/sync-affiliate-plan",
+        config.funnelswift_url.trim_end_matches('/')
+    );
     let api_key = config.internal_sync_key.clone();
 
     let action_owned = action.to_string();
@@ -82,13 +85,29 @@ async fn sync_plan_to_affiliate(
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    tracing::info!("sync-affiliate-plan {} {}: {}", action_owned, plan_name_owned, status);
+                    tracing::info!(
+                        "sync-affiliate-plan {} {}: {}",
+                        action_owned,
+                        plan_name_owned,
+                        status
+                    );
                 } else {
                     let body = resp.text().await.unwrap_or_default();
-                    tracing::warn!("sync-affiliate-plan {} {} failed: {} - {}", action_owned, plan_name_owned, status, body);
+                    tracing::warn!(
+                        "sync-affiliate-plan {} {} failed: {} - {}",
+                        action_owned,
+                        plan_name_owned,
+                        status,
+                        body
+                    );
                 }
             }
-            Err(e) => tracing::warn!("sync-affiliate-plan {} {} error: {}", action_owned, plan_name_owned, e),
+            Err(e) => tracing::warn!(
+                "sync-affiliate-plan {} {} error: {}",
+                action_owned,
+                plan_name_owned,
+                e
+            ),
         }
     });
 }
@@ -186,7 +205,7 @@ pub async fn list_plans(
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans
            WHERE is_active = true
-           ORDER BY sort_order, name"#
+           ORDER BY sort_order, name"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -224,7 +243,7 @@ pub async fn create_plan(
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -237,7 +256,8 @@ pub async fn create_plan(
         body.price_monthly.unwrap_or(0.0),
         &id.to_string(),
         true,
-    ).await;
+    )
+    .await;
     // Fire-and-forget to FunnelSwift with configured URL + API key
     let plan_name2 = body.name.clone();
     let plan_price2 = body.price_monthly.unwrap_or(0.0);
@@ -275,7 +295,7 @@ pub async fn admin_assign_plan(
         .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
 
     // Find the plan by slug
-    
+
     let plan_info = sqlx::query("SELECT slug FROM plans WHERE id = $1")
         .bind(plan_id)
         .fetch_one(&state.db)
@@ -283,15 +303,16 @@ pub async fn admin_assign_plan(
     let plan_slug: String = plan_info.get("slug");
 
     // Find plan by slug
-    let tier_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM plans WHERE slug = $1"
-    )
-    .bind(&plan_slug)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!(
-        "No plan found matching plan slug '{}' — create the plan first", plan_slug
-    )))?;
+    let tier_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = $1")
+        .bind(&plan_slug)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "No plan found matching plan slug '{}' — create the plan first",
+                plan_slug
+            ))
+        })?;
 
     sqlx::query("UPDATE accounts SET plan_tier_id = $1 WHERE id = $2")
         .bind(tier_id)
@@ -313,13 +334,13 @@ pub async fn get_plan(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let plan_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
+    let plan_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
     .fetch_optional(&state.db)
@@ -336,14 +357,14 @@ pub async fn update_plan(
     user: AuthenticatedUser,
     Json(body): Json<UpdatePlanInput>,
 ) -> Result<Json<Value>, AppError> {
-    let plan_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
+    let plan_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
     // Get existing plan
     let existing = sqlx::query(
         r#"SELECT name, slug, description, price_monthly, price_yearly,
                   features, is_active, sort_order, payment_provider
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
     .fetch_optional(&state.db)
@@ -353,11 +374,17 @@ pub async fn update_plan(
     let name: String = body.name.unwrap_or_else(|| existing.get("name"));
     let slug = body.slug.unwrap_or_else(|| generate_slug(&name));
     let description: Option<String> = body.description.or_else(|| existing.get("description"));
-    let price_monthly: f64 = body.price_monthly.unwrap_or_else(|| existing.get("price_monthly"));
-    let price_yearly: f64 = body.price_yearly.unwrap_or_else(|| existing.get("price_yearly"));
+    let price_monthly: f64 = body
+        .price_monthly
+        .unwrap_or_else(|| existing.get("price_monthly"));
+    let price_yearly: f64 = body
+        .price_yearly
+        .unwrap_or_else(|| existing.get("price_yearly"));
     let features: Value = body.features.unwrap_or_else(|| existing.get("features"));
     let is_active: bool = body.is_active.unwrap_or_else(|| existing.get("is_active"));
-    let sort_order: i32 = body.sort_order.unwrap_or_else(|| existing.get("sort_order"));
+    let sort_order: i32 = body
+        .sort_order
+        .unwrap_or_else(|| existing.get("sort_order"));
     let payment_provider: Option<String> = existing.get("payment_provider");
     let payment_provider: Option<String> = body.payment_provider.or(payment_provider);
 
@@ -367,7 +394,7 @@ pub async fn update_plan(
                price_monthly = $4, price_yearly = $5,
                features = $6, is_active = $7, sort_order = $8,
                payment_provider = $9, updated_at = now()
-           WHERE id = $10"#
+           WHERE id = $10"#,
     )
     .bind(&name)
     .bind(&slug)
@@ -385,7 +412,7 @@ pub async fn update_plan(
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
     .fetch_one(&state.db)
@@ -398,7 +425,8 @@ pub async fn update_plan(
         price_monthly,
         &plan_id.to_string(),
         is_active,
-    ).await;
+    )
+    .await;
     // Fire-and-forget to FunnelSwift with configured URL + API key
     let plan_name2 = name.clone();
     let config2 = state.config.clone();
@@ -415,38 +443,34 @@ pub async fn delete_plan(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let plan_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
+    let plan_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
     let result = sqlx::query(
-        "UPDATE plans SET is_active = false, updated_at = now() WHERE id = $1 AND is_active = true"
+        "UPDATE plans SET is_active = false, updated_at = now() WHERE id = $1 AND is_active = true",
     )
     .bind(plan_id)
     .execute(&state.db)
     .await?;
 
     // Get plan name before soft-delete for affiliate sync
-    let plan_name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM plans WHERE id = $1"
-    )
-    .bind(plan_id)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let plan_name: Option<String> = sqlx::query_scalar("SELECT name FROM plans WHERE id = $1")
+        .bind(plan_id)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten();
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Plan not found or already inactive".to_string()));
+        return Err(AppError::NotFound(
+            "Plan not found or already inactive".to_string(),
+        ));
     }
 
     // Notify FunnelSwift affiliate system about the deletion
     if let Some(name) = plan_name {
-        let _ = sync_to_funnelswift_affiliates(
-            "deactivate",
-            &name,
-            0.0,
-            &plan_id.to_string(),
-            false,
-        ).await;
+        let _ =
+            sync_to_funnelswift_affiliates("deactivate", &name, 0.0, &plan_id.to_string(), false)
+                .await;
         // Fire-and-forget to FunnelSwift with configured URL + API key
         let plan_name2 = name.clone();
         let config2 = state.config.clone();
@@ -465,21 +489,19 @@ pub async fn admin_update_plan_features(
     user: AuthenticatedUser,
     Json(body): Json<UpdateFeaturesInput>,
 ) -> Result<Json<Value>, AppError> {
-    let plan_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
+    let plan_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
-    sqlx::query(
-        "UPDATE plans SET features = $1, updated_at = now() WHERE id = $2"
-    )
-    .bind(&body.features)
-    .bind(plan_id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE plans SET features = $1, updated_at = now() WHERE id = $2")
+        .bind(&body.features)
+        .bind(plan_id)
+        .execute(&state.db)
+        .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
         r#"SELECT id, name, slug, description, price_monthly, price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
-           FROM plans WHERE id = $1"#
+           FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
     .fetch_optional(&state.db)

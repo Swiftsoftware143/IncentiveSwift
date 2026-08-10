@@ -1,8 +1,8 @@
 //! Email Templates handler — full CRUD with admin auth.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -75,9 +75,10 @@ pub async fn list(
         .unwrap_or_default()
     } else {
         sqlx::query_as::<_, EmailTemplate>(
-            "SELECT * FROM email_templates ORDER BY name LIMIT $1 OFFSET $2"
+            "SELECT * FROM email_templates ORDER BY name LIMIT $1 OFFSET $2",
         )
-        .bind(limit).bind(offset)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&state.db)
         .await
         .unwrap_or_default()
@@ -97,13 +98,11 @@ pub async fn get(
     Path(id): Path<Uuid>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -131,10 +130,10 @@ pub async fn create(
     .bind(&body.template_type)
     .execute(&state.db).await?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id).fetch_one(&state.db).await?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -156,7 +155,7 @@ pub async fn update(
             is_default = COALESCE($6, is_default),
             template_type = COALESCE($7, template_type),
             updated_at = NOW()
-           WHERE id = $8"#
+           WHERE id = $8"#,
     )
     .bind(&body.name)
     .bind(&body.subject)
@@ -166,12 +165,13 @@ pub async fn update(
     .bind(body.is_default)
     .bind(&body.template_type)
     .bind(id)
-    .execute(&state.db).await?;
+    .execute(&state.db)
+    .await?;
 
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT * FROM email_templates WHERE id = $1"
-    )
-    .bind(id).fetch_one(&state.db).await?;
+    let item = sqlx::query_as::<_, EmailTemplate>("SELECT * FROM email_templates WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({"item": item})))
 }
@@ -183,7 +183,9 @@ pub async fn delete(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     sqlx::query("DELETE FROM email_templates WHERE id = $1")
-        .bind(id).execute(&state.db).await?;
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({"status": "deleted"})))
 }

@@ -1,16 +1,27 @@
 //! Campaign database operations.
 
 use crate::error::AppError;
-use sqlx::PgPool;
 use serde_json::Value as JsonValue;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Valid mechanic types.
 pub const VALID_MECHANIC_TYPES: &[&str] = &[
-    "score_reveal", "spin_wheel", "scratch_card", "personality",
-    "calculator", "mystery", "countdown", "poll", "chat",
-    "leaderboard", "raffle", "long_form_qualifier", "quiz",
-    "loyalty", "b2b_loyalty",
+    "score_reveal",
+    "spin_wheel",
+    "scratch_card",
+    "personality",
+    "calculator",
+    "mystery",
+    "countdown",
+    "poll",
+    "chat",
+    "leaderboard",
+    "raffle",
+    "long_form_qualifier",
+    "quiz",
+    "loyalty",
+    "b2b_loyalty",
 ];
 
 /// Input for creating a campaign.
@@ -61,10 +72,7 @@ pub fn validate_mechanic_type(type_str: &str) -> bool {
 }
 
 /// Get a campaign by its slug.
-pub async fn get_campaign_by_slug(
-    pool: &PgPool,
-    slug: &str,
-) -> Result<Campaign, AppError> {
+pub async fn get_campaign_by_slug(pool: &PgPool, slug: &str) -> Result<Campaign, AppError> {
     let campaign = sqlx::query_as::<_, Campaign>(
         r#"SELECT id, name, slug, type as "type", status,
                   config, tag_namespace,
@@ -76,7 +84,7 @@ pub async fn get_campaign_by_slug(
                   loyalty_points_per_play,
                   auto_enroll_loyalty,
                   iqs_funnel_id
-           FROM campaigns WHERE slug = $1"#
+           FROM campaigns WHERE slug = $1"#,
     )
     .bind(slug)
     .fetch_optional(pool)
@@ -87,10 +95,7 @@ pub async fn get_campaign_by_slug(
 }
 
 /// List campaigns scoped to an account.
-pub async fn list_campaigns(
-    pool: &PgPool,
-    account_id: &Uuid,
-) -> Result<Vec<Campaign>, AppError> {
+pub async fn list_campaigns(pool: &PgPool, account_id: &Uuid) -> Result<Vec<Campaign>, AppError> {
     let campaigns = sqlx::query_as::<_, Campaign>(
         r#"SELECT id, name, slug, type as "type", status,
                   config, tag_namespace,
@@ -103,7 +108,7 @@ pub async fn list_campaigns(
                   auto_enroll_loyalty,
                   iqs_funnel_id
            FROM campaigns WHERE account_id = $1
-           ORDER BY created_at DESC"#
+           ORDER BY created_at DESC"#,
     )
     .bind(account_id)
     .fetch_all(pool)
@@ -113,17 +118,12 @@ pub async fn list_campaigns(
 }
 
 /// Look up an account by its subdomain slug.
-pub async fn get_account_by_slug(
-    pool: &PgPool,
-    slug: &str,
-) -> Result<Uuid, AppError> {
-    let account_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE slug = $1"
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await?
-    .flatten();
+pub async fn get_account_by_slug(pool: &PgPool, slug: &str) -> Result<Uuid, AppError> {
+    let account_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?
+        .flatten();
 
     account_id.ok_or_else(|| AppError::NotFound("Tenant not found".to_string()))
 }
@@ -145,10 +145,22 @@ pub async fn create_campaign(
     let slug = generate_slug(&input.name);
 
     let id = Uuid::new_v4();
-    let delivery_method = input.delivery_method.clone().unwrap_or_else(|| "webhook".to_string());
-    let config = input.config.clone().unwrap_or_else(|| serde_json::json!({}));
-    let outcome_tags = input.outcome_tags.clone().unwrap_or_else(|| serde_json::json!({}));
-    let delivery_config = input.delivery_config.clone().unwrap_or_else(|| serde_json::json!({}));
+    let delivery_method = input
+        .delivery_method
+        .clone()
+        .unwrap_or_else(|| "webhook".to_string());
+    let config = input
+        .config
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let outcome_tags = input
+        .outcome_tags
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let delivery_config = input
+        .delivery_config
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
 
     let loyalty_program_id = input.loyalty_program_id;
     let loyalty_points_per_play = input.loyalty_points_per_play.unwrap_or(0);
@@ -179,10 +191,7 @@ pub async fn create_campaign(
 }
 
 /// Get a campaign by its id.
-pub async fn get_campaign_by_id(
-    pool: &PgPool,
-    id: &Uuid,
-) -> Result<Campaign, AppError> {
+pub async fn get_campaign_by_id(pool: &PgPool, id: &Uuid) -> Result<Campaign, AppError> {
     let campaign = sqlx::query_as::<_, Campaign>(
         r#"SELECT id, name, slug, type as "type", status,
                   config, tag_namespace,
@@ -194,7 +203,7 @@ pub async fn get_campaign_by_id(
                   loyalty_points_per_play,
                   auto_enroll_loyalty,
                   iqs_funnel_id
-           FROM campaigns WHERE id = $1"#
+           FROM campaigns WHERE id = $1"#,
     )
     .bind(id)
     .fetch_optional(pool)
@@ -225,7 +234,8 @@ pub async fn update_campaign(
     let new_delivery_method = delivery_method.unwrap_or(&existing.delivery_method);
     let new_delivery_config = delivery_config.unwrap_or(&existing.delivery_config);
     let new_loyalty_program_id = loyalty_program_id.unwrap_or(existing.loyalty_program_id);
-    let new_loyalty_points_per_play = loyalty_points_per_play.unwrap_or(existing.loyalty_points_per_play);
+    let new_loyalty_points_per_play =
+        loyalty_points_per_play.unwrap_or(existing.loyalty_points_per_play);
     let new_auto_enroll_loyalty = auto_enroll_loyalty.unwrap_or(existing.auto_enroll_loyalty);
 
     sqlx::query(
@@ -235,7 +245,7 @@ pub async fn update_campaign(
                loyalty_program_id = $6,
                loyalty_points_per_play = $7,
                auto_enroll_loyalty = $8
-           WHERE id = $9"#
+           WHERE id = $9"#,
     )
     .bind(new_name)
     .bind(new_config)
@@ -253,10 +263,7 @@ pub async fn update_campaign(
 }
 
 /// Delete a campaign by id.
-pub async fn delete_campaign(
-    pool: &PgPool,
-    id: &Uuid,
-) -> Result<bool, AppError> {
+pub async fn delete_campaign(pool: &PgPool, id: &Uuid) -> Result<bool, AppError> {
     let result = sqlx::query("DELETE FROM campaigns WHERE id = $1")
         .bind(id)
         .execute(pool)

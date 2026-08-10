@@ -47,17 +47,14 @@ pub struct Entry {
 }
 
 /// Create a new entry.
-pub async fn create_entry(
-    pool: &PgPool,
-    input: &CreateEntryInput,
-) -> Result<Uuid, AppError> {
+pub async fn create_entry(pool: &PgPool, input: &CreateEntryInput) -> Result<Uuid, AppError> {
     let id = Uuid::new_v4();
     let tags_applied = input.tags_applied.clone().unwrap_or_default();
 
     sqlx::query(
         r#"INSERT INTO entries (id, contact_id, campaign_id, answers, score, outcome, tags_applied,
             utm_source, utm_medium, utm_campaign, referrer_url, page_url, user_agent, ip_address)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"#,
     )
     .bind(id)
     .bind(input.contact_id)
@@ -96,16 +93,8 @@ pub async fn record_delivery(
     .await?;
 
     // Also log to delivery_log
-    crate::db::delivery_log::log_delivery(
-        pool,
-        entry_id,
-        method,
-        target,
-        success,
-        None,
-        None,
-    )
-    .await?;
+    crate::db::delivery_log::log_delivery(pool, entry_id, method, target, success, None, None)
+        .await?;
 
     Ok(())
 }

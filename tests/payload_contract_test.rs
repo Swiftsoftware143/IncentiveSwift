@@ -2,7 +2,9 @@
 
 #[cfg(test)]
 mod tests {
-    use incentiveswift_api::delivery::payload::{DeliveryPayload, ContactPayload, CampaignPayload, QuestionAnswerPair};
+    use incentiveswift_api::delivery::payload::{
+        CampaignPayload, ContactPayload, DeliveryPayload, QuestionAnswerPair,
+    };
 
     /// Serialize a known DeliveryPayload and assert the exact JSON keys and shape.
     #[test]
@@ -61,9 +63,18 @@ mod tests {
         assert_eq!(json["score"], 74);
 
         // Assert Q&A structure
-        assert_eq!(json["questions_and_answers"][0]["question"], "What's your biggest challenge right now?");
-        assert_eq!(json["questions_and_answers"][0]["answer"], "Not enough leads");
-        assert_eq!(json["questions_and_answers"][1]["question"], "How many leads do you get per month?");
+        assert_eq!(
+            json["questions_and_answers"][0]["question"],
+            "What's your biggest challenge right now?"
+        );
+        assert_eq!(
+            json["questions_and_answers"][0]["answer"],
+            "Not enough leads"
+        );
+        assert_eq!(
+            json["questions_and_answers"][1]["question"],
+            "How many leads do you get per month?"
+        );
         assert_eq!(json["questions_and_answers"][1]["answer"], "10-50");
 
         // Assert entry_id
@@ -71,12 +82,23 @@ mod tests {
 
         // Assert no unexpected top-level keys
         let expected_keys = vec![
-            "event", "contact", "campaign", "outcome", "tags_applied",
-            "score", "questions_and_answers", "entry_id", "captured_at"
+            "event",
+            "contact",
+            "campaign",
+            "outcome",
+            "tags_applied",
+            "score",
+            "questions_and_answers",
+            "entry_id",
+            "captured_at",
         ];
         let json_obj = json.as_object().unwrap();
         for key in json_obj.keys() {
-            assert!(expected_keys.contains(&key.as_str()), "Unexpected key: {}", key);
+            assert!(
+                expected_keys.contains(&key.as_str()),
+                "Unexpected key: {}",
+                key
+            );
         }
     }
 }

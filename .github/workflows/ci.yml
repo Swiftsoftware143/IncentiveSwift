@@ -26,7 +26,6 @@ jobs:
 
     env:
       DATABASE_URL: postgres://swift:test@localhost:5432/test
-      SQLX_OFFLINE: true
 
     steps:
       - uses: actions/checkout@v4
@@ -36,24 +35,23 @@ jobs:
         with:
           components: clippy
 
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --no-default-features --features postgres,native-tls
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Run migrations
+        run: sqlx migrate run
+
       - name: Clippy
         run: cargo clippy -- -D warnings
 
       - name: Build
         run: cargo build --release
-
-      - name: Run migrations
-        run: |
-          cargo install sqlx-cli --no-default-features --features postgres,native-tls
-          sqlx migrate run
-        env:
-          SQLX_OFFLINE: false
 
       - name: Test
         run: cargo test -- --test-threads=1

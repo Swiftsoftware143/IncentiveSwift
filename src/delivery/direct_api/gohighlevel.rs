@@ -40,7 +40,10 @@ pub async fn push_to_gohighlevel(
         )));
     }
 
-    tracing::info!("GoHighLevel contact push successful for {}", payload.contact.email.as_deref().unwrap_or("unknown"));
+    tracing::info!(
+        "GoHighLevel contact push successful for {}",
+        payload.contact.email.as_deref().unwrap_or("unknown")
+    );
     Ok(())
 }
 

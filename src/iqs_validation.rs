@@ -25,11 +25,7 @@ use serde_json::Value;
 /// `question_type` – the `question_type` column on `iqs_questions`
 /// `config`         – the `config` JSONB from `iqs_questions`
 /// `value`          – the answer string submitted by the contact
-pub fn validate_field(
-    question_type: &str,
-    config: &Value,
-    value: &str,
-) -> Result<(), AppError> {
+pub fn validate_field(question_type: &str, config: &Value, value: &str) -> Result<(), AppError> {
     match question_type {
         "field_email" => validate_email(value),
         "field_phone" => validate_phone(value, config),
@@ -47,7 +43,7 @@ pub fn validate_field(
         "field_image_choice" => validate_single_choice(value, config),
         "field_matrix" => validate_matrix(value, config),
         "field_text" | "field_textarea" => Ok(()), // free text
-        _ => Ok(()), // pass through unknown types
+        _ => Ok(()),                               // pass through unknown types
     }
 }
 
@@ -60,7 +56,8 @@ fn validate_email(value: &str) -> Result<(), AppError> {
     let re = regex_lite::Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$").unwrap();
     if !re.is_match(trimmed) {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid email address", trimmed
+            "'{}' is not a valid email address",
+            trimmed
         )));
     }
     Ok(())
@@ -77,7 +74,8 @@ fn validate_phone(value: &str, _config: &Value) -> Result<(), AppError> {
     let us = regex_lite::Regex::new(r"^\+?1?\d{10}$").unwrap();
     if !e164.is_match(trimmed) && !us.is_match(trimmed) {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid phone number. Use E.164 format (e.g. +12025551234)", trimmed
+            "'{}' is not a valid phone number. Use E.164 format (e.g. +12025551234)",
+            trimmed
         )));
     }
     Ok(())
@@ -92,7 +90,8 @@ fn validate_url(value: &str) -> Result<(), AppError> {
     let re = regex_lite::Regex::new(r"^https?://[^\s/$.?#].[^\s]*$").unwrap();
     if !re.is_match(trimmed) {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid URL. Must start with http:// or https://", trimmed
+            "'{}' is not a valid URL. Must start with http:// or https://",
+            trimmed
         )));
     }
     Ok(())
@@ -105,20 +104,22 @@ fn validate_number(value: &str, config: &Value) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::BadRequest("Number is required".into()));
     }
-    let parsed: f64 = trimmed.parse().map_err(|_| {
-        AppError::BadRequest(format!("'{}' is not a valid number", trimmed))
-    })?;
+    let parsed: f64 = trimmed
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("'{}' is not a valid number", trimmed)))?;
     if let Some(min) = config.get("min").and_then(|v| v.as_f64()) {
         if parsed < min {
             return Err(AppError::BadRequest(format!(
-                "Value {} is below minimum {}", parsed, min
+                "Value {} is below minimum {}",
+                parsed, min
             )));
         }
     }
     if let Some(max) = config.get("max").and_then(|v| v.as_f64()) {
         if parsed > max {
             return Err(AppError::BadRequest(format!(
-                "Value {} exceeds maximum {}", parsed, max
+                "Value {} exceeds maximum {}",
+                parsed, max
             )));
         }
     }
@@ -132,13 +133,17 @@ fn validate_rating(value: &str, config: &Value) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::BadRequest("Rating is required".into()));
     }
-    let max_rating = config.get("max_rating").and_then(|v| v.as_i64()).unwrap_or(5);
-    let parsed: i64 = trimmed.parse().map_err(|_| {
-        AppError::BadRequest(format!("'{}' is not a valid rating number", trimmed))
-    })?;
+    let max_rating = config
+        .get("max_rating")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(5);
+    let parsed: i64 = trimmed
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("'{}' is not a valid rating number", trimmed)))?;
     if parsed < 1 || parsed > max_rating {
         return Err(AppError::BadRequest(format!(
-            "Rating must be between 1 and {}", max_rating
+            "Rating must be between 1 and {}",
+            max_rating
         )));
     }
     Ok(())
@@ -152,7 +157,10 @@ fn validate_date(value: &str, config: &Value) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::BadRequest("Date is required".into()));
     }
-    let include_time = config.get("include_time").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_time = config
+        .get("include_time")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if include_time {
         // Accept both date-only (YYYY-MM-DD) and datetime formats
         let is_valid = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").is_ok()
@@ -160,12 +168,14 @@ fn validate_date(value: &str, config: &Value) -> Result<(), AppError> {
             || chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M").is_ok();
         if !is_valid {
             return Err(AppError::BadRequest(format!(
-                "'{}' is not a valid date/datetime. Use format YYYY-MM-DD or YYYY-MM-DD HH:MM", trimmed
+                "'{}' is not a valid date/datetime. Use format YYYY-MM-DD or YYYY-MM-DD HH:MM",
+                trimmed
             )));
         }
     } else if chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").is_err() {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid date. Use format YYYY-MM-DD", trimmed
+            "'{}' is not a valid date. Use format YYYY-MM-DD",
+            trimmed
         )));
     }
     Ok(())
@@ -205,12 +215,13 @@ fn validate_select(value: &str, config: &Value) -> Result<(), AppError> {
         Some(o) => o,
         None => return Ok(()), // no options defined → pass through
     };
-    let valid = options.iter().any(|o| {
-        o.get("value").and_then(|v| v.as_str()) == Some(trimmed)
-    });
+    let valid = options
+        .iter()
+        .any(|o| o.get("value").and_then(|v| v.as_str()) == Some(trimmed));
     if !valid {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid selection", trimmed
+            "'{}' is not a valid selection",
+            trimmed
         )));
     }
     Ok(())
@@ -223,20 +234,22 @@ fn validate_slider(value: &str, config: &Value) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::BadRequest("Slider value is required".into()));
     }
-    let parsed: i64 = trimmed.parse().map_err(|_| {
-        AppError::BadRequest(format!("'{}' is not a valid number", trimmed))
-    })?;
+    let parsed: i64 = trimmed
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("'{}' is not a valid number", trimmed)))?;
     let min = config.get("min").and_then(|v| v.as_i64()).unwrap_or(0);
     let max = config.get("max").and_then(|v| v.as_i64()).unwrap_or(100);
     let step = config.get("step").and_then(|v| v.as_i64()).unwrap_or(1);
     if parsed < min || parsed > max {
         return Err(AppError::BadRequest(format!(
-            "Value must be between {} and {}", min, max
+            "Value must be between {} and {}",
+            min, max
         )));
     }
     if (parsed - min) % step != 0 {
         return Err(AppError::BadRequest(format!(
-            "Value must be in steps of {}", step
+            "Value must be in steps of {}",
+            step
         )));
     }
     Ok(())
@@ -250,34 +263,39 @@ fn validate_matrix(value: &str, config: &Value) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::BadRequest("Matrix is required".into()));
     }
-    let parsed: Value = serde_json::from_str(trimmed).map_err(|_| {
-        AppError::BadRequest("Invalid matrix format".into())
-    })?;
-    let obj = parsed.as_object().ok_or_else(|| {
-        AppError::BadRequest("Matrix must be a JSON object".into())
-    })?;
-    let rows = config.get("rows").and_then(|v| v.as_array()).ok_or_else(|| {
-        AppError::BadRequest("Matrix config missing rows".into())
-    })?;
-    let columns = config.get("columns").and_then(|v| v.as_array()).ok_or_else(|| {
-        AppError::BadRequest("Matrix config missing columns".into())
-    })?;
-    let valid_col_values: Vec<&str> = columns.iter()
+    let parsed: Value = serde_json::from_str(trimmed)
+        .map_err(|_| AppError::BadRequest("Invalid matrix format".into()))?;
+    let obj = parsed
+        .as_object()
+        .ok_or_else(|| AppError::BadRequest("Matrix must be a JSON object".into()))?;
+    let rows = config
+        .get("rows")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| AppError::BadRequest("Matrix config missing rows".into()))?;
+    let columns = config
+        .get("columns")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| AppError::BadRequest("Matrix config missing columns".into()))?;
+    let valid_col_values: Vec<&str> = columns
+        .iter()
         .filter_map(|c| c.get("value").and_then(|v| v.as_str()))
         .collect();
     for row in rows {
-        let key = row.get("key").and_then(|v| v.as_str()).ok_or_else(|| {
-            AppError::BadRequest("Matrix row missing 'key'".into())
-        })?;
+        let key = row
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AppError::BadRequest("Matrix row missing 'key'".into()))?;
         let answer = obj.get(key).and_then(|v| v.as_str()).unwrap_or("");
         if answer.is_empty() {
             return Err(AppError::BadRequest(format!(
-                "Matrix row '{}' is unanswered", key
+                "Matrix row '{}' is unanswered",
+                key
             )));
         }
         if !valid_col_values.contains(&answer) {
             return Err(AppError::BadRequest(format!(
-                "'{}' is not a valid option for row '{}'", answer, key
+                "'{}' is not a valid option for row '{}'",
+                answer, key
             )));
         }
     }
@@ -295,12 +313,13 @@ fn validate_single_choice(value: &str, config: &Value) -> Result<(), AppError> {
         Some(o) => o,
         None => return Ok(()),
     };
-    let valid = options.iter().any(|o| {
-        o.get("value").and_then(|v| v.as_str()) == Some(trimmed)
-    });
+    let valid = options
+        .iter()
+        .any(|o| o.get("value").and_then(|v| v.as_str()) == Some(trimmed));
     if !valid {
         return Err(AppError::BadRequest(format!(
-            "'{}' is not a valid option", trimmed
+            "'{}' is not a valid option",
+            trimmed
         )));
     }
     Ok(())
@@ -310,7 +329,9 @@ fn validate_single_choice(value: &str, config: &Value) -> Result<(), AppError> {
 fn validate_multiple_choice(value: &str, config: &Value) -> Result<(), AppError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(AppError::BadRequest("At least one selection is required".into()));
+        return Err(AppError::BadRequest(
+            "At least one selection is required".into(),
+        ));
     }
     let options = match config.get("options").and_then(|v| v.as_array()) {
         Some(o) => o,
@@ -318,12 +339,13 @@ fn validate_multiple_choice(value: &str, config: &Value) -> Result<(), AppError>
     };
     let values: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
     for val in &values {
-        let valid = options.iter().any(|o| {
-            o.get("value").and_then(|v| v.as_str()) == Some(val)
-        });
+        let valid = options
+            .iter()
+            .any(|o| o.get("value").and_then(|v| v.as_str()) == Some(val));
         if !valid {
             return Err(AppError::BadRequest(format!(
-                "'{}' is not a valid option in the list", val
+                "'{}' is not a valid option in the list",
+                val
             )));
         }
     }
@@ -417,7 +439,8 @@ mod tests {
     fn test_invalid_dates() {
         assert!(validate_date("", &json!({})).is_err());
         assert!(validate_date("07-16-2026", &json!({})).is_err());
-        assert!(validate_date("2026-07-16", &json!({"include_time": true})).is_ok()); // date-only is OK with include_time
+        assert!(validate_date("2026-07-16", &json!({"include_time": true})).is_ok());
+        // date-only is OK with include_time
     }
 
     // --- Consent ---

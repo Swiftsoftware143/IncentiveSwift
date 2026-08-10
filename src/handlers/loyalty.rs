@@ -1,10 +1,10 @@
 //! Loyalty handlers — checkin, approve reward, deny reward.
 
-use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::db::{contacts, loyalty};
+use crate::error::AppError;
 use crate::mechanics::loyalty_checkin;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -41,7 +41,8 @@ pub async fn checkin(
     let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
 
     // 2. Get loyalty program by slug — lookup from campaign slug
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
+    let campaign =
+        crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
     let program = loyalty::get_program(&state.db, &campaign.id).await?;
 
     // 3. Process checkin
@@ -50,28 +51,29 @@ pub async fn checkin(
         &program.id.to_string(),
         &contact_id.to_string(),
         body.method.as_deref().unwrap_or("web"),
-    ).await?;
+    )
+    .await?;
 
     // 4. Return result
     match result {
-        loyalty_checkin::CheckinResult::Success { points_awarded, new_balance, rewards_awarded } => {
-            Ok(Json(json!({
-                "status": "ok",
-                "points_awarded": points_awarded,
-                "new_balance": new_balance,
-                "rewards_awarded": rewards_awarded.iter().map(|r| json!({
-                    "id": r.id,
-                    "name": r.name,
-                    "status": r.status,
-                })).collect::<Vec<_>>(),
-            })))
-        }
-        loyalty_checkin::CheckinResult::DailyCapReached { message } => {
-            Ok(Json(json!({
-                "status": "daily_cap_reached",
-                "message": message,
-            })))
-        }
+        loyalty_checkin::CheckinResult::Success {
+            points_awarded,
+            new_balance,
+            rewards_awarded,
+        } => Ok(Json(json!({
+            "status": "ok",
+            "points_awarded": points_awarded,
+            "new_balance": new_balance,
+            "rewards_awarded": rewards_awarded.iter().map(|r| json!({
+                "id": r.id,
+                "name": r.name,
+                "status": r.status,
+            })).collect::<Vec<_>>(),
+        }))),
+        loyalty_checkin::CheckinResult::DailyCapReached { message } => Ok(Json(json!({
+            "status": "daily_cap_reached",
+            "message": message,
+        }))),
     }
 }
 
@@ -88,28 +90,23 @@ pub async fn approve_reward(
     user: AuthenticatedUser,
     Json(body): Json<ApproveBody>,
 ) -> Result<Json<Value>, AppError> {
-    let reward_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
+    let reward_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
 
     // Get reward
     let reward = loyalty::get_reward(&state.db, &reward_id).await?;
 
     if reward.status != "pending" {
         return Err(AppError::BadRequest(format!(
-            "Reward is already {}", reward.status
+            "Reward is already {}",
+            reward.status
         )));
     }
 
-    let approved_by = body.approved_by
-        .and_then(|s| Uuid::parse_str(&s).ok());
+    let approved_by = body.approved_by.and_then(|s| Uuid::parse_str(&s).ok());
 
     // Update to approved
-    loyalty::update_reward_status(
-        &state.db,
-        &reward_id,
-        "approved",
-        approved_by.as_ref(),
-    ).await?;
+    loyalty::update_reward_status(&state.db, &reward_id, "approved", approved_by.as_ref()).await?;
 
     // Get tier info for tag
     let tier = loyalty::get_reward_tier(&state.db, &reward.tier_id).await?;
@@ -147,7 +144,7 @@ pub async fn list_programs(
            FROM loyalty_programs lp
            LEFT JOIN campaigns c ON c.id = lp.campaign_id
            WHERE c.account_id = $1 OR lp.campaign_id IS NULL
-           ORDER BY lp.name"#
+           ORDER BY lp.name"#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
@@ -190,7 +187,7 @@ pub async fn list_rewards(
            JOIN loyalty_programs lp ON lp.id = rt.program_id
            LEFT JOIN campaigns cam ON cam.id = lp.campaign_id
            WHERE cam.account_id = $1 OR lp.campaign_id IS NULL
-           ORDER BY re.earned_at DESC"#
+           ORDER BY re.earned_at DESC"#,
     )
     .bind(account_id)
     .fetch_all(&state.db)
@@ -205,25 +202,21 @@ pub async fn deny_reward(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let reward_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
+    let reward_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
 
     // Get reward
     let reward = loyalty::get_reward(&state.db, &reward_id).await?;
 
     if reward.status != "pending" {
         return Err(AppError::BadRequest(format!(
-            "Reward is already {}", reward.status
+            "Reward is already {}",
+            reward.status
         )));
     }
 
     // Update to denied
-    loyalty::update_reward_status(
-        &state.db,
-        &reward_id,
-        "denied",
-        None,
-    ).await?;
+    loyalty::update_reward_status(&state.db, &reward_id, "denied", None).await?;
 
     Ok(Json(json!({
         "status": "denied",
@@ -287,14 +280,13 @@ pub async fn create_program(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let id = Uuid::new_v4();
-    let campaign_id = body.campaign_id
-        .and_then(|s| Uuid::parse_str(&s).ok());
+    let campaign_id = body.campaign_id.and_then(|s| Uuid::parse_str(&s).ok());
 
     sqlx::query(
         r#"INSERT INTO loyalty_programs (id, campaign_id, name, recognition_method,
             points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
             currency_name, currency_icon, currency_color)
-           VALUES ($1, $2, $3, 'both', $4, $5, $6, $7, $8, $9, $10)"#
+           VALUES ($1, $2, $3, 'both', $4, $5, $6, $7, $8, $9, $10)"#,
     )
     .bind(id)
     .bind(campaign_id)
@@ -317,7 +309,7 @@ pub async fn create_program(
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
                   points_expire_days, social_share_points, points_per_visit,
                   currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1"#
+           FROM loyalty_programs WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -333,17 +325,15 @@ pub async fn update_program(
     user: AuthenticatedUser,
     Json(body): Json<LoyaltyProgramInput>,
 ) -> Result<Json<Value>, AppError> {
-    let program_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
     // Verify program exists
-    let existing = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM loyalty_programs WHERE id = $1"
-    )
-    .bind(program_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Loyalty program not found".to_string()))?;
+    let existing = sqlx::query_scalar::<_, Uuid>("SELECT id FROM loyalty_programs WHERE id = $1")
+        .bind(program_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Loyalty program not found".to_string()))?;
 
     let _ = existing;
 
@@ -357,7 +347,7 @@ pub async fn update_program(
                currency_name = COALESCE($6, currency_name),
                currency_icon = COALESCE($7, currency_icon),
                currency_color = COALESCE($8, currency_color)
-           WHERE id = $9"#
+           WHERE id = $9"#,
     )
     .bind(&body.name)
     .bind(body.points_per_checkin)
@@ -379,7 +369,7 @@ pub async fn update_program(
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
                   points_expire_days, social_share_points, points_per_visit,
                   currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1"#
+           FROM loyalty_programs WHERE id = $1"#,
     )
     .bind(program_id)
     .fetch_one(&state.db)
@@ -394,8 +384,8 @@ pub async fn delete_program(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let program_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
     let result = sqlx::query("DELETE FROM loyalty_programs WHERE id = $1")
         .bind(program_id)
@@ -440,7 +430,7 @@ pub async fn create_tier(
     let tier = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
                   reward_tag, sort_order, marketing_boost
-           FROM loyalty_reward_tiers WHERE id = $1"#
+           FROM loyalty_reward_tiers WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -456,8 +446,8 @@ pub async fn update_tier(
     user: AuthenticatedUser,
     Json(body): Json<RewardTierUpdateInput>,
 ) -> Result<Json<Value>, AppError> {
-    let tier_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
+    let tier_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
 
     sqlx::query(
         r#"UPDATE loyalty_reward_tiers
@@ -467,7 +457,7 @@ pub async fn update_tier(
                requires_approval = COALESCE($4, requires_approval),
                sort_order = COALESCE($5, sort_order),
                marketing_boost = COALESCE($6, marketing_boost)
-           WHERE id = $7"#
+           WHERE id = $7"#,
     )
     .bind(&body.name)
     .bind(body.points_required)
@@ -482,7 +472,7 @@ pub async fn update_tier(
     let tier = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
                   reward_tag, sort_order, marketing_boost
-           FROM loyalty_reward_tiers WHERE id = $1"#
+           FROM loyalty_reward_tiers WHERE id = $1"#,
     )
     .bind(tier_id)
     .fetch_one(&state.db)
@@ -497,8 +487,8 @@ pub async fn delete_tier(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let tier_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
+    let tier_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
 
     let result = sqlx::query("DELETE FROM loyalty_reward_tiers WHERE id = $1")
         .bind(tier_id)
@@ -529,7 +519,7 @@ pub async fn list_tiers(
                   reward_tag, sort_order, marketing_boost
            FROM loyalty_reward_tiers
            WHERE program_id = $1
-           ORDER BY sort_order ASC, points_required ASC"#
+           ORDER BY sort_order ASC, points_required ASC"#,
     )
     .bind(program_id)
     .fetch_all(&state.db)
@@ -574,7 +564,7 @@ pub async fn online_visit(
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at
-           FROM loyalty_members WHERE referral_code = $1"#
+           FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referral_code)
     .fetch_optional(&state.db)
@@ -590,7 +580,7 @@ pub async fn online_visit(
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
                   points_expire_days, social_share_points, points_per_visit,
                   currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1 AND is_active = true"#
+           FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
     )
     .bind(member.program_id)
     .fetch_optional(&state.db)
@@ -602,7 +592,7 @@ pub async fn online_visit(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
            WHERE member_id = $1
              AND action_type = 'daily_visit'
-             AND created_at::date = CURRENT_DATE"#
+             AND created_at::date = CURRENT_DATE"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
@@ -632,7 +622,7 @@ pub async fn online_visit(
 
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
-           VALUES ($1, 'daily_visit', $2, $3::jsonb)"#
+           VALUES ($1, 'daily_visit', $2, $3::jsonb)"#,
     )
     .bind(member.id)
     .bind(points)
@@ -648,7 +638,7 @@ pub async fn online_visit(
                current_streak = current_streak + 1,
                -- reset streak if last activity was more than 1 day ago
                last_activity_date = now()
-           WHERE id = $2"#
+           WHERE id = $2"#,
     )
     .bind(points as i32)
     .bind(member.id)
@@ -664,7 +654,7 @@ pub async fn online_visit(
 
     let updated = sqlx::query_as::<_, MemberStreak>(
         r#"SELECT points_balance, current_streak
-           FROM loyalty_members WHERE id = $1"#
+           FROM loyalty_members WHERE id = $1"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
@@ -687,7 +677,7 @@ pub async fn online_share(
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at
-           FROM loyalty_members WHERE referral_code = $1"#
+           FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referral_code)
     .fetch_optional(&state.db)
@@ -703,7 +693,7 @@ pub async fn online_share(
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
                   points_expire_days, social_share_points, points_per_visit,
                   currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1 AND is_active = true"#
+           FROM loyalty_programs WHERE id = $1 AND is_active = true"#,
     )
     .bind(member.program_id)
     .fetch_optional(&state.db)
@@ -720,7 +710,7 @@ pub async fn online_share(
 
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
-           VALUES ($1, 'social_share', $2, $3::jsonb)"#
+           VALUES ($1, 'social_share', $2, $3::jsonb)"#,
     )
     .bind(member.id)
     .bind(points)
@@ -733,7 +723,7 @@ pub async fn online_share(
         r#"UPDATE loyalty_members
            SET points_balance = points_balance + $1,
                lifetime_points = lifetime_points + $1
-           WHERE id = $2"#
+           WHERE id = $2"#,
     )
     .bind(points as i32)
     .bind(member.id)
@@ -741,12 +731,11 @@ pub async fn online_share(
     .await?;
 
     // 5. Get updated balance
-    let new_balance: i32 = sqlx::query_scalar(
-        r#"SELECT points_balance FROM loyalty_members WHERE id = $1"#
-    )
-    .bind(member.id)
-    .fetch_one(&state.db)
-    .await?;
+    let new_balance: i32 =
+        sqlx::query_scalar(r#"SELECT points_balance FROM loyalty_members WHERE id = $1"#)
+            .bind(member.id)
+            .fetch_one(&state.db)
+            .await?;
 
     Ok(Json(json!({
         "status": "ok",
@@ -764,7 +753,7 @@ pub async fn referral_click(
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at
-           FROM loyalty_members WHERE referral_code = $1"#
+           FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referrer_code)
     .fetch_optional(&state.db)
@@ -780,7 +769,7 @@ pub async fn referral_click(
 
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
-           VALUES ($1, 'referral_click', 0, $2::jsonb)"#
+           VALUES ($1, 'referral_click', 0, $2::jsonb)"#,
     )
     .bind(member.id)
     .bind(json!(metadata).to_string())
@@ -802,7 +791,7 @@ pub async fn online_stats(
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
         r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
                   member_since, last_checkin_at
-           FROM loyalty_members WHERE referral_code = $1"#
+           FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&code)
     .fetch_optional(&state.db)
@@ -810,17 +799,16 @@ pub async fn online_stats(
     .ok_or_else(|| AppError::NotFound("Member not found for referral code".to_string()))?;
 
     // 2. Get current streak
-    let current_streak: i32 = sqlx::query_scalar(
-        "SELECT current_streak FROM loyalty_members WHERE id = $1"
-    )
-    .bind(member.id)
-    .fetch_one(&state.db)
-    .await?;
+    let current_streak: i32 =
+        sqlx::query_scalar("SELECT current_streak FROM loyalty_members WHERE id = $1")
+            .bind(member.id)
+            .fetch_one(&state.db)
+            .await?;
 
     // 3. Count daily visits
     let total_visits: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
-           WHERE member_id = $1 AND action_type = 'daily_visit'"#
+           WHERE member_id = $1 AND action_type = 'daily_visit'"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
@@ -829,7 +817,7 @@ pub async fn online_stats(
     // 4. Count social shares
     let total_shares: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
-           WHERE member_id = $1 AND action_type = 'social_share'"#
+           WHERE member_id = $1 AND action_type = 'social_share'"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
@@ -838,24 +826,23 @@ pub async fn online_stats(
     // 5. Count referral clicks
     let referral_clicks: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM loyalty_online_actions
-           WHERE member_id = $1 AND action_type = 'referral_click'"#
+           WHERE member_id = $1 AND action_type = 'referral_click'"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
     .await?;
 
     // 6. Count total referrals
-    let total_referrals: i32 = sqlx::query_scalar(
-        "SELECT total_referrals FROM loyalty_members WHERE id = $1"
-    )
-    .bind(member.id)
-    .fetch_one(&state.db)
-    .await?;
+    let total_referrals: i32 =
+        sqlx::query_scalar("SELECT total_referrals FROM loyalty_members WHERE id = $1")
+            .bind(member.id)
+            .fetch_one(&state.db)
+            .await?;
 
     // 7. Sum points earned from online actions
     let online_points: i64 = sqlx::query_scalar(
         r#"SELECT COALESCE(SUM(points_earned), 0)::bigint FROM loyalty_online_actions
-           WHERE member_id = $1"#
+           WHERE member_id = $1"#,
     )
     .bind(member.id)
     .fetch_one(&state.db)
@@ -885,13 +872,12 @@ pub async fn check_plan_loyalty(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     // Get tenant's plan_tier
-    let plan_tier: Option<String> = sqlx::query_scalar(
-        "SELECT plan_tier FROM tenants WHERE id = $1"
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let plan_tier: Option<String> =
+        sqlx::query_scalar("SELECT plan_tier FROM tenants WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     let tier = plan_tier.unwrap_or_else(|| "free".to_string());
 
@@ -937,14 +923,14 @@ pub async fn set_secret_code(
     user: AuthenticatedUser,
     Json(body): Json<SetSecretCodeInput>,
 ) -> Result<Json<Value>, AppError> {
-    let program_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
     // Verify program exists and user has access via campaign
     let existing = sqlx::query_scalar::<_, Uuid>(
         r#"SELECT lp.id FROM loyalty_programs lp
            LEFT JOIN campaigns c ON c.id = lp.campaign_id
-           WHERE lp.id = $1"#
+           WHERE lp.id = $1"#,
     )
     .bind(program_id)
     .fetch_optional(&state.db)
@@ -953,7 +939,7 @@ pub async fn set_secret_code(
     let _ = existing;
 
     sqlx::query(
-        r#"UPDATE loyalty_programs SET secret_code = $1, secret_code_points = $2 WHERE id = $3"#
+        r#"UPDATE loyalty_programs SET secret_code = $1, secret_code_points = $2 WHERE id = $3"#,
     )
     .bind(&body.secret_code)
     .bind(body.secret_code_points.unwrap_or(25))
@@ -976,8 +962,8 @@ pub async fn program_qr(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let program_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
@@ -987,7 +973,7 @@ pub async fn program_qr(
                   streak_bonus, streak_days, referral_bonus, birthday_bonus,
                   points_expire_days, social_share_points, points_per_visit,
                   currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1"#
+           FROM loyalty_programs WHERE id = $1"#,
     )
     .bind(program_id)
     .fetch_optional(&state.db)
@@ -1001,7 +987,10 @@ pub async fn program_qr(
     );
 
     // Return URL + QR API link (using public QR API)
-    let qr_img_url = format!("https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={}", urlencoding(&checkin_url));
+    let qr_img_url = format!(
+        "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={}",
+        urlencoding(&checkin_url)
+    );
 
     Ok(Json(json!({
         "checkin_url": checkin_url,
@@ -1012,15 +1001,17 @@ pub async fn program_qr(
 
 /// Simple URL encoder.
 fn urlencoding(s: &str) -> String {
-    s.chars().map(|c| match c {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-        ' ' => "%20".to_string(),
-        ':' => "%3A".to_string(),
-        '/' => "%2F".to_string(),
-        '?' => "%3F".to_string(),
-        '&' => "%26".to_string(),
-        '=' => "%3D".to_string(),
-        '#' => "%23".to_string(),
-        _ => format!("%{:02X}", c as u8),
-    }).collect()
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            ' ' => "%20".to_string(),
+            ':' => "%3A".to_string(),
+            '/' => "%2F".to_string(),
+            '?' => "%3F".to_string(),
+            '&' => "%26".to_string(),
+            '=' => "%3D".to_string(),
+            '#' => "%23".to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
 }

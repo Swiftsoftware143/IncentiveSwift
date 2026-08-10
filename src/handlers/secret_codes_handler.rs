@@ -3,8 +3,8 @@
 //! check-in page to earn points. Great for Facebook groups, newsletters, social posts.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -50,7 +50,7 @@ pub async fn list_secret_codes(
         "SELECT id, program_id, code, description, points_reward, max_uses, uses_so_far,
                 starts_at, expires_at, is_active, created_at
          FROM loyalty_secret_codes
-         ORDER BY created_at DESC"
+         ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
     .await?;
@@ -69,7 +69,9 @@ pub async fn create_secret_code(
         return Err(AppError::BadRequest("Code is required".to_string()));
     }
     if code_upper.len() < 3 {
-        return Err(AppError::BadRequest("Code must be at least 3 characters".to_string()));
+        return Err(AppError::BadRequest(
+            "Code must be at least 3 characters".to_string(),
+        ));
     }
 
     // Find the first program (admin-level, so for now use first active program)
@@ -88,7 +90,7 @@ pub async fn create_secret_code(
 
     // Check for duplicate code in this program
     let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM loyalty_secret_codes WHERE program_id = $1 AND UPPER(code) = $2"
+        "SELECT id FROM loyalty_secret_codes WHERE program_id = $1 AND UPPER(code) = $2",
     )
     .bind(program_id)
     .bind(&code_upper)
@@ -96,14 +98,20 @@ pub async fn create_secret_code(
     .await?;
 
     if existing.is_some() {
-        return Err(AppError::BadRequest("A code with this name already exists in this program".to_string()));
+        return Err(AppError::BadRequest(
+            "A code with this name already exists in this program".to_string(),
+        ));
     }
 
     // Parse expires_at if provided
     let expires_at = match &body.expires_at {
         Some(dt) if !dt.is_empty() => {
-            let parsed = chrono::DateTime::parse_from_rfc3339(dt)
-                .map_err(|_| AppError::BadRequest("Invalid expires_at format. Use ISO 8601 (e.g., 2026-12-31T23:59:59Z)".to_string()))?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(dt).map_err(|_| {
+                AppError::BadRequest(
+                    "Invalid expires_at format. Use ISO 8601 (e.g., 2026-12-31T23:59:59Z)"
+                        .to_string(),
+                )
+            })?;
             Some(parsed.with_timezone(&chrono::Utc))
         }
         _ => None,
@@ -174,17 +182,21 @@ pub async fn verify_secret_code(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let program_slug = body.get("program_slug")
+    let program_slug = body
+        .get("program_slug")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("program_slug is required".to_string()))?;
 
-    let secret_code = body.get("secret_code")
+    let secret_code = body
+        .get("secret_code")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("secret_code is required".to_string()))?;
 
     let code_upper = secret_code.trim().to_uppercase();
     if code_upper.is_empty() {
-        return Err(AppError::BadRequest("Secret code cannot be empty".to_string()));
+        return Err(AppError::BadRequest(
+            "Secret code cannot be empty".to_string(),
+        ));
     }
 
     // Get program by slug (resolves campaign → program)
@@ -197,7 +209,7 @@ pub async fn verify_secret_code(
                 starts_at, expires_at, is_active, created_at
          FROM loyalty_secret_codes
          WHERE program_id = $1 AND UPPER(code) = $2 AND is_active = true
-         LIMIT 1"
+         LIMIT 1",
     )
     .bind(program.id)
     .bind(&code_upper)
@@ -214,32 +226,57 @@ pub async fn verify_secret_code(
 
     // Check if code hasn't started yet
     if chrono::Utc::now() < code_record.starts_at {
-        return Err(AppError::BadRequest("This code is not active yet".to_string()));
+        return Err(AppError::BadRequest(
+            "This code is not active yet".to_string(),
+        ));
     }
 
     // Check max uses
     if code_record.max_uses > 0 && code_record.uses_so_far >= code_record.max_uses {
-        return Err(AppError::BadRequest("This code has reached its maximum uses".to_string()));
+        return Err(AppError::BadRequest(
+            "This code has reached its maximum uses".to_string(),
+        ));
     }
 
     // Upsert contact
-    let contact_data = body.get("contact").ok_or_else(|| AppError::BadRequest("contact is required".to_string()))?;
+    let contact_data = body
+        .get("contact")
+        .ok_or_else(|| AppError::BadRequest("contact is required".to_string()))?;
     let contact_input = crate::db::contacts::ContactInput {
-        first_name: contact_data.get("first_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        last_name: contact_data.get("last_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        email: contact_data.get("email").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        phone: contact_data.get("phone").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        website: contact_data.get("website").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        business_name: contact_data.get("business_name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        first_name: contact_data
+            .get("first_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        last_name: contact_data
+            .get("last_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        email: contact_data
+            .get("email")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        phone: contact_data
+            .get("phone")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        website: contact_data
+            .get("website")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        business_name: contact_data
+            .get("business_name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     };
     let contact_id = crate::db::contacts::upsert_contact(&state.db, &contact_input).await?;
 
     // Find or create loyalty member
-    let member_id = crate::db::loyalty::find_or_create_member(&state.db, &program.id, &contact_id).await?;
+    let member_id =
+        crate::db::loyalty::find_or_create_member(&state.db, &program.id, &contact_id).await?;
 
     // Check if this member already redeemed this code
     let already_redeemed: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM loyalty_secret_code_redemptions WHERE code_id = $1 AND member_id = $2"
+        "SELECT id FROM loyalty_secret_code_redemptions WHERE code_id = $1 AND member_id = $2",
     )
     .bind(code_record.id)
     .bind(member_id)
@@ -247,39 +284,37 @@ pub async fn verify_secret_code(
     .await?;
 
     if already_redeemed.is_some() {
-        return Err(AppError::BadRequest("You have already redeemed this code".to_string()));
+        return Err(AppError::BadRequest(
+            "You have already redeemed this code".to_string(),
+        ));
     }
 
     // Award points
     let points = code_record.points_reward;
     let entry_id = Uuid::new_v4();
-    crate::db::loyalty::record_checkin(&state.db, &member_id, points, "secret_code", &entry_id).await?;
+    crate::db::loyalty::record_checkin(&state.db, &member_id, points, "secret_code", &entry_id)
+        .await?;
     crate::db::loyalty::create_reward(&state.db, &member_id, &member_id, "approved").await?; // placeholder
 
     // Record redemption
-    sqlx::query(
-        "INSERT INTO loyalty_secret_code_redemptions (code_id, member_id) VALUES ($1, $2)"
-    )
-    .bind(code_record.id)
-    .bind(member_id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("INSERT INTO loyalty_secret_code_redemptions (code_id, member_id) VALUES ($1, $2)")
+        .bind(code_record.id)
+        .bind(member_id)
+        .execute(&state.db)
+        .await?;
 
     // Increment uses counter
-    sqlx::query(
-        "UPDATE loyalty_secret_codes SET uses_so_far = uses_so_far + 1 WHERE id = $1"
-    )
-    .bind(code_record.id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE loyalty_secret_codes SET uses_so_far = uses_so_far + 1 WHERE id = $1")
+        .bind(code_record.id)
+        .execute(&state.db)
+        .await?;
 
     // Get member current balance
-    let balance: i32 = sqlx::query_scalar(
-        "SELECT points_balance FROM loyalty_members WHERE id = $1"
-    )
-    .bind(member_id)
-    .fetch_one(&state.db)
-    .await?;
+    let balance: i32 =
+        sqlx::query_scalar("SELECT points_balance FROM loyalty_members WHERE id = $1")
+            .bind(member_id)
+            .fetch_one(&state.db)
+            .await?;
 
     Ok(Json(json!({
         "status": "ok",

@@ -42,7 +42,7 @@ pub async fn sync_entry_to_coreswift(
         r#"SELECT api_key, base_url, scope, metadata
            FROM provider_keys
            WHERE provider = $1 AND account_id = $2 AND is_active = true
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(CORESWIFT_PROVIDER)
     .bind(account_id)
@@ -54,7 +54,11 @@ pub async fn sync_entry_to_coreswift(
     };
 
     let (jwt_str, base_url, scope, metadata) = row;
-    let mut jwt: Option<String> = if jwt_str.is_empty() { None } else { Some(jwt_str) };
+    let mut jwt: Option<String> = if jwt_str.is_empty() {
+        None
+    } else {
+        Some(jwt_str)
+    };
     let base_url = base_url.unwrap_or_else(|| "https://coreswiftcrm.com".to_string());
 
     let http_client = &state.http_client;
@@ -70,7 +74,12 @@ pub async fn sync_entry_to_coreswift(
         let email = meta.get("email")?.as_str()?;
         let password = meta.get("password")?.as_str()?;
 
-        let login_url = format!("{}/api/auth/login", meta.get("base_url").and_then(|v| v.as_str()).unwrap_or("https://coreswiftcrm.com"));
+        let login_url = format!(
+            "{}/api/auth/login",
+            meta.get("base_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://coreswiftcrm.com")
+        );
 
         let resp = client
             .post(&login_url)
@@ -150,7 +159,12 @@ pub async fn sync_entry_to_coreswift(
         Ok(r) => {
             let status = r.status().as_u16();
             if (200..300).contains(&status) {
-                tracing::info!("CoreSwift contact synced: {} {} (status={})", first, last, status);
+                tracing::info!(
+                    "CoreSwift contact synced: {} {} (status={})",
+                    first,
+                    last,
+                    status
+                );
             } else if status == 401 {
                 // JWT expired — clear it so next attempt re-authenticates
                 let _ = sqlx::query(
@@ -161,7 +175,13 @@ pub async fn sync_entry_to_coreswift(
                 .await;
                 tracing::warn!("CoreSwift JWT expired, will re-authenticate on next entry");
             } else {
-                let body = r.text().await.unwrap_or_default().chars().take(200).collect::<String>();
+                let body = r
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(200)
+                    .collect::<String>();
                 tracing::warn!("CoreSwift contact sync failed ({}): {}", status, body);
             }
         }

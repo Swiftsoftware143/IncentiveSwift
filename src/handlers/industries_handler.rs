@@ -12,8 +12,8 @@
 //!   GET  /api/v1/admin/industries        — list all industries incl. inactive (admin)
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -90,7 +90,7 @@ pub async fn list_active_industries(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
            FROM industries
            WHERE is_active = true
-           ORDER BY sort_order, name"#
+           ORDER BY sort_order, name"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -106,7 +106,7 @@ pub async fn admin_list_industries(
     let industries = sqlx::query_as::<_, Industry>(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
            FROM industries
-           ORDER BY sort_order, name"#
+           ORDER BY sort_order, name"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -125,7 +125,7 @@ pub async fn admin_create_industry(
 
     sqlx::query(
         r#"INSERT INTO industries (id, name, slug, description, icon, sort_order)
-           VALUES ($1, $2, $3, $4, $5, $6)"#
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
     )
     .bind(id)
     .bind(&body.name)
@@ -138,7 +138,7 @@ pub async fn admin_create_industry(
 
     let industry = sqlx::query_as::<_, Industry>(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
-           FROM industries WHERE id = $1"#
+           FROM industries WHERE id = $1"#,
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -160,7 +160,7 @@ pub async fn admin_update_industry(
     // Get existing
     let existing = sqlx::query(
         r#"SELECT name, slug, description, icon, is_active, sort_order
-           FROM industries WHERE id = $1"#
+           FROM industries WHERE id = $1"#,
     )
     .bind(industry_id)
     .fetch_optional(&state.db)
@@ -172,13 +172,15 @@ pub async fn admin_update_industry(
     let description: Option<String> = body.description.or_else(|| existing.get("description"));
     let icon: Option<String> = body.icon.or_else(|| existing.get("icon"));
     let is_active: bool = body.is_active.unwrap_or_else(|| existing.get("is_active"));
-    let sort_order: i32 = body.sort_order.unwrap_or_else(|| existing.get("sort_order"));
+    let sort_order: i32 = body
+        .sort_order
+        .unwrap_or_else(|| existing.get("sort_order"));
 
     sqlx::query(
         r#"UPDATE industries SET
                name = $1, slug = $2, description = $3, icon = $4,
                is_active = $5, sort_order = $6, updated_at = now()
-           WHERE id = $7"#
+           WHERE id = $7"#,
     )
     .bind(&name)
     .bind(&slug)
@@ -192,7 +194,7 @@ pub async fn admin_update_industry(
 
     let industry = sqlx::query_as::<_, Industry>(
         r#"SELECT id, name, slug, description, icon, is_active, sort_order, created_at, updated_at
-           FROM industries WHERE id = $1"#
+           FROM industries WHERE id = $1"#,
     )
     .bind(industry_id)
     .fetch_one(&state.db)
@@ -218,7 +220,9 @@ pub async fn admin_delete_industry(
     .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Industry not found or already inactive".to_string()));
+        return Err(AppError::NotFound(
+            "Industry not found or already inactive".to_string(),
+        ));
     }
 
     Ok(Json(json!({ "status": "deleted", "id": id })))

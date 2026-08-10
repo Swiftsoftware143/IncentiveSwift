@@ -1,8 +1,8 @@
 //! Portfolio company handlers — CRUD for portfolio_companies table.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -137,8 +137,8 @@ pub async fn get_portfolio_company(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let company_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let company_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
 
     let company = sqlx::query_as::<_, PortfolioCompany>(
         r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
@@ -159,12 +159,12 @@ pub async fn update_portfolio_company(
     user: AuthenticatedUser,
     Json(body): Json<UpdatePortfolioCompanyInput>,
 ) -> Result<Json<Value>, AppError> {
-    let company_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let company_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
 
     let existing = sqlx::query(
         r#"SELECT name, slug, settings, email, description
-           FROM portfolio_companies WHERE id = $1"#
+           FROM portfolio_companies WHERE id = $1"#,
     )
     .bind(company_id)
     .fetch_optional(&state.db)
@@ -212,21 +212,45 @@ pub async fn internal_create_portfolio_company(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if key != state.config.internal_sync_key {
         return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
 
-    let account_id = body.get("tenant_id")
+    let account_id = body
+        .get("tenant_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| AppError::BadRequest("tenant_id required".into()))?;
 
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
-    let slug = body.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| generate_slug(&name));
-    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Company")
+        .to_string();
+    let slug = body
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| generate_slug(&name));
+    let email = body
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = body
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let id = Uuid::new_v4();
 
     sqlx::query(
@@ -251,8 +275,8 @@ pub async fn delete_portfolio_company(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let company_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let company_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
 
     let result = sqlx::query("DELETE FROM portfolio_companies WHERE id = $1")
         .bind(company_id)
@@ -260,7 +284,9 @@ pub async fn delete_portfolio_company(
         .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Portfolio company not found".to_string()));
+        return Err(AppError::NotFound(
+            "Portfolio company not found".to_string(),
+        ));
     }
 
     Ok(Json(json!({ "status": "deleted", "id": id })))

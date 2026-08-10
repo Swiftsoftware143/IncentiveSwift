@@ -1,10 +1,13 @@
 //! Delivery handlers — resend a delivery by entry ID.
 
-use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::db::questions_answers;
-use crate::delivery::{payload::DeliveryPayload, payload::ContactPayload, payload::CampaignPayload, payload::QuestionAnswerPair};
+use crate::delivery::{
+    payload::CampaignPayload, payload::ContactPayload, payload::DeliveryPayload,
+    payload::QuestionAnswerPair,
+};
+use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -36,7 +39,7 @@ pub async fn resend(
            FROM entries e
            JOIN contacts c ON c.id = e.contact_id
            JOIN campaigns cam ON cam.id = e.campaign_id
-           WHERE e.id = $1"#
+           WHERE e.id = $1"#,
     )
     .bind(entry_id)
     .fetch_optional(&state.db)
@@ -66,12 +69,13 @@ pub async fn resend(
 
     // CRITICAL: Get Q&A from normalized join (questions table), not from raw JSONB
     let normalized_qa = questions_answers::get_questions_with_answers(&state.db, &entry_id).await?;
-    let qa_pairs: Vec<QuestionAnswerPair> = normalized_qa.iter().map(|qa| {
-        QuestionAnswerPair {
+    let qa_pairs: Vec<QuestionAnswerPair> = normalized_qa
+        .iter()
+        .map(|qa| QuestionAnswerPair {
             question: qa.question_text.clone(),
             answer: qa.value.clone(),
-        }
-    }).collect();
+        })
+        .collect();
 
     // Build payload
     let payload = DeliveryPayload::build(
@@ -105,7 +109,8 @@ pub async fn resend(
         &payload,
         &state.db,
         &entry_id,
-    ).await?;
+    )
+    .await?;
 
     Ok(Json(json!({
         "status": "resent",

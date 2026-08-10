@@ -10,10 +10,10 @@
 //!   PATCH /earn-channels/{channel_id} ??? update earn channel
 //!   DELETE /earn-channels/{channel_id} ??? delete earn channel
 
-use crate::error::AppError;
-use crate::state::AppState;
-use crate::security::auth::AuthenticatedUser;
 use crate::db::{campaigns, contacts, viral};
+use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -81,7 +81,6 @@ pub struct VerifyEarnBody {
     pub answer: Option<String>,
 }
 
-
 // ---------------------------------------------------------------------------
 // Helper: extract IP and UA from headers
 // ---------------------------------------------------------------------------
@@ -147,7 +146,8 @@ async fn handle_referral_credit(
     campaign_config: &Value,
 ) -> Result<(), AppError> {
     if let Some(code) = ref_code {
-        if let Ok(Some(referral)) = viral::find_referral_by_code(&state.db, campaign_id, code).await {
+        if let Ok(Some(referral)) = viral::find_referral_by_code(&state.db, campaign_id, code).await
+        {
             if referral.referrer_contact_id != Some(*earning_contact_id) {
                 let referral_bonus = campaign_config
                     .get("referrer_points")
@@ -162,7 +162,8 @@ async fn handle_referral_credit(
                     None,
                     action_type,
                     referral_bonus,
-                ).await?;
+                )
+                .await?;
 
                 if let Some(ref_contact_id) = referral.referrer_contact_id {
                     viral::upsert_campaign_points(
@@ -170,19 +171,24 @@ async fn handle_referral_credit(
                         campaign_id,
                         &ref_contact_id,
                         referral_bonus,
-                    ).await?;
+                    )
+                    .await?;
 
                     // Milestone check for referrer
-                    let current_pts = viral::get_campaign_points(
-                        &state.db, campaign_id, &ref_contact_id
-                    ).await?;
+                    let current_pts =
+                        viral::get_campaign_points(&state.db, campaign_id, &ref_contact_id).await?;
                     let _ = crate::mechanics::milestone_engine::check_milestones(
-                        state, campaign_id, &ref_contact_id, current_pts,
-                    ).await;
+                        state,
+                        campaign_id,
+                        &ref_contact_id,
+                        current_pts,
+                    )
+                    .await;
                 }
 
                 if !referral.converted {
-                    viral::mark_referral_converted(&state.db, &referral.id, earning_contact_id).await?;
+                    viral::mark_referral_converted(&state.db, &referral.id, earning_contact_id)
+                        .await?;
                 }
             }
         }
@@ -217,11 +223,19 @@ pub async fn earn_click_through(
         None => {
             // Anonymous ??? log the click but don't award points
             viral::log_earn_click(
-                &state.db, &channel.id, None, &channel.campaign_id,
-                ip.as_deref(), ua.as_deref(), None,
-                query.utm_source.as_deref(), query.utm_medium.as_deref(),
-                query.utm_campaign.as_deref(), 0,
-            ).await?;
+                &state.db,
+                &channel.id,
+                None,
+                &channel.campaign_id,
+                ip.as_deref(),
+                ua.as_deref(),
+                None,
+                query.utm_source.as_deref(),
+                query.utm_medium.as_deref(),
+                query.utm_campaign.as_deref(),
+                0,
+            )
+            .await?;
 
             let redirect = if channel.redirect_url.is_empty() {
                 format!("/play/{}", campaign.slug)
@@ -239,7 +253,8 @@ pub async fn earn_click_through(
         Some(cid) => {
             // Check max clicks
             if channel.max_clicks_per_contact > 0 {
-                let count = viral::count_contact_clicks_for_channel(&state.db, &channel.id, &cid).await?;
+                let count =
+                    viral::count_contact_clicks_for_channel(&state.db, &channel.id, &cid).await?;
                 if count >= channel.max_clicks_per_contact {
                     let redirect = if channel.redirect_url.is_empty() {
                         format!("/play/{}", campaign.slug)
@@ -259,21 +274,33 @@ pub async fn earn_click_through(
             let points = channel.points_per_click;
 
             viral::log_earn_click(
-                &state.db, &channel.id, Some(&cid), &channel.campaign_id,
-                ip.as_deref(), ua.as_deref(), None,
-                query.utm_source.as_deref(), query.utm_medium.as_deref(),
-                query.utm_campaign.as_deref(), points,
-            ).await?;
+                &state.db,
+                &channel.id,
+                Some(&cid),
+                &channel.campaign_id,
+                ip.as_deref(),
+                ua.as_deref(),
+                None,
+                query.utm_source.as_deref(),
+                query.utm_medium.as_deref(),
+                query.utm_campaign.as_deref(),
+                points,
+            )
+            .await?;
 
             // Campaign-specific points balance
-            let new_balance = viral::upsert_campaign_points(
-                &state.db, &channel.campaign_id, &cid, points,
-            ).await?;
+            let new_balance =
+                viral::upsert_campaign_points(&state.db, &channel.campaign_id, &cid, points)
+                    .await?;
 
             // Milestone check
             let triggered_milestones = crate::mechanics::milestone_engine::check_milestones(
-                &state, &channel.campaign_id, &cid, new_balance,
-            ).await?;
+                &state,
+                &channel.campaign_id,
+                &cid,
+                new_balance,
+            )
+            .await?;
 
             // Loyalty bridge: award loyalty points if linked
             if let Some(prog_id) = campaign.loyalty_program_id {
@@ -284,25 +311,35 @@ pub async fn earn_click_through(
                     points,
                     "earn",
                     &channel_code,
-                ).await;
+                )
+                .await;
             }
 
             // Referral credit
             handle_referral_credit(
-                &state, &channel.campaign_id, query.r#ref.as_deref(),
-                &cid, "earn", &campaign.config,
-            ).await?;
+                &state,
+                &channel.campaign_id,
+                query.r#ref.as_deref(),
+                &cid,
+                "earn",
+                &campaign.config,
+            )
+            .await?;
 
             let redirect = if channel.redirect_url.is_empty() {
                 format!("/play/{}", campaign.slug)
             } else {
-                channel.redirect_url
+                channel
+                    .redirect_url
                     .replace("{code}", &channel_code)
                     .replace("{points}", &points.to_string())
                     .replace("{contact_id}", &cid.to_string())
             };
 
-            let milestone_names: Vec<&str> = triggered_milestones.iter().map(|(n, _)| n.as_str()).collect();
+            let milestone_names: Vec<&str> = triggered_milestones
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
 
             Ok(Json(json!({
                 "status": "success",
@@ -335,7 +372,9 @@ pub async fn campaign_share_link(
 
     // Track referral click
     if let Some(ref ref_code) = query.r#ref {
-        if let Ok(Some(referral)) = viral::find_referral_by_code(&state.db, &campaign.id, ref_code).await {
+        if let Ok(Some(referral)) =
+            viral::find_referral_by_code(&state.db, &campaign.id, ref_code).await
+        {
             viral::increment_referral_click(&state.db, &referral.id).await?;
         }
     }
@@ -383,30 +422,6 @@ pub async fn create_referral_code(
     })))
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // GET /api/v1/campaigns/{slug}/referral-stats
 // Admin: referral stats + list
@@ -431,7 +446,7 @@ pub async fn get_referral_stats(
            FROM campaign_referrals
            WHERE campaign_id = $1
            ORDER BY created_at DESC
-           LIMIT $2 OFFSET $3"#
+           LIMIT $2 OFFSET $3"#,
     )
     .bind(campaign.id)
     .bind(limit)
@@ -485,7 +500,7 @@ pub async fn create_earn_channel(
            (id, account_id, campaign_id, channel_code, label, description,
             points_per_click, max_clicks_per_contact, redirect_url,
             verification_type, expected_answer, verification_label, approval_notes)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"#,
     )
     .bind(channel_id)
     .bind(account_id)
@@ -496,7 +511,11 @@ pub async fn create_earn_channel(
     .bind(body.points_per_click)
     .bind(body.max_clicks_per_contact.unwrap_or(0))
     .bind(&body.redirect_url)
-    .bind(body.verification_type.as_deref().unwrap_or("auto_approve_all"))
+    .bind(
+        body.verification_type
+            .as_deref()
+            .unwrap_or("auto_approve_all"),
+    )
     .bind(body.expected_answer.as_deref().unwrap_or(""))
     .bind(body.verification_label.as_deref().unwrap_or(""))
     .execute(&state.db)
@@ -543,7 +562,7 @@ pub async fn update_earn_channel(
                verification_type = $7, expected_answer = $8, verification_label = $9,
                approval_notes = $10,
                updated_at = now()
-           WHERE id = $11"#
+           WHERE id = $11"#,
     )
     .bind(&code)
     .bind(&body.label)
@@ -551,7 +570,11 @@ pub async fn update_earn_channel(
     .bind(body.points_per_click)
     .bind(body.max_clicks_per_contact.unwrap_or(0))
     .bind(&body.redirect_url)
-    .bind(body.verification_type.as_deref().unwrap_or("auto_approve_all"))
+    .bind(
+        body.verification_type
+            .as_deref()
+            .unwrap_or("auto_approve_all"),
+    )
     .bind(body.expected_answer.as_deref().unwrap_or(""))
     .bind(body.verification_label.as_deref().unwrap_or(""))
     .bind(ch_id)
@@ -584,7 +607,7 @@ pub async fn verify_earn_action(
 
     // Fetch the earn channel
     let channel = sqlx::query_as::<_, crate::db::viral::EarnChannel>(
-        "SELECT * FROM earn_channels WHERE id = $1 AND campaign_id = $2"
+        "SELECT * FROM earn_channels WHERE id = $1 AND campaign_id = $2",
     )
     .bind(channel_id)
     .bind(campaign.id)
@@ -600,12 +623,20 @@ pub async fn verify_earn_action(
         "auto_approve_all" => {
             // Award points immediately, no verification needed
             let cur_pts = crate::db::viral::upsert_campaign_points(
-                &state.db, &campaign.id, &contact_id, channel.points_per_click
-            ).await?;
+                &state.db,
+                &campaign.id,
+                &contact_id,
+                channel.points_per_click,
+            )
+            .await?;
 
             let _ = crate::mechanics::milestone_engine::check_milestones(
-                &state, &campaign.id, &contact_id, cur_pts
-            ).await;
+                &state,
+                &campaign.id,
+                &contact_id,
+                cur_pts,
+            )
+            .await;
 
             Ok(Json(json!({
                 "verified": true,
@@ -624,12 +655,20 @@ pub async fn verify_earn_action(
             }
 
             let cur_pts = crate::db::viral::upsert_campaign_points(
-                &state.db, &campaign.id, &contact_id, channel.points_per_click
-            ).await?;
+                &state.db,
+                &campaign.id,
+                &contact_id,
+                channel.points_per_click,
+            )
+            .await?;
 
             let _ = crate::mechanics::milestone_engine::check_milestones(
-                &state, &campaign.id, &contact_id, cur_pts
-            ).await;
+                &state,
+                &campaign.id,
+                &contact_id,
+                cur_pts,
+            )
+            .await;
 
             Ok(Json(json!({
                 "verified": true,
@@ -641,9 +680,8 @@ pub async fn verify_earn_action(
         "manual_approve" => {
             // Create a pending approval ??? points not awarded until admin approves
             // For now, log the request and return pending
-            let cur_pts = crate::db::viral::get_campaign_points(
-                &state.db, &campaign.id, &contact_id
-            ).await?;
+            let cur_pts =
+                crate::db::viral::get_campaign_points(&state.db, &campaign.id, &contact_id).await?;
 
             Ok(Json(json!({
                 "verified": false,
@@ -654,7 +692,8 @@ pub async fn verify_earn_action(
             })))
         }
         _ => Err(AppError::BadRequest(format!(
-            "Unknown verification type: {}", channel.verification_type
+            "Unknown verification type: {}",
+            channel.verification_type
         ))),
     }
 }
@@ -693,8 +732,17 @@ pub async fn campaign_leaderboard(
     let mut entries = Vec::new();
     for (contact_id, campaign_id, lifetime_points, balance) in &leaderboard {
         let contact = contacts::get_contact(&state.db, contact_id).await.ok();
-        let name = contact.as_ref()
-            .map(|c| format!("{} {}", c.first_name.as_deref().unwrap_or(""), c.last_name.as_deref().unwrap_or("")).trim().to_string())
+        let name = contact
+            .as_ref()
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    c.first_name.as_deref().unwrap_or(""),
+                    c.last_name.as_deref().unwrap_or("")
+                )
+                .trim()
+                .to_string()
+            })
             .filter(|n| !n.is_empty());
         let email = contact.and_then(|c| c.email);
         entries.push(json!({

@@ -1,8 +1,8 @@
 //! API key handlers ??? CRUD for api_keys table.
 
 use crate::error::AppError;
-use crate::state::AppState;
 use crate::security::auth::AuthenticatedUser;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     Json,
@@ -52,20 +52,21 @@ pub struct UpdateApiKeyInput {
 /// Returns (full_key, prefix, key_hash)
 fn generate_api_key() -> Result<(String, String, String), AppError> {
     use rand::Rng;
-    
 
     let rng = rand::thread_rng();
     let random_bytes: Vec<u8> = rng
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(48)
         .collect();
-    let random_str: String = String::from_utf8(random_bytes).map_err(|e| AppError::Internal(format!("Invalid UTF-8 in key generation: {}", e)))?;
+    let random_str: String = String::from_utf8(random_bytes)
+        .map_err(|e| AppError::Internal(format!("Invalid UTF-8 in key generation: {}", e)))?;
     let prefix: String = random_str[..8].to_string();
 
     let full_key = format!("is_key_{}", random_str);
 
     // Hash with bcrypt for storage
-    let hash = bcrypt::hash(&full_key, 6).map_err(|e| AppError::Internal(format!("Failed to hash API key: {}", e)))?;
+    let hash = bcrypt::hash(&full_key, 6)
+        .map_err(|e| AppError::Internal(format!("Failed to hash API key: {}", e)))?;
 
     Ok((full_key, prefix, hash))
 }
@@ -83,7 +84,7 @@ pub async fn list_api_keys(
                   last_used_at, expires_at, is_active, created_at, updated_at
            FROM api_keys
            WHERE (tenant_id = $1 OR user_id = $1)
-           ORDER BY created_at DESC"#
+           ORDER BY created_at DESC"#,
     )
     .bind(user_id)
     .fetch_all(&state.db)
@@ -102,10 +103,11 @@ pub async fn create_api_key(
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     // Get the account's tenant_id
-    let tenant_id: Uuid = sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-        .bind(user_id)
-        .fetch_one(&state.db)
-        .await?;
+    let tenant_id: Uuid =
+        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
 
     let id = Uuid::new_v4();
     let (full_key, prefix, key_hash) = generate_api_key()?;
@@ -149,15 +151,15 @@ pub async fn update_api_key(
     user: AuthenticatedUser,
     Json(body): Json<UpdateApiKeyInput>,
 ) -> Result<Json<Value>, AppError> {
-    let key_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid API key ID".to_string()))?;
+    let key_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid API key ID".to_string()))?;
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
     // Get existing key
     let existing = sqlx::query(
         r#"SELECT name, permissions, is_active, expires_at
-           FROM api_keys WHERE id = $1 AND (user_id = $2 OR tenant_id = $2)"#
+           FROM api_keys WHERE id = $1 AND (user_id = $2 OR tenant_id = $2)"#,
     )
     .bind(key_id)
     .bind(user_id)
@@ -166,14 +168,17 @@ pub async fn update_api_key(
     .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
 
     let name = body.name.unwrap_or_else(|| existing.get("name"));
-    let permissions = body.permissions.unwrap_or_else(|| existing.get("permissions"));
-    let expires_at: Option<chrono::DateTime<chrono::Utc>> = body.expires_at.or(existing.get("expires_at"));
+    let permissions = body
+        .permissions
+        .unwrap_or_else(|| existing.get("permissions"));
+    let expires_at: Option<chrono::DateTime<chrono::Utc>> =
+        body.expires_at.or(existing.get("expires_at"));
     let is_active = body.is_active.unwrap_or_else(|| existing.get("is_active"));
 
     sqlx::query(
         r#"UPDATE api_keys SET
                name = $1, permissions = $2, expires_at = $3, is_active = $4, updated_at = now()
-           WHERE id = $5"#
+           WHERE id = $5"#,
     )
     .bind(&name)
     .bind(&permissions)
@@ -186,7 +191,7 @@ pub async fn update_api_key(
     let key = sqlx::query_as::<_, ApiKey>(
         r#"SELECT id, tenant_id, user_id, name, prefix, permissions, target_url,
                   last_used_at, expires_at, is_active, created_at, updated_at
-           FROM api_keys WHERE id = $1"#
+           FROM api_keys WHERE id = $1"#,
     )
     .bind(key_id)
     .fetch_one(&state.db)
@@ -201,8 +206,8 @@ pub async fn delete_api_key(
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let key_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid API key ID".to_string()))?;
+    let key_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid API key ID".to_string()))?;
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
