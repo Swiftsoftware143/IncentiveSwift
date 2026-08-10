@@ -2,6 +2,7 @@
 
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::features;
 use crate::security::auth::AuthenticatedUser;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -793,4 +794,12 @@ pub async fn reset_password(
         .await?;
 
     Ok(Json(json!({ "status": "password_reset" })))
+}
+
+pub async fn get_usage(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let usage = crate::features::get_usage_json(&state.db, &user.account_id).await;
+    Ok(Json(usage))
 }

@@ -24,6 +24,8 @@ pub enum AppError {
 
     #[error("Rate limited")]
     RateLimited,
+    #[error("Upgrade required: {0}")]
+    UpgradeRequired(String),
 
     #[error("Internal error: {0}")]
     Internal(String),
@@ -39,6 +41,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
+            AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
