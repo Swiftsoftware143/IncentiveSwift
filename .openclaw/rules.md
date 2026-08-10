@@ -1,4 +1,14 @@
-# .openclaw/rules.md — Automated Agent Rules
+# .openclaw/rules.md
+
+## RULES PROTECTION — READ THIS FIRST
+
+**These rules are READ-ONLY.** Do NOT modify, rewrite, or "improve" this file unless the CEO Bot or David explicitly instructs you to do so. This file exists to guard against regression — editing it defeats its purpose.
+
+**Before declaring any task complete:** Re-read these rules and confirm your changes satisfy every applicable rule. If you skip a rule, the task is NOT done.
+
+---
+
+ — Automated Agent Rules
 # 
 # This file is read by OpenClaw on EVERY context load for this repo.
 # It defines permanent constraints that survive context windows and sessions.
