@@ -1044,6 +1044,8 @@ pub struct PurchaseVerifyRequest {
     pub offer_id: Option<Uuid>,
     pub subtotal_amount: Option<f64>, // Portion eligible for earning (excludes deal items)
     pub deal_description: Option<String>, // Human-readable: "Free dessert — rest of meal earns"
+    #[serde(default)]
+    pub transaction_category: Option<String>, // b2c, b2b_supplies, b2b_services, events
 }
 
 /// POST /api/v1/loyalty/purchase/verify
@@ -1292,6 +1294,7 @@ pub async fn purchase_verify(
         resp.insert("status".to_string(), json!("verified"));
         resp.insert("contact_id".to_string(), json!(req.contact_id));
         resp.insert("credits_earned".to_string(), json!(credit_amount));
+        resp.insert("credit_rate".to_string(), json!(credit_rate));
         resp.insert("new_balance".to_string(), json!(new_balance));
         resp.insert("purchase_amount".to_string(), json!(req.amount));
         resp.insert("earnable_amount".to_string(), json!(earnable_amount));
