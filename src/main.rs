@@ -265,6 +265,14 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::loyalty_plans::subscribe),
         )
         .route("/api/v1/loyalty/webhook/stripe", post(handlers::stripe_webhook::stripe_webhook))
+        // Treasury / ledger
+        .route("/api/v1/admin/treasury/summary", get(handlers::treasury_handler::treasury_summary))
+        .route("/api/v1/admin/treasury/businesses", get(handlers::treasury_handler::business_ledgers))
+        .route("/api/v1/admin/treasury/issuance-log", get(handlers::treasury_handler::issuance_log))
+        .route("/api/v1/admin/treasury/expire-points", post(handlers::point_expiry_handler::expire_points))
+        // B2B Supplier milestones
+        .route("/api/v1/loyalty/supplier/milestone", post(handlers::supplier_handler::record_milestone))
+        .route("/api/v1/loyalty/supplier/milestones/:business_id", get(handlers::supplier_handler::get_milestones))
 
         // Loyalty Badge endpoints (Phase 1)
         .route(
