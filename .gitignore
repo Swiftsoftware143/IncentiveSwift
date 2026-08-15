@@ -3,3 +3,11 @@
 *.swp
 .DS_Store
 incentiveswift-api
+
+# Build artifacts / binaries
+incentiveswift
+incentiveswift-api
+incentiveswift-api-bak-*
+incentiveswift-api.new
+*.zip
+C:UsersAdministrator/

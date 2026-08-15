@@ -2,13 +2,16 @@
 //! POST /api/v1/loyalty/supplier/milestone
 //! GET  /api/v1/loyalty/supplier/milestones/:business_id
 
-use axum::{extract::{State, Path}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::state::AppState;
 use crate::error::AppError;
+use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct MilestoneRequest {
@@ -37,9 +40,18 @@ pub async fn record_milestone(
     State(s): State<AppState>,
     Json(req): Json<MilestoneRequest>,
 ) -> Result<Json<Value>, AppError> {
-    let valid_types = ["contract_sign","verified_review","supplier_referral","onboarding","community_contribution"];
+    let valid_types = [
+        "contract_sign",
+        "verified_review",
+        "supplier_referral",
+        "onboarding",
+        "community_contribution",
+    ];
     if !valid_types.contains(&req.milestone_type.as_str()) {
-        return Err(AppError::BadRequest(format!("Invalid milestone_type. Must be one of: {}", valid_types.join(", "))));
+        return Err(AppError::BadRequest(format!(
+            "Invalid milestone_type. Must be one of: {}",
+            valid_types.join(", ")
+        )));
     }
 
     // Get points config from supplier_tier_config
@@ -100,7 +112,9 @@ pub async fn record_milestone(
 
     tracing::info!(
         "B2B milestone: business={} type={} points={}",
-        req.business_id, req.milestone_type, config
+        req.business_id,
+        req.milestone_type,
+        config
     );
 
     Ok(Json(json!({

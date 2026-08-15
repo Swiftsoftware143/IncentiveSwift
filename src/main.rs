@@ -264,21 +264,55 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/subscribe",
             post(handlers::loyalty_plans::subscribe),
         )
-        .route("/api/v1/loyalty/webhook/stripe", post(handlers::stripe_webhook::stripe_webhook))
+        .route(
+            "/api/v1/loyalty/webhook/stripe",
+            post(handlers::stripe_webhook::stripe_webhook),
+        )
         // Treasury / ledger
-        .route("/api/v1/admin/treasury/summary", get(handlers::treasury_handler::treasury_summary))
-        .route("/api/v1/admin/treasury/businesses", get(handlers::treasury_handler::business_ledgers))
-        .route("/api/v1/admin/treasury/issuance-log", get(handlers::treasury_handler::issuance_log))
-        .route("/api/v1/admin/treasury/expire-points", post(handlers::point_expiry_handler::expire_points))
+        .route(
+            "/api/v1/admin/treasury/summary",
+            get(handlers::treasury_handler::treasury_summary),
+        )
+        .route(
+            "/api/v1/admin/treasury/businesses",
+            get(handlers::treasury_handler::business_ledgers),
+        )
+        .route(
+            "/api/v1/admin/treasury/issuance-log",
+            get(handlers::treasury_handler::issuance_log),
+        )
+        .route(
+            "/api/v1/admin/treasury/expire-points",
+            post(handlers::point_expiry_handler::expire_points),
+        )
         // B2B Supplier milestones
-        .route("/api/v1/loyalty/supplier/milestone", post(handlers::supplier_handler::record_milestone))
-        .route("/api/v1/loyalty/supplier/milestones/:business_id", get(handlers::supplier_handler::get_milestones))
+        .route(
+            "/api/v1/loyalty/supplier/milestone",
+            post(handlers::supplier_handler::record_milestone),
+        )
+        .route(
+            "/api/v1/loyalty/supplier/milestones/:business_id",
+            get(handlers::supplier_handler::get_milestones),
+        )
         // Clearinghouse configuration
-        .route("/api/v1/admin/clearinghouse/config", get(handlers::clearinghouse_config_handler::get_treasury_config).put(handlers::clearinghouse_config_handler::update_treasury_config))
-        .route("/api/v1/admin/clearinghouse/caps", get(handlers::clearinghouse_config_handler::get_category_caps).put(handlers::clearinghouse_config_handler::update_category_cap))
-        .route("/api/v1/admin/clearinghouse/supplier-config", get(handlers::clearinghouse_config_handler::get_supplier_config))
-        .route("/api/v1/admin/clearinghouse/supplier-config/:id", put(handlers::clearinghouse_config_handler::update_supplier_config))
-
+        .route(
+            "/api/v1/admin/clearinghouse/config",
+            get(handlers::clearinghouse_config_handler::get_treasury_config)
+                .put(handlers::clearinghouse_config_handler::update_treasury_config),
+        )
+        .route(
+            "/api/v1/admin/clearinghouse/caps",
+            get(handlers::clearinghouse_config_handler::get_category_caps)
+                .put(handlers::clearinghouse_config_handler::update_category_cap),
+        )
+        .route(
+            "/api/v1/admin/clearinghouse/supplier-config",
+            get(handlers::clearinghouse_config_handler::get_supplier_config),
+        )
+        .route(
+            "/api/v1/admin/clearinghouse/supplier-config/:id",
+            put(handlers::clearinghouse_config_handler::update_supplier_config),
+        )
         // Loyalty Badge endpoints (Phase 1)
         .route(
             "/api/v1/loyalty/badge/business/:business_id",
@@ -559,10 +593,7 @@ async fn main() -> anyhow::Result<()> {
                 .delete(handlers::contacts::delete_contact),
         )
         // Tags list
-        .route(
-            "/api/v1/tags",
-            get(handlers::dashboard_handler::list_tags),
-        )
+        .route("/api/v1/tags", get(handlers::dashboard_handler::list_tags))
         .route(
             "/api/v1/portfolio-companies",
             get(handlers::portfolio_handler::list_portfolio_companies)
@@ -796,6 +827,11 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/admin/plans/:id/domains",
             get(handlers::surface_handler::check_plan_domains),
+        )
+        // Site configuration (SEO, tracking, legal pages, homepage)
+        .route(
+            "/api/v1/admin/site",
+            get(handlers::site_handler::get_site).put(handlers::site_handler::update_site),
         )
         // Surfaces REST CRUD routes
         .route(

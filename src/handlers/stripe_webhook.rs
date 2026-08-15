@@ -2,15 +2,11 @@
 //! POST /api/v1/loyalty/webhook/stripe
 //! Called by Stripe when checkout.session.completed fires
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde_json::Value;
 
-use crate::state::AppState; use crate::error::AppError;
+use crate::error::AppError;
+use crate::state::AppState;
 
 pub async fn stripe_webhook(
     State(s): State<AppState>,
@@ -80,7 +76,9 @@ async fn handle_checkout_completed(s: &AppState, payload: &Value) -> Result<(), 
 
     tracing::info!(
         "Loyalty plan activated: account={} plan={} zc_pool={}",
-        account_id, plan_slug, monthly_zc_pool
+        account_id,
+        plan_slug,
+        monthly_zc_pool
     );
 
     Ok(())
