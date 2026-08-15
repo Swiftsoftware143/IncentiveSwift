@@ -580,7 +580,7 @@ pub async fn scan_member(
 
                 // ── CLEARINGHOUSE: Log redemption for reimbursement ──
                 let biz_name = req.business_name.clone().unwrap_or_default();
-                let reimbursement = (points_awarded.abs() as f64 * 0.008) as f64;
+                let reimbursement = points_awarded.abs() as f64 * 0.008;
                 let tx_id: Option<Uuid> = req
                     .transaction_id
                     .as_ref()
