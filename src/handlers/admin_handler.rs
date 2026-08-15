@@ -214,7 +214,7 @@ pub async fn list_all_tenants(
             COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
             u.user_count
         FROM accounts a
-        LEFT JOIN plans pt ON a.plan_tier_id = pt.id
+        LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
         LEFT JOIN (
             SELECT a2.id as acc_id, COUNT(DISTINCT a3.id)::bigint as user_count
             FROM accounts a2

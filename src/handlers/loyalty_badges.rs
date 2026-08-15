@@ -550,14 +550,16 @@ pub async fn scan_member(
                 .await?
                 .unwrap_or(1.0);
 
-                points_awarded = (amount.to_string().parse::<f64>().unwrap_or(0.0) * earn_rate).floor() as i32;
+                points_awarded =
+                    (amount.to_string().parse::<f64>().unwrap_or(0.0) * earn_rate).floor() as i32;
             }
         }
         "redemption" => {
             // Redemption: deduct points, check category caps
             if let Some(amount) = transaction_amount {
-                let points_to_redeem = amount.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32;
-                
+                let points_to_redeem =
+                    amount.to_string().parse::<f64>().unwrap_or(0.0).floor() as i32;
+
                 // Check category cap
                 let category = req.business_category.as_deref().unwrap_or("Default");
                 let cap_percent: f64 = sqlx::query_scalar(
@@ -570,15 +572,18 @@ pub async fn scan_member(
                 .unwrap_or(25.0);
 
                 let max_redeemable = (current_balance as f64).min(
-                    (amount.to_string().parse::<f64>().unwrap_or(0.0) * cap_percent / 100.0).floor()
+                    (amount.to_string().parse::<f64>().unwrap_or(0.0) * cap_percent / 100.0)
+                        .floor(),
                 ) as i32;
-                
+
                 points_awarded = -(points_to_redeem.min(max_redeemable));
 
                 // ── CLEARINGHOUSE: Log redemption for reimbursement ──
                 let biz_name = req.business_name.clone().unwrap_or_default();
                 let reimbursement = (points_awarded.abs() as f64 * 0.008) as f64;
-                let tx_id: Option<Uuid> = req.transaction_id.as_ref()
+                let tx_id: Option<Uuid> = req
+                    .transaction_id
+                    .as_ref()
                     .and_then(|s| Uuid::parse_str(s).ok());
 
                 sqlx::query(
@@ -645,7 +650,9 @@ pub async fn scan_member(
     if points_awarded > 0 {
         let biz_name = req.business_name.clone().unwrap_or_default();
         let bill_amount = points_awarded as f64 * 0.01;
-        let tx_id: Option<Uuid> = req.transaction_id.as_ref()
+        let tx_id: Option<Uuid> = req
+            .transaction_id
+            .as_ref()
             .and_then(|s| Uuid::parse_str(s).ok());
 
         sqlx::query(
@@ -723,8 +730,17 @@ pub async fn scan_member(
 
     tracing::info!(
         "[clearinghouse] Member {} scanned at {} — {} points, balance: {}, clearinghouse: {}",
-        member_id, req.business_id, points_awarded, new_balance,
-        if points_awarded > 0 { "issuance+billed" } else if points_awarded < 0 { "redemption+reimbursed" } else { "no-op" }
+        member_id,
+        req.business_id,
+        points_awarded,
+        new_balance,
+        if points_awarded > 0 {
+            "issuance+billed"
+        } else if points_awarded < 0 {
+            "redemption+reimbursed"
+        } else {
+            "no-op"
+        }
     );
 
     Ok(Json(json!({

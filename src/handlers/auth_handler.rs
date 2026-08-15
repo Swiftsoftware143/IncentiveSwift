@@ -277,6 +277,24 @@ pub async fn register(
         .await;
     });
 
+    // Send welcome email
+    let wl_pool = state.db.clone();
+    let wl_email = body.email.clone();
+    let wl_name = name.clone();
+    tokio::spawn(async move {
+        let vars = serde_json::json!({
+            "name": wl_name,
+            "email": wl_email,
+            "app_name": "IncentiveSwift",
+            "login_url": "https://app.incentiveswift.com"
+        });
+        if let Err(e) =
+            crate::email::send_template_email(&wl_pool, &wl_email, "welcome", &vars).await
+        {
+            tracing::warn!("Welcome email failed for {}: {}", wl_email, e);
+        }
+    });
+
     Ok(Json(json!({
         "token": token,
         "user": {

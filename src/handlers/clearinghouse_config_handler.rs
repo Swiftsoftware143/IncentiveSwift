@@ -3,13 +3,13 @@
 //! GET/PUT /api/v1/admin/clearinghouse/caps
 //! GET /api/v1/admin/clearinghouse/supplier-config
 
-use axum::{extract::State, Json, http::StatusCode};
+use axum::{extract::State, http::StatusCode, Json};
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use rust_decimal::Decimal;
 
-use crate::state::AppState;
 use crate::error::AppError;
+use crate::state::AppState;
 
 // ── Treasury Config ──
 
@@ -72,7 +72,9 @@ pub struct CategoryCap {
 }
 
 /// GET /api/v1/admin/clearinghouse/caps
-pub async fn get_category_caps(State(s): State<AppState>) -> Result<Json<Vec<CategoryCap>>, AppError> {
+pub async fn get_category_caps(
+    State(s): State<AppState>,
+) -> Result<Json<Vec<CategoryCap>>, AppError> {
     let caps = sqlx::query_as::<_, CategoryCap>(
         "SELECT category_name as category_name, max_redeem_percent, description FROM category_redeem_caps ORDER BY category_name"
     )
@@ -117,7 +119,9 @@ pub async fn update_category_cap(
     .execute(&s.db)
     .await?;
 
-    Ok(Json(json!({"success": true, "category": req.category_name})))
+    Ok(Json(
+        json!({"success": true, "category": req.category_name}),
+    ))
 }
 
 // ── Supplier Tier Config ──
@@ -136,7 +140,9 @@ pub struct SupplierTierConfigRow {
 }
 
 /// GET /api/v1/admin/clearinghouse/supplier-config
-pub async fn get_supplier_config(State(s): State<AppState>) -> Result<Json<Vec<SupplierTierConfigRow>>, AppError> {
+pub async fn get_supplier_config(
+    State(s): State<AppState>,
+) -> Result<Json<Vec<SupplierTierConfigRow>>, AppError> {
     let rows = sqlx::query_as::<_, SupplierTierConfigRow>(
         "SELECT id, program_id, contract_sign_points, verified_review_points, supplier_referral_points, onboarding_points, community_contribution_points, max_monthly_earn, is_active FROM supplier_tier_config"
     )
@@ -172,7 +178,7 @@ pub async fn update_supplier_config(
             max_monthly_earn = COALESCE($6, max_monthly_earn),
             is_active = COALESCE($7, is_active),
             updated_at = NOW()
-         WHERE id = $8"
+         WHERE id = $8",
     )
     .bind(req.contract_sign_points)
     .bind(req.verified_review_points)

@@ -112,7 +112,8 @@ pub async fn list_leads(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&user.account_id).map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let rows = sqlx::query(
         r#"SELECT e.id, ct.email, ct.phone, ct.first_name, ct.last_name, c.name as campaign_name, e.created_at
            FROM entries e JOIN campaigns c ON c.id = e.campaign_id
@@ -140,12 +141,16 @@ pub async fn list_tags(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&user.account_id).map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let rows = sqlx::query(
         r#"SELECT t.id, t.name, t.color, tg.name as group_name FROM tags t
            LEFT JOIN tag_groups tg ON tg.id = t.group_id
            WHERE t.account_id = $1 ORDER BY tg.name, t.name"#,
-    ).bind(account_id).fetch_all(&state.db).await?;
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
     let mut tags: Vec<Value> = Vec::new();
     for row in &rows {
         use sqlx::Row;
@@ -160,9 +165,7 @@ pub async fn list_tags(
 }
 
 /// GET /api/v1/plans (public - no auth required)
-pub async fn list_public_plans(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, AppError> {
+pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
         r#"SELECT id, name, slug, price::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description, features, NULL::text as how_it_works
            FROM plans ORDER BY name"#,

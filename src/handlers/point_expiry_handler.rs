@@ -3,15 +3,13 @@
 use axum::{extract::State, Json};
 use serde_json::{json, Value};
 
-use crate::state::AppState;
 use crate::error::AppError;
+use crate::state::AppState;
 
 /// POST /api/v1/admin/treasury/expire-points
 /// Expires all points earned more than 12 months ago.
 /// Returns count of points expired and members affected.
-pub async fn expire_points(
-    State(s): State<AppState>,
-) -> Result<Json<Value>, AppError> {
+pub async fn expire_points(State(s): State<AppState>) -> Result<Json<Value>, AppError> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(365);
 
     // Find and sum expired points per member
@@ -21,7 +19,7 @@ pub async fn expire_points(
          WHERE created_at < $1
            AND points_awarded > 0
            AND cleared_at IS NULL
-         GROUP BY member_id"
+         GROUP BY member_id",
     )
     .bind(cutoff)
     .fetch_all(&s.db)
