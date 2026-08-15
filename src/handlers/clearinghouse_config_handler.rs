@@ -3,7 +3,7 @@
 //! GET/PUT /api/v1/admin/clearinghouse/caps
 //! GET /api/v1/admin/clearinghouse/supplier-config
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, Json};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -96,7 +96,6 @@ pub async fn update_category_cap(
     Json(req): Json<UpdateCap>,
 ) -> Result<Json<Value>, AppError> {
     let mut set_clauses = vec![];
-    let mut params: Vec<&(dyn sqlx::Encode<'_, sqlx::Postgres> + Sync + 'static)> = vec![];
 
     if let Some(pct) = &req.max_redeem_percent {
         set_clauses.push("max_redeem_percent");

@@ -105,7 +105,7 @@ pub async fn record_milestone(
     .bind(&req.milestone_type)
     .bind(&req.description)
     .bind(config)
-    .bind(req.contract_value.map(|v| rust_decimal::Decimal::try_from(v).ok()).flatten())
+    .bind(req.contract_value.and_then(|v| rust_decimal::Decimal::try_from(v).ok()))
     .bind(&req.contract_partner)
     .execute(&s.db)
     .await?;
