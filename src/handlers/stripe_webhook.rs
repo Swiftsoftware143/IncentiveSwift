@@ -4,6 +4,7 @@
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -80,6 +81,19 @@ async fn handle_checkout_completed(s: &AppState, payload: &Value) -> Result<(), 
         plan_slug,
         monthly_zc_pool
     );
+
+    // Credit the referring affiliate for the paid-plan upgrade (permanent, no expiry).
+    if let Ok(account_uuid) = Uuid::parse_str(account_id) {
+        if let Some(plan_id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = $1")
+            .bind(plan_slug)
+            .fetch_optional(&s.db)
+            .await
+            .ok()
+            .flatten()
+        {
+            crate::handlers::plans_handler::attribute_plan_upgrade(s, account_uuid, plan_id).await;
+        }
+    }
 
     Ok(())
 }
