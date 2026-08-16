@@ -269,6 +269,77 @@ pub async fn create_plan(
     Ok(Json(json!({ "plan": plan })))
 }
 
+/// Fire-and-forget notification to FunnelSwift that an account upgraded to a paid plan,
+/// so the referring affiliate is credited (permanent, no expiry).
+async fn notify_funnelswift_upgrade(
+    config: &crate::config::AppConfig,
+    email: &str,
+    plan_name: &str,
+    plan_price: f64,
+    event_id: &str,
+) {
+    if email.is_empty() || config.funnelswift_url.is_empty() {
+        return;
+    }
+    let url = format!(
+        "{}/api/v1/internal/affiliate/upgrade-event",
+        config.funnelswift_url.trim_end_matches('/')
+    );
+    let key = config.internal_sync_key.clone();
+    let payload = json!({
+        "source_app": "incentiveswift",
+        "email": email,
+        "plan_name": plan_name,
+        "plan_price": plan_price,
+        "event_id": event_id,
+    });
+    tokio::spawn(async move {
+        let _ = reqwest::Client::new()
+            .post(&url)
+            .header("x-internal-key", key)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+    });
+}
+
+/// Resolve the account's email + plan, and notify FunnelSwift if it's a PAID upgrade.
+/// Free plan is the initial attribution (handled at tag time), not an upgrade.
+pub(crate) async fn attribute_plan_upgrade(state: &AppState, account_id: Uuid, plan_id: Uuid) {
+    let plan: Option<(String, Option<f64>)> =
+        sqlx::query_as("SELECT name, price_monthly::float8 FROM plans WHERE id = $1")
+            .bind(plan_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    let Some((plan_name, price)) = plan else {
+        return;
+    };
+    let plan_price = price.unwrap_or(0.0);
+    if plan_price <= 0.0 {
+        return;
+    }
+    let email: Option<String> = sqlx::query_scalar("SELECT email FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let Some(email) = email else {
+        return;
+    };
+    notify_funnelswift_upgrade(
+        &state.config,
+        &email,
+        &plan_name,
+        plan_price,
+        &Uuid::new_v4().to_string(),
+    )
+    .await;
+}
+
 /// POST /api/v1/admin/plans/assign
 pub async fn admin_assign_plan(
     State(state): State<AppState>,
@@ -319,6 +390,9 @@ pub async fn admin_assign_plan(
         .bind(account_id)
         .execute(&state.db)
         .await?;
+
+    // Credit the referring affiliate if this is a paid-plan assignment.
+    attribute_plan_upgrade(&state, account_id, plan_id).await;
 
     Ok(Json(json!({
         "status": "assigned",

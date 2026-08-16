@@ -1,8 +1,8 @@
-//! Authentication — API key validation (bcrypt) and Supabase JWT validation.
+//! Authentication — API key validation (bcrypt) and JWT validation.
 //!
 //! SECURITY RULES:
 //! - API keys: NEVER compare via direct hash equality. ALWAYS use bcrypt::verify.
-//! - JWTs: Decode header+payload, verify HMAC-SHA256 signature with Supabase anon key.
+//! - JWTs: Decode header+payload, verify HMAC-SHA256 signature with the JWT secret.
 
 use crate::error::AppError;
 use axum::extract::FromRef;
@@ -19,7 +19,7 @@ pub struct AuthenticatedUser {
 }
 
 /// Extracts and validates Bearer token from Authorization header.
-/// Supports both API keys (bcrypt-verified) and Supabase JWTs.
+/// Supports both API keys (bcrypt-verified) and JWTs.
 #[async_trait]
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
