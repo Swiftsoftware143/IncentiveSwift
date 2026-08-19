@@ -50,3 +50,25 @@ pub async fn has_feature_access(
 
     Ok(enabled.unwrap_or(false))
 }
+
+/// Enforce that an account's plan tier can play a given mechanic.
+/// Returns `AppError::UpgradeRequired` (402) when the account's tier does not
+/// include the `mechanic_<type>` feature (or the `all_mechanics` catch-all).
+pub async fn enforce_mechanic_feature(
+    state: &AppState,
+    account_id: &str,
+    mechanic_type: &str,
+) -> Result<(), AppError> {
+    let feature_key = format!("mechanic_{}", mechanic_type);
+    let mut allowed = has_feature_access(state, account_id, &feature_key).await?;
+    if !allowed {
+        allowed = has_feature_access(state, account_id, "all_mechanics").await?;
+    }
+    if !allowed {
+        return Err(AppError::UpgradeRequired(format!(
+            "The '{}' mechanic is not available on your current plan. Upgrade to unlock it.",
+            mechanic_type
+        )));
+    }
+    Ok(())
+}

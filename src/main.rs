@@ -109,6 +109,46 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/campaigns/:slug/spin-status",
             get(handlers::spin_handler::spin_status),
         )
+        // Score reveal
+        .route(
+            "/api/v1/campaigns/:slug/score-reveal",
+            post(handlers::score_reveal_handler::score_reveal),
+        )
+        // Scratch card
+        .route(
+            "/api/v1/campaigns/:slug/scratch-card",
+            post(handlers::scratch_handler::scratch),
+        )
+        // Mystery reveal
+        .route(
+            "/api/v1/campaigns/:slug/mystery",
+            post(handlers::mystery_handler::mystery),
+        )
+        // Countdown (urgency gate)
+        .route(
+            "/api/v1/campaigns/:slug/countdown",
+            get(handlers::countdown_handler::countdown_get)
+                .post(handlers::countdown_handler::countdown_post),
+        )
+        // Poll (single-question vote + results)
+        .route(
+            "/api/v1/campaigns/:slug/poll",
+            post(handlers::poll_handler::poll_vote),
+        )
+        .route(
+            "/api/v1/campaigns/:slug/poll/results",
+            get(handlers::poll_handler::poll_results),
+        )
+        // Chat funnel (conversational bubble quiz)
+        .route(
+            "/api/v1/campaigns/:slug/chat",
+            post(handlers::chat_handler::chat),
+        )
+        // Long-form qualifier (logic-based scoring)
+        .route(
+            "/api/v1/campaigns/:slug/long-form-qualifier",
+            post(handlers::long_form_qualifier_handler::long_form_qualifier),
+        )
         .route("/api/v1/loyalty/checkin", post(handlers::loyalty::checkin))
         .route(
             "/api/v1/loyalty/online/visit",
