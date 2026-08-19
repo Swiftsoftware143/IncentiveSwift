@@ -338,6 +338,35 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | PUT | `/email-templates/:id` | JWT | `email_templates_handler::update` | Update template |
 | DELETE | `/email-templates/:id` | JWT | `email_templates_handler::delete` | Delete template |
 
+## Support Tickets
+
+| Method | Path | Auth | Handler | Description |
+|--------|------|------|---------|-------------|
+| GET | `/support-tickets` | JWT | `support_tickets::list_tickets` | List tickets |
+| POST | `/support-tickets` | JWT | `support_tickets::create_ticket` | Create ticket |
+| GET | `/support-tickets/:id` | JWT | `support_tickets::get_ticket` | Ticket + message thread |
+| PUT | `/support-tickets/:id` | JWT | `support_tickets::update_ticket` | Update status/priority/category/assignee |
+| DELETE | `/support-tickets/:id` | JWT | `support_tickets::delete_ticket` | Delete ticket |
+| POST | `/support-tickets/:id/messages` | JWT | `support_tickets::add_message` | Add internal/customer note |
+
+## Reviews & Ratings
+
+| Method | Path | Auth | Handler | Description |
+|--------|------|------|---------|-------------|
+| GET | `/reviews` | JWT | `reviews::list_reviews` | List reviews + count/average |
+| POST | `/reviews` | JWT | `reviews::create_review` | Create review (rating 1..5) |
+| PUT | `/reviews/:id` | JWT | `reviews::update_review` | Moderate (approve/reject) or edit |
+| DELETE | `/reviews/:id` | JWT | `reviews::delete_review` | Delete review |
+
+## Calendar Events
+
+| Method | Path | Auth | Handler | Description |
+|--------|------|------|---------|-------------|
+| GET | `/calendar-events?from=&to=` | JWT | `calendar_events::list_events` | List events (RFC3339 range) |
+| POST | `/calendar-events` | JWT | `calendar_events::create_event` | Create event |
+| PUT | `/calendar-events/:id` | JWT | `calendar_events::update_event` | Update event/status |
+| DELETE | `/calendar-events/:id` | JWT | `calendar_events::delete_event` | Delete event |
+
 ## Settings & Custom Fields
 
 | Method | Path | Auth | Handler | Description |
