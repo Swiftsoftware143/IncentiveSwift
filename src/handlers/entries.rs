@@ -68,6 +68,18 @@ pub async fn create_entry(
     // 2. Find campaign by slug
     let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
 
+    // Play-time gate for the calculator mechanic. Calculator has no dedicated
+    // handler — it plays through this generic entry-capture endpoint and evaluates
+    // its formula client-side — so gate on the campaign owner's tier here.
+    if campaign.r#type == "calculator" {
+        crate::access::feature_gate::enforce_mechanic_feature(
+            &state,
+            &campaign.account_id.to_string(),
+            "calculator",
+        )
+        .await?;
+    }
+
     // 3. Check daily spin limit (before creating entry)
     crate::mechanics::pity_timer::check_daily_limit(
         &state.db,

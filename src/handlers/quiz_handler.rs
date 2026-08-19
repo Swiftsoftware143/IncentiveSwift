@@ -28,6 +28,16 @@ pub async fn play_campaign_questions(
     State(state): State<AppState>,
     Path(campaign_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    // Play-time gate: loading the quiz questions is the first step of play, so gate
+    // on the campaign owner's tier (402 before questions are served when subtracted).
+    let campaign = campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
+
     let questions =
         questions_answers::get_campaign_questions_public(&state.db, &campaign_id).await?;
     Ok(Json(json!({ "questions": questions })))
@@ -120,6 +130,16 @@ pub async fn submit_quiz(
 ) -> Result<Json<Value>, AppError> {
     // Get campaign
     let campaign = campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
+
+    // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
+    // (402 before any quiz is scored/recorded for free/subtracted tiers).
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
+
     let passing_score = campaign
         .config
         .get("passing_score")

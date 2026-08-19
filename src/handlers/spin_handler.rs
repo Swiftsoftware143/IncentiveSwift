@@ -188,6 +188,15 @@ pub async fn spin(
         )));
     }
 
+    // Play-time gate: enforce the campaign owner's plan tier includes this mechanic.
+    // Free/subtracted tiers get 402 (UpgradeRequired) before any prize draw.
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
+
     let contact_id = resolve_contact(&state, &body).await?;
 
     // Extract source tracking from headers
