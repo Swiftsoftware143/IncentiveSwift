@@ -102,67 +102,6 @@ IncentiveSwift uses predicate-based CORS — allowed origins are loaded at start
 
 All methods and headers are permitted. Update `ALLOWED_ORIGINS` in the environment to add or remove tenants.
 
-## Campaign Theming (Campaign-Level Color Scheme)
-
-Every campaign can carry its own **theme** (color scheme) stored at `surface_config.theme`. When no `theme` key is present, the surface_config object itself is read for theme keys (backwards compatible). The theme renders live into the widget JS, widget config, and embed views, and is editable from the **admin SPA → Campaign → Theme** tab.
-
-### Theme Object Keys
-
-| Key | Default | Description |
-|---|---|---|
-| `primary_color` | `#2563eb` | Primary brand color (buttons, CTAs) → CSS var `--is-primary` |
-| `accent_color` | `#7c3aed` | Accent/highlight color → CSS var `--is-accent` |
-| `background_color` | `#ffffff` | Widget background → CSS var `--is-bg` |
-| `text_color` | `#1e293b` | Text color → CSS var `--is-text` |
-| `button_text_color` | `#ffffff` | Button label color → CSS var `--is-btn-text` |
-| `font_family` | `Inter, system-ui, sans-serif` | Font stack → CSS var `--is-font` |
-| `border_radius` | `12` | Corner radius (px) → CSS var `--is-radius` |
-| `dark_mode` | `false` | Dark-mode flag |
-
-Hex colors are validated/normalized (`#rgb` expanded to `#rrggbb`); invalid values fall back to the default. Missing keys fall back to defaults so existing surfaces never break.
-
-### Where the Theme Renders (all live, verified)
-
-| Surface | Endpoint | Renders |
-|---|---|---|
-| Widget JS | `GET /api/v1/widget/:hash` | Injects a `<style>` block with `--is-primary:...` vars + `theme` object |
-| Widget config | `GET /api/v1/widget/:hash/config` | Returns resolved `theme` object + raw `surface_config.theme` |
-| Embed views | `GET /api/v1/embed/campaign/:slug`, `GET /api/v1/embed/:id` | Injects theme CSS vars into the embed HTML `<style data-incentiveswift-theme>` |
-| Admin save path | `PUT /api/v1/campaigns/:slug` (body `theme`) | `update_campaign` → `merge_campaign_theme` deep-merges into `surface_config.theme` |
-
-**Admin SPA:** the Campaign editor has a **Theme** tab with a color picker per key (`input[type=color]`) and font/radius selects, saving via `API.put('/campaigns/' + slug, { theme })`. Theme changes reflect immediately in the widget/embed render.
-
-**Verified live (off-peak 2026-08-19):** a campaign created with `theme: { primary_color: "#ff0000" }` rendered `--is-primary:#ff0000` in the widget JS, `theme.primary_color = #ff0000` in the widget config, and the equivalent CSS vars in both embed views. Updating the theme re-rendered instantly.
-
-## Plan Tiers, Features & Mechanic Gating
-
-Plan tiers (`plan_tiers`) define **feature access** through the `tier_features` join table (feature definitions live in `features`). This is the single source of truth for feature gating — the legacy `plans.features` JSONB is no longer consulted.
-
-### Feature Model
-
-- `plan_tiers` — base tier (name, slug, price, `max_campaigns`, `max_entries_per_month`, `is_active`)
-- `features` — feature definitions by `key` (e.g. `mechanic_spin_wheel`, `all_mechanics`, `surface_*`, `module_*`)
-- `tier_features` — `(tier_id, feature_id, enabled, limit_value)`; per-tier grants
-
-### Mechanic Access Resolution
-
-`has_mechanic_access` (in `access/feature_gate.rs`) resolves a mechanic like `spin_wheel`:
-
-1. `mechanic_spin_wheel` row `enabled = true` → **allow**
-2. `mechanic_spin_wheel` row `enabled = false` → **deny** (explicit disable overrides catch-all)
-3. No row → allow iff **`all_mechanics`** is enabled
-
-At play time, `enforce_mechanic_feature` returns **402 Upgrade Required** when the account's tier lacks the mechanic. Every game mechanic (spin wheel, scratch card, mystery, countdown, poll, chat, long-form qualifier, leaderboard, personality, calculator, raffle, score reveal, quiz) is gated this way.
-
-### Admin UI (Plan Tiers Tab)
-
-The admin SPA **Plan Tiers** tab (wired to `tier_features` CRUD endpoints) lets admins:
-- Create/rename tiers, set pricing and numeric limits
-- Toggle per-tier features (`mechanic_*`, `all_mechanics`, modules, surfaces) on/off
-- Set `limit_value` for numeric features
-
-This replaced the previous `plan_tier_features`/`feature_limits` tables (removed — see reconciliation note in `src/features.rs`).
-
 ## Setup for a New Tenant
 
 1. **Create an account** — via API or direct DB
@@ -266,12 +205,6 @@ This replaced the previous `plan_tier_features`/`feature_limits` tables (removed
 | `/api/v1/admin/impersonate` | POST | Switch to another tenant |
 | `/api/v1/admin/tenants` | GET | List all tenants |
 | `/api/v1/admin/plans` | GET/POST | List/create plan tiers |
-| `/api/v1/admin/plans/:id` | PUT/DELETE | Update/delete a plan tier |
-| `/api/v1/admin/plans/:id/features` | PUT/POST | Update/set plan feature mapping (legacy alias) |
-| `/api/v1/admin/tiers` | GET | List plan tiers (tier_handler) |
-| `/api/v1/admin/tiers/:tier_id` | PUT | Update a tier |
-| `/api/v1/admin/tiers/:tier_id/features` | GET | List features for a tier (tier_features) |
-| `/api/v1/admin/tiers/:tier_id/features/:feature_key` | PUT | Enable/disable a feature for a tier (canonical tier_features CRUD) |
 | `/api/v1/admin/credits/adjust` | POST | Adjust user credits |
 
 ### Admin Impersonation

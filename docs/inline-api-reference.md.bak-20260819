@@ -19,7 +19,7 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | GET | `/campaigns` | JWT/API Key | `campaigns::list_campaigns` | List all campaigns |
 | POST | `/campaigns` | JWT/API Key | `campaigns::create_campaign` | Create campaign (feature-gated) |
 | GET | `/campaigns/:slug` | None | `campaigns::get_campaign` | Public campaign by slug |
-| PUT | `/campaigns/:slug` | JWT | `campaigns::update_campaign` | Update campaign (body may include `theme` → deep-merged into `surface_config.theme`) |
+| PUT | `/campaigns/:slug` | JWT | `campaigns::update_campaign` | Update campaign |
 | DELETE | `/campaigns/:slug` | JWT | `campaigns::delete_campaign_by_id` | Delete campaign |
 | GET | `/campaigns/subdomain/:t_slug` | None | `campaigns::get_campaigns_by_subdomain` | Campaigns by tenant subdomain |
 | POST | `/campaigns/test-webhook` | None | `entries::test_entry_webhook` | Test entry webhook |
@@ -36,7 +36,7 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/campaigns/:slug/spin` | None | `spin_handler::spin` | Spin the wheel (mechanic-gated; 402 if tier lacks `mechanic_spin_wheel`/`all_mechanics`) |
+| POST | `/campaigns/:slug/spin` | None | `spin_handler::spin` | Spin the wheel |
 | GET | `/campaigns/:slug/spin-status` | None | `spin_handler::spin_status` | Check spin availability |
 | GET | `/campaigns/:slug/wins` | JWT | `spin_handler::list_wins` | List wins for campaign |
 | POST | `/campaigns/:slug/wins/:win_id/redeem` | JWT | `spin_handler::redeem_win` | Redeem a win |
