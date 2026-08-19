@@ -1,8 +1,15 @@
-//! Feature limit enforcement — reads limits from plans table columns.
-//! Falls back to plan_tier_features/feature_limits tables if populated.
+//! Feature limit enforcement — single source of truth: `tier_features.limit_value`
+//! (per-feature numeric limits) with `plan_tiers.max_campaigns` /
+//! `max_entries_per_month` as the tier base columns.
+//!
+//! RECONCILIATION NOTE (2026-08-18): the previous `plan_tier_features` +
+//! `feature_limits` table fallback was REMOVED — those tables do not exist in
+//! the live schema, and the runtime gate reads `tier_features` only. There is
+//! now exactly one feature model (see `access::feature_gate`).
 
 use crate::error::AppError;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 pub async fn enforce_feature_limit(
     db: &PgPool,
@@ -10,90 +17,83 @@ pub async fn enforce_feature_limit(
     feature_key: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    // Get plan tier slug from account
-    let plan_slug: Option<String> = sqlx::query_scalar(
-        "SELECT pt.slug FROM accounts a
-         JOIN plans pt ON pt.id = a.plan_tier_id
-         WHERE a.id = $1",
-    )
-    .bind(account_id)
-    .fetch_optional(db)
-    .await?
-    .flatten();
+    // Resolve the account's plan tier.
+    let tier_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
 
-    let slug = match plan_slug {
-        Some(s) => s,
-        None => return Ok(()), // No plan — allow
+    let Some(tier_id) = tier_id else {
+        return Ok(()); // No plan — allow
     };
 
-    // First check feature_limits table (custom overrides)
-    let fl_val: Option<i64> = sqlx::query_scalar(
-        "SELECT fl.limit_value FROM feature_limits fl
-         JOIN plan_tier_features ptf ON ptf.feature_id = fl.feature_id
-         WHERE ptf.slug = $1 AND fl.feature_key = $2",
+    // Canonical per-feature numeric limit from tier_features.
+    let tf_val: Option<i64> = sqlx::query_scalar(
+        "SELECT tf.limit_value FROM tier_features tf
+         JOIN features f ON f.id = tf.feature_id
+         WHERE tf.tier_id = $1 AND f.key = $2",
     )
-    .bind(&slug)
+    .bind(tier_id)
     .bind(feature_key)
     .fetch_optional(db)
     .await?
     .flatten();
 
-    if let Some(val) = fl_val {
-        if val == -1 {
-            return Ok(());
-        }
-        if val == 0 {
-            return Err(AppError::UpgradeRequired(format!(
-                "{} is not available on your current plan. Upgrade to access this feature.",
-                label
-            )));
-        }
-        let usage = count_usage(db, account_id, feature_key).await?;
-        if usage >= val {
-            return Err(AppError::UpgradeRequired(format!(
-                "{} limit reached ({}/{}). Upgrade to increase your limit.",
-                label, usage, val
-            )));
-        }
-        return Ok(());
+    if let Some(val) = tf_val {
+        return check_limit(db, account_id, feature_key, label, val).await;
     }
 
-    // Fall back to plans table column
-    let plan_col = match feature_key {
-        "max_campaigns" | "campaigns" => "max_campaigns",
-        "max_leads" | "leads" => "max_leads",
-        "max_tags" | "tags" => "max_tags",
-        "max_members" | "members" => "max_members",
-        "max_entries" | "entries" => "max_entries",
-        "max_forms" | "forms" => "max_forms",
-        _ => return Ok(()), // Unknown feature — allow
+    // Tier base columns for the two built-in numeric limits.
+    let base_val: Option<i64> = match feature_key {
+        "max_campaigns" | "campaigns" => {
+            sqlx::query_scalar("SELECT max_campaigns FROM plan_tiers WHERE id = $1")
+                .bind(tier_id)
+                .fetch_optional(db)
+                .await?
+                .flatten()
+        }
+        "max_entries_per_month" | "max_entries" | "entries" => {
+            sqlx::query_scalar("SELECT max_entries_per_month FROM plan_tiers WHERE id = $1")
+                .bind(tier_id)
+                .fetch_optional(db)
+                .await?
+                .flatten()
+        }
+        _ => return Ok(()), // Unknown feature — no numeric limit, allow
     };
 
-    let limit_val: Option<i64> =
-        sqlx::query_scalar(&format!("SELECT {} FROM plans WHERE slug = $1", plan_col))
-            .bind(&slug)
-            .fetch_optional(db)
-            .await?
-            .flatten();
-
-    match limit_val {
+    match base_val {
         None | Some(-1) => Ok(()),
-        Some(0) => Err(AppError::UpgradeRequired(format!(
+        Some(v) => check_limit(db, account_id, feature_key, label, v).await,
+    }
+}
+
+async fn check_limit(
+    db: &PgPool,
+    account_id: &str,
+    feature_key: &str,
+    label: &str,
+    val: i64,
+) -> Result<(), AppError> {
+    if val == -1 {
+        return Ok(()); // unlimited
+    }
+    if val == 0 {
+        return Err(AppError::UpgradeRequired(format!(
             "{} is not available on your current plan. Upgrade to access this feature.",
             label
-        ))),
-        Some(limit) => {
-            let usage = count_usage(db, account_id, feature_key).await?;
-            if usage >= limit {
-                Err(AppError::UpgradeRequired(format!(
-                    "{} limit reached ({}/{}). Upgrade to increase your limit.",
-                    label, usage, limit
-                )))
-            } else {
-                Ok(())
-            }
-        }
+        )));
     }
+    let usage = count_usage(db, account_id, feature_key).await?;
+    if usage >= val {
+        return Err(AppError::UpgradeRequired(format!(
+            "{} limit reached ({}/{}). Upgrade to increase your limit.",
+            label, usage, val
+        )));
+    }
+    Ok(())
 }
 
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
