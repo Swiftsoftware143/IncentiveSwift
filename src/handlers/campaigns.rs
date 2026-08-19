@@ -63,18 +63,13 @@ pub async fn create_campaign(
     user: AuthenticatedUser,
     Json(body): Json<CreateCampaignBody>,
 ) -> Result<Json<Value>, AppError> {
-    // Feature gate: check if account can create campaigns
+    // Feature gate: check if account can create campaigns of this mechanic type.
+    // Honors the `all_mechanics` catch-all with explicit-disable override.
     let account_id = uuid::Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let feature_key = format!("mechanic_{}", body.r#type);
-    let mut has_access =
-        feature_gate::has_feature_access(&state, &user.account_id, &feature_key).await?;
-    // Also check the catch-all 'all_mechanics' feature
-    if !has_access {
-        has_access =
-            feature_gate::has_feature_access(&state, &user.account_id, "all_mechanics").await?;
-    }
+    let has_access =
+        feature_gate::has_mechanic_access(&state, &user.account_id, &body.r#type).await?;
     if !has_access {
         return Err(AppError::Forbidden(format!(
             "Your plan does not include the '{}' mechanic. Upgrade to access this feature.",

@@ -755,7 +755,25 @@ async fn main() -> anyhow::Result<()> {
         )
         .route(
             "/api/v1/admin/plans/:id/features",
-            put(crate::handlers::plans_handler::admin_update_plan_features),
+            put(crate::handlers::plans_handler::admin_update_plan_features)
+                .post(crate::handlers::tier_handler::post_plan_features),
+        )
+        // Plan tier feature management (canonical tier_features CRUD)
+        .route(
+            "/api/v1/admin/tiers",
+            get(crate::handlers::tier_handler::list_tiers),
+        )
+        .route(
+            "/api/v1/admin/tiers/:tier_id",
+            put(crate::handlers::tier_handler::update_tier),
+        )
+        .route(
+            "/api/v1/admin/tiers/:tier_id/features",
+            get(crate::handlers::tier_handler::get_tier_features),
+        )
+        .route(
+            "/api/v1/admin/tiers/:tier_id/features/:feature_key",
+            put(crate::handlers::tier_handler::update_tier_feature),
         )
         // Industry routes
         .route(

@@ -44,6 +44,7 @@ pub mod settings_handler;
 pub mod site_handler;
 pub mod spin_handler;
 pub mod surfaces_handler;
+pub mod tier_handler;
 pub mod viral_handler;
 
 pub mod sms_handler;
