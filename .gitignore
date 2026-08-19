@@ -1,5 +1,6 @@
 /target
 .env
+.hermes/
 *.swp
 .DS_Store
 incentiveswift-api
