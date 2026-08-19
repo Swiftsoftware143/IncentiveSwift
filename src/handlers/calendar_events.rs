@@ -89,9 +89,7 @@ pub async fn list_events(
         ),
         None => None,
     };
-    let mut sql = format!(
-        "SELECT {CE_COLS} FROM calendar_events WHERE tenant_id = $1"
-    );
+    let mut sql = format!("SELECT {CE_COLS} FROM calendar_events WHERE tenant_id = $1");
     let mut next: usize = 2;
     if from_dt.is_some() {
         sql.push_str(&format!(" AND starts_at >= ${}", next));
@@ -145,10 +143,12 @@ pub async fn create_event(
     .bind(account)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query_as::<_, CalendarEvent>(&format!("SELECT {CE_COLS} FROM calendar_events WHERE id = $1"))
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let row = sqlx::query_as::<_, CalendarEvent>(&format!(
+        "SELECT {CE_COLS} FROM calendar_events WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({ "event": row })))
 }
 
@@ -196,10 +196,12 @@ pub async fn update_event(
     .bind(&body.color)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query_as::<_, CalendarEvent>(&format!("SELECT {CE_COLS} FROM calendar_events WHERE id = $1"))
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    let row = sqlx::query_as::<_, CalendarEvent>(&format!(
+        "SELECT {CE_COLS} FROM calendar_events WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({ "event": row })))
 }
 
