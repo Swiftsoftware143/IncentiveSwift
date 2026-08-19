@@ -175,6 +175,45 @@ This replaced the previous `plan_tier_features`/`feature_limits` tables (removed
 8. **System auto-issues vouchers** on purchase verification
 9. **Set up webhooks** — configure Marketing Boost and delivery config for real-time event notifications
 
+## Support Tickets, Reviews & Calendar Modules
+
+The admin dashboard includes three support modules added with the ticketing/reviews/calendar feature set. All are scoped per-tenant (owned by the calling account).
+
+### Support Tickets
+Customer/support request tracking with an internal-note thread.
+
+- **View:** `Support Tickets` (sidebar 🎫)
+- Create a ticket (subject, description, priority, category), filter by status (all / open / in_progress / resolved / closed), open a detail drawer, post internal notes, and flip status (`Set In Progress / Resolved / Closed`).
+- **API:**
+  - `GET /api/v1/support-tickets` — list
+  - `POST /api/v1/support-tickets` — create `{ subject, description?, priority?, category?, campaign_id?, contact_id? }`
+  - `GET /api/v1/support-tickets/:id` — ticket + message thread
+  - `PUT /api/v1/support-tickets/:id` — update `{ status?, priority?, category?, assignee_id?, subject? }` (status `resolved`/`closed` stamps `resolved_at`)
+  - `DELETE /api/v1/support-tickets/:id`
+  - `POST /api/v1/support-tickets/:id/messages` — add message `{ body, is_internal? }`
+
+### Reviews & Ratings
+Customer reviews with a 1–5 rating and approve/reject moderation.
+
+- **View:** `Reviews & Ratings` (sidebar ⭐) — shows count, average rating, pending approvals; create review, approve/reject, delete.
+- **API:**
+  - `GET /api/v1/reviews` — list + `{ count, average_rating }` aggregates
+  - `POST /api/v1/reviews` — create `{ rating (1..5), title?, body?, reviewer_name?, campaign_id?, contact_id?, status? }`
+  - `PUT /api/v1/reviews/:id` — moderate `{ status?, moderation_note?, ... }`
+  - `DELETE /api/v1/reviews/:id`
+
+### Calendar Events
+Schedule/event tracking per tenant (event / reminder / appointment), optional campaign link.
+
+- **View:** `Calendar` (sidebar 📅) — upcoming/past/completed counts, create event, confirm/complete/cancel, delete.
+- **API:**
+  - `GET /api/v1/calendar-events?from=&to=` — list (RFC3339 range filter)
+  - `POST /api/v1/calendar-events` — create `{ title, starts_at, ends_at?, event_type?, all_day?, color?, campaign_id?, contact_id? }`
+  - `PUT /api/v1/calendar-events/:id` — update `{ title?, status?, color?, starts_at?, ends_at?, ... }`
+  - `DELETE /api/v1/calendar-events/:id`
+
+> **Note:** pass range timestamps in `Z` / RFC3339 format (e.g. `2026-08-21T12:00:00Z`). A raw unencoded `+00:00` in the URL will be treated as a space and fail to parse.
+
 ## API Endpoints
 
 ### Authentication
