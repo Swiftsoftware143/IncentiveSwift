@@ -38,6 +38,7 @@ pub struct CreateCampaignInput {
     pub loyalty_program_id: Option<Uuid>,
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
+    pub theme: Option<JsonValue>,
 }
 
 /// A campaign record.
@@ -165,10 +166,14 @@ pub async fn create_campaign(
     let loyalty_program_id = input.loyalty_program_id;
     let loyalty_points_per_play = input.loyalty_points_per_play.unwrap_or(0);
     let auto_enroll_loyalty = input.auto_enroll_loyalty.unwrap_or(false);
+    let surface_config = match &input.theme {
+        Some(t) => serde_json::json!({ "theme": t }),
+        None => serde_json::json!({}),
+    };
 
     sqlx::query(
-        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13)"#
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty, surface_config)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13, $14)"#
     )
     .bind(id)
     .bind(input.account_id)
@@ -183,6 +188,7 @@ pub async fn create_campaign(
     .bind(loyalty_program_id)
     .bind(loyalty_points_per_play)
     .bind(auto_enroll_loyalty)
+    .bind(&surface_config)
     .execute(pool)
     .await?;
 
@@ -270,6 +276,41 @@ pub async fn delete_campaign(pool: &PgPool, id: &Uuid) -> Result<bool, AppError>
         .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Merge a theme object into a campaign's `surface_config.theme` (deep merge),
+/// preserving other surface_config keys and any existing theme keys not
+/// present in the incoming object.
+pub async fn merge_campaign_theme(
+    pool: &PgPool,
+    id: &Uuid,
+    theme: &JsonValue,
+) -> Result<(), AppError> {
+    let existing: Option<JsonValue> =
+        sqlx::query_scalar("SELECT surface_config FROM campaigns WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+
+    let mut surface = existing.unwrap_or_else(|| serde_json::json!({}));
+    let mut theme_obj = surface
+        .get("theme")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    crate::theme::deep_merge(&mut theme_obj, theme);
+
+    if let Some(obj) = surface.as_object_mut() {
+        obj.insert("theme".to_string(), theme_obj);
+    }
+
+    sqlx::query("UPDATE campaigns SET surface_config = $1 WHERE id = $2")
+        .bind(&surface)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 /// Generate a clone slug by appending a short id to a slugified name.

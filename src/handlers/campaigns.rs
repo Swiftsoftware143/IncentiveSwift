@@ -55,6 +55,7 @@ pub struct CreateCampaignBody {
     pub loyalty_program_id: Option<uuid::Uuid>,
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
+    pub theme: Option<Value>,
 }
 
 /// POST /api/v1/campaigns — create campaign (authenticated + feature-gated).
@@ -89,6 +90,7 @@ pub async fn create_campaign(
         loyalty_program_id: body.loyalty_program_id,
         loyalty_points_per_play: body.loyalty_points_per_play,
         auto_enroll_loyalty: body.auto_enroll_loyalty,
+        theme: body.theme,
     };
 
     let campaign = campaigns::create_campaign(&state.db, &input).await?;
@@ -107,6 +109,7 @@ pub struct UpdateCampaignBody {
     pub loyalty_program_id: Option<Option<uuid::Uuid>>,
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
+    pub theme: Option<Value>,
 }
 
 /// PUT /api/v1/campaigns/:slug — update campaign (authenticated).
@@ -148,6 +151,11 @@ pub async fn update_campaign(
         body.auto_enroll_loyalty,
     )
     .await?;
+
+    // Persist an optional theme into surface_config.theme (deep merge).
+    if let Some(ref theme) = body.theme {
+        campaigns::merge_campaign_theme(&state.db, &campaign.id, theme).await?;
+    }
 
     Ok(Json(json!({ "campaign": campaign })))
 }
