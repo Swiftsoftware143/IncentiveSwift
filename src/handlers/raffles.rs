@@ -47,6 +47,15 @@ pub async fn enter_raffle(
     // 2. Find campaign by slug
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
 
+    // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
+    // (402 before any entry is created for free/subtracted tiers).
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
+
     // 3. Enter raffle
     let entry_id = raffles::enter_raffle(&state.db, &campaign.id, &contact_id).await?;
 
@@ -65,6 +74,15 @@ pub async fn draw(
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+
+    // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
+    // (402 before any draw is run for free/subtracted tiers).
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
 
     // Check if already drawn
     if raffles::has_existing_draw(&state.db, &campaign.id).await? {
@@ -111,6 +129,15 @@ pub async fn redraw(
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+
+    // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
+    // (402 before any redraw is run for free/subtracted tiers).
+    crate::access::feature_gate::enforce_mechanic_feature(
+        &state,
+        &campaign.account_id.to_string(),
+        &campaign.r#type,
+    )
+    .await?;
 
     // Get all entries (excluding current winner)
     let mut entry_ids = raffles::get_entries_for_draw(&state.db, &campaign.id).await?;
