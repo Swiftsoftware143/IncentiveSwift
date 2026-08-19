@@ -646,6 +646,42 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::portfolio_handler::update_portfolio_company)
                 .delete(handlers::portfolio_handler::delete_portfolio_company),
         )
+        // Support / Tickets
+        .route(
+            "/api/v1/support-tickets",
+            get(handlers::support_tickets::list_tickets)
+                .post(handlers::support_tickets::create_ticket),
+        )
+        .route(
+            "/api/v1/support-tickets/:id",
+            get(handlers::support_tickets::get_ticket)
+                .put(handlers::support_tickets::update_ticket)
+                .delete(handlers::support_tickets::delete_ticket),
+        )
+        .route(
+            "/api/v1/support-tickets/:id/messages",
+            post(handlers::support_tickets::add_message),
+        )
+        // Reviews & Ratings
+        .route(
+            "/api/v1/reviews",
+            get(handlers::reviews::list_reviews).post(handlers::reviews::create_review),
+        )
+        .route(
+            "/api/v1/reviews/:id",
+            put(handlers::reviews::update_review).delete(handlers::reviews::delete_review),
+        )
+        // Calendar Events
+        .route(
+            "/api/v1/calendar-events",
+            get(handlers::calendar_events::list_events)
+                .post(handlers::calendar_events::create_event),
+        )
+        .route(
+            "/api/v1/calendar-events/:id",
+            put(handlers::calendar_events::update_event)
+                .delete(handlers::calendar_events::delete_event),
+        )
         .route(
             "/api/v1/integration-targets",
             get(handlers::integration_target_handler::list_integration_targets)
