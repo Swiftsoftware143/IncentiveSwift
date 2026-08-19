@@ -25,3 +25,4 @@ pub mod iqs_validation;
 pub mod mechanics;
 pub mod security;
 pub mod state;
+pub mod theme;

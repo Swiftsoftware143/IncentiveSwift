@@ -124,15 +124,36 @@ pub async fn get_widget_js(
     .await?
     .ok_or_else(|| AppError::NotFound("Widget snippet not found".to_string()))?;
 
+    // Resolve the campaign's theme so the widget runtime can brand itself live.
+    let surface_config: Value = sqlx::query_scalar::<_, Value>(
+        "SELECT COALESCE(surface_config, '{}'::jsonb) FROM campaigns WHERE id = $1",
+    )
+    .bind(snippet.campaign_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or_else(|| json!({}));
+    let theme = crate::theme::resolve_theme(&surface_config);
+    let css = crate::theme::theme_css(&theme);
+    let css_literal = crate::theme::js_string_literal(&css);
+
     let widget_url = format!("/api/v1/widget/{}/config", hash);
-    let js = WIDGET_JS_TEMPLATE
-        .replace("WIDGET_URL", &widget_url)
-        .replace("HASH", &hash);
+    let theme_js = format!(
+        "(function(){{\n  try {{\n    var st = document.createElement('style');\n    st.setAttribute('data-incentiveswift-theme', '{}');\n    st.textContent = '{}';\n    document.head.appendChild(st);\n  }} catch(e) {{}}\n}})();",
+        hash, css_literal
+    );
+    let js = format!(
+        "{}\n{}",
+        theme_js,
+        WIDGET_JS_TEMPLATE
+            .replace("WIDGET_URL", &widget_url)
+            .replace("HASH", &hash)
+    );
 
     Ok(Json(json!({
         "hash": hash,
         "campaign_id": snippet.campaign_id,
         "javascript": js,
+        "theme": theme,
         "status": "active",
     })))
 }
@@ -169,6 +190,7 @@ pub async fn get_widget_config(
     let config: Value = campaign.get("config");
     let surface_config: Value = campaign.get("surface_config");
     let outcome_tags: Value = campaign.get("outcome_tags");
+    let theme = crate::theme::resolve_theme(&surface_config);
 
     Ok(Json(json!({
         "campaign": {
@@ -179,6 +201,7 @@ pub async fn get_widget_config(
         },
         "config": config,
         "surface_config": surface_config,
+        "theme": theme,
         "outcome_tags": outcome_tags,
     })))
 }
@@ -216,6 +239,8 @@ pub async fn get_tablet_view(
     let campaign_type: String = campaign.get("type");
     let campaign_config: Value = campaign.get("config");
     let surface_config: Value = campaign.get("surface_config");
+    let theme = crate::theme::resolve_theme(&surface_config);
+    let theme_css_vars = crate::theme::theme_to_css_vars(&theme);
 
     Ok(Json(json!({
         "session": session,
@@ -226,6 +251,8 @@ pub async fn get_tablet_view(
         },
         "config": campaign_config,
         "surface_config": surface_config,
+        "theme": theme,
+        "theme_css_vars": theme_css_vars,
     })))
 }
 
@@ -351,6 +378,7 @@ pub async fn get_play_view(
     let delivery_method: String = campaign.get("delivery_method");
     let delivery_config: Value = campaign.get("delivery_config");
     let created_at: chrono::DateTime<chrono::Utc> = campaign.get("created_at");
+    let theme = crate::theme::resolve_theme(&surface_config);
 
     Ok(Json(json!({
         "campaign": {
@@ -364,6 +392,7 @@ pub async fn get_play_view(
         },
         "config": config,
         "surface_config": surface_config,
+        "theme": theme,
         "outcome_tags": outcome_tags,
         "delivery_method": delivery_method,
         "delivery_config": delivery_config,
@@ -483,14 +512,19 @@ pub async fn get_embed_view(
     let config: Value = campaign.get("config");
     let surface_config: Value = campaign.get("surface_config");
     let outcome_tags: Value = campaign.get("outcome_tags");
+    let theme = crate::theme::resolve_theme(&surface_config);
+    let theme_css = crate::theme::theme_css(&theme);
 
-    // Build embed HTML snippet with campaign config
+    // Build embed HTML snippet with campaign config + injected theme CSS vars.
     let embed_html = format!(
-        r#"<div id="is-embed-{}" data-campaign="{}" data-type="{}"></div>
+        r#"<div id="is-embed-{}" data-campaign="{}" data-type="{}" data-is-theme></div>
+<style data-incentiveswift-theme="{}">{}</style>
 <script src="/api/v1/widget/{}/config" async></script>"#,
         &cid.to_string()[..8],
         slug,
         campaign_type,
+        slug,
+        theme_css,
         slug
     );
 
@@ -504,6 +538,7 @@ pub async fn get_embed_view(
         "embed_html": embed_html,
         "config": config,
         "surface_config": surface_config,
+        "theme": theme,
         "outcome_tags": outcome_tags,
     })))
 }
@@ -524,7 +559,12 @@ pub async fn get_surface_config(
             .await?
             .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
 
-    Ok(Json(json!({ "surface_config": surface_config })))
+    let sc = surface_config.clone().unwrap_or_else(|| json!({}));
+    let theme = crate::theme::resolve_theme(&sc);
+
+    Ok(Json(
+        json!({ "surface_config": surface_config, "theme": theme }),
+    ))
 }
 
 /// GET /api/v1/embed/campaign/all — List all active campaigns for public embed lobby
@@ -573,7 +613,7 @@ pub async fn get_campaign_embed(
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let campaign = sqlx::query(
-        r#"SELECT id, name, slug, type, config, created_at
+        r#"SELECT id, name, slug, type, config, surface_config, created_at
            FROM campaigns WHERE slug = $1"#,
     )
     .bind(&slug)
@@ -586,11 +626,15 @@ pub async fn get_campaign_embed(
     let slug_str: String = campaign.get("slug");
     let campaign_type: String = campaign.get("type");
     let config: Value = campaign.get("config");
+    let surface_config: Value = campaign.get("surface_config");
+    let theme = crate::theme::resolve_theme(&surface_config);
+    let theme_css = crate::theme::theme_css(&theme);
 
     let play_url = format!("/play/{}", slug_str);
     let embed_code = format!(
         r##"<!-- IncentiveSwift Campaign: {} -->
-<iframe src="{}/play/{}" width="100%" height="600" frameborder="0" style="border:none;border-radius:12px;" allow="geolocation"></iframe>
+<style data-incentiveswift-theme="{}">{}</style>
+<iframe src="{}/play/{}" width="100%" height="600" frameborder="0" style="border:none;border-radius:var(--is-radius,12px);" allow="geolocation" data-is-theme></iframe>
 <script>
 (function(){{
   var iframe = document.querySelector('iframe[src*="/play/{}"]');
@@ -608,6 +652,8 @@ pub async fn get_campaign_embed(
 </script>
 "##,
         esc_html(&name),
+        slug_str,
+        theme_css,
         "",
         slug_str,
         slug_str
@@ -621,6 +667,8 @@ pub async fn get_campaign_embed(
             "type": campaign_type,
         },
         "config": config,
+        "surface_config": surface_config,
+        "theme": theme,
         "play_url": play_url,
         "play_url_full": format!("/play/{}", slug_str),
         "embed_code": embed_code,
@@ -642,15 +690,31 @@ pub async fn update_surface_config(
     let campaign_id = Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid campaign ID".to_string()))?;
 
+    // Deep-merge the incoming surface_config into the existing one so we never
+    // clobber unrelated surface keys (tablet/widget/full_page) when only a
+    // theme update is sent.
+    let existing: Option<Value> =
+        sqlx::query_scalar("SELECT surface_config FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+
+    let mut merged = existing.unwrap_or_else(|| json!({}));
+    crate::theme::deep_merge(&mut merged, &body.surface_config);
+
     sqlx::query("UPDATE campaigns SET surface_config = $1 WHERE id = $2")
-        .bind(&body.surface_config)
+        .bind(&merged)
         .bind(campaign_id)
         .execute(&state.db)
         .await?;
 
+    let theme = crate::theme::resolve_theme(&merged);
+
     Ok(Json(json!({
         "status": "updated",
-        "surface_config": body.surface_config,
+        "surface_config": merged,
+        "theme": theme,
     })))
 }
 

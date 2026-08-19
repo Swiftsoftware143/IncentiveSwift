@@ -27,6 +27,7 @@ pub mod iqs_validation;
 pub mod mechanics;
 pub mod security;
 mod state;
+mod theme;
 
 use axum::{
     http::HeaderValue,
