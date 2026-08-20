@@ -19,6 +19,9 @@ impl AppState {
             .connect(&config.database_url)
             .await?;
 
+        // Run database migrations (filename-based, idempotent)
+        crate::db::migrations::run_migrations(&pool).await;
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("IncentiveSwift/0.1.0")
