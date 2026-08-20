@@ -56,6 +56,7 @@ pub struct CreateCampaignBody {
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
     pub theme: Option<Value>,
+    pub iqs_funnel_id: Option<Option<String>>,
 }
 
 /// POST /api/v1/campaigns — create campaign (authenticated + feature-gated).
@@ -110,6 +111,7 @@ pub struct UpdateCampaignBody {
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
     pub theme: Option<Value>,
+    pub iqs_funnel_id: Option<Option<String>>,
 }
 
 /// PUT /api/v1/campaigns/:slug — update campaign (authenticated).
@@ -149,6 +151,7 @@ pub async fn update_campaign(
         body.loyalty_program_id,
         body.loyalty_points_per_play,
         body.auto_enroll_loyalty,
+        body.iqs_funnel_id.clone(),
     )
     .await?;
 

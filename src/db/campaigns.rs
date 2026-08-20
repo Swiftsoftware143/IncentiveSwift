@@ -63,8 +63,8 @@ pub struct Campaign {
     pub loyalty_points_per_play: i32,
     /// Auto-enroll players into the loyalty program when they play
     pub auto_enroll_loyalty: bool,
-    /// Optional IQS funnel linked to this campaign
-    pub iqs_funnel_id: Option<uuid::Uuid>,
+    /// Optional IQS funnel linked to this campaign (stores funnel UUID as string; column is VARCHAR)
+    pub iqs_funnel_id: Option<String>,
 }
 
 /// Validate mechanic type string.
@@ -231,6 +231,7 @@ pub async fn update_campaign(
     loyalty_program_id: Option<Option<Uuid>>,
     loyalty_points_per_play: Option<i32>,
     auto_enroll_loyalty: Option<bool>,
+    iqs_funnel_id: Option<Option<String>>,
 ) -> Result<Campaign, AppError> {
     let existing = get_campaign_by_id(pool, id).await?;
 
@@ -243,6 +244,8 @@ pub async fn update_campaign(
     let new_loyalty_points_per_play =
         loyalty_points_per_play.unwrap_or(existing.loyalty_points_per_play);
     let new_auto_enroll_loyalty = auto_enroll_loyalty.unwrap_or(existing.auto_enroll_loyalty);
+    let new_iqs_funnel_id =
+        iqs_funnel_id.unwrap_or(existing.iqs_funnel_id.map(|id| id.to_string()));
 
     sqlx::query(
         r#"UPDATE campaigns
@@ -250,7 +253,8 @@ pub async fn update_campaign(
                delivery_method = $4, delivery_config = $5,
                loyalty_program_id = $6,
                loyalty_points_per_play = $7,
-               auto_enroll_loyalty = $8
+               auto_enroll_loyalty = $8,
+               iqs_funnel_id = $10
            WHERE id = $9"#,
     )
     .bind(new_name)
@@ -262,6 +266,7 @@ pub async fn update_campaign(
     .bind(new_loyalty_points_per_play)
     .bind(new_auto_enroll_loyalty)
     .bind(id)
+    .bind(new_iqs_funnel_id)
     .execute(pool)
     .await?;
 
