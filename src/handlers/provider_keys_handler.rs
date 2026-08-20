@@ -215,3 +215,82 @@ pub struct UpsertInput {
     #[serde(default)]
     pub scope: Option<String>,
 }
+
+// ---- CoreSwift integration proxy (server-side, key stays server-side) ----
+
+pub async fn get_coreswift_conn(
+    state: &AppState,
+    account_id: &Uuid,
+) -> Result<(String, String), AppError> {
+    let row = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT api_key, base_url FROM provider_keys
+         WHERE account_id = $1 AND provider = 'coreswift' AND is_active = true",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Database(format!("DB error: {e}")))?
+    .ok_or_else(|| AppError::NotFound("CoreSwift is not connected".to_string()))?;
+
+    let api_key = row.0;
+    let base_url = row
+        .1
+        .filter(|u| !u.is_empty())
+        .or_else(|| {
+            let d = state.config.coreswift_url.trim().to_string();
+            if d.is_empty() {
+                None
+            } else {
+                Some(d)
+            }
+        })
+        .map(|u| u.trim_end_matches('/').to_string())
+        .ok_or_else(|| AppError::NotFound("CoreSwift base URL not configured".to_string()))?;
+
+    Ok((api_key, base_url))
+}
+
+/// GET /api/v1/integrations/coreswift/lists
+pub async fn coreswift_lists(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    let (api_key, base_url) = get_coreswift_conn(&state, &account_id).await?;
+
+    let url = format!("{base_url}/api/external/lists");
+    let resp = state
+        .http_client
+        .get(&url)
+        .bearer_auth(&api_key)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("CoreSwift unreachable: {e}")))?;
+
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or_else(|_| json!({ "lists": [] }));
+
+    if !status.is_success() {
+        return Err(AppError::Internal(format!(
+            "CoreSwift returned {status}: {}",
+            serde_json::to_string(&body).unwrap_or_default()
+        )));
+    }
+
+    Ok(Json(body))
+}
+
+/// GET /api/v1/integrations/coreswift/status
+pub async fn coreswift_status(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    let connected = get_coreswift_conn(&state, &account_id).await.is_ok();
+    Ok(Json(json!({ "connected": connected })))
+}
