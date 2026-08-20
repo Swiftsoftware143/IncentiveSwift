@@ -953,6 +953,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/available-providers",
             get(handlers::provider_keys_handler::list_available_providers),
         )
+        .route(
+            "/api/v1/integrations/coreswift/lists",
+            get(handlers::provider_keys_handler::coreswift_lists),
+        )
+        .route(
+            "/api/v1/integrations/coreswift/status",
+            get(handlers::provider_keys_handler::coreswift_status),
+        )
         // Payment provider, checkout & webhook routes (via billing module)
         .merge(billing::router(state.clone()))
         // Campaign Integration Hub routes
