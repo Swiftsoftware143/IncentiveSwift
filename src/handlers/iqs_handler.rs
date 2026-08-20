@@ -1076,7 +1076,7 @@ pub async fn get_campaign_iqs_questions(
         .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?
     };
 
-    let funnel_id = match campaign.iqs_funnel_id {
+    let funnel_id_str = match campaign.iqs_funnel_id {
         Some(fid) => fid,
         None => {
             return Err(AppError::BadRequest(
@@ -1084,6 +1084,8 @@ pub async fn get_campaign_iqs_questions(
             ))
         }
     };
+    let funnel_id = Uuid::parse_str(&funnel_id_str)
+        .map_err(|_| AppError::BadRequest("Invalid IQS funnel id".into()))?;
 
     // Fetch the funnel
     let funnel = sqlx::query_as::<_, IqsFunnel>("SELECT * FROM iqs_funnels WHERE id = $1")
