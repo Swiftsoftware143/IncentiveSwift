@@ -1019,6 +1019,10 @@ async fn main() -> anyhow::Result<()> {
         )
         // Email Templates routes
         .route(
+            "/api/v1/email-templates/merge-fields",
+            get(handlers::email_templates_handler::merge_fields),
+        )
+        .route(
             "/api/v1/email-templates",
             get(handlers::email_templates_handler::list)
                 .post(handlers::email_templates_handler::create),
