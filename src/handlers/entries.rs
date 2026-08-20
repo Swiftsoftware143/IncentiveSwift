@@ -348,7 +348,6 @@ pub async fn create_entry(
     //     WorkflowSwift handles routing to API targets using stored keys
     dispatch_integrations(
         &state.http_client,
-        &state.config.workflowswift_url,
         &campaign.delivery_config,
         &payload,
         &state.db,
@@ -365,25 +364,19 @@ pub async fn create_entry(
     })))
 }
 
-/// Dispatch to all integrations configured in a campaign's delivery_config.
-/// The primary dispatch route is to WorkflowSwift's incoming webhook, which
-/// handles all routing using stored API keys, workflow steps, and n8n triggers.
-/// Users configure everything in WorkflowSwift — this is the hands-off layer.
-/// For backwards compatibility, if `integrations` is not empty, those direct
-/// integrations will also be dispatched (legacy path). New campaigns should
-/// configure everything via WorkflowSwift and leave `integrations` empty.
+/// Dispatch to all DIRECT integrations configured in a campaign's delivery_config
+/// (webhook, Mailchimp, HubSpot, ActiveCampaign, GoHighLevel, n8n). CoreSwift's
+/// per-user/per-campaign push is handled separately in `create_entry` step 7.8.
+///
+/// NOTE: IncentiveSwift never routes outbound data through WorkflowSwift here —
+/// WorkflowSwift only receives data that originates within WorkflowSwift itself.
 pub(crate) async fn dispatch_integrations(
     client: &reqwest::Client,
-    workflowswift_url: &str,
     delivery_config: &serde_json::Value,
     payload: &DeliveryPayload,
     db: &sqlx::PgPool,
     entry_id: &Uuid,
 ) -> Result<(), AppError> {
-    // PRIMARY: push to WorkflowSwift for orchestrated routing
-    // This is the recommended path — WorkflowSwift handles all integrations
-    crate::delivery::coreswift::push_to_workflowswift(client, workflowswift_url, payload).await?;
-
     // LEGACY: also do any direct integrations specified in the campaign config
     // These are kept for backwards compat with existing campaigns
     if let Some(integrations) = delivery_config
@@ -402,7 +395,8 @@ pub(crate) async fn dispatch_integrations(
 
             match int_type {
                 "core_swift" => {
-                    // Already handled by WorkflowSwift, skip
+                    // Handled by the per-user CoreSwift push in create_entry step 7.8
+                    // (provider_keys + delivery_config.coreswift.list_id + field mapping).
                 }
                 "mailchimp" => {
                     let _api_key = int_config

@@ -104,7 +104,6 @@ pub async fn resend(
     let _ = delivery_method;
     crate::handlers::entries::dispatch_integrations(
         &state.http_client,
-        &state.config.workflowswift_url,
         &delivery_config,
         &payload,
         &state.db,
