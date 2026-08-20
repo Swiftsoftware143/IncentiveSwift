@@ -1,6 +1,5 @@
 //! Webhook, direct API, and CoreSwift delivery.
 
-pub mod coreswift;
 pub mod direct_api;
 pub mod integration_hub;
 pub mod payload;

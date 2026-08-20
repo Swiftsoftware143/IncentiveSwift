@@ -190,36 +190,44 @@ pub async fn create_entry(
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
     {
-        let email_payload = json!({
-            "event": "prize.won",
-            "contact": {
-                "first_name": body.contact.first_name.as_deref(),
-                "last_name": body.contact.last_name.as_deref(),
-                "email": body.contact.email.as_deref(),
-                "phone": body.contact.phone.as_deref(),
-            },
-            "campaign": {
-                "name": campaign.name,
-                "type": campaign.r#type,
-                "tag_namespace": campaign.tag_namespace,
-            },
-            "prize": campaign.config.get("prize_name"),
-            "entry_id": entry_id.to_string(),
-            "captured_at": chrono::Utc::now().to_rfc3339(),
-        });
-
-        let n8n_url = format!(
-            "{}/api/prize-email",
-            state.config.workflowswift_url.trim_end_matches('/')
-        );
-        let _ = state
-            .http_client
-            .post(&n8n_url)
-            .json(&email_payload)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
+        let to_email = body.contact.email.as_deref().unwrap_or("");
+        if !to_email.is_empty() {
+            // Per-account SMTP + DB template (fallback template_type = winner)
+            let template_type = format!("{}_winner", campaign.r#type);
+            let vars = json!({
+                "first_name": body.contact.first_name.as_deref().unwrap_or(""),
+                "last_name": body.contact.last_name.as_deref().unwrap_or(""),
+                "email": to_email,
+                "phone": body.contact.phone.as_deref().unwrap_or(""),
+                "campaign_name": campaign.name,
+                "campaign_type": campaign.r#type,
+                "prize_name": campaign.config.get("prize_name").and_then(|v| v.as_str()).unwrap_or(""),
+                "entry_id": entry_id.to_string(),
+            });
+            // Try per-type template first, then generic "winner"
+            let mut res = crate::delivery::sender::send_template_by_type(
+                &state.db,
+                campaign.account_id,
+                to_email,
+                &template_type,
+                &vars,
+            )
             .await;
-        // Best-effort: don't fail the entry if email fails
+            if res.is_err() {
+                res = crate::delivery::sender::send_template_by_type(
+                    &state.db,
+                    campaign.account_id,
+                    to_email,
+                    "winner",
+                    &vars,
+                )
+                .await;
+            }
+            if let Err(e) = res {
+                tracing::warn!("Prize email send failed: {e}");
+            }
+            // Best-effort: don't fail the entry if email fails
+        }
     }
 
     // 8.5. Push tags to CoreSwift for directory campaign entries
@@ -344,8 +352,7 @@ pub async fn create_entry(
         entry_id.to_string(),
     );
 
-    // 10. Execute campaign integrations — pushes to WorkflowSwift
-    //     WorkflowSwift handles routing to API targets using stored keys
+    // 10. Execute DIRECT campaign integrations (webhook/Mailchimp/HubSpot/etc)
     dispatch_integrations(
         &state.http_client,
         &campaign.delivery_config,
