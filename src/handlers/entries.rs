@@ -160,6 +160,26 @@ pub async fn create_entry(
         }
     }
 
+    // 7.8. CoreSwift external push (per-user connection + per-campaign list + field mapping).
+    //      Best-effort: fire-and-forget — never fails the entry.
+    {
+        let state_clone = state.clone();
+        let push_contact_id = contact_id;
+        let push_campaign_id = campaign.id;
+        let push_entry_id = entry_id;
+        let push_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
+        tokio::spawn(async move {
+            crate::delivery::coreswift_external::push_entry_to_coreswift(
+                &state_clone,
+                &push_contact_id,
+                &push_campaign_id,
+                &push_entry_id,
+                &push_tags,
+            )
+            .await;
+        });
+    }
+
     // 8. If winning outcome and auto-email configured, trigger prize email via n8n
     //    Do this BEFORE consuming contact fields in the delivery payload.
     let is_win = outcome == "winner" || outcome == "grand_prize";

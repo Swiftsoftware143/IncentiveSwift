@@ -10,7 +10,7 @@
 //!   `{"label": "Yes", "value": "yes", "tag": "interested_in_premium"}`
 //! When the user selects that answer, the tag is applied to the contact.
 
-use crate::delivery::coreswift_push::{get_contact_tags, push_contact_to_coreswift};
+use crate::delivery::coreswift_external::IqsAnswerField;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -54,6 +54,8 @@ pub struct IqsQuestion {
     pub required: bool,
     pub options: Value,
     pub config: Value,
+    pub crm_field: Option<String>,
+    pub crm_field_type: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -121,6 +123,8 @@ pub struct CreateQuestionInput {
     pub required: Option<bool>,
     pub options: Option<Value>,
     pub config: Option<Value>,
+    pub crm_field: Option<String>,
+    pub crm_field_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -132,6 +136,8 @@ pub struct UpdateQuestionInput {
     pub required: Option<bool>,
     pub options: Option<Value>,
     pub config: Option<Value>,
+    pub crm_field: Option<Option<String>>,
+    pub crm_field_type: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -437,8 +443,8 @@ pub async fn create_question(
     sqlx::query(
         r#"INSERT INTO iqs_questions
            (id, funnel_id, question_key, question_text, question_type,
-            sort_order, required, options, config)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)"#,
+            sort_order, required, options, config, crm_field, crm_field_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)"#,
     )
     .bind(qid)
     .bind(id)
@@ -449,6 +455,8 @@ pub async fn create_question(
     .bind(required)
     .bind(&options)
     .bind(&question_config)
+    .bind(&body.crm_field)
+    .bind(&body.crm_field_type)
     .execute(&state.db)
     .await?;
 
@@ -507,13 +515,22 @@ pub async fn update_question(
     let required = body.required.unwrap_or(existing.required);
     let options = body.options.unwrap_or(existing.options);
     let config = body.config.unwrap_or(existing.config);
+    let crm_field = match body.crm_field {
+        None => existing.crm_field,
+        Some(cf) => cf,
+    };
+    let crm_field_type = match body.crm_field_type {
+        None => existing.crm_field_type,
+        Some(cf) => cf,
+    };
 
     sqlx::query(
         r#"UPDATE iqs_questions
               SET question_key = $1, question_text = $2, question_type = $3,
                   sort_order = $4, required = $5, options = $6::jsonb,
-                  config = $7::jsonb, updated_at = NOW()
-            WHERE id = $8"#,
+                  config = $7::jsonb, crm_field = $8, crm_field_type = $9,
+                  updated_at = NOW()
+            WHERE id = $10"#,
     )
     .bind(&question_key)
     .bind(&question_text)
@@ -522,6 +539,8 @@ pub async fn update_question(
     .bind(required)
     .bind(&options)
     .bind(&config)
+    .bind(&crm_field)
+    .bind(&crm_field_type)
     .bind(qid)
     .execute(&state.db)
     .await?;
@@ -997,18 +1016,38 @@ pub async fn submit_funnel(
         .execute(&state.db)
         .await?;
 
-    // 10. Push to CoreSwift
-    let contact_tags = get_contact_tags(&state, &contact_id).await;
-    push_contact_to_coreswift(
-        &state,
-        &contact_id,
-        &funnel.account_id,
-        &contact_tags,
-        &collected_tags,
-        &[],
-        "iqs_submission",
-    )
-    .await;
+    // 10. Push to CoreSwift (per-user connection + per-campaign list + field mapping)
+    let iqs_answer_fields: Vec<IqsAnswerField> = answer_records
+        .iter()
+        .filter_map(|rec| {
+            let qid = rec.get("question_id")?.as_str()?;
+            let qid = Uuid::parse_str(qid).ok()?;
+            let q = question_map.get(&qid)?;
+            Some(IqsAnswerField {
+                question_key: q.question_key.clone(),
+                question_text: q.question_text.clone(),
+                value: rec.get("value")?.as_str().unwrap_or_default().to_string(),
+                crm_field: q.crm_field.clone(),
+            })
+        })
+        .collect();
+
+    let state_clone = state.clone();
+    let push_contact_id = contact_id;
+    let push_account_id = funnel.account_id;
+    let push_funnel_id = funnel.id;
+    let push_tags: Vec<String> = collected_tags.to_vec();
+    tokio::spawn(async move {
+        crate::delivery::coreswift_external::push_iqs_submission_to_coreswift(
+            &state_clone,
+            &push_account_id,
+            &push_funnel_id,
+            &push_contact_id,
+            &push_tags,
+            &iqs_answer_fields,
+        )
+        .await;
+    });
 
     Ok(Json(json!({
         "data": {
