@@ -11,3 +11,5 @@ pub mod plans;
 pub mod questions_answers;
 pub mod raffles;
 pub mod viral;
+
+pub mod migrations;
