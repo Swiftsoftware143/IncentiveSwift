@@ -1067,8 +1067,7 @@ async fn main() -> anyhow::Result<()> {
         // Authenticated funnel CRUD
         .route(
             "/api/v1/iqs/funnels",
-            get(handlers::iqs_handler::list_funnels)
-                .post(handlers::iqs_handler::create_funnel),
+            get(handlers::iqs_handler::list_funnels).post(handlers::iqs_handler::create_funnel),
         )
         .route(
             "/api/v1/iqs/funnels/:id",
@@ -1079,8 +1078,7 @@ async fn main() -> anyhow::Result<()> {
         // Questions
         .route(
             "/api/v1/iqs/funnels/:id/questions",
-            get(handlers::iqs_handler::list_questions)
-                .post(handlers::iqs_handler::create_question),
+            get(handlers::iqs_handler::list_questions).post(handlers::iqs_handler::create_question),
         )
         .route(
             "/api/v1/iqs/funnels/:id/questions/reorder",
@@ -1094,13 +1092,11 @@ async fn main() -> anyhow::Result<()> {
         // Rules (conditional branching / classification)
         .route(
             "/api/v1/iqs/funnels/:id/rules",
-            get(handlers::iqs_handler::list_rules)
-                .post(handlers::iqs_handler::create_rule),
+            get(handlers::iqs_handler::list_rules).post(handlers::iqs_handler::create_rule),
         )
         .route(
             "/api/v1/iqs/funnels/:fid/rules/:rid",
-            put(handlers::iqs_handler::update_rule)
-                .delete(handlers::iqs_handler::delete_rule),
+            put(handlers::iqs_handler::update_rule).delete(handlers::iqs_handler::delete_rule),
         )
         // Submissions
         .route(
