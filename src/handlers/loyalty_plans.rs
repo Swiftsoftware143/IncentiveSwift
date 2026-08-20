@@ -145,7 +145,7 @@ pub async fn subscribe(
     };
 
     let base_url = std::env::var("APP_BASE_URL")
-        .unwrap_or_else(|_| "https://app.workflowswift.com".to_string());
+        .unwrap_or_else(|_| "https://app.incentiveswift.com".to_string());
     let success_url = req
         .success_url
         .unwrap_or_else(|| format!("{}/business-portal?loyalty=success", base_url));

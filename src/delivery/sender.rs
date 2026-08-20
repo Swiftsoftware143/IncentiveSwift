@@ -151,3 +151,53 @@ pub async fn test_smtp_config(
         "<h2>✅ SMTP Configuration Works!</h2><p>Your SMTP settings are correct. This email was sent using your configured SMTP server.</p><p>— IncentiveSwift</p>"
     ).await
 }
+
+/// Render {{key}} placeholders from a vars object.
+pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
+    let mut result = template.to_string();
+    if let Some(obj) = vars.as_object() {
+        for (key, value) in obj {
+            let placeholder = format!("{{{{{}}}}}", key);
+            let replacement = match value {
+                serde_json::Value::String(sv) => sv.clone(),
+                other => other.to_string(),
+            };
+            result = result.replace(&placeholder, &replacement);
+        }
+    }
+    result
+}
+
+/// Load an email template by type for the given account (account override first,
+/// then global default), render vars, and send via the tenant's SMTP.
+/// Returns Err if no template exists for that type OR no SMTP is configured.
+pub async fn send_template_by_type(
+    pool: &PgPool,
+    account_id: Uuid,
+    to: &str,
+    template_type: &str,
+    vars: &serde_json::Value,
+) -> Result<(), String> {
+    let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
+        "SELECT subject, body, html_body FROM email_templates
+         WHERE template_type = $1 AND (aid = $2 OR (aid IS NULL AND is_default = true))
+         ORDER BY (aid = $2) DESC, is_default DESC, created_at DESC
+         LIMIT 1",
+    )
+    .bind(template_type)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error loading template: {e}"))?
+    .ok_or_else(|| format!("No email template found for type '{template_type}'"))?;
+
+    let subject = row
+        .0
+        .unwrap_or_else(|| format!("IncentiveSwift: {}", template_type));
+    // Prefer html_body, fall back to body
+    let body = row.2.or(row.1).unwrap_or_default();
+    let subject = render_template(&subject, vars);
+    let body = render_template(&body, vars);
+
+    send_email(pool, account_id, to, &subject, &body).await
+}
