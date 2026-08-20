@@ -108,13 +108,8 @@ pub async fn create_entry(
         tags = pity_tags;
     }
 
-    // 5.5. Auto-add Newsletter tag for directory (b2b_loyalty) campaign entries
-    if campaign.r#type == "b2b_loyalty" && !campaign.name.is_empty() {
-        let city_newsletter_tag = format!("{} - Newsletter", campaign.name);
-        if !tags.contains(&city_newsletter_tag) {
-            tags.push(city_newsletter_tag);
-        }
-    }
+    // 5.5. Loyalty campaigns: tags are driven by campaign config (tag_namespace),
+    // NOT hardcoded business-specific assumptions (no forced "Newsletter" tag).
 
     let tags_applied = tags.clone();
 
@@ -230,16 +225,12 @@ pub async fn create_entry(
         }
     }
 
-    // 8.5. Push tags to CoreSwift for directory campaign entries
+    // 8.5. Push tags to CoreSwift for loyalty campaign entries (all applied tags)
     if campaign.r#type == "b2b_loyalty" {
         let push_contact_id = contact_id;
         let push_account_id = campaign.account_id;
         let push_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
-        let push_added: Vec<String> = tags_applied
-            .iter()
-            .filter(|t| t.contains(" - Newsletter"))
-            .cloned()
-            .collect();
+        let push_added: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
         let state_clone = state.clone();
         tokio::spawn(async move {
             crate::delivery::coreswift_push::push_contact_to_coreswift(
