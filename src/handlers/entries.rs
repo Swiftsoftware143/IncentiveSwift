@@ -155,6 +155,41 @@ pub async fn create_entry(
         }
     }
 
+    // 7.6. Lifecycle email trigger (stage 1 immediate + stage 3 scheduled 24h).
+    // Industry-standard dedupe: once per campaign per email. Best-effort, non-blocking.
+    if let Some(ref email) = body.contact.email {
+        if !email.trim().is_empty() {
+            let already = crate::lifecycle_emails::already_emailed(
+                &state.db,
+                campaign.account_id,
+                email.trim(),
+                &campaign.r#type,
+            )
+            .await;
+            if !already {
+                let state_clone = state.clone();
+                let acct = campaign.account_id;
+                let em = email.trim().to_string();
+                let ctype = campaign.r#type.clone();
+                let cname = campaign.name.clone();
+                let fname = body.contact.first_name.clone();
+                let lname = body.contact.last_name.clone();
+                tokio::spawn(async move {
+                    crate::lifecycle_emails::trigger_entry_lifecycle(
+                        &state_clone,
+                        acct,
+                        &em,
+                        &ctype,
+                        &cname,
+                        fname.as_deref(),
+                        lname.as_deref(),
+                    )
+                    .await;
+                });
+            }
+        }
+    }
+
     // 7.8. CoreSwift external push (per-user connection + per-campaign list + field mapping).
     //      Best-effort: fire-and-forget — never fails the entry.
     {

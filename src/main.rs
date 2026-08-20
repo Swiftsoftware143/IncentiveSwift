@@ -14,6 +14,8 @@
 #![allow(clippy::incompatible_msrv)]
 #![allow(non_snake_case)]
 mod email;
+mod email_queue;
+mod lifecycle_emails;
 
 pub mod access;
 pub mod billing;
@@ -73,6 +75,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Build shared state
     let state = state::AppState::new(&config).await?;
+
+    // Start background email ticker (flushes scheduled follow-ups/reminders)
+    email_queue::spawn_email_ticker(state.clone());
 
     // Build router
     let app = Router::new()
@@ -1127,6 +1132,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_state(state);
 
+    // Start background email ticker (flushes scheduled follow-ups/reminders)
     // Start server
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("Starting IncentiveSwift API on {}", addr);
