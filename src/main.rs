@@ -1047,6 +1047,71 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/analytics/export",
             get(handlers::analytics_handler::export_csv),
         )
+        // ------------------------------------------------------------------
+        // IQS — Intelligent Qualifying Surveys
+        // ------------------------------------------------------------------
+        // Public play endpoints (no auth)
+        .route(
+            "/api/v1/iqs/play/:slug",
+            get(handlers::iqs_handler::get_play_funnel),
+        )
+        .route(
+            "/api/v1/iqs/play/:slug/submit",
+            post(handlers::iqs_handler::submit_funnel),
+        )
+        // Campaign-attached IQS questions (for gating a campaign entry)
+        .route(
+            "/api/v1/campaigns/:slug/iqs-questions",
+            get(handlers::iqs_handler::get_campaign_iqs_questions),
+        )
+        // Authenticated funnel CRUD
+        .route(
+            "/api/v1/iqs/funnels",
+            get(handlers::iqs_handler::list_funnels)
+                .post(handlers::iqs_handler::create_funnel),
+        )
+        .route(
+            "/api/v1/iqs/funnels/:id",
+            get(handlers::iqs_handler::get_funnel)
+                .put(handlers::iqs_handler::update_funnel)
+                .delete(handlers::iqs_handler::delete_funnel),
+        )
+        // Questions
+        .route(
+            "/api/v1/iqs/funnels/:id/questions",
+            get(handlers::iqs_handler::list_questions)
+                .post(handlers::iqs_handler::create_question),
+        )
+        .route(
+            "/api/v1/iqs/funnels/:id/questions/reorder",
+            post(handlers::iqs_handler::reorder_questions),
+        )
+        .route(
+            "/api/v1/iqs/funnels/:fid/questions/:qid",
+            put(handlers::iqs_handler::update_question)
+                .delete(handlers::iqs_handler::delete_question),
+        )
+        // Rules (conditional branching / classification)
+        .route(
+            "/api/v1/iqs/funnels/:id/rules",
+            get(handlers::iqs_handler::list_rules)
+                .post(handlers::iqs_handler::create_rule),
+        )
+        .route(
+            "/api/v1/iqs/funnels/:fid/rules/:rid",
+            put(handlers::iqs_handler::update_rule)
+                .delete(handlers::iqs_handler::delete_rule),
+        )
+        // Submissions
+        .route(
+            "/api/v1/iqs/funnels/:id/submissions",
+            get(handlers::iqs_handler::list_submissions),
+        )
+        // File upload (image-choice question assets)
+        .route(
+            "/api/v1/iqs/upload",
+            post(handlers::iqs_handler::upload_file),
+        )
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(TraceLayer::new_for_http())
