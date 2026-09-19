@@ -102,7 +102,7 @@ The 9 sections: Source Control → Build → Git Sync → Signup Flow → Admin 
 
 
 ### 9. Admin Login — NEVER BREAK
-- Admin credentials: `swiftsoftware143@yahoo.com` / `(rotated-2026-09-16)`
+- Admin credentials: `swiftsoftware143@yahoo.com` / `<REDACTED-ROTATED-2026-09-16>`
 - After EVERY deploy: verify admin login works
 - For SaaS apps: `https://admin.{domain}/` must accept these credentials
 - For Multi-Directory: `https://directory.swiftsoftware.net/admin` must accept these credentials
