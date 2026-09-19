@@ -1,3 +1,5 @@
+> OpenClaw-era rules. Hermes reads AGENTS.md — mirrored there 2026-09-19.
+
 # .openclaw/rules.md
 
 ## RULES PROTECTION — READ THIS FIRST
