@@ -291,6 +291,192 @@ pub async fn coreswift_status(
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let connected = get_coreswift_conn(&state, &account_id).await.is_ok();
-    Ok(Json(json!({ "connected": connected })))
+    match crate::delivery::coreswift_external::get_coreswift_connection(&state, &account_id).await {
+        Some((_, base_url)) => Ok(Json(json!({ "connected": true, "base_url": base_url }))),
+        None => Ok(Json(json!({ "connected": false, "base_url": null }))),
+    }
+}
+
+// ---- Manual push (the documented manual fallback for the inbound path) ----
+
+#[derive(Deserialize)]
+pub struct CoreswiftPushInput {
+    /// Contact to push. Omitted -> the account's most recently captured contact.
+    pub contact_id: Option<Uuid>,
+    /// Optional CoreSwift list id (picker value from /integrations/coreswift/lists).
+    pub list_id: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+/// POST /api/v1/integrations/coreswift/push
+///
+/// Same code path as the automatic capture push (`push_lead_to_coreswift`).
+/// Unlike the capture path this one is user-triggered, so failures are surfaced.
+pub async fn coreswift_push(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Json(body): Json<CoreswiftPushInput>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // Contacts are shared across the install, so ownership is proven through the
+    // entries -> campaigns -> account chain rather than a contacts.account_id.
+    let contact_id = match body.contact_id {
+        Some(cid) => {
+            let owned: Option<Uuid> = sqlx::query_scalar(
+                r#"SELECT c.account_id
+                   FROM entries e
+                   JOIN campaigns c ON c.id = e.campaign_id
+                   WHERE e.contact_id = $1 AND c.account_id = $2
+                   ORDER BY e.created_at DESC
+                   LIMIT 1"#,
+            )
+            .bind(cid)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+            if owned.is_none() {
+                return Err(AppError::NotFound(
+                    "Contact not found for this account".to_string(),
+                ));
+            }
+            cid
+        }
+        None => sqlx::query_scalar(
+            r#"SELECT e.contact_id
+               FROM entries e
+               JOIN campaigns c ON c.id = e.campaign_id
+               WHERE c.account_id = $1 AND e.contact_id IS NOT NULL
+               ORDER BY e.created_at DESC
+               LIMIT 1"#,
+        )
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("No captured contacts yet".to_string()))?,
+    };
+
+    if crate::delivery::coreswift_external::get_coreswift_connection(&state, &account_id)
+        .await
+        .is_none()
+    {
+        return Err(AppError::BadRequest(
+            "CoreSwift is not connected — store your CoreSwift key first".to_string(),
+        ));
+    }
+
+    let pushed = crate::delivery::coreswift_external::push_lead_to_coreswift(
+        &state,
+        &account_id,
+        &contact_id,
+        &body.tags,
+        body.list_id.clone(),
+        json!({}),
+        "manual_push",
+    )
+    .await;
+
+    if !pushed {
+        return Err(AppError::Internal(
+            "CoreSwift rejected the push — check the server log for the hub response".to_string(),
+        ));
+    }
+
+    Ok(Json(json!({
+        "pushed": true,
+        "contact_id": contact_id,
+        "list_id": body.list_id,
+    })))
+}
+
+/// POST /api/v1/provider-keys/:provider/test
+///
+/// Live probe where the provider supports one (CoreSwift -> hub /api/external/lists).
+/// For the rest: honest "credential stored, no live probe" — never a fake green.
+pub async fn test_provider_key(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(provider): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    if provider == "coreswift" {
+        return match get_coreswift_conn(&state, &account_id).await {
+            Err(_) => Ok(Json(json!({
+                "provider": provider,
+                "ok": false,
+                "live": false,
+                "message": "Not connected — store your CoreSwift API key first",
+            }))),
+            Ok((api_key, base_url)) => {
+                let url = format!("{base_url}/api/external/lists");
+                let resp = state
+                    .http_client
+                    .get(&url)
+                    .bearer_auth(&api_key)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .send()
+                    .await;
+
+                match resp {
+                    Ok(r) if r.status().is_success() => {
+                        let body: Value = r.json().await.unwrap_or_else(|_| json!({}));
+                        let n = body
+                            .get("lists")
+                            .and_then(|l| l.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        Ok(Json(json!({
+                            "provider": provider,
+                            "ok": true,
+                            "live": true,
+                            "base_url": base_url,
+                            "message": format!("CoreSwift reachable — {n} list(s)"),
+                        })))
+                    }
+                    Ok(r) => {
+                        let status = r.status();
+                        Ok(Json(json!({
+                            "provider": provider,
+                            "ok": false,
+                            "live": true,
+                            "base_url": base_url,
+                            "message": format!("CoreSwift returned {status} — key rejected or URL wrong"),
+                        })))
+                    }
+                    Err(e) => Ok(Json(json!({
+                        "provider": provider,
+                        "ok": false,
+                        "live": true,
+                        "base_url": base_url,
+                        "message": format!("CoreSwift unreachable: {e}"),
+                    }))),
+                }
+            }
+        };
+    }
+
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM provider_keys
+         WHERE account_id = $1 AND provider = $2 AND is_active = true AND api_key <> ''",
+    )
+    .bind(account_id)
+    .bind(&provider)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(json!({
+        "provider": provider,
+        "ok": stored > 0,
+        "live": false,
+        "message": if stored > 0 {
+            "Credential stored — no live probe for this provider"
+        } else {
+            "No credential stored for this provider"
+        },
+    })))
 }

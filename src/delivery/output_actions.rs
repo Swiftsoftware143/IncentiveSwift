@@ -81,26 +81,9 @@ pub async fn execute_output_actions(
             let _ = fire_webhook(&state.http_client, webhook_url, &payload).await;
         }
 
-        // Also fire legacy CoreSwift sync
-        let _ = crate::delivery::coreswift_sync::sync_entry_to_coreswift(
-            state,
-            campaign_id,
-            campaign_name,
-            campaign_slug,
-            contact_id,
-            &Some(contact_first_name.to_string()),
-            &Some(contact_last_name.to_string()),
-            &Some(contact_email.to_string()),
-            &Some(contact_phone.to_string()),
-            &Some(contact_website.to_string()),
-            &Some(contact_business_name.to_string()),
-            account_id,
-            outcome,
-            answers,
-            utm_source,
-        )
-        .await;
-
+        // CoreSwift delivery is NOT fired here: every capture path already pushes the
+        // lead through the shared helper in the capture handler (coreswift_external),
+        // so this branch stays webhook-only instead of double-pushing.
         return;
     }
 
@@ -161,42 +144,29 @@ pub async fn execute_output_actions(
                 }
             }
             "coreswift_contact" => {
-                let _ = crate::delivery::coreswift_sync::sync_entry_to_coreswift(
-                    state,
-                    campaign_id,
-                    campaign_name,
-                    campaign_slug,
-                    contact_id,
-                    &Some(contact_first_name.to_string()),
-                    &Some(contact_last_name.to_string()),
-                    &Some(contact_email.to_string()),
-                    &Some(contact_phone.to_string()),
-                    &Some(contact_website.to_string()),
-                    &Some(contact_business_name.to_string()),
-                    account_id,
-                    outcome,
-                    answers,
-                    utm_source,
-                )
-                .await;
-
-                // Also add to list if configured
+                // ONE CoreSwift path: the shared inbound helper -> hub
+                // /api/external/contacts (list membership + tags ride in the payload).
                 let list_id = action_config
                     .get("list_id")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !list_id.is_empty() {
-                    add_contact_to_coreswift_list(state, account_id, contact_id, list_id).await;
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                let mut push_tags: Vec<String> = tags.to_vec();
+                if let Some(t) = action_config.get("tag").and_then(|v| v.as_str()) {
+                    if !t.is_empty() {
+                        push_tags.push(t.to_string());
+                    }
                 }
-
-                // Also apply tag if configured
-                let tag_name = action_config
-                    .get("tag")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !tag_name.is_empty() {
-                    apply_tag_to_coreswift_contact(state, account_id, contact_id, tag_name).await;
-                }
+                let _ = crate::delivery::coreswift_external::push_lead_to_coreswift(
+                    state,
+                    account_id,
+                    contact_id,
+                    &push_tags,
+                    list_id,
+                    json!({}),
+                    "output_action:coreswift_contact",
+                )
+                .await;
             }
             "email" => {
                 let subject = action_config
@@ -408,103 +378,6 @@ async fn fire_webhook_with_method(client: &Client, url: &str, method: &str, payl
     match resp {
         Ok(r) => tracing::debug!("Webhook {} returned {}", url, r.status()),
         Err(e) => tracing::warn!("Webhook {} failed: {}", url, e),
-    }
-}
-
-/// Add a contact to a CoreSwift list via the API
-async fn add_contact_to_coreswift_list(
-    state: &AppState,
-    account_id: &Uuid,
-    contact_id: &Uuid,
-    list_id: &str,
-) {
-    // Get CoreSwift credentials
-    let creds = sqlx::query_as::<_, (String, Option<String>)>(
-        r#"SELECT api_key, base_url FROM provider_keys
-           WHERE provider = 'coreswift' AND account_id = $1 AND is_active = true
-           LIMIT 1"#,
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await;
-
-    let Ok(Some((jwt, base_url))) = creds else {
-        return;
-    };
-    if jwt.is_empty() {
-        return;
-    }
-
-    let base = base_url.unwrap_or_else(|| "https://coreswiftcrm.com".to_string());
-
-    let resp = state
-        .http_client
-        .post(format!(
-            "{}/api/lists/{}/members",
-            base.trim_end_matches('/'),
-            list_id
-        ))
-        .header("Authorization", format!("Bearer {}", jwt))
-        .json(&json!({"contact_id": contact_id}))
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) => tracing::info!("CoreSwift list add: {} (status={})", list_id, r.status()),
-        Err(e) => tracing::warn!("CoreSwift list add failed: {}", e),
-    }
-}
-
-/// Apply a tag to a CoreSwift contact
-/// Note: CoreSwift tags contacts via PATCH on the contact itself or a dedicated tag endpoint.
-/// We assume a simple approach: tags are appended to contact notes.
-async fn apply_tag_to_coreswift_contact(
-    state: &AppState,
-    account_id: &Uuid,
-    contact_id: &Uuid,
-    tag_name: &str,
-) {
-    let creds = sqlx::query_as::<_, (String, Option<String>)>(
-        r#"SELECT api_key, base_url FROM provider_keys
-           WHERE provider = 'coreswift' AND account_id = $1 AND is_active = true
-           LIMIT 1"#,
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await;
-
-    let Ok(Some((jwt, base_url))) = creds else {
-        return;
-    };
-    if jwt.is_empty() {
-        return;
-    }
-
-    let base = base_url.unwrap_or_else(|| "https://coreswiftcrm.com".to_string());
-
-    // Try: PATCH /api/contacts/:id with tag in metadata
-    let resp = state
-        .http_client
-        .patch(format!(
-            "{}/api/contacts/{}",
-            base.trim_end_matches('/'),
-            contact_id
-        ))
-        .header("Authorization", format!("Bearer {}", jwt))
-        .json(&json!({"tags": [tag_name]}))
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) => tracing::info!(
-            "CoreSwift tag '{}' applied to contact {} (status={})",
-            tag_name,
-            contact_id,
-            r.status()
-        ),
-        Err(e) => tracing::warn!("CoreSwift tag apply failed: {}", e),
     }
 }
 

@@ -262,20 +262,9 @@ pub async fn register(
         }
     }
 
-    let cs_state = state.clone();
-    let cs_account_id = account_id;
-    tokio::spawn(async move {
-        crate::delivery::coreswift_push::push_contact_to_coreswift(
-            &cs_state,
-            &cs_account_id,
-            &cs_account_id,
-            &["incentiveswift:Free".to_string()],
-            &["incentiveswift:Free".to_string()],
-            &[],
-            "signup",
-        )
-        .await;
-    });
+    // Account signup is not a lead-capture event (there is no contact yet); the
+    // legacy account-as-contact CoreSwift push that lived here was removed. Captured
+    // leads reach CoreSwift through the shared push in the entry / IQS paths.
 
     // Send welcome email
     let wl_pool = state.db.clone();

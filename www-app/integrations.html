@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IncentiveSwift — Integrations</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0;color:#0f172a}
+.header{background:#fff;border-bottom:1px solid #e2e8f0;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+.header a{color:#64748b;text-decoration:none;font-size:13px;margin-left:18px}
+.header a:hover{color:#0f172a}
+.wrap{max-width:960px;margin:24px auto;padding:0 24px}
+.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:24px;margin-bottom:16px}
+.card.pinned{border:1px solid #bfdbfe;box-shadow:0 1px 3px rgba(37,99,235,.12)}
+.btn{background:#2563eb;color:#fff;padding:9px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:600;font-size:14px}
+.btn:hover{background:#1d4ed8}.btn:disabled{opacity:.6;cursor:not-allowed}
+.btn.gray{background:#e2e8f0;color:#334155}.btn.gray:hover{background:#cbd5e1}
+.btn.sm{padding:6px 12px;font-size:13px}.btn.red{background:#ef4444}.btn.red:hover{background:#dc2626}
+.input,select{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:9px 12px;font-size:14px;outline:0;box-sizing:border-box}
+.input:focus,select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+label{font-size:12px;font-weight:600;color:#475569;display:block;margin:14px 0 4px}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.ok{background:#dcfce7;color:#166534}.badge.no{background:#f1f5f9;color:#475569}
+.badge.rec{background:#dbeafe;color:#1d4ed8;margin-left:6px}
+.msg{padding:10px 14px;border-radius:8px;font-size:13px;margin:12px 0;display:none}
+.msg.ok{background:#dcfce7;color:#166534;display:block}.msg.err{background:#fee2e2;color:#991b1b;display:block}
+.muted{color:#64748b;font-size:13px}
+.spinner{border:2px solid #e2e8f0;border-top-color:#2563eb;border-radius:50%;width:14px;height:14px;display:inline-block;animation:spin .6s linear infinite;vertical-align:-2px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none !important}
+.xsell{margin-top:14px;padding:12px 14px;background:#eff6ff;border-radius:8px;font-size:13px;color:#1e40af}
+.xsell a{color:#1d4ed8;font-weight:600}
+.tbl{width:100%;font-size:13px;border-collapse:collapse}
+.tbl th{text-align:left;padding:8px;color:#64748b;font-weight:600;border-bottom:1px solid #f1f5f9}
+.tbl td{padding:8px;border-bottom:1px solid #f1f5f9}
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="font-weight:700;font-size:15px">IncentiveSwift <span class="muted">— Integrations</span></div>
+  <div><a href="/dashboard">Dashboard</a><a href="/iqs.html">IQS Surveys</a><a href="#" id="logout">Sign Out</a></div>
+</div>
+<div class="wrap">
+  <div id="msg" class="msg"></div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;margin:0">Integration Center</h2>
+    <p class="muted" style="margin:8px 0 0">Connect the tools your campaigns deliver through. Credentials are stored per account (your key, your account) — never shared.</p>
+  </div>
+  <div id="cards">
+    <div class="card"><span class="muted"><span class="spinner"></span> Loading integrations…</span></div>
+  </div>
+</div>
+
+<script>
+var PINNED_KEY = 'coreswift';                  // CoreSwift is pinned first (standard R2)
+var CROSS_SELL_URL = 'https://coreswiftcrm.com';
+var UPSELL_URL = '/signup.html?plan=pro';
+var API_BASE = window.location.origin + '/api/v1';
+var TOKEN_KEYS = ['ws_fs_token','is_token','token','access_token'];
+
+function getToken(){
+  for (var i=0;i<TOKEN_KEYS.length;i++){
+    var t = sessionStorage.getItem(TOKEN_KEYS[i]) || localStorage.getItem(TOKEN_KEYS[i]);
+    if (t) return t;
+  }
+  return null;
+}
+var token = getToken();
+if (!token) { window.location.href = '/login'; }
+
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function msg(t,cls){var m=document.getElementById('msg');m.className='msg '+(cls||'ok');m.textContent=t;setTimeout(function(){m.className='msg';},5000);}
+
+async function api(path, method, body){
+  var r = await fetch(API_BASE + path, {method:method||'GET', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: body?JSON.stringify(body):undefined});
+  if (r.status === 401) { window.location.href = '/login'; return null; }
+  var d = null; try{ d = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((d && (d.error||d.message)) || ('HTTP '+r.status));
+  return d;
+}
+
+var CATALOGUE = [], KEYS = {};
+
+function keyFor(p){ return KEYS[String(p).toLowerCase()] || null; }
+
+function metadataInputs(p){
+  var req = p.requires_metadata || [];
+  if (!req.length) return {html:'', fields:[]};
+  var h = '<label>Metadata (required: ' + req.map(esc).join(', ') + ')</label>';
+  req.forEach(function(f){
+    h += '<input class="input meta-field" data-field="'+esc(f)+'" placeholder="'+esc(f)+'" style="margin-bottom:6px" autocomplete="off">';
+  });
+  return {html:h, fields:req};
+}
+
+function cardHtml(p){
+  var k = keyFor(p.key), on = !!(k && k.is_active !== false && k.api_key_masked);
+  var pinned = p.key === PINNED_KEY;
+  var meta = metadataInputs(p);
+  var h = '<div class="card' + (pinned?' pinned':'') + '" data-provider="'+esc(p.key)+'">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center">';
+  h += '<h2 style="font-size:16px;font-weight:600;margin:0">'+esc(p.name)+(pinned?'<span class="badge rec">Recommended</span>':'')+'</h2>';
+  h += '<span class="badge '+(on?'ok':'no')+'">'+(on?'Connected':'Not connected')+'</span></div>';
+  h += '<p class="muted" style="margin:8px 0 0">'+esc(p.description||'')+'</p>';
+
+  if (on) {
+    h += '<div style="margin-top:12px" class="muted">Key on file: <b>'+esc(k.api_key_masked)+'</b>'
+       + (k.base_url? ' · '+esc(k.base_url) : '') + '</div>';
+    h += '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">'
+       + '<button class="btn gray sm test-btn">Test connection</button>'
+       + (pinned? '<button class="btn gray sm list-btn">Test — fetch lists</button>':'')
+       + (pinned? '<button class="btn sm push-btn">Push latest captured lead</button>':'')
+       + '<button class="btn red sm disc-btn">Disconnect</button></div>';
+    if (pinned) h += '<div class="lists" style="margin-top:14px"></div>';
+  } else {
+    h += '<label>'+esc(p.name)+' API key</label><input class="input key-field" placeholder="'+esc(p.key==='coreswift'?'csk_…':'paste your key')+'" autocomplete="off">';
+    if (p.requires_base_url) h += '<label>Base URL (required)</label><input class="input url-field" placeholder="https://…" autocomplete="off">';
+    else if (pinned) h += '<label>CoreSwift URL (optional — override only if self-hosted)</label><input class="input url-field" placeholder="https://your-instance" autocomplete="off">';
+    h += meta.html;
+    if (pinned) h += '<p class="muted" style="margin-top:6px">Create this key inside your CoreSwift account → Integration Center → Lead-delivery keys.</p>';
+    h += '<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">'
+       + '<button class="btn conn-btn">Connect '+esc(p.name)+'</button>'
+       + '<button class="btn gray sm test-btn">Test connection</button></div>';
+  }
+
+  if (pinned) {
+    h += '<div class="xsell">One CRM for every tool you connect — leads captured here land in CoreSwift automatically. '
+       + '<a href="'+CROSS_SELL_URL+'" target="_blank" rel="noopener">Open CoreSwift CRM →</a>'
+       + ' &nbsp;·&nbsp; Need more lead volume? <a href="'+UPSELL_URL+'">Compare plans →</a></div>';
+  }
+  h += '<div class="result muted" style="margin-top:10px"></div>';
+  h += '</div>';
+  return h;
+}
+
+function render(){
+  var box = document.getElementById('cards');
+  if (!CATALOGUE.length) { box.innerHTML = '<div class="card"><span class="muted">No integrations available yet.</span></div>'; return; }
+  var pinned = CATALOGUE.filter(function(p){return p.key===PINNED_KEY;});
+  var rest = CATALOGUE.filter(function(p){return p.key!==PINNED_KEY;});
+  box.innerHTML = pinned.concat(rest).map(cardHtml).join('');
+  box.querySelectorAll('.card[data-provider]').forEach(wire);
+}
+
+function out(card, text, isErr){
+  var el = card.querySelector('.result');
+  el.innerHTML = esc(text);
+  el.style.color = isErr ? '#991b1b' : '#166534';
+}
+
+function wire(card){
+  var provider = card.getAttribute('data-provider');
+  var keyEl = card.querySelector('.key-field');
+  var urlEl = card.querySelector('.url-field');
+  var metaFields = card.querySelectorAll('.meta-field');
+
+  var t = card.querySelector('.test-btn');
+  if (t) t.onclick = async function(){
+    t.disabled = true; var old = t.textContent; t.innerHTML = '<span class="spinner"></span>';
+    try { var d = await api('/provider-keys/'+encodeURIComponent(provider)+'/test', 'POST', {});
+          out(card, (d && d.message) || 'Tested', !(d && d.ok)); }
+    catch(e){ out(card, e.message, true); }
+    t.disabled = false; t.textContent = old;
+  };
+
+  var c = card.querySelector('.conn-btn');
+  if (c) c.onclick = async function(){
+    var body = {provider: provider, api_key: keyEl.value.trim()};
+    if (urlEl && urlEl.value.trim()) body.base_url = urlEl.value.trim();
+    var m = {}; metaFields.forEach(function(f){ if (f.value.trim()) m[f.getAttribute('data-field')] = f.value.trim(); });
+    if (Object.keys(m).length) body.metadata = m;
+    if (!body.api_key) { out(card, 'Paste a key first', true); return; }
+    c.disabled = true; c.innerHTML = '<span class="spinner"></span> Connecting…';
+    try { await api('/provider-keys', 'POST', body); msg('Connected ' + provider, 'ok'); await load(); }
+    catch(e){ out(card, e.message, true); c.disabled = false; c.textContent = 'Connect'; }
+  };
+
+  var d = card.querySelector('.disc-btn');
+  if (d) d.onclick = async function(){
+    if (!confirm('Disconnect ' + provider + '? Captured leads will stop syncing.')) return;
+    try { await api('/provider-keys/'+encodeURIComponent(provider), 'DELETE'); msg('Disconnected ' + provider, 'ok'); await load(); }
+    catch(e){ out(card, e.message, true); }
+  };
+
+  var l = card.querySelector('.list-btn');
+  if (l) l.onclick = async function(){
+    var box = card.querySelector('.lists');
+    box.innerHTML = '<span class="muted"><span class="spinner"></span> Fetching lists…</span>';
+    try {
+      var res = await api('/integrations/coreswift/lists');
+      var lists = (res && (res.lists || res.data)) || [];
+      if (!lists.length) { box.innerHTML = '<p class="muted">No lists found in CoreSwift. Create one there first.</p>'; return; }
+      box.innerHTML = '<table class="tbl"><thead><tr><th>List</th><th>Type</th><th style="text-align:right">Members</th></tr></thead><tbody>'
+        + lists.map(function(x){ return '<tr><td>'+esc(x.name)+'</td><td>'+esc(x.list_type||'')+'</td><td style="text-align:right">'+(x.member_count||0)+'</td></tr>'; }).join('')
+        + '</tbody></table>';
+    } catch(e){ box.innerHTML = '<p class="muted">'+esc(e.message)+'</p>'; }
+  };
+
+  var p = card.querySelector('.push-btn');
+  if (p) p.onclick = async function(){
+    p.disabled = true; p.innerHTML = '<span class="spinner"></span> Pushing…';
+    try { var r = await api('/integrations/coreswift/push', 'POST', {}); out(card, 'Pushed contact ' + r.contact_id + ' to CoreSwift', false); }
+    catch(e){ out(card, e.message, true); }
+    p.disabled = false; p.textContent = 'Push latest captured lead';
+  };
+}
+
+async function load(){
+  try {
+    var cat = await api('/available-providers');
+    CATALOGUE = (cat && (cat.items || cat.data)) || [];
+    var ks = await api('/provider-keys');
+    KEYS = {};
+    ((ks && (ks.items || ks.data)) || []).forEach(function(k){ KEYS[String(k.provider).toLowerCase()] = k; });
+    render();
+  } catch(e){ msg(e.message, 'err'); }
+}
+
+document.getElementById('logout').onclick = function(){
+  TOKEN_KEYS.forEach(function(k){ sessionStorage.removeItem(k); localStorage.removeItem(k); });
+  window.location.href = '/login';
+};
+
+load();
+</script>
+</body>
+</html>

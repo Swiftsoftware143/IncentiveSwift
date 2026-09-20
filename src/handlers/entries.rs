@@ -260,26 +260,9 @@ pub async fn create_entry(
         }
     }
 
-    // 8.5. Push tags to CoreSwift for loyalty campaign entries (all applied tags)
-    if campaign.r#type == "b2b_loyalty" {
-        let push_contact_id = contact_id;
-        let push_account_id = campaign.account_id;
-        let push_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
-        let push_added: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            crate::delivery::coreswift_push::push_contact_to_coreswift(
-                &state_clone,
-                &push_contact_id,
-                &push_account_id,
-                &push_tags,
-                &push_added,
-                &[],
-                "entry",
-            )
-            .await;
-        });
-    }
+    // 8.5. (removed) The legacy X-Internal-Key/tag-sync push lived here. There is now
+    //      exactly ONE CoreSwift path: step 7.8 above (coreswift_external, per-tenant
+    //      BYOK key -> hub /api/external/contacts), which already carries tags_applied.
 
     // 8.6. Execute output actions (webhook, CoreSwift sync, email, SMS)
     let oa_tags: Vec<String> = tags_applied.iter().map(|t| t.to_string()).collect();

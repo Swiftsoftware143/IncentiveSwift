@@ -15,8 +15,30 @@ use crate::state::AppState;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
+/// Fleet default when neither the tenant nor the catalogue carries a base URL.
+pub const DEFAULT_CORESWIFT_URL: &str = "https://coreswiftcrm.com";
+
+/// Fleet-wide CoreSwift base URL from `integration_provider_presets` (seeded by
+/// migration). Step 2 of the documented resolution order — never env-only.
+async fn preset_base_url(state: &AppState) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT base_url FROM integration_provider_presets
+         WHERE key = 'coreswift' AND base_url IS NOT NULL AND base_url <> ''",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Resolve the account's CoreSwift connection (personal API key + base URL) from
 /// provider_keys. Returns None if not connected.
+///
+/// Base URL resolution order (standard §Hub contract):
+///   1. `provider_keys.base_url` (tenant override)
+///   2. `integration_provider_presets.base_url` where key='coreswift'
+///   3. app config fallback
+///   4. constant default `https://coreswiftcrm.com`
 pub async fn get_coreswift_connection(
     state: &AppState,
     account_id: &Uuid,
@@ -31,20 +53,53 @@ pub async fn get_coreswift_connection(
     .ok()??;
 
     let api_key = row.0;
-    let base_url = row
-        .1
-        .filter(|u| !u.is_empty())
-        .or_else(|| {
-            let def = state.config.coreswift_url.trim().to_string();
-            if def.is_empty() {
-                None
-            } else {
-                Some(def)
+    if api_key.trim().is_empty() {
+        return None;
+    }
+
+    let tenant_override = row.1.filter(|u| !u.trim().is_empty());
+    let base_url = match tenant_override {
+        Some(u) => u,
+        None => match preset_base_url(state).await {
+            Some(u) => u,
+            None => {
+                let cfg = state.config.coreswift_url.trim().to_string();
+                if cfg.is_empty() {
+                    DEFAULT_CORESWIFT_URL.to_string()
+                } else {
+                    cfg
+                }
             }
-        })
-        .map(|u| u.trim_end_matches('/').to_string())?;
+        },
+    }
+    .trim_end_matches('/')
+    .to_string();
 
     Some((api_key, base_url))
+}
+
+/// THE shared inbound helper — every capture path and the manual push endpoint
+/// goes through this. Quietly does nothing when the tenant is not connected;
+/// logs real failures. Never fails the caller.
+pub async fn push_lead_to_coreswift(
+    state: &AppState,
+    account_id: &Uuid,
+    contact_id: &Uuid,
+    tags: &[String],
+    list_id: Option<String>,
+    fields: Value,
+    context_label: &str,
+) -> bool {
+    do_push(
+        state,
+        account_id,
+        contact_id,
+        tags,
+        list_id,
+        fields,
+        context_label,
+    )
+    .await
 }
 
 /// Fetch the campaign's per-campaign CoreSwift list id from delivery_config jsonb.
@@ -261,7 +316,7 @@ pub async fn push_entry_to_coreswift(
     let list_id = get_campaign_coreswift_list(state, campaign_id).await;
     let fields = build_field_mapping(state, entry_id).await;
 
-    do_push(
+    push_lead_to_coreswift(
         state,
         &account_id,
         contact_id,
@@ -323,7 +378,7 @@ pub async fn push_iqs_submission_to_coreswift(
 
     let fields = build_iqs_field_mapping(answers);
 
-    do_push(
+    push_lead_to_coreswift(
         state,
         account_id,
         contact_id,
