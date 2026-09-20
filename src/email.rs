@@ -1,5 +1,4 @@
 use serde_json::json;
-use std::env;
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
 fn render_template(template: &str, vars: &serde_json::Value) -> String {
@@ -54,6 +53,7 @@ pub async fn send_template_email(
             let text_body = render_template(&t.body.unwrap_or_default(), vars);
             let use_html = t.is_html.unwrap_or(true);
             send_email_request(
+                pool,
                 to,
                 &subject,
                 &text_body,
@@ -61,7 +61,7 @@ pub async fn send_template_email(
             )
             .await
         }
-        None => send_inline(to, template_type, vars, app_name, app_url).await,
+        None => send_inline(pool, to, template_type, vars, app_name, app_url).await,
     }
 }
 
@@ -75,6 +75,7 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
 }
 
 async fn send_inline(
+    pool: &sqlx::PgPool,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
@@ -96,25 +97,25 @@ async fn send_inline(
                 "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
                 app_name, name, email, password, app_url, app_name
             );
-            send_email_request(to, &format!("Welcome to {}!", app_name), &body, "").await
+            send_email_request(pool, to, &format!("Welcome to {}!", app_name), &body, "").await
         }
         "purchase_confirmed" => {
             let body = format!(
                 "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, please contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
                 name, plan_name_val, app_url, app_name
             );
-            send_email_request(to, "Payment Received - Thank You!", &body, "").await
+            send_email_request(pool, to, "Payment Received - Thank You!", &body, "").await
         }
         "password_reset" => {
             let body = format!(
                 "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- SwiftSoftware",
                 token
             );
-            send_email_request(to, "Password Reset Request", &body, "").await
+            send_email_request(pool, to, "Password Reset Request", &body, "").await
         }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);
-            send_email_request(to, &format!("{} Notification", app_name), &body, "").await
+            send_email_request(pool, to, &format!("{} Notification", app_name), &body, "").await
         }
     }
 }
@@ -158,40 +159,40 @@ pub async fn send_reset_email(pool: &sqlx::PgPool, to: &str, token: &str) -> Res
     send_template_email(pool, to, "password_reset", &vars).await
 }
 
-/// Core email sender — form-based HTTP POST (Mailgun-compatible)
+/// Core email sender — the provider (`smtp | mailgun | sendgrid | sendiio`) and its
+/// credentials come from the database (`admin_settings.email`, overridable per tenant in
+/// `tenant_settings`). Nothing is read from the process environment.
 async fn send_email_request(
+    pool: &sqlx::PgPool,
     to: &str,
     subject: &str,
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
-    let api_url = env::var("EMAIL_API_URL").map_err(|_| "EMAIL_API_URL not set".to_string())?;
-    let api_key = env::var("EMAIL_API_KEY").map_err(|_| "EMAIL_API_KEY not set".to_string())?;
-    let from = env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
+    let Some(cfg) = crate::email_provider::resolve(pool, None).await else {
+        tracing::warn!(
+            to = %to,
+            subject = %subject,
+            "email skipped — no email provider configured (Admin > Settings > Email Provider)"
+        );
+        return Err(
+            "Email provider not configured. Set it in Admin > Settings > Email Provider."
+                .to_string(),
+        );
+    };
 
-    let mut params = std::collections::HashMap::new();
-    params.insert("from", from.as_str());
-    params.insert("to", to);
-    params.insert("subject", subject);
-    params.insert("text", text_body);
+    let html = if html_body.trim().is_empty() {
+        None
+    } else {
+        Some(html_body)
+    };
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&api_url)
-        .basic_auth("api", Some(&api_key))
-        .form(&params)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
+    crate::email_provider::deliver(&cfg, to, subject, text_body, html)
         .await
-        .map_err(|e| format!("Failed to send email request: {}", e))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("Email API returned {}: {}", status, text));
-    }
-
-    Ok(())
+        .map_err(|e| {
+            tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
+            e
+        })
 }
 
 #[derive(Debug, sqlx::FromRow)]

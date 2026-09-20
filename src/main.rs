@@ -14,6 +14,7 @@
 #![allow(clippy::incompatible_msrv)]
 #![allow(non_snake_case)]
 mod email;
+mod email_provider;
 mod email_queue;
 mod lifecycle_emails;
 
@@ -28,6 +29,7 @@ pub mod handlers;
 pub mod iqs_validation;
 pub mod mechanics;
 pub mod security;
+mod smtp;
 mod state;
 mod theme;
 
@@ -945,6 +947,15 @@ async fn main() -> anyhow::Result<()> {
                 .delete(handlers::surfaces_handler::delete),
         )
         // Provider Keys routes
+        .route(
+            "/api/v1/admin/email-settings",
+            get(handlers::email_settings_handler::get_email_settings)
+                .put(handlers::email_settings_handler::update_email_settings),
+        )
+        .route(
+            "/api/v1/admin/email-settings/test",
+            post(handlers::email_settings_handler::test_email_settings),
+        )
         .route(
             "/api/v1/provider-keys",
             get(handlers::provider_keys_handler::list_provider_keys)
