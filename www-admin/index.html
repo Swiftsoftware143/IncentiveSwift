@@ -21,7 +21,11 @@
 <div id="app" class="flex min-h-screen"></div>
 
 <script type="module">
-import { h, render, useState, useEffect } from 'https://esm.sh/preact@10.26.4';
+import { h, render } from 'https://esm.sh/preact@10.26.4';
+// Hooks are NOT exported from preact's root module — they live in /hooks. Importing useEffect
+// from the root threw "does not provide an export named 'useEffect'", which killed the whole
+// module and left the admin dashboard rendering nothing in production.
+import { useState, useEffect } from 'https://esm.sh/preact@10.26.4/hooks';
 import htm from 'https://esm.sh/htm@3.1.1';
 const html = htm.bind(h);
 
