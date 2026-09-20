@@ -108,3 +108,58 @@ async fn validate_api_key(
         None => Ok(None), // Not an API key, try JWT validation
     }
 }
+
+/// Fleet guard for `/api/v1/admin/*`.
+///
+/// SECURITY (2026-09-20): these routes previously answered 2xx to *anonymous*
+/// callers (12 of them, including the state-changing
+/// `POST /api/v1/admin/treasury/expire-points`). This middleware is applied
+/// globally but only inspects admin paths, so non-admin traffic is untouched.
+///
+/// Allowed callers:
+/// - a valid JWT or API key whose role is `admin` / `super_admin`;
+/// - a sibling service presenting the shared `X-Internal-Sync-Key`.
+pub async fn admin_guard(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, AppError> {
+    let path = req.uri().path().to_string();
+    if !path.starts_with("/api/v1/admin") {
+        return Ok(next.run(req).await);
+    }
+
+    // Sibling-bot / cron bypass using the shared internal sync key.
+    let sync_key = state.config.internal_sync_key.clone();
+    if !sync_key.is_empty() {
+        let presented = req
+            .headers()
+            .get("X-Internal-Sync-Key")
+            .and_then(|v| v.to_str().ok());
+        if presented == Some(sync_key.as_str()) {
+            return Ok(next.run(req).await);
+        }
+    }
+
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Unauthorized("Admin authentication required".to_string()))?;
+
+    let role = match validate_api_key(&state, &token).await? {
+        Some(user) => user.role,
+        None => crate::security::jwt::verify_jwt(&token, &state.config.jwt_secret)?
+            .role
+            .clone()
+            .unwrap_or_else(|| "authenticated".to_string()),
+    };
+
+    if role != "admin" && role != "super_admin" {
+        return Err(AppError::Forbidden("Admin role required".to_string()));
+    }
+
+    Ok(next.run(req).await)
+}

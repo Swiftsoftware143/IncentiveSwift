@@ -1125,6 +1125,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/iqs/upload",
             post(handlers::iqs_handler::upload_file),
         )
+        // SECURITY: /api/v1/admin/* must never answer anonymous callers.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::auth::admin_guard,
+        ))
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(TraceLayer::new_for_http())
