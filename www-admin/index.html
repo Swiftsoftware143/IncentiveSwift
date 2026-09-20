@@ -1,55 +1,1519 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Login — IncentiveSwift</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:Inter,system-ui,-apple-system,sans-serif;background:#070A10;min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 0%,#0B0F19 0%,#070A10 70%)}
-.login-card{background:#0B0F19;border:1px solid rgba(0,178,204,.2);border-radius:16px;padding:40px;width:400px;max-width:90%}
-.logo{font-size:30px;font-weight:800;color:#fff;text-align:center;margin-bottom:2px;letter-spacing:-.5px}
-.logo span{color:#00E5FF}
-.logo .sub{display:block;font-size:12px;font-weight:400;color:#64748b;letter-spacing:.05em}
-.badge{text-align:center;margin-bottom:24px}
-.badge span{display:inline-block;background:rgba(0,178,204,.15);color:#00E5FF;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;padding:3px 10px;border-radius:100px}
-h1{font-size:22px;font-weight:700;text-align:center;color:#fff;margin-bottom:4px}
-p.sub{text-align:center;color:#94a3b8;font-size:14px;margin-bottom:28px}
-.field{margin-bottom:16px}
-.field label{display:block;font-size:13px;font-weight:600;color:#94a3b8;margin-bottom:6px}
-.field input{width:100%;padding:10px 14px;border:1px solid rgba(0,178,204,.3);border-radius:8px;font-size:14px;background:#070A10;color:#fff;outline:none;transition:border-color .2s}
-.field input:focus{border-color:#00E5FF}
-.btn{width:100%;padding:12px;background:linear-gradient(135deg,#00B2CC,#00E5FF);color:#070A10;border:none;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .2s}
-.btn:hover{opacity:.9}
-.btn:disabled{opacity:.5;cursor:default}
-.error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#fca5a5;font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:16px;display:none}
-.footer{text-align:center;margin-top:20px;font-size:12px;color:#475569}
-.footer a{color:#00E5FF;text-decoration:none}
-</style>
-</head>
-<body>
-<div class="login-card">
-  <div class="logo">Incentive<span>Swift</span></div>
-  <div class="badge"><span>Admin</span></div>
-  <h1>Welcome back</h1>
-  <p class="sub">Sign in to manage campaigns & rewards</p>
-  <div class="error" id="login-error"></div>
-  <form id="login-form">
-    <div class="field"><label>Email</label><input type="email" id="email" placeholder="admin@example.com" autocomplete="email"></div>
-    <div class="field"><label>Password</label><input type="password" id="password" placeholder="••••••••" autocomplete="current-password"></div>
-    <button type="submit" class="btn" id="login-btn">Sign In</button>
-  </form>
-  <div class="footer"><a href="https://incentiveswift.com">incentiveswift.com</a></div>
-</div>
+<!-- AUTH GUARD — canonical login redirect -->
 <script>
-document.getElementById('login-form').addEventListener('submit',function(e){
-  e.preventDefault();var btn=document.getElementById('login-btn');btn.disabled=true;btn.textContent='Signing in...';
-  fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})})
-  .then(function(r){return r.json()}).then(function(d){
-    if(d.access_token){localStorage.setItem('is_token',d.access_token);window.location.href='/admin'}
-    else{document.getElementById('login-error').textContent=d.error||'Login failed';document.getElementById('login-error').style.display='block';btn.disabled=false;btn.textContent='Sign In'}
-  }).catch(function(){document.getElementById('login-error').textContent='Connection error';document.getElementById('login-error').style.display='block';btn.disabled=false;btn.textContent='Sign In'})
-});
+!function(){
+  var p = window.location.pathname;
+  if (p === '/' || p === '/index.html' || p.startsWith('/api/')) return;
+  var t = localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
+  if (!t) window.location.replace('/');
+}();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IncentiveSwift — Admin Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body{font-family:Inter,system-ui,sans-serif;background:#f8fafc}.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}.btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}.btn-sm{padding:5px 12px;font-size:13px}.btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}.btn-green{background:#059669}.btn-green:hover{background:#047857}.btn-outline{background:0 0;border:1px solid #cbd5e1;color:#475569}.btn-outline:hover{background:#f1f5f9}.btn-blue{background:#7c3aed}.btn-blue:hover{background:#6d28d9}.input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;width:100%;font-size:14px;outline:0}.input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}.modal-content{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:480px;max-height:80vh;overflow-y:auto}.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500}.badge-green{background:#d1fae5;color:#065f46}.badge-red{background:#fee2e2;color:#991b1b}.badge-yellow{background:#fef3c7;color:#92400e}.badge-blue{background:#dbeafe;color:#1e40af}.nav-item{padding:10px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:10px;color:#64748b;font-size:14px;font-weight:500}.nav-item:hover{background:#f1f5f9;color:#1e293b}.nav-item.active{background:#2563eb;color:#fff}.table{width:100%;border-collapse:collapse}.table th{text-align:left;padding:10px 12px;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #e2e8f0}.table td{padding:10px 12px;font-size:14px;border-bottom:1px solid #f1f5f9}.table tr:hover td{background:#f8fafc}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-value{font-size:28px;font-weight:700;color:#1e293b}.stat-label{font-size:13px;color:#64748b;margin-top:4px}.dropdown-item{padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px}.dropdown-item:hover{background:#f1f5f9}.text-red-500{color:#ef4444}.upgrade-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999}.upgrade-box{background:#fff;border-radius:20px;padding:32px;text-align:center;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2)}.upgrade-box h2{font-size:20px;color:#1e293b;margin:0 0 8px}.upgrade-box p{color:#64748b;margin:0 0 20px;line-height:1.5}.upgrade-box .btn-upgrade{background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:600;border:none;cursor:pointer}@media(max-width:768px){.sidebar{width:60px!important}.sidebar .nav-text{display:none}.sidebar .nav-item{justify-content:center;padding:10px}.main{margin-left:60px!important}}</style>
+</head>
+<body class="min-h-screen">
+<div id="app" class="flex min-h-screen"></div>
+
+<script type="module">
+import { h, render } from 'https://esm.sh/preact@10.26.4';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(h);
+
+const showUpgradePrompt = (msg) => {
+  const div = document.createElement('div');
+  div.className = 'upgrade-overlay';
+  div.innerHTML = '<div class="upgrade-box"><h2>🚀 Upgrade Required</h2><p>' + (msg || 'This feature requires a higher plan.') + '</p><button class="btn-upgrade" onclick="this.closest(\'.upgrade-overlay\').remove()">Got it</button></div>';
+  document.body.appendChild(div);
+  div.addEventListener('click', (e) => { if (e.target === div) div.remove(); });
+};
+
+
+const API = (() => {
+  const base = window.location.origin + '/api/v1';
+  let token = sessionStorage.getItem('is_token');
+  let user = JSON.parse(sessionStorage.getItem('is_user') || 'null');
+
+  const headers = () => ({ 'Content-Type': 'application/json', ...(token ? { 'Authorization': 'Bearer ' + token } : {}) });
+  const handle = async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error || d.message || 'Request failed'); return d; };
+  const login = (e, p) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:e,password:p}) }).then(handle);
+  const get = (p) => fetch(base + p, {headers:headers()}).then(handle).catch(e => { console.error(e); throw e; });
+  const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), body:JSON.stringify(b)}).then(handle);
+  const put = (p, b) => fetch(base + p, {method:'PUT', headers:headers(), body:JSON.stringify(b)}).then(handle);
+  const del = (p) => fetch(base + p, {method:'DELETE', headers:headers()}).then(handle);
+  return {
+    login, get, post, put, del,
+    get token(){ return token; },
+    get user(){ return user; },
+    setAuth(t, u){ token = t; user = u; sessionStorage.setItem('is_token', t); sessionStorage.setItem('is_user', JSON.stringify(u)); },
+    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user'); }
+  };
+})();
+
+const S = { view: 'dashboard', loading: false, error: null, views: {} };
+// Wrap API to catch 402 upgrade prompts
+const _get = API.get, _post = API.post, _put = API.put, _del = API.del;
+API.get = async (p) => _get(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+API.post = async (p, b) => _post(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+API.put = async (p, b) => _put(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+API.del = async (p) => _del(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+
+const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
+
+// ---- LOGIN ----
+const LoginView = () => {
+  let email = '', pw = '';
+  const submit = async (e) => { e.preventDefault(); S.loading = true; S.error = null; renderApp();
+    try { const r = await API.login(email, pw); API.setAuth(r.token, r.user); S.view = 'dashboard'; } catch(err) { S.error = err.message; }
+    S.loading = false; renderApp();
+  };
+  return html`<div class="flex items-center justify-center min-h-screen w-full">
+    <div class="card w-full max-w-sm mx-4">
+      <div class="text-center mb-6">
+        <div class="text-3xl mb-2">🎯</div>
+        <h1 class="text-xl font-bold text-gray-800">IncentiveSwift</h1>
+        <p class="text-sm text-gray-500 mt-1">Incentive & Loyalty Platform</p>
+      </div>
+      <form onSubmit=${submit} class="space-y-4">
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Email</label><input type="email" class="input" value=${email} onInput=${e => email = e.target.value} placeholder="admin@company.com" required /></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Password</label><input type="password" class="input" value=${pw} onInput=${e => pw = e.target.value} placeholder="......" required /></div>
+        ${S.error && html`<div class="text-red-600 text-sm bg-red-50 p-2 rounded-lg">${S.error}</div>`}
+        <button type="submit" class="btn w-full">Sign In</button>
+      </form>
+    </div>
+  </div>`;
+};
+
+// ---- DASHBOARD ----
+const Dashboard = () => {
+  const st = viewState('dashboard', {});
+  if (!st._loaded) { st._loaded = true;
+    API.get('/dashboard/stats').then(s => { Object.assign(st, s); renderApp(); }).catch(() => {});
+  }
+  return html`<div>
+    <h2 class="text-xl font-bold mb-4">Dashboard</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="stat-card"><div class="stat-value">${st.total_plans ?? '...'}</div><div class="stat-label">Plans</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_programs ?? '...'}</div><div class="stat-label">Loyalty Programs</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_users ?? '...'}</div><div class="stat-label">Users</div></div>
+    </div>
+  </div>`;
+};
+
+// ---- PORTFOLIO ----
+const Portfolio = () => {
+  const st = viewState('portfolio', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/portfolio-companies'); st.list = (data && data.companies) ? data.companies : (Array.isArray(data) ? data : []); renderApp(); } catch(e) { try { const data2 = await API.get('/portfolio-companies'); st.list = (data2 && data2.companies) ? data2.companies : (Array.isArray(data2) ? data2 : []); renderApp(); } catch(e2) { console.error(e2); } } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete this portfolio company?')) return; await API.del('/portfolio-companies/' + id); load(); };
+  const impersonate = async (company) => {
+    if(!confirm('Impersonate as ' + company.name + '?')) return;
+    try {
+      const r = await API.post('/admin/impersonate', { account_id: company.account_id || company.id });
+      sessionStorage.setItem('impersonate_token', r.token);
+      sessionStorage.setItem('impersonate_company', JSON.stringify(company));
+      window.open('https://incentiveswift.com', '_blank');
+    } catch(e) { alert('Impersonation failed: ' + e.message); }
+  };
+
+  const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()) || (c.slug||'').toLowerCase().includes(st.search.toLowerCase()) || (c.domain||'').toLowerCase().includes(st.search.toLowerCase()));
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Company</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(c => html`<tr>
+          <td class="font-medium">${c.name}</td><td class="text-gray-500">${c.slug || c.domain || '-'}</td>
+          <td><button class="btn btn-sm btn-blue" onClick=${() => impersonate(c)} title="Impersonate">🔑 Impersonate</button><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No portfolio companies yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Portfolio Company</h3>
+        ${(() => { let name = st.editItem?.name||'', slug = st.editItem?.slug||'';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Company Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Slug</label><input class="input" value=${slug} onInput=${e => slug = e.target.value} /></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name,slug})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- PLANS ----
+const Plans = () => {
+  const st = viewState('plans', { list: [], showModal: false, editItem: null });
+  const load = async () => { try { const data = await API.get('/plans'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem) await API.put('/plans/' + st.editItem.id, data); else await API.post('/plans', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Price</th><th>Interval</th><th>Actions</th></tr></thead>
+        <tbody>${st.list.map(p => html`<tr>
+          <td class="font-medium">${p.name}</td>
+          <td class="text-gray-500">${p.price ? '$' + p.price : '-'}</td>
+          <td class="text-gray-500">${p.interval || '-'}</td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
+        </tr>`)}
+        ${st.list.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
+        ${(() => { let name = st.editItem?.name||'', price = st.editItem?.price||'', interval = st.editItem?.interval||'monthly';
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Price</label><input type="number" class="input" value=${price} onInput=${e => price = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Interval</label><select class="input" value=${interval} onChange=${e => interval = e.target.value}><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One Time</option></select></div>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${() => save({name,price,interval})}>${st.editItem ? 'Save' : 'Add'}</button>
+            </div>
+          </div>`; })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- PLAN TIERS (tier_features CRUD) ----
+const PlanTiers = () => {
+  const st = viewState('plantiers', { tiers: [], selectedId: null, features: [], editTier: null, editModal: false });
+
+  const loadTiers = async () => { try { const d = await API.get('/admin/tiers'); st.tiers = d.tiers || []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; loadTiers(); }
+
+  const selectTier = (tier) => { st.selectedId = tier.id; st.features = []; renderApp(); loadFeatures(tier.id); };
+  const loadFeatures = async (tierId) => { try { const d = await API.get('/admin/tiers/' + tierId + '/features'); st.features = d.features || []; renderApp(); } catch(e) { alert(e.message); } };
+
+  const toggleFeature = async (f, enabled) => {
+    try { await API.put('/admin/tiers/' + st.selectedId + '/features/' + f.feature_key, { enabled, limit_value: f.limit_value ?? null }); loadFeatures(st.selectedId); }
+    catch(e) { alert(e.message); }
+  };
+  const setLimit = async (f, val) => {
+    const num = (val === '' || val === null || val === undefined) ? null : parseInt(val, 10);
+    try { await API.put('/admin/tiers/' + st.selectedId + '/features/' + f.feature_key, { enabled: f.enabled, limit_value: num }); loadFeatures(st.selectedId); }
+    catch(e) { alert(e.message); }
+  };
+
+  const openEdit = (tier) => { st.editTier = tier ? { ...tier } : null; st.editModal = true; renderApp(); };
+  const closeEdit = () => { st.editModal = false; renderApp(); };
+  const saveTier = async (data) => { try { await API.put('/admin/tiers/' + st.editTier.id, data); closeEdit(); loadTiers(); } catch(e) { alert(e.message); } };
+
+  // Group features by category.
+  const groups = {};
+  (st.features || []).forEach(f => { const c = f.category || 'other'; (groups[c] = groups[c] || []).push(f); });
+  const CATEGORY_ORDER = ['mechanic','delivery','branding','surface','module','loyalty','limits','billing'];
+  const catKeys = Object.keys(groups).sort((a,b) => {
+    const ia = CATEGORY_ORDER.indexOf(a), ib = CATEGORY_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+
+  const selected = (st.tiers || []).find(t => t.id === st.selectedId);
+
+  return html`<div>
+    <div class="mb-4">
+      <h2 class="text-xl font-bold">Plan Tiers</h2>
+      <p class="text-sm text-gray-500">Add or subtract features per tier. Changes hit the live runtime gate immediately.</p>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+      <div class="space-y-3">
+        ${(st.tiers || []).map(t => html`<div class="card cursor-pointer ${st.selectedId === t.id ? 'ring-2 ring-blue-500' : ''}" onClick=${() => selectTier(t)}>
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold">${t.name}</h3>
+            <span class="badge ${t.is_active ? 'badge-green' : 'badge-red'}">${t.is_active ? 'Active' : 'Off'}</span>
+          </div>
+          <div class="text-sm text-gray-500">${t.slug}</div>
+          <div class="text-sm font-medium mt-1">$${t.price_monthly ?? 0}<span class="text-xs text-gray-400">/mo</span></div>
+          <div class="mt-2"><button class="btn btn-sm btn-outline" onClick=${(e) => { e.stopPropagation(); openEdit(t); }}>Edit tier</button></div>
+        </div>`)}
+        ${(st.tiers || []).length === 0 && html`<div class="card text-center text-gray-400 py-8">No tiers found.</div>`}
+      </div>
+      <div class="lg:col-span-3">
+        ${selected ? html`<div>
+          <div class="card mb-4">
+            <h3 class="font-bold mb-2">${selected.name} — Features</h3>
+            <div class="flex flex-wrap gap-4 text-sm text-gray-600">
+              <span>Campaigns: <b>${selected.max_campaigns ?? '—'}</b></span>
+              <span>Entries/month: <b>${selected.max_entries_per_month ?? '—'}</b></span>
+              <span>Annual: <b>$${selected.price_annual ?? 0}</b></span>
+            </div>
+          </div>
+          ${catKeys.map(cat => html`<div class="card mb-4">
+            <h4 class="font-bold text-sm uppercase text-gray-500 mb-3">${cat}</h4>
+            <div class="space-y-2">
+              ${groups[cat].map(f => html`<div class="flex items-center gap-3 py-1 border-b border-gray-100">
+                <input type="checkbox" checked=${f.enabled} onChange=${(e) => toggleFeature(f, e.target.checked)} class="w-4 h-4" />
+                <div class="flex-1">
+                  <div class="text-sm font-medium">${f.label}</div>
+                  <div class="text-xs text-gray-400 font-mono">${f.feature_key}</div>
+                </div>
+                <input type="number" class="input" style="width:90px" placeholder="limit" value=${f.limit_value ?? ''} onInput=${(e) => { f.limit_value = e.target.value === '' ? null : parseInt(e.target.value, 10); }} onBlur=${(e) => setLimit(f, e.target.value)} />
+                <span class="badge ${f.enabled ? 'badge-green' : 'badge-red'}">${f.enabled ? 'ADDED' : 'REMOVED'}</span>
+              </div>`)}
+            </div>
+          </div>`)}
+        </div>` : html`<div class="card text-center text-gray-400 py-12">Select a tier to manage its features.</div>`}
+      </div>
+    </div>
+    ${st.editModal && st.editTier ? html`<div class="modal" onClick=${(e) => e.target === e.currentTarget && closeEdit()}>
+      <div class="modal-content">
+        <h3 class="text-lg font-bold mb-4">Edit Tier</h3>
+        ${(() => {
+          let t = st.editTier;
+          let name = t.name || '', slug = t.slug || '', pm = t.price_monthly ?? '', pa = t.price_annual ?? '', mc = t.max_campaigns ?? '', me = t.max_entries_per_month ?? '', active = t.is_active !== false;
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Slug</label><input class="input" value=${slug} onInput=${e => slug = e.target.value} /></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-sm font-medium block mb-1">Price Monthly</label><input type="number" class="input" value=${pm} onInput=${e => pm = e.target.value} /></div>
+              <div><label class="text-sm font-medium block mb-1">Price Annual</label><input type="number" class="input" value=${pa} onInput=${e => pa = e.target.value} /></div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-sm font-medium block mb-1">Max Campaigns (-1 unlimited)</label><input type="number" class="input" value=${mc} onInput=${e => mc = e.target.value} /></div>
+              <div><label class="text-sm font-medium block mb-1">Max Entries/Month (-1 unlimited)</label><input type="number" class="input" value=${me} onInput=${e => me = e.target.value} /></div>
+            </div>
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${active} onChange=${e => active = e.target.checked} /> Active</label>
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${closeEdit}>Cancel</button>
+              <button class="btn" onClick=${() => saveTier({ name, slug, price_monthly: pm === '' ? null : parseFloat(pm), price_annual: pa === '' ? null : parseFloat(pa), max_campaigns: mc === '' ? null : parseInt(mc, 10), max_entries_per_month: me === '' ? null : parseInt(me, 10), is_active: active })}>Save</button>
+            </div>
+          </div>`;
+        })()}
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
+// ---- CAMPAIGNS ----
+const MECHANICS = [
+  { id: 'score_reveal', label: 'Score Reveal' },
+  { id: 'spin_wheel', label: 'Spin Wheel' },
+  { id: 'scratch_card', label: 'Scratch Card' },
+  { id: 'personality', label: 'Personality Quiz' },
+  { id: 'calculator', label: 'Calculator' },
+  { id: 'mystery', label: 'Mystery Reveal' },
+  { id: 'countdown', label: 'Countdown Timer' },
+  { id: 'poll', label: 'Poll' },
+  { id: 'chat', label: 'Chat Funnel' },
+  { id: 'leaderboard', label: 'Leaderboard' },
+  { id: 'raffle', label: 'Raffle & Giveaway' },
+  { id: 'long_form_qualifier', label: 'Long-Form Qualifier' },
+  { id: 'quiz', label: 'Quiz' },
+  { id: 'loyalty', label: 'Loyalty' },
+  { id: 'b2b_loyalty', label: 'B2B Loyalty' },
+];
+
+const MECHANIC_DEFAULT_CONFIG = {
+  score_reveal: { tiers: [{ min: 0, max: 100, label: 'Bronze', message: 'Keep going!' }] },
+  spin_wheel: { prize_pool: { prizes: [] } },
+  scratch_card: { win_probability: 0.5, prize_pool: { prizes: [] } },
+  personality: { outcomes: [] },
+  calculator: { formula: '' },
+  mystery: { reward: { label: 'Mystery Reward' } },
+  countdown: { target_at: '2026-12-31T23:59:59Z' },
+  poll: { question: 'Your question here?', options: ['Yes', 'No'] },
+  chat: { chat_flow: ['Welcome! How can we help you today?'], system_prompt: 'You are a friendly sales assistant.' },
+  leaderboard: {},
+  raffle: {},
+  long_form_qualifier: { rules: [], outcomes: [] },
+  quiz: { passing_score: 70 },
+  loyalty: {},
+  b2b_loyalty: {},
+};
+
+// Campaign theme (surface_config.theme) contract defaults — mirror backend src/theme.rs.
+const THEME_DEFAULTS = {
+  primary_color: '#2563eb',
+  accent_color: '#7c3aed',
+  background_color: '#ffffff',
+  text_color: '#1e293b',
+  button_text_color: '#ffffff',
+  font_family: 'Inter, system-ui, sans-serif',
+  border_radius: '12',
+  dark_mode: false,
+};
+const FONT_OPTIONS = [
+  'Inter, system-ui, sans-serif',
+  'system-ui, -apple-system, sans-serif',
+  'Georgia, "Times New Roman", serif',
+  'ui-monospace, SFMono-Regular, monospace',
+  'Poppins, system-ui, sans-serif',
+];
+
+const Campaigns = () => {
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null });
+  const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const show = (item) => {
+    st.editItem = item || null;
+    st.theme = null;
+    if (item && item.id) {
+      API.get('/admin/campaigns/' + item.id + '/surface')
+        .then(d => { st.theme = d.theme || THEME_DEFAULTS; renderApp(); })
+        .catch(() => { st.theme = { ...THEME_DEFAULTS }; renderApp(); });
+    }
+    st.showModal = true;
+    renderApp();
+  };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem && st.editItem.id) await API.put('/campaigns/' + (st.editItem.slug || st.editItem.id), data); else await API.post('/campaigns', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/campaigns/' + id); load(); };
+
+  const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(c => html`<tr>
+          <td class="font-medium">${c.name}</td>
+          <td><span class="badge badge-blue">${c.type || '—'}</span></td>
+          <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
+      </tbody></table>
+    </div>
+    ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+      <div class="modal-content" style="max-width:760px"><h3 class="text-lg font-bold mb-4">${st.editItem && st.editItem.id ? 'Edit' : 'Add'} Campaign</h3>
+        ${(() => {
+          const isEdit = !!(st.editItem && st.editItem.id);
+          let name = st.editItem?.name || '';
+          let type = st.editItem?.type || 'spin_wheel';
+          let tagNamespace = st.editItem?.tag_namespace || '';
+          let config = st.editItem?.config ? JSON.stringify(st.editItem.config, null, 2) : JSON.stringify(MECHANIC_DEFAULT_CONFIG[type] || {}, null, 2);
+          const setType = (t) => { type = t; if (!isEdit) { config = JSON.stringify(MECHANIC_DEFAULT_CONFIG[t] || {}, null, 2); } renderApp(); };
+          const doSave = () => {
+            let parsed = {};
+            try { parsed = config && config.trim() ? JSON.parse(config) : {}; } catch(err) { alert('Config JSON is invalid: ' + err.message); return; }
+            const payload = isEdit ? { name, config: parsed } : { name, type, tag_namespace: tagNamespace || (name || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '_'), config: parsed };
+            save(payload);
+          };
+          // Theme editor (surface_config.theme) — edit-only (needs an existing campaign id).
+          const theme = st.theme || { ...THEME_DEFAULTS };
+          const setTheme = (k, v) => { st.theme = { ...(st.theme || THEME_DEFAULTS), [k]: v }; renderApp(); };
+          const saveTheme = async () => {
+            try { await API.put('/admin/campaigns/' + st.editItem.id + '/surface', { surface_config: { theme: st.theme || THEME_DEFAULTS } }); alert('Theme saved'); }
+            catch(e) { alert('Theme save failed: ' + e.message); }
+          };
+          const resetTheme = () => { st.theme = { ...THEME_DEFAULTS }; renderApp(); };
+          const radiusPx = parseInt(theme.border_radius, 10) || 12;
+          const colorField = (key, label) => html`<div><label class="text-xs font-medium block mb-1 text-gray-500">${label}</label><input type="color" value=${theme[key] || ''} onInput=${e => setTheme(key, e.target.value)} class="input" style="height:36px;padding:3px;width:100%;cursor:pointer" /></div>`;
+          return html`<div class="space-y-3">
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => { name = e.target.value; }} /></div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-sm font-medium block mb-1">Mechanic Type</label>
+                <select class="input" value=${type} onChange=${e => setType(e.target.value)} disabled=${isEdit}>
+                  ${MECHANICS.map(m => html`<option value=${m.id}>${m.label}</option>`)}
+                </select>
+              </div>
+              <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${tagNamespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { tagNamespace = e.target.value; }} /></div>
+            </div>
+            <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${config} onInput=${e => { config = e.target.value; }}></textarea></div>
+            ${isEdit && html`<div class="border-t border-gray-100 pt-3 mt-3">
+              <div class="flex items-center justify-between mb-2">
+                <div class="text-sm font-semibold">🎨 Theme</div>
+                <div class="flex gap-2">
+                  <button class="btn btn-sm btn-outline" onClick=${resetTheme}>Reset to default</button>
+                  <button class="btn btn-sm btn-blue" onClick=${saveTheme}>Save Theme</button>
+                </div>
+              </div>
+              <div class="grid grid-cols-5 gap-2">
+                ${colorField('primary_color', 'Primary')}
+                ${colorField('accent_color', 'Accent')}
+                ${colorField('background_color', 'Background')}
+                ${colorField('text_color', 'Text')}
+                ${colorField('button_text_color', 'Button text')}
+              </div>
+              <div class="grid grid-cols-2 gap-3 mt-3">
+                <div><label class="text-xs font-medium block mb-1 text-gray-500">Font family</label>
+                  <select class="input" value=${theme.font_family || THEME_DEFAULTS.font_family} onChange=${e => setTheme('font_family', e.target.value)}>${FONT_OPTIONS.map(f => html`<option value=${f}>${f.split(',')[0]}</option>`)}</select>
+                </div>
+                <div><label class="text-xs font-medium block mb-1 text-gray-500">Border radius: <b>${radiusPx}px</b></label>
+                  <input type="range" min="0" max="24" step="1" value=${radiusPx} style="width:100%" onInput=${e => setTheme('border_radius', e.target.value)} />
+                </div>
+              </div>
+              <div class="flex items-center gap-2 mt-3">
+                <input type="checkbox" id="is-dark-mode" checked=${!!theme.dark_mode} onChange=${e => setTheme('dark_mode', e.target.checked)} />
+                <label for="is-dark-mode" class="text-sm text-gray-600">Dark mode</label>
+              </div>
+              <div class="mt-3 p-3 rounded-lg" style="background:${theme.background_color};color:${theme.text_color};font-family:${theme.font_family};border-radius:${radiusPx}px;border:1px solid #e2e8f0">
+                <div style="font-size:14px;font-weight:600">Preview</div>
+                <div style="font-size:12px;color:${theme.accent_color};margin-top:2px">Accent highlight</div>
+                <button style="margin-top:8px;background:${theme.primary_color};color:${theme.button_text_color};border:none;border-radius:${radiusPx}px;padding:6px 14px;font-weight:600;cursor:pointer">Primary button</button>
+              </div>
+            </div>`}
+            <div class="flex gap-2 justify-end mt-4">
+              <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+              <button class="btn" onClick=${doSave}>${isEdit ? 'Save' : 'Create Campaign'}</button>
+            </div>
+          </div>`;
+        })()}
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// ---- LOYALTY PROGRAMS ----
+// ============================================================
+// LOYALTY — Full Admin Module (14 areas)
+// ============================================================
+const LoyaltyPrograms = () => {
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], badges: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false });
+  if (!st._loaded) { st._loaded = true; loadPrograms(); }
+
+  async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
+  async function loadTiers(progId) { try { const data = await API.get('/loyalty/tiers?program_id='+progId); st.tiers = data.tiers||[]; renderApp(); } catch(e){ st.tiers=[]; } }
+  async function loadRewards() { try { const data = await API.get('/loyalty/rewards'); st.rewards = data.rewards||[]; renderApp(); } catch(e){ st.rewards=[]; } }
+  async function loadVouchers() { try { const data = await API.get('/loyalty/vouchers'); st.vouchers = data.vouchers||[]; renderApp(); } catch(e){ st.vouchers=[]; } }
+  async function loadPledges() { try { const data = await API.get('/admin/pledges'); st.pledges = data.pending_pledges||[]; renderApp(); } catch(e){ st.pledges=[]; } }
+  async function loadReferrals() { st.refLoading = true; renderApp(); try { const data = await API.get('/loyalty/referrals'); st.referrals = data.referrals||[]; st.referralCount = data.referral_count||0; st.referralCode = data.code||null; st.refLoading=false; renderApp(); } catch(e){ st.referrals=[]; st.refLoading=false; renderApp(); } }
+  async function loadCredits() { try { const data = await API.get('/credits/balance'); const hist = await API.get('/credits/history'); st.credits = {balance:data,history:hist.transactions||hist||[]}; renderApp(); } catch(e){ st.credits={balance:{},history:[]}; } }
+  async function loadBadges(progId) { try { const data = await API.get('/loyalty/badges/program/'+progId); st.badges = data.badges||[]; renderApp(); } catch(e){ st.badges=[]; } }
+  async function loadDashboard(progSlug) { try { const data = await API.get('/loyalty/dashboard/admin/'+progSlug); st.dashboard = data; renderApp(); } catch(e){ st.dashboard=null; } }
+  async function loadLedger() { try { const data = await API.get('/admin/treasury/summary'); st.treasury = data; renderApp(); } catch(e){ st.treasury = null; } try { const businesses = await API.get('/admin/treasury/businesses'); st.businessLedgers = businesses; renderApp(); } catch(e){ st.businessLedgers = []; } }
+  async function loadSettings() { try { const data = await API.get('/admin/clearinghouse/config'); st.chConfig = data; renderApp(); } catch(e){ st.chConfig = null; } try { const caps = await API.get('/admin/clearinghouse/caps'); st.chCaps = caps||[]; renderApp(); } catch(e){ st.chCaps = []; } try { const scfg = await API.get('/admin/clearinghouse/supplier-config'); st.supConfig = scfg||[]; renderApp(); } catch(e){ st.supConfig = []; } }
+  async function loadMembers(progId) { try { const data = await API.get('/loyalty/dashboard/admin/'+progId); st.members = data.members||[]; st.dashboard = data; renderApp(); } catch(e){ st.members=[]; } }
+
+  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try { if(st.editItem && st.editItem.id) await API.put('/loyalty/programs/'+st.editItem.id, data); else await API.post('/loyalty/programs', data); st.showModal = false; loadPrograms(); } catch(e){ alert(e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/loyalty/programs/'+id); loadPrograms(); };
+
+  const tabs = ['Plans','Programs','Tiers','Rewards','Vouchers','Pledges','Referrals','Credits','Badges','Dashboard','Ledger','Settings'];
+  const setTab = (t) => { st.tab = t.toLowerCase();
+    if (t==='Plans') loadLoyaltyPlans();
+    if (t==='Tiers'&&st.list.length>0) loadTiers(st.list[0].id);
+    if (t==='Rewards') loadRewards();
+    if (t==='Vouchers') loadVouchers();
+    if (t==='Pledges') loadPledges();
+    if (t==='Referrals') loadReferrals();
+    if (t==='Credits') loadCredits();
+    if (t==='Badges'&&st.list.length>0) loadBadges(st.list[0].slug||st.list[0].id);
+    if (t==='Dashboard'&&st.list.length>0) loadDashboard(st.list[0].slug||st.list[0].id);
+    if (t==='ledger' || t==='Ledger') { loadLedger(); }
+    if (t==='site-config' || t==='SiteConfig') { loadSiteConfig(); }
+    if (t==='settings' || t==='Settings') { loadSettings(); }
+    renderApp();
+  };
+
+  const filtered = st.list.filter(p => !st.search || (p.name||'').toLowerCase().includes(st.search.toLowerCase()));
+  const activeProg = st.list.length>0 ? st.list[0] : null;
+
+    async function loadLoyaltyPlans() { try { const data = await API.get('/loyalty/plans'); st.loyaltyPlans = Array.isArray(data) ? data : []; renderApp(); } catch(e){ st.loyaltyPlans=[]; } }
+  
+  // ── Plans Tab ──
+  const plansTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Subscription Plans</h2><span class="text-sm text-gray-500">For directory businesses</span></div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      ${(st.loyaltyPlans||[]).map(p => {
+        let feats = p.features || [];
+        if (typeof feats === 'string') try { feats = JSON.parse(feats); } catch(e){ feats = []; }
+        return html`<div class="card" style="border-top:4px solid ${p.slug==='premium'?'#7c3aed':p.slug==='standard'?'#2563eb':'#059669'}">
+          <h3 class="font-bold text-lg">${p.name}</h3>
+          <div class="text-2xl font-bold my-2">$${p.monthly_price}<span class="text-sm text-gray-400 font-normal">/mo</span></div>
+          <div class="badge badge-blue mb-3">${p.monthly_zc_pool} ZC monthly</div>
+          <p class="text-sm text-gray-500 mb-3">${p.description||''}</p>
+          <ul class="text-xs text-gray-600 space-y-1">${feats.map(f => html`<li>✓ ${f}</li>`)}</ul>
+        </div>`;
+      })}
+      ${(!st.loyaltyPlans||st.loyaltyPlans.length===0) && html`<div class="card col-span-full text-center text-gray-400 py-8">No subscription plans configured.</div>`}
+    </div>
+  </div>`;
+
+  // ── Programs Tab ──
+  const programsTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Programs</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button></div></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Name</th><th>Currency</th><th>Points/Checkin</th><th>Streaks</th><th>Active</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(p => html`<tr>
+          <td class="font-medium">${p.name}</td>
+          <td><span style="color:${p.currency_color||'#000'}">${p.currency_icon||''} ${p.currency_name||'Points'}</span></td>
+          <td>${p.points_per_checkin||0}</td>
+          <td>${p.streak_enabled ? html`<span class="badge badge-green">${p.streak_bonus||0} bonus / ${p.streak_days||0}d</span>` : html`<span class="badge badge-yellow">Off</span>`}</td>
+          <td><span class="badge ${p.is_active ? 'badge-green' : 'badge-red'}">${p.is_active?'Active':'Inactive'}</span></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(p.id)}>Delete</button></td>
+        </tr>`)}
+        ${filtered.length === 0 && html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No loyalty programs yet. Create one to start.</td></tr>`}
+      </tbody></table>
+    </div>
+  </div>`;
+
+  // ── Tiers Tab ──
+  const tiersTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Reward Tiers</h2><button class="btn btn-sm btn-green" onClick=${() => { show({_type:'tier'}); }}>+ Add Tier</button></div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      ${st.tiers.map(t => html`<div class="card" style="border-left:4px solid ${t.color||'#cbd5e1'}">
+        <h3 class="font-bold text-lg">${t.name}</h3>
+        <p class="text-sm text-gray-500">${t.points_required||0} points required</p>
+        <p class="text-xs text-gray-400">${t.requires_approval?'Requires approval':'Auto-approved'}</p>
+        <div class="mt-2"><span class="badge badge-blue">${t.reward_tag||''}</span></div>
+      </div>`)}
+      ${st.tiers.length===0 && html`<div class="card col-span-full text-center text-gray-400 py-8">No reward tiers configured. Select a program and add tiers.</div>`}
+    </div>
+  </div>`;
+
+  // ── Rewards Tab ──
+  const rewardsTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Rewards Earned</h2><span class="text-sm text-gray-500">${st.rewards.length} total</span></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Member</th><th>Reward</th><th>Points Spent</th><th>Status</th><th>Earned</th></tr></thead>
+        <tbody>${st.rewards.map(r => html`<tr>
+          <td>${r.member_id||r.contact_id||'?'}</td>
+          <td>${r.reward_tier_id||r.name||'?'}</td>
+          <td>${r.points_spent||0}</td>
+          <td><span class="badge ${r.status==='approved'?'badge-green':r.status==='pending'?'badge-yellow':'badge-red'}">${r.status||'pending'}</span></td>
+          <td>${new Date(r.created_at||r.earned_at).toLocaleDateString()}</td>
+        </tr>`)}
+        ${st.rewards.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No rewards earned yet.</td></tr>`}
+      </tbody></table>
+    </div>
+  </div>`;
+
+  // ── Vouchers Tab ──
+  const vouchersTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Vouchers</h2><span class="text-sm text-gray-500">${st.vouchers.length} active</span></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Expires</th></tr></thead>
+        <tbody>${st.vouchers.map(v => html`<tr>
+          <td class="font-mono">${v.redemption_code||v.code||'?'}</td>
+          <td>${v.voucher_type||'discount'}</td>
+          <td>${v.discount_value||0}</td>
+          <td><span class="badge ${v.status==='active'?'badge-green':'badge-yellow'}">${v.status||'active'}</span></td>
+          <td>${v.expires_at ? new Date(v.expires_at).toLocaleDateString() : 'Never'}</td>
+        </tr>`)}
+        ${st.vouchers.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No vouchers issued yet.</td></tr>`}
+      </tbody></table>
+    </div>
+  </div>`;
+
+  // ── Pledges Tab ──
+  const pledgesTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Business Pledges</h2><span class="text-sm text-gray-500">${st.pledges.length} pending</span></div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Business</th><th>Offer</th><th>Value</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>${st.pledges.map(p => html`<tr>
+          <td class="font-medium">${p.business_name||'?'}</td>
+          <td>${p.offer_type||'offer'}</td>
+          <td>${p.offer_value||''}</td>
+          <td><span class="badge ${p.status==='approved'?'badge-green':p.status==='pending'?'badge-yellow':'badge-red'}">${p.status||'pending'}</span></td>
+          <td>${p.status==='pending'?html`<button class="btn btn-sm btn-green" onClick=${async () => { await API.post('/admin/pledges/'+p.id+'/review',{status:'approved'}); loadPledges(); }}>Approve</button>`:''}</td>
+        </tr>`)}
+        ${st.pledges.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No pending pledges.</td></tr>`}
+      </tbody></table>
+    </div>
+  </div>`;
+
+  // ── Referrals Tab ──
+  const referralsTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Referrals</h2><div><span class="text-sm text-gray-500 mr-4">Code: <b>${st.referralCode||'None'}</b></span><span class="badge badge-blue">${st.referralCount||0} total</span></div></div>
+    ${st.refLoading ? html`<div class="card text-center py-8 text-gray-400">Loading...</div>` : html`
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Code</th><th>Source</th><th>Converted</th><th>Clicks</th><th>Points</th><th>Date</th></tr></thead>
+        <tbody>${st.referrals.map(r => html`<tr>
+          <td class="font-mono">${r.referral_code||'?'}</td>
+          <td>${r.source||'direct'}</td>
+          <td>${r.converted ? html`<span class="badge badge-green">Yes</span>`: html`<span class="badge badge-yellow">No</span>`}</td>
+          <td>${r.click_count||0}</td>
+          <td>${r.points_earned||0}</td>
+          <td>${new Date(r.created_at).toLocaleDateString()}</td>
+        </tr>`)}
+        ${st.referrals.length===0 && html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No referrals yet.</td></tr>`}
+      </tbody></table>
+    </div>`}
+  </div>`;
+
+  // ── Credits Tab ──
+  const creditsTab = html`<div>
+    <h2 class="text-xl font-bold mb-4">ZaarCash Credits</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div class="stat-card"><div class="stat-value">${st.credits.balance?.balance||0}</div><div class="stat-label">Balance</div></div>
+      <div class="stat-card"><div class="stat-value">${st.credits.balance?.credits_monthly||0}</div><div class="stat-label">Monthly</div></div>
+      <div class="stat-card"><div class="stat-value">${st.credits.balance?.lifetime_used||0}</div><div class="stat-label">Lifetime Used</div></div>
+      <div class="stat-card"><div class="stat-value">${st.credits.balance?.plan_name||'Free'}</div><div class="stat-label">Plan</div></div>
+    </div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Description</th><th>Date</th></tr></thead>
+        <tbody>${(st.credits.history||[]).slice(0,50).map(t => html`<tr>
+          <td><span class="badge ${t.amount>0?'badge-green':'badge-red'}">${t.transaction_type||t.action||'?'}</span></td>
+          <td class="${t.amount>0?'text-green-600':'text-red-600'} font-medium">${t.amount>0?'+':''}${t.amount||0}</td>
+          <td>${t.description||''}</td>
+          <td>${new Date(t.created_at).toLocaleDateString()}</td>
+        </tr>`)}
+        ${(st.credits.history||[]).length===0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No transaction history.</td></tr>`}
+      </tbody></table>
+    </div>
+  </div>`;
+
+  // ── Badges Tab ──
+  const badgesTab = html`<div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Badges</h2><span class="text-sm text-gray-500">${st.badges.length} enrolled</span></div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      ${st.badges.map(b => html`<div class="card text-center">
+        <div style="font-size:32px;margin-bottom:8px">🏅</div>
+        <h3 class="font-bold">${b.name||b.entity_name||'Badge'}</h3>
+        <p class="text-sm text-gray-500">${b.entity_type||b.type||''}</p>
+        <span class="badge badge-green mt-2">Active</span>
+      </div>`)}
+      ${st.badges.length===0 && html`<div class="card col-span-full text-center text-gray-400 py-8">No badges enrolled yet. Businesses and members enroll via the directory.</div>`}
+    </div>
+  </div>`;
+
+  // ── Dashboard Tab ──
+  const dashboardTab = html`<div>
+    <h2 class="text-xl font-bold mb-4">Loyalty Dashboard</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_members||st.dashboard?.enrolled_businesses||0}</div><div class="stat-label">Businesses</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_suppliers||st.dashboard?.enrolled_suppliers||0}</div><div class="stat-label">Suppliers</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_members||st.dashboard?.total_scans||0}</div><div class="stat-label">Scans</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_redemptions||0}</div><div class="stat-label">Redemptions</div></div>
+    </div>
+    ${st.dashboard?.recent_scans ? html`<div class="card p-0 overflow-hidden"><h3 class="font-bold p-4 pb-0">Recent Scans</h3>
+      <table class="table"><thead><tr><th>Member</th><th>Business</th><th>Points</th><th>Time</th></tr></thead>
+        <tbody>${(st.dashboard.recent_scans||[]).map(s => html`<tr>
+          <td>${s.member_name||'?'}</td><td>${s.business_name||'?'}</td>
+          <td>${s.points_earned||0}</td><td>${new Date(s.created_at).toLocaleString()}</td>
+        </tr>`)}</tbody></table></div>` : html`<div class="card text-center py-8 text-gray-400">Select a program above to load dashboard data.</div>`}
+  </div>`;
+
+  // ── Program Edit Modal ──
+  const editModal = st.showModal ? html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
+    <div class="modal-content" style="max-width:560px"><h3 class="text-lg font-bold mb-4">${st.editItem&&st.editItem.id ? 'Edit' : 'Add'} Loyalty Program</h3>
+      ${(() => { 
+        let p = st.editItem||{};
+        let name = p.name||''; let currency = p.currency_name||''; let icon = p.currency_icon||''; 
+        let color = p.currency_color||'#10B981'; let cpi = p.points_per_checkin||10; let mx = p.max_checkins_per_day||5;
+        let sb = p.streak_bonus||25; let sd=p.streak_days||7; let rb=p.referral_bonus||50; let bb=p.birthday_bonus||100;
+        let se=p.streak_enabled!==false; let te=p.tiers_enabled!==false; let me=p.milestones_enabled!==false;
+        let active=p.is_active!==false;
+        return html`<div class="space-y-3">
+          <div><label class="text-sm font-medium block mb-1">Program Name</label><input class="input" value=${name} onInput=${e => name=e.target.value} /></div>
+          <div class="grid grid-cols-3 gap-2">
+            <div><label class="text-sm font-medium block mb-1">Currency Name</label><input class="input" placeholder="ZaarCash" value=${currency} onInput=${e => currency=e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Icon</label><input class="input" placeholder="ZC" value=${icon} onInput=${e => icon=e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Color</label><input class="input" type="color" value=${color} onInput=${e => color=e.target.value} style="height:38px" /></div>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div><label class="text-sm font-medium block mb-1">Points/Checkin</label><input class="input" type="number" value=${cpi} onInput=${e => cpi=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Max Checkins/Day</label><input class="input" type="number" value=${mx} onInput=${e => mx=parseInt(e.target.value)||0} /></div>
+          </div>
+          <div class="grid grid-cols-4 gap-2">
+            <div><label class="text-sm font-medium block mb-1">Streak Bonus</label><input class="input" type="number" value=${sb} onInput=${e => sb=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Streak Days</label><input class="input" type="number" value=${sd} onInput=${e => sd=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Referral Bonus</label><input class="input" type="number" value=${rb} onInput=${e => rb=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Birthday Bonus</label><input class="input" type="number" value=${bb} onInput=${e => bb=parseInt(e.target.value)||0} /></div>
+          </div>
+          <div class="grid grid-cols-4 gap-2">
+            <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${se} onChange=${e=>se=e.target.checked} />Streaks</label>
+            <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${te} onChange=${e=>te=e.target.checked} />Tiers</label>
+            <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${me} onChange=${e=>me=e.target.checked} />Milestones</label>
+            <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${active} onChange=${e=>active=e.target.checked} />Active</label>
+          </div>
+          <div class="flex gap-2 justify-end mt-4">
+            <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+            <button class="btn" onClick=${() => save({name,currency_name:currency,currency_icon:icon,currency_color:color,points_per_checkin:cpi,max_checkins_per_day:mx,streak_bonus:sb,streak_days:sd,referral_bonus:rb,birthday_bonus:bb,streak_enabled:se,tiers_enabled:te,milestones_enabled:me,is_active:active})}>${p.id ? 'Save' : 'Create'}</button>
+          </div>
+        </div>`;
+      })()}
+    </div>
+  </div>` : '';
+
+  // Tab content (single ternary defined after every *Tab template below)
+  const siteConfigTab = html`<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h2 class="text-xl font-bold">Site Configuration</h2>
+  </div>
+  <p class="text-xs text-gray-500">SEO, tracking, legal pages, and homepage. Changes regenerate the live marketing site.</p>
+  <div id="scform"></div>
+</div>`;
+
+function loadSiteConfig() {
+  const el = document.getElementById('scform');
+  if (!el) return;
+  el.innerHTML = '<p class="text-gray-500 text-sm">Loading...</p>';
+  API.get('/admin/site').then(d => {
+    if (!d) { el.innerHTML='<p class="text-red-500">Not available.</p>'; return; }
+    const hp = d.homepage || {};
+    const f = (n, v, t) => t==='textarea'
+      ? `<div class="mb-3"><label class="block text-xs font-medium text-gray-600 mb-1">${v}</label><textarea name="${n}" rows="3" class="w-full border rounded px-3 py-2 text-sm"></textarea></div>`
+      : `<div class="mb-3"><label class="block text-xs font-medium text-gray-600 mb-1">${v}</label><input name="${n}" class="w-full border rounded px-3 py-2 text-sm"></div>`;
+    const g = id => { const e = document.querySelector('[name="'+id+'"]'); return e ? e.value : ''; };
+    let h = '';
+    h += '<div class="border rounded-lg p-4 mb-4"><h3 class="font-semibold mb-3">🔍 SEO & Meta</h3>';
+    h += f('title','Page Title')+f('description','Meta Description','textarea')+f('keywords','Keywords','textarea');
+    h += f('canonical_url','Canonical URL')+f('og_title','OG Title')+f('og_description','OG Description','textarea');
+    h += f('og_image_url','OG Image URL')+f('favicon_url','Favicon URL');
+    h += '</div>';
+    h += '<div class="border rounded-lg p-4 mb-4"><h3 class="font-semibold mb-3">📊 Analytics & Tracking</h3>';
+    h += f('ga_id','Google Analytics ID')+f('gtm_id','Google Tag Manager ID');
+    h += f('head_scripts','Head Scripts','textarea')+f('body_scripts','Body Scripts','textarea');
+    h += '</div>';
+    h += '<div class="border rounded-lg p-4 mb-4"><h3 class="font-semibold mb-3">🏠 Homepage</h3>';
+    h += f('homepage_logo_text','Logo Text')+f('homepage_headline','Headline','textarea');
+    h += f('homepage_subheadline','Subheadline','textarea')+f('homepage_button_text','CTA Button');
+    h += f('homepage_secondary_button_text','Secondary Button');
+    h += '</div>';
+    h += '<div class="border rounded-lg p-4 mb-4"><h3 class="font-semibold mb-3">⚖️ Legal Pages</h3>';
+    h += '<p class="text-xs text-gray-400 mb-2">Rendered at /terms.html, /privacy.html, /refunds.html</p>';
+    h += f('legal_tos','Terms of Service','textarea')+f('legal_privacy','Privacy Policy','textarea');
+    h += f('legal_refunds','Refund & Cancellation Policy','textarea');
+    h += '</div>';
+    h += '<div class="border rounded-lg p-4 mb-4"><h3 class="font-semibold mb-3">📋 Structured Data</h3>';
+    h += f('schema_json','Schema.org JSON','textarea');
+    h += '</div>';
+    h += '<button class="btn btn-primary" id="scsave">Save Site Configuration</button> <span id="scstatus" class="text-sm ml-2"></span>';
+    el.innerHTML = h;
+    // Populate
+    const sv = (nm,v) => { const e = document.querySelector('[name="'+nm+'"]'); if(e)e.value=v||''; };
+    sv('title',d.title);sv('description',d.description);sv('keywords',d.keywords);
+    sv('canonical_url',d.canonical_url);sv('og_title',d.og_title);sv('og_description',d.og_description);
+    sv('og_image_url',d.og_image_url);sv('favicon_url',d.favicon_url);
+    sv('ga_id',d.ga_id);sv('gtm_id',d.gtm_id);sv('head_scripts',d.head_scripts);sv('body_scripts',d.body_scripts);
+    sv('homepage_logo_text',hp.logo_text);sv('homepage_headline',hp.headline);
+    sv('homepage_subheadline',hp.subheadline);sv('homepage_button_text',hp.button_text);
+    sv('homepage_secondary_button_text',hp.secondary_button_text);
+    sv('legal_tos',d.legal_tos);sv('legal_privacy',d.legal_privacy);sv('legal_refunds',d.legal_refunds);
+    sv('schema_json',d.schema_json);
+    document.getElementById('scsave').onclick = async () => {
+      const body = {};
+      body.title=g('title');body.description=g('description');body.keywords=g('keywords');
+      body.canonical_url=g('canonical_url');body.og_title=g('og_title');body.og_description=g('og_description');
+      body.og_image_url=g('og_image_url');body.favicon_url=g('favicon_url');
+      body.ga_id=g('ga_id');body.gtm_id=g('gtm_id');body.head_scripts=g('head_scripts');body.body_scripts=g('body_scripts');
+      body.homepage={logo_text:g('homepage_logo_text'),headline:g('homepage_headline'),subheadline:g('homepage_subheadline'),button_text:g('homepage_button_text'),secondary_button_text:g('homepage_secondary_button_text')};
+      body.legal_tos=g('legal_tos');body.legal_privacy=g('legal_privacy');body.legal_refunds=g('legal_refunds');
+      body.schema_json=g('schema_json');
+      const st = document.getElementById('scstatus');st.textContent='Saving...';st.className='text-sm ml-2 text-blue-600';
+      const r = await API.put('/admin/site',body);
+      if(r){st.textContent='Saved! Marketing page regenerated.';st.className='text-sm ml-2 text-green-600'}
+      else{st.textContent='Error saving.';st.className='text-sm ml-2 text-red-600'}
+    };
+  }).catch(() => el.innerHTML='<p class="text-red-500">Not available.</p>');
+}
+
+
+const settingsTab = html`<div>
+    <h2 class="text-xl font-bold mb-4">Clearinghouse Settings</h2>
+
+    <h3 class="text-lg font-bold mb-3">Point Economics</h3>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="stat-card"><div class="stat-value">$${(st.chConfig?.issuance_rate||0.01).toFixed(3)}</div><div class="stat-label">Issue Rate / Point</div></div>
+      <div class="stat-card"><div class="stat-value">$${(st.chConfig?.redemption_rate||0.008).toFixed(3)}</div><div class="stat-label">Redeem Rate / Point</div></div>
+      <div class="stat-card"><div class="stat-value">${(st.chConfig?.platform_spread_percent||20).toFixed(1)}%</div><div class="stat-label">Platform Spread</div></div>
+      <div class="stat-card"><div class="stat-value">$${(st.chConfig?.minimum_float||100).toFixed(2)}</div><div class="stat-label">Min Treasury Float</div></div>
+    </div>
+
+    <h3 class="text-lg font-bold mb-3">Category Redemption Caps</h3>
+    <div class="card p-0 overflow-hidden mb-6">
+      <table class="table"><thead><tr><th>Category</th><th>Max Redeem %</th><th>Notes</th></tr></thead>
+        <tbody>${(st.chCaps||[]).map(c => html`<tr>
+          <td class="font-medium">${c.category_name}</td>
+          <td><span class="badge ${c.max_redeem_percent>=100?'badge-green':c.max_redeem_percent>=50?'badge-blue':'badge-yellow'}">${c.max_redeem_percent}%</span></td>
+          <td class="text-xs text-gray-500">${c.description||''}</td>
+        </tr>`)}</tbody></table>
+    </div>
+
+    <h3 class="text-lg font-bold mb-3">B2B Supplier Milestone Points</h3>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Program</th><th>Contract Sign</th><th>Review</th><th>Referral</th><th>Onboarding</th><th>Community</th><th>Monthly Cap</th><th>Active</th></tr></thead>
+        <tbody>${(st.supConfig||[]).map(s => html`<tr>
+          <td class="font-medium">${s.program_id||'Global'}</td>
+          <td>${s.contract_sign_points} ZC</td>
+          <td>${s.verified_review_points} ZC</td>
+          <td>${s.supplier_referral_points} ZC</td>
+          <td>${s.onboarding_points} ZC</td>
+          <td>${s.community_contribution_points} ZC</td>
+          <td>${s.max_monthly_earn} ZC</td>
+          <td><span class="badge ${s.is_active?'badge-green':'badge-red'}">${s.is_active?'Active':'Off'}</span></td>
+        </tr>`)}</tbody></table>
+    </div>
+  </div>`;
+
+const ledgerTab = html`<div>
+  <h2 class="text-xl font-bold mb-4">Treasury Ledger</h2>
+  ${st.treasury ? html`<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+    <div class="stat-card"><div class="stat-value">${Number(st.treasury.total_points_issued||0).toLocaleString()}</div><div class="stat-label">Points Issued</div></div>
+    <div class="stat-card"><div class="stat-value">${Number(st.treasury.total_points_redeemed||0).toLocaleString()}</div><div class="stat-label">Points Redeemed</div></div>
+    <div class="stat-card"><div class="stat-value">$${Number(st.treasury.total_revenue_collected||0).toFixed(2)}</div><div class="stat-label">Revenue Collected</div></div>
+    <div class="stat-card"><div class="stat-value">$${Number(st.treasury.total_reimbursements_paid||0).toFixed(2)}</div><div class="stat-label">Reimbursements Paid</div></div>
+    <div class="stat-card"><div class="stat-value">$${Number(st.treasury.outstanding_liability||0).toFixed(2)}</div><div class="stat-label">Outstanding Liability</div></div>
+    <div class="stat-card"><div class="stat-value">$${Number(st.treasury.minimum_float||0).toFixed(2)}</div><div class="stat-label">Minimum Float</div></div>
+  </div>` : html`<p class="text-gray-500 text-sm mb-6">No treasury data loaded.</p>`}
+  <h3 class="text-lg font-bold mb-3">Business Point Ledger</h3>
+  <div class="card p-0 overflow-hidden">
+    <table class="table"><thead><tr><th>Business</th><th>Issued</th><th>Redeemed</th><th>Billed</th><th>Reimbursed</th><th>Net</th></tr></thead>
+      <tbody>${(st.businessLedgers||[]).map(b => html`<tr>
+        <td class="font-medium">${b.business_name||'—'}</td>
+        <td>${b.points_issued_this_month||0}</td>
+        <td>${b.points_redeemed_this_month||0}</td>
+        <td>$${Number(b.total_billed_this_month||0).toFixed(2)}</td>
+        <td>$${Number(b.total_reimbursed_this_month||0).toFixed(2)}</td>
+        <td>$${Number(b.net_position||0).toFixed(2)}</td>
+      </tr>`)}
+      ${(!st.businessLedgers||st.businessLedgers.length===0) ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No ledger data.</td></tr>` : null}
+    </tbody></table>
+  </div>
+</div>`;
+
+  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='vouchers' ? vouchersTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='badges' ? badgesTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+
+  return html`<div>
+    <div class="flex gap-2 mb-4 flex-wrap">${tabs.map(t => html`<button class="btn btn-sm ${st.tab===t.toLowerCase()?'':'btn-outline'}" onClick=${()=>setTab(t)}>${t}</button>`)}</div>
+    ${editModal}
+    ${tabContent}
+  </div>`;
+};
+
+// ---- SHELL ----
+
+// ---- SHELL ----
+
+// ---- INTEGRATION CENTER ----
+const IntegrationCenter = () => {
+  const st = viewState('integration', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/integration-targets'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try {
+      if (st.editItem && st.editItem.id) {
+        await API.put('/integration-targets/' + st.editItem.id, data);
+      } else {
+        await API.post('/integration-targets', data);
+      }
+      hide(); load();
+    } catch(e) { alert('Error: ' + e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete this integration?')) return; await API.del('/integration-targets/' + id); load(); };
+  const filtered = st.list.filter(it => !st.search || (it.name||'').toLowerCase().includes(st.search.toLowerCase()) || (it.software_type||'').toLowerCase().includes(st.search.toLowerCase()));
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Integration Center</h2><p class="text-sm text-gray-500">Connect third-party services with your API keys</p></div>
+      <input class="border rounded px-3 py-1.5 text-sm w-48" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
+    </div>
+    <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm mb-4" onClick=${() => show()}>+ Add Integration</button>
+    <div class="space-y-3">
+      ${filtered.map(item => html`<div class="card p-3 flex items-center justify-between">
+        <div>
+          <div class="font-medium">${item.name||'Unnamed'}</div>
+          <div class="text-xs text-gray-500">${item.software_type||'Unknown'} ${item.api_key ? '\u2022 API Key: ' + item.api_key.substring(0,8) + '...' : ''}</div>
+        </div>
+        <div class="flex gap-2">
+          <button class="text-blue-600 text-sm" onClick=${() => show(item)}>Edit</button>
+          <button class="text-red-600 text-sm" onClick=${() => remove(item.id)}>Delete</button>
+        </div>
+      </div>`)}
+    </div>
+    ${st.showModal ? IntegrationModal({ st, show, hide, save }) : null}
+  </div>`;
+};
+
+const IntegrationModal = ({ st, show, hide, save }) => {
+  const item = st.editItem || {};
+  const [form, setForm] = viewState('integration_form', { name: item.name || '', software_type: item.software_type || '', api_key: item.api_key || '', webhook_url: item.webhook_url || '' });
+  const submit = () => { save({ ...form }); };
+  return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
+    <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
+      <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Integration</h3>
+      <div class="space-y-3">
+        <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Software Type</label><input class="border rounded px-3 py-2 w-full text-sm" placeholder="e.g. CoreSwift CRM, Mailgun" value=${form.software_type} onInput=${e => { form.software_type = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">API Key</label><input class="border rounded px-3 py-2 w-full text-sm" type="password" value=${form.api_key} onInput=${e => { form.api_key = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Webhook URL (optional)</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.webhook_url} onInput=${e => { form.webhook_url = e.target.value; renderApp(); }} /></div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="px-4 py-1.5 text-sm rounded border" onClick=${hide}>Cancel</button>
+        <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${submit}>Save</button>
+      </div>
+    </div>
+  </div>`;
+};
+
+// ---- TAGS ----
+const Tags = () => {
+  const st = viewState('tags', { list: [], showModal: false, editItem: null, search: '' });
+  const load = async () => { try { const data = await API.get('/tags'); st.list = Array.isArray(data.tags||data) ? (data.tags||data) : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try {
+      if (st.editItem && st.editItem.id) {
+        await API.put('/tags/' + st.editItem.id, data);
+      } else {
+        await API.post('/tags', data);
+      }
+      hide(); load();
+    } catch(e) { alert('Error: ' + e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Delete this tag?')) return; await API.del('/tags/' + id); load(); };
+  const filtered = st.list.filter(t => !st.search || (t.name||'').toLowerCase().includes(st.search.toLowerCase()));
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Tags</h2><p class="text-sm text-gray-500">Organize campaigns and leads</p></div>
+      <input class="border rounded px-3 py-1.5 text-sm w-48" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
+    </div>
+    <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm mb-4" onClick=${() => show()}>+ Add Tag</button>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      ${filtered.map(tag => html`<div class="card p-3 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          ${tag.color ? html`<span class="w-3 h-3 rounded-full" style="background:${tag.color}"></span>` : null}
+          <div><div class="font-medium text-sm">${tag.name}</div>${tag.group ? html`<div class="text-xs text-gray-400">${tag.group}</div>` : null}</div>
+        </div>
+        <div class="flex gap-1">
+          <button class="text-blue-600 text-xs" onClick=${() => show(tag)}>Edit</button>
+          <button class="text-red-600 text-xs" onClick=${() => remove(tag.id)}>Del</button>
+        </div>
+      </div>`)}
+      ${!filtered.length ? html`<div class="col-span-3 text-center text-gray-400 py-8">No tags yet</div>` : null}
+    </div>
+    ${st.showModal ? TagModal({ st, show, hide, save }) : null}
+  </div>`;
+};
+
+const TagModal = ({ st, show, hide, save }) => {
+  const item = st.editItem || {};
+  const [form, setForm] = viewState('tag_form', { name: item.name || '', color: item.color || '#3B82F6', group: item.group || '' });
+  const submit = () => { save({ ...form }); };
+  return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
+    <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
+      <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Tag</h3>
+      <div class="space-y-3">
+        <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Color</label><div class="flex gap-2"><input class="border rounded px-3 py-2 text-sm" type="color" value=${form.color} onInput=${e => { form.color = e.target.value; renderApp(); }} /><span class="text-sm text-gray-500 self-center">${form.color}</span></div></div>
+        <div><label class="block text-xs font-medium mb-1">Group</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.group} onInput=${e => { form.group = e.target.value; renderApp(); }} /></div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="px-4 py-1.5 text-sm rounded border" onClick=${hide}>Cancel</button>
+        <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${submit}>Save</button>
+      </div>
+    </div>
+  </div>`;
+};
+
+// ---- LEADS ----
+const LeadsView = () => {
+  const st = viewState('leads', { list: [], search: '' });
+  const load = async () => { try { const data = await API.get('/leads'); st.list = Array.isArray(data.leads||data) ? (data.leads||data) : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const filtered = st.list.filter(l => !st.search || (l.email||'').toLowerCase().includes(st.search.toLowerCase()) || (l.first_name||'').toLowerCase().includes(st.search.toLowerCase()) || (l.last_name||'').toLowerCase().includes(st.search.toLowerCase()) || (l.campaign||'').toLowerCase().includes(st.search.toLowerCase()));
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Leads</h2><p class="text-sm text-gray-500">Entries and contacts from campaigns</p></div>
+      <input class="border rounded px-3 py-1.5 text-sm w-48" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
+    </div>
+    <div class="card overflow-hidden">
+      <table class="table w-full">
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Campaign</th><th>Date</th></tr></thead>
+        <tbody>
+          ${filtered.map(l => html`<tr>
+            <td class="font-medium text-sm">${[l.first_name,l.last_name].filter(Boolean).join(' ') || '—'}</td>
+            <td class="text-sm">${l.email||'—'}</td>
+            <td class="text-sm">${l.phone||'—'}</td>
+            <td class="text-sm">${l.campaign||'—'}</td>
+            <td class="text-sm text-gray-500">${l.created_at ? new Date(l.created_at).toLocaleDateString() : '—'}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+      ${!filtered.length ? html`<div class="text-center text-gray-400 py-8">No leads yet</div>` : null}
+    </div>
+  </div>`;
+};
+
+// ---- API KEYS ----
+const ApiKeysView = () => {
+  const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '' });
+  const load = async () => { try { const data = await API.get('/api-keys'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const create = async () => {
+    if (!st.newKeyName) return;
+    try { await API.post('/api-keys', { name: st.newKeyName }); st.newKeyName = ''; st.showModal = false; load(); } catch(e) { alert('Error: ' + e.message); }
+  };
+  const remove = async (id) => { if(!confirm('Revoke this key?')) return; await API.del('/api-keys/' + id); load(); };
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">API Keys</h2><p class="text-sm text-gray-500">Manage API access keys</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${() => { st.showModal = true; st.newKeyName = ''; renderApp(); }}>+ Generate Key</button>
+    </div>
+    <div class="space-y-3">
+      ${st.list.map(key => html`<div class="card p-3 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-sm">${key.name||'API Key'}</div>
+          <div class="text-xs text-gray-400 font-mono">${key.key_prefix||''}****${key.key_suffix||''}</div>
+          <div class="text-xs text-gray-400">Created: ${key.created_at ? new Date(key.created_at).toLocaleDateString() : '—'}</div>
+        </div>
+        <button class="text-red-600 text-sm" onClick=${() => remove(key.id)}>Revoke</button>
+      </div>`)}
+      ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No API keys yet</div>` : null}
+    </div>
+    ${st.showModal ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.showModal = false; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-4">Generate API Key</h3>
+        <div><label class="block text-xs font-medium mb-1">Key Name</label><input class="border rounded px-3 py-2 w-full text-sm" placeholder="e.g. Mobile App" value=${st.newKeyName} onInput=${e => { st.newKeyName = e.target.value; renderApp(); }} /></div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.showModal = false; renderApp(); }}>Cancel</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${create}>Generate</button>
+        </div>
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
+// ---- SETTINGS ----
+const SettingsView = () => {
+  const st = viewState('settings', { data: {} });
+  const load = async () => { try { const d = await API.get('/settings'); st.data = d; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  return html`<div>
+    <h2 class="text-xl font-bold mb-4">Settings</h2>
+    <div class="card p-4 space-y-4 max-w-lg">
+      <div>
+        <h3 class="font-medium mb-2">Tenant Settings</h3>
+        <div class="text-sm text-gray-500">Settings are managed as key-value pairs.</div>
+      </div>
+      <div class="space-y-2">
+        ${Object.entries(st.data).map(([k,v]) => html`<div class="flex items-center justify-between py-2 border-b">
+          <span class="text-sm font-medium">${k}</span>
+          <span class="text-sm text-gray-500">${typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+        </div>`)}
+      </div>
+      ${!Object.keys(st.data).length ? html`<div class="text-gray-400 text-sm py-4">No settings configured</div>` : null}
+    </div>
+  </div>`;
+};
+
+// ---- EMAIL TEMPLATES (Admin Only) ----
+const EmailTemplates = () => {
+  const st = viewState('emailtemplates', { list: [], showModal: false, editItem: null, mode: 'html' });
+  const load = async () => { try { const data = await API.get('/email-templates'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const hide = () => { st.showModal = false; renderApp(); };
+  const save = async (data) => {
+    try {
+      if (st.editItem && st.editItem.id) {
+        await API.put('/email-templates/' + st.editItem.id, data);
+      } else {
+        await API.post('/email-templates', data);
+      }
+      hide(); load();
+    } catch(e) { alert('Error: ' + e.message); }
+  };
+  const MERGE_FIELDS = ['{{name}}', '{{email}}', '{{password}}', '{{login_url}}', '{{reset_url}}', '{{app_name}}', '{{support_email}}'];
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Email Templates</h2><p class="text-sm text-gray-500">System emails: welcome, password reset, notifications</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${() => show()}>+ Add Template</button>
+    </div>
+    <div class="space-y-3">
+      ${st.list.map(tpl => html`<div class="card p-3 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-sm">${tpl.name||'Unnamed'} <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">${tpl.template_type||'general'}</span></div>
+          <div class="text-xs text-gray-500">Subject: ${tpl.subject||'—'}</div>
+        </div>
+        <div class="flex gap-2">
+          <button class="text-blue-600 text-sm" onClick=${() => show(tpl)}>Edit</button>
+          <button class="text-red-600 text-sm" onClick=${() => { if(confirm('Delete?')) { API.del('/email-templates/' + tpl.id); load(); } }}>Delete</button>
+        </div>
+      </div>`)}
+      ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No email templates yet</div>` : null}
+    </div>
+    ${st.showModal ? EmailTemplateModal({ st, show, hide, save, MERGE_FIELDS }) : null}
+  </div>`;
+};
+
+const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
+  const item = st.editItem || {};
+  const [form, setForm] = viewState('emailtpl_form', {
+    name: item.name || '', template_type: item.template_type || 'welcome', subject: item.subject || '',
+    body_html: item.body_html || '', body_text: item.body_text || '', is_active: item.is_active !== false
+  });
+  const [mode, setMode] = viewState('emailtpl_mode', { m: 'html' });
+  const submit = () => { save({ ...form }); };
+  const insertField = (field) => {
+    const ta = document.getElementById('email_body_editor');
+    if (ta) {
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      const val = mode.m === 'html' ? form.body_html : form.body_text;
+      const newVal = val.substring(0, start) + field + val.substring(end);
+      if (mode.m === 'html') form.body_html = newVal; else form.body_text = newVal;
+      renderApp();
+    }
+  };
+  return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
+    <div class="bg-white rounded-xl p-6 w-3xl max-w-2xl shadow-xl max-h-screen overflow-y-auto" onClick=${e => e.stopPropagation()}>
+      <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Email Template</h3>
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Type</label>
+          <select class="border rounded px-3 py-2 w-full text-sm" value=${form.template_type} onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
+            <option value="welcome">Welcome Email</option>
+            <option value="password_reset">Password Reset</option>
+            <option value="notification">Notification</option>
+            <option value="general">General</option>
+          </select>
+        </div>
+      </div>
+      <div class="mb-3"><label class="block text-xs font-medium mb-1">Subject</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.subject} onInput=${e => { form.subject = e.target.value; renderApp(); }} /></div>
+      <div class="mb-3">
+        <div class="flex items-center justify-between mb-1">
+          <label class="text-xs font-medium">Body</label>
+          <div class="flex gap-2">
+            <button class="text-xs px-2 py-0.5 rounded ${mode.m === 'html' ? 'bg-blue-600 text-white' : 'bg-gray-200'}" onClick=${() => { mode.m = 'html'; renderApp(); }}>HTML</button>
+            <button class="text-xs px-2 py-0.5 rounded ${mode.m === 'text' ? 'bg-blue-600 text-white' : 'bg-gray-200'}" onClick=${() => { mode.m = 'text'; renderApp(); }}>Text</button>
+          </div>
+        </div>
+        <textarea id="email_body_editor" class="border rounded px-3 py-2 w-full text-sm font-mono" rows="8" value=${mode.m === 'html' ? form.body_html : form.body_text} onInput=${e => { if(mode.m==='html') form.body_html=e.target.value; else form.body_text=e.target.value; renderApp(); }}></textarea>
+        <div class="flex flex-wrap gap-1 mt-1">
+          ${MERGE_FIELDS.map(f => html`<button class="text-xs bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200" onClick=${() => insertField(f)}>${f}</button>`)}
+        </div>
+      </div>
+      <div class="flex items-center gap-2 mb-4">
+        <input type="checkbox" checked=${form.is_active} onChange=${e => { form.is_active = e.target.checked; renderApp(); }} />
+        <span class="text-sm">Active</span>
+      </div>
+      <div class="flex justify-end gap-2">
+        <button class="px-4 py-1.5 text-sm rounded border" onClick=${hide}>Cancel</button>
+        <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${submit}>Save Template</button>
+      </div>
+    </div>
+  </div>`;
+};
+
+// ---- SITE CONFIG (SEO / analytics / homepage / legal) ----
+const SiteConfigView = () => {
+  const st = viewState('siteConfig', { data: null, loaded: false, saving: false, status: '' });
+  const load = async () => { try { st.data = await API.get('/admin/site'); } catch(e) { st.data = null; } st.loaded = true; renderApp(); };
+  if (!st.loaded) { load(); }
+  const set = (k, v) => { st.data[k] = v; renderApp(); };
+  const sethp = (k, v) => { if (!st.data.homepage) st.data.homepage = {}; st.data.homepage[k] = v; renderApp(); };
+  const save = async () => {
+    if (!st.data) return;
+    st.saving = true; st.status = 'Saving...'; renderApp();
+    try {
+      const body = { ...st.data };
+      body.homepage = st.data.homepage || {};
+      await API.put('/admin/site', body);
+      st.status = 'Saved! Marketing page regenerated.';
+    } catch(e) { st.status = 'Error saving: ' + e.message; }
+    st.saving = false; renderApp();
+  };
+  const d = st.data;
+  const field = (k, label, ta) => html`<div class="mb-3"><label class="block text-xs font-medium text-gray-600 mb-1">${label}</label>${ta
+    ? html`<textarea class="input" rows="3" value=${d[k]||''} onInput=${e => set(k, e.target.value)}></textarea>`
+    : html`<input class="input" value=${d[k]||''} onInput=${e => set(k, e.target.value)} />`}</div>`;
+  const hpfield = (k, label, ta) => html`<div class="mb-3"><label class="block text-xs font-medium text-gray-600 mb-1">${label}</label>${ta
+    ? html`<textarea class="input" rows="3" value=${(d.homepage||{})[k]||''} onInput=${e => sethp(k, e.target.value)}></textarea>`
+    : html`<input class="input" value=${(d.homepage||{})[k]||''} onInput=${e => sethp(k, e.target.value)} />`}</div>`;
+  if (!st.loaded) return html`<div class="card"><p class="text-gray-500 text-sm">Loading site configuration...</p></div>`;
+  if (!d) return html`<div class="card"><p class="text-red-500">Site configuration not available.</p></div>`;
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Site Config</h2><p class="text-sm text-gray-500">SEO, analytics, homepage & legal content</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${save}>${st.saving ? 'Saving...' : 'Save Site Configuration'}</button>
+    </div>
+    ${st.status ? html`<div class="text-sm mb-3 ${st.status.startsWith('Error') ? 'text-red-600' : 'text-green-600'}">${st.status}</div>` : null}
+    <div class="card"><h3 class="font-semibold mb-3">🔍 SEO & Meta</h3>
+      ${field('title','Page Title')}${field('description','Meta Description',1)}${field('keywords','Keywords',1)}
+      ${field('canonical_url','Canonical URL')}${field('og_title','OG Title')}${field('og_description','OG Description',1)}
+      ${field('og_image_url','OG Image URL')}${field('favicon_url','Favicon URL')}
+    </div>
+    <div class="card"><h3 class="font-semibold mb-3">📊 Analytics & Tracking</h3>
+      ${field('ga_id','Google Analytics ID')}${field('gtm_id','Google Tag Manager ID')}
+      ${field('head_scripts','Head Scripts',1)}${field('body_scripts','Body Scripts',1)}
+    </div>
+    <div class="card"><h3 class="font-semibold mb-3">🏠 Homepage</h3>
+      ${hpfield('logo_text','Logo Text')}${hpfield('headline','Headline',1)}
+      ${hpfield('subheadline','Subheadline',1)}${hpfield('button_text','CTA Button')}${hpfield('secondary_button_text','Secondary Button')}
+    </div>
+    <div class="card"><h3 class="font-semibold mb-3">⚖️ Legal Pages</h3>
+      <p class="text-xs text-gray-400 mb-2">Rendered at /terms.html, /privacy.html, /refunds.html</p>
+      ${field('legal_tos','Terms of Service',1)}${field('legal_privacy','Privacy Policy',1)}${field('legal_refunds','Refund & Cancellation Policy',1)}
+    </div>
+    <div class="card"><h3 class="font-semibold mb-3">📋 Structured Data</h3>
+      ${field('schema_json','Schema.org JSON',1)}
+    </div>
+  </div>`;
+};
+
+// ---- SUPPORT TICKETS ----
+const SupportTickets = () => {
+  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all' });
+  const load = async () => { try { const d = await API.get('/support-tickets'); st.list = Array.isArray(d.tickets) ? d.tickets : []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const openNew = () => { st.form = { subject:'', description:'', priority:'normal', category:'' }; st.showModal = true; renderApp(); };
+  const create = async () => { if(!st.form.subject) return alert('Subject required'); try { await API.post('/support-tickets', st.form); st.showModal = false; load(); } catch(e){ alert('Error: ' + e.message); } };
+  const openDetail = async (id) => { try { const d = await API.get('/support-tickets/' + id); st.detail = d; st.newMsg=''; renderApp(); } catch(e){ alert(e.message); } };
+  const closeDetail = () => { st.detail = null; load(); renderApp(); };
+  const updateStatus = async (id, status) => { try { await API.put('/support-tickets/' + id, { status }); openDetail(id); load(); } catch(e){ alert(e.message); } };
+  const sendMsg = async () => { if(!st.newMsg || !st.detail) return; try { await API.post('/support-tickets/' + st.detail.ticket.id + '/messages', { body: st.newMsg, is_internal: true }); st.newMsg=''; openDetail(st.detail.ticket.id); } catch(e){ alert(e.message); } };
+  const remove = async (id) => { if(!confirm('Delete this ticket?')) return; await API.del('/support-tickets/' + id); load(); };
+  const badge = (s) => s==='open' ? 'badge badge-yellow' : s==='resolved' ? 'badge badge-green' : s==='in_progress' ? 'badge badge-blue' : 'badge badge-red';
+  const prio = (p) => ({low:'Low',normal:'Normal',high:'High',urgent:'Urgent'}[p] || p);
+  const filtered = st.list.filter(t => st.filter==='all' ? true : t.status===st.filter);
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Support Tickets</h2><p class="text-sm text-gray-500">Track and resolve support requests</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${openNew}>+ New Ticket</button>
+    </div>
+    <div class="flex gap-2 mb-4">
+      ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
+    </div>
+    <div class="card overflow-hidden">
+      <table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
+        <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
+          <td class="font-medium text-sm">${t.subject}</td>
+          <td><span class=${badge(t.status)}>${t.status}</span></td>
+          <td class="text-sm">${prio(t.priority)}</td>
+          <td class="text-sm text-gray-500">${t.category||'—'}</td>
+          <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
+          <td><button class="text-red-600 text-sm mr-2" onClick=${e => { e.stopPropagation(); remove(t.id); }}>Delete</button></td>
+        </tr>`)}
+        ${!filtered.length ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No tickets in this view</td></tr>` : null}
+        </tbody></table>
+    </div>
+
+    ${st.showModal ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.showModal=false; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 w-[500px] shadow-xl" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-4">New Support Ticket</h3>
+        <div class="space-y-3">
+          <div><label class="block text-xs font-medium mb-1">Subject *</label><input class="border rounded px-3 py-2 w-full text-sm" value=${st.form.subject} onInput=${e => { st.form.subject=e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Description</label><textarea class="border rounded px-3 py-2 w-full text-sm" rows="3" value=${st.form.description} onInput=${e => { st.form.description=e.target.value; renderApp(); }}></textarea></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="block text-xs font-medium mb-1">Priority</label><select class="border rounded px-3 py-2 w-full text-sm" value=${st.form.priority} onInput=${e => { st.form.priority=e.target.value; renderApp(); }}>${['low','normal','high','urgent'].map(p => html`<option>${p}</option>`)}</select></div>
+            <div><label class="block text-xs font-medium mb-1">Category</label><input class="border rounded px-3 py-2 w-full text-sm" placeholder="bug / feature / billing..." value=${st.form.category} onInput=${e => { st.form.category=e.target.value; renderApp(); }} /></div>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.showModal=false; renderApp(); }}>Cancel</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${create}>Create Ticket</button>
+        </div>
+      </div>
+    </div>` : null}
+
+    ${st.detail ? html`<div class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div class="bg-white rounded-xl p-6 w-[620px] shadow-xl max-h-[85vh] overflow-y-auto">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="font-bold text-lg">${st.detail.ticket.subject}</h3>
+          <button class="text-gray-500 text-xl" onClick=${closeDetail}>×</button>
+        </div>
+        <div class="flex gap-3 mb-4">
+          <span class=${badge(st.detail.ticket.status)}>${st.detail.ticket.status}</span>
+          <span class="badge badge-blue">${prio(st.detail.ticket.priority)}</span>
+          ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
+        </div>
+        ${st.detail.ticket.description ? html`<div class="bg-gray-50 rounded-lg p-3 text-sm mb-4">${st.detail.ticket.description}</div>` : null}
+        <div class="space-y-2 mb-4">${(st.detail.messages||[]).map(m => html`<div class="rounded-lg p-3 text-sm ${m.is_internal?'bg-blue-50':'bg-gray-50'}"><span class="text-gray-400 text-xs mr-2">${new Date(m.created_at).toLocaleTimeString()}</span>${m.body}${m.is_internal?html` <span class="text-blue-500 text-xs">(internal)</span>`:null}</div>`)}</div>
+        <div class="flex gap-2 mb-4">
+          <input class="border rounded px-3 py-2 text-sm flex-1" placeholder="Add internal note..." value=${st.newMsg} onInput=${e => { st.newMsg=e.target.value; renderApp(); }} />
+          <button class="px-3 py-2 text-sm rounded bg-gray-200" onClick=${sendMsg}>Post</button>
+        </div>
+        <div class="flex gap-2">
+          ${['open','in_progress','resolved','closed'].filter(s => s!==st.detail.ticket.status).map(s => html`<button class="px-3 py-1.5 text-xs rounded border" onClick=${() => updateStatus(st.detail.ticket.id, s)}>Set ${s==='in_progress'?'In Progress':s}</button>`)}
+        </div>
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
+// ---- REVIEWS & RATINGS ----
+const Reviews = () => {
+  const st = viewState('reviews', { list: [], avg: 0, count: 0, showModal: false, form: { rating:5, title:'', body:'', reviewer_name:'' } });
+  const load = async () => { try { const d = await API.get('/reviews'); st.list = Array.isArray(d.reviews) ? d.reviews : []; st.avg = d.average_rating||0; st.count = d.count||0; renderApp(); } catch(e){ console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const openNew = () => { st.form = { rating:5, title:'', body:'', reviewer_name:'' }; st.showModal = true; renderApp(); };
+  const create = async () => { try { await API.post('/reviews', st.form); st.showModal=false; load(); } catch(e){ alert('Error: '+e.message); } };
+  const moderate = async (id, status) => { try { await API.put('/reviews/'+id, { status }); load(); } catch(e){ alert(e.message); } };
+  const remove = async (id) => { if(!confirm('Delete this review?')) return; await API.del('/reviews/'+id); load(); };
+  const stars = (n) => '★'.repeat(n) + '☆'.repeat(5-n);
+  const badge = (s) => s==='approved' ? 'badge badge-green' : s==='pending' ? 'badge badge-yellow' : 'badge badge-red';
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Reviews & Ratings</h2><p class="text-sm text-gray-500">Customer reviews</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${openNew}>+ New Review</button>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mb-4">
+      <div class="stat-card"><div class="stat-value">${st.count}</div><div class="stat-label">Total Reviews</div></div>
+      <div class="stat-card"><div class="stat-value">${Number(st.avg).toFixed(1)}</div><div class="stat-label">Average Rating</div></div>
+      <div class="stat-card"><div class="stat-value">${st.list.filter(r => r.status==='pending').length}</div><div class="stat-label">Pending Approval</div></div>
+    </div>
+    <div class="card overflow-hidden">
+      <table class="table"><thead><tr><th>Rating</th><th>Reviewer</th><th>Title</th><th>Status</th><th>Date</th><th></th></tr></thead>
+        <tbody>${st.list.map(r => html`<tr>
+          <td class="text-yellow-500">${stars(r.rating)}</td>
+          <td class="text-sm">${r.reviewer_name||'—'}</td>
+          <td class="text-sm font-medium">${r.title||'—'}</td>
+          <td><span class=${badge(r.status)}>${r.status}</span></td>
+          <td class="text-sm text-gray-500">${new Date(r.created_at).toLocaleDateString()}</td>
+          <td class="text-right">
+            ${r.status==='pending' ? html`<button class="text-green-600 text-sm mr-2" onClick=${() => moderate(r.id,'approved')}>Approve</button><button class="text-red-600 text-sm mr-2" onClick=${() => moderate(r.id,'rejected')}>Reject</button>` : null}
+            <button class="text-red-600 text-sm" onClick=${() => remove(r.id)}>Delete</button>
+          </td>
+        </tr>`)}
+        ${!st.list.length ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No reviews yet</td></tr>` : null}
+        </tbody></table>
+    </div>
+    ${st.showModal ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.showModal=false; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 w-[480px] shadow-xl" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-4">New Review</h3>
+        <div class="space-y-3">
+          <div><label class="block text-xs font-medium mb-1">Rating</label><select class="border rounded px-3 py-2 w-full text-sm" value=${st.form.rating} onInput=${e => { st.form.rating=Number(e.target.value); renderApp(); }}>${[1,2,3,4,5].map(n => html`<option value=${n}>${'★'.repeat(n)}${'☆'.repeat(5-n)}</option>`)}</select></div>
+          <div><label class="block text-xs font-medium mb-1">Reviewer Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${st.form.reviewer_name} onInput=${e => { st.form.reviewer_name=e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Title</label><input class="border rounded px-3 py-2 w-full text-sm" value=${st.form.title} onInput=${e => { st.form.title=e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Body</label><textarea class="border rounded px-3 py-2 w-full text-sm" rows="3" value=${st.form.body} onInput=${e => { st.form.body=e.target.value; renderApp(); }}></textarea></div>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.showModal=false; renderApp(); }}>Cancel</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${create}>Save</button>
+        </div>
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
+// ---- CALENDAR EVENTS ----
+const CalendarEvents = () => {
+  const st = viewState('calendar', { list: [], showModal: false, form: { title:'', description:'', starts_at:'', event_type:'event', all_day:false } });
+  const load = async () => { try { const d = await API.get('/calendar-events'); st.list = Array.isArray(d.events) ? d.events : []; renderApp(); } catch(e){ console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const openNew = () => { st.form = { title:'', description:'', starts_at:'', event_type:'event', all_day:false }; st.showModal = true; renderApp(); };
+  const create = async () => { if(!st.form.title||!st.form.starts_at) return alert('Title and start time required'); try { await API.post('/calendar-events', { ...st.form, starts_at: new Date(st.form.starts_at).toISOString() }); st.showModal=false; load(); } catch(e){ alert('Error: '+e.message); } };
+  const setStatus = async (id, status) => { try { await API.put('/calendar-events/'+id, { status }); load(); } catch(e){ alert(e.message); } };
+  const remove = async (id) => { if(!confirm('Delete this event?')) return; await API.del('/calendar-events/'+id); load(); };
+  const fmt = (d) => d ? new Date(d).toLocaleString() : '—';
+  const icon = (t) => ({event:'📅', reminder:'⏰', appointment:'📌'}[t] || '📅');
+  const badge = (s) => s==='confirmed'?'badge badge-green':s==='cancelled'?'badge badge-red':s==='completed'?'badge badge-blue':'badge badge-yellow';
+  const sorted = [...st.list].sort((a,b) => new Date(a.starts_at) - new Date(b.starts_at));
+  const upcoming = sorted.filter(e => e.status!=='cancelled' && e.status!=='completed' && new Date(e.starts_at) >= new Date());
+  const past = sorted.filter(e => e.status==='completed' || new Date(e.starts_at) < new Date());
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Calendar Events</h2><p class="text-sm text-gray-500">Schedule and track events</p></div>
+      <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${openNew}>+ New Event</button>
+    </div>
+    <div class="grid grid-cols-3 gap-4 mb-4">
+      <div class="stat-card"><div class="stat-value">${upcoming.length}</div><div class="stat-label">Upcoming</div></div>
+      <div class="stat-card"><div class="stat-value">${past.length}</div><div class="stat-label">Past / Completed</div></div>
+      <div class="stat-card"><div class="stat-value">${st.list.filter(e=>e.status==='confirmed').length}</div><div class="stat-label">Confirmed</div></div>
+    </div>
+    <div class="card overflow-hidden">
+      <table class="table"><thead><tr><th></th><th>Title</th><th>Type</th><th>Starts</th><th>Status</th><th></th></tr></thead>
+        <tbody>${sorted.map(e => html`<tr class="${new Date(e.starts_at) < new Date() && e.status!=='completed' ? 'opacity-50' : ''}">
+          <td>${icon(e.event_type)}</td>
+          <td class="text-sm font-medium">${e.title}</td>
+          <td class="text-sm capitalize text-gray-500">${e.event_type}</td>
+          <td class="text-sm text-gray-500">${fmt(e.starts_at)}</td>
+          <td><span class=${badge(e.status)}>${e.status}</span></td>
+          <td class="text-right">
+            ${e.status==='scheduled' ? html`<button class="text-green-600 text-sm mr-2" onClick=${() => setStatus(e.id,'confirmed')}>Confirm</button>` : null}
+            ${e.status!=='completed' ? html`<button class="text-blue-600 text-sm mr-2" onClick=${() => setStatus(e.id,'completed')}>Complete</button>` : null}
+            ${e.status!=='cancelled' ? html`<button class="text-red-600 text-sm mr-2" onClick=${() => setStatus(e.id,'cancelled')}>Cancel</button>` : null}
+            <button class="text-red-600 text-sm" onClick=${() => remove(e.id)}>Delete</button>
+          </td>
+        </tr>`)}
+        ${!sorted.length ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No events yet</td></tr>` : null}
+        </tbody></table>
+    </div>
+    ${st.showModal ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.showModal=false; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 w-[480px] shadow-xl" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-4">New Event</h3>
+        <div class="space-y-3">
+          <div><label class="block text-xs font-medium mb-1">Title *</label><input class="border rounded px-3 py-2 w-full text-sm" value=${st.form.title} onInput=${e => { st.form.title=e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Description</label><textarea class="border rounded px-3 py-2 w-full text-sm" rows="2" value=${st.form.description} onInput=${e => { st.form.description=e.target.value; renderApp(); }}></textarea></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="block text-xs font-medium mb-1">Type</label><select class="border rounded px-3 py-2 w-full text-sm" value=${st.form.event_type} onInput=${e => { st.form.event_type=e.target.value; renderApp(); }}>${['event','reminder','appointment'].map(x => html`<option>${x}</option>`)}</select></div>
+            <div><label class="block text-xs font-medium mb-1">Starts *</label><input type="datetime-local" class="border rounded px-3 py-2 w-full text-sm" value=${st.form.starts_at} onInput=${e => { st.form.starts_at=e.target.value; renderApp(); }} /></div>
+          </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.showModal=false; renderApp(); }}>Cancel</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${create}>Save</button>
+        </div>
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
+const App = () => {
+  if(!API.token) return html`<${LoginView} />`;
+
+  const isAdmin = API.user && (API.user.role === 'admin' || API.user.role === 'super_admin');
+  const nav = [
+    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    { id: 'campaigns', label: 'Campaigns', icon: '📢' },
+    { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
+    { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
+    { id: 'tags', label: 'Tags', icon: '🏷' },
+    { id: 'leads', label: 'Leads', icon: '📋' },
+    { id: 'api-keys', label: 'API Keys', icon: '🔑' },
+    { id: 'site-config', label: 'Site Config', icon: '🌐', adminOnly: true },
+    { id: 'settings', label: 'Settings', icon: '⚙' },
+    { id: 'portfolio', label: 'Portfolio', icon: '🏢', adminOnly: true },
+    { id: 'plans', label: 'Plans', icon: '💳', adminOnly: true },
+    { id: 'plan-tiers', label: 'Plan Tiers', icon: '🥇', adminOnly: true },
+    { id: 'email-templates', label: 'Email Templates', icon: '📧', adminOnly: true },
+    { id: 'support-tickets', label: 'Support Tickets', icon: '🎫' },
+    { id: 'reviews', label: 'Reviews & Ratings', icon: '⭐', adminOnly: false },
+    { id: 'calendar', label: 'Calendar', icon: '📅' },
+  ].filter(item => !item.adminOnly || isAdmin);
+
+  const views = { dashboard: Dashboard, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents };
+  const CurrentView = views[S.view] || Dashboard;
+
+  return html`<div class="flex w-full">
+    <div class="sidebar w-56 bg-white border-r border-gray-200 min-h-screen p-3 flex flex-col" style="flex-shrink:0">
+      <div class="flex items-center gap-2 px-3 py-4 mb-2">
+        <span class="text-2xl">🎯</span>
+        <span class="nav-text font-bold text-gray-800">IncentiveSwift</span>
+      </div>
+      <div class="flex-1 space-y-1">
+        ${nav.map(n => html`<div class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; renderApp(); }}>
+          <span>${n.icon}</span><span class="nav-text">${n.label}</span>
+        </div>`)}
+      </div>
+      <div class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }}>
+        <span>🚪</span><span class="nav-text">Logout</span>
+      </div>
+    </div>
+    <div class="main flex-1 p-6 overflow-auto">
+      <${CurrentView} />
+    </div>
+  </div>`;
+};
+
+const renderApp = () => render(html`<${App} />`, document.getElementById('app'));
+renderApp();
 </script>
 </body>
 </html>
