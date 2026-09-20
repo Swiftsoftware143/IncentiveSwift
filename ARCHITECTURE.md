@@ -5,7 +5,7 @@
 ## Golden Rules (Read Before Touching ANY App)
 
 ### Rule 1: One VPS, One Brain
-All 7 apps share this Hetzner VPS. No app owns the entire machine.
+All 7 apps share this Miami VPS. No app owns the entire machine.
 - CARGO_BUILD_JOBS=1 always (2GB RAM constraint)
 - One build at a time — check `ps aux | grep rustc` before starting
 - If load > 3.0 or memory > 80%, STOP. Tell David.
