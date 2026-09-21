@@ -10,7 +10,9 @@
 //!
 //! Ciphertext format
 //! -----------------
-//!     enc:v1:<base64( pgp_sym_encrypt(plaintext, master_key) )>
+//! ```text
+//! enc:v1:<base64( pgp_sym_encrypt(plaintext, master_key) )>
+//! ```
 //!
 //! * AES-256 (pgcrypto PGP symmetric, `cipher-algo=aes256`), random salt per write, so the
 //!   same key value encrypts differently every time. The base64 payload is single-line (the
