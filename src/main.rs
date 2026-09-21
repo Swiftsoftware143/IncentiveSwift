@@ -838,6 +838,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/api-keys",
             get(handlers::api_keys::list_api_keys).post(handlers::api_keys::create_api_key),
         )
+        // Public by contract: sibling services (Multi-Directory's "Connect
+        // IncentiveSwift" flow) verify a pasted key here. Answers 200 {"valid": ...}
+        // for any well-formed request — see handlers::api_keys::verify_api_key.
+        .route(
+            "/api/v1/api-keys/verify",
+            post(handlers::api_keys::verify_api_key),
+        )
         .route(
             "/api/v1/api-keys/:id",
             put(handlers::api_keys::update_api_key).delete(handlers::api_keys::delete_api_key),

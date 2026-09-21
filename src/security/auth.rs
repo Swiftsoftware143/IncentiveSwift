@@ -60,9 +60,96 @@ where
     }
 }
 
-/// Validate an API key by extracting its identifier prefix, looking up the hash,
-/// and verifying with bcrypt::verify.
-async fn validate_api_key(
+/// Resolve a bearer token that claims to be an IncentiveSwift API key.
+///
+/// Two credential stores exist and both are consulted, `api_keys` first:
+///
+/// 1. `api_keys` — what `POST /api/v1/api-keys` writes (the admin + tenant
+///    "API Keys" screens). Keys are `is_key_<48 random alphanumerics>`; the stored
+///    `prefix` is the first 8 characters of the random part and `key_hash` is a
+///    bcrypt hash of the WHOLE key.
+/// 2. `api_credentials` — legacy rows (`key_identifier` + bcrypt `key_hash`).
+///
+/// Returns `Ok(None)` when the token is not an API key at all, so the caller can
+/// fall back to JWT validation; `Err(Unauthorized)` when it looks like one but the
+/// secret does not match (or the key is deactivated/expired).
+///
+/// This is the single resolver behind BOTH `AuthenticatedUser` and
+/// `POST /api/v1/api-keys/verify`, which is what makes the verify endpoint honest:
+/// a key that verifies is a key that really authenticates.
+pub(crate) async fn validate_api_key(
+    state: &crate::state::AppState,
+    token: &str,
+) -> Result<Option<AuthenticatedUser>, AppError> {
+    if let Some(user) = verify_issued_api_key(state, token).await? {
+        return Ok(Some(user));
+    }
+    verify_legacy_api_credential(state, token).await
+}
+
+/// Look a key up in `api_keys` (the store the CRUD API and the UI write).
+///
+/// `Ok(None)` = prefix unknown, not an issued key (caller may try the legacy store).
+/// `Err(Unauthorized)` = the key exists but is inactive, expired, or the secret is wrong.
+async fn verify_issued_api_key(
+    state: &crate::state::AppState,
+    token: &str,
+) -> Result<Option<AuthenticatedUser>, AppError> {
+    let Some(secret) = token.strip_prefix("is_key_") else {
+        return Ok(None);
+    };
+    // The stored `prefix` is the first 8 chars of the random part; a token too short
+    // to carry one cannot match a row.
+    if secret.len() < 8 {
+        return Ok(None);
+    }
+    let prefix = &secret[..8];
+
+    // The column has no unique constraint, so verify against every row that shares
+    // the prefix rather than assuming the first one is the key.
+    let rows = sqlx::query(
+        "SELECT ak.key_hash, ak.user_id::text AS user_id, ak.is_active, ak.expires_at,
+                COALESCE(a.email, '') AS email
+           FROM api_keys ak
+           LEFT JOIN accounts a ON a.id = ak.user_id
+          WHERE ak.prefix = $1",
+    )
+    .bind(prefix)
+    .fetch_all(&state.db)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    for r in &rows {
+        let is_active: bool = r.try_get("is_active").unwrap_or(false);
+        if !is_active {
+            continue;
+        }
+        let expires_at: Option<chrono::DateTime<chrono::Utc>> = r.try_get("expires_at")?;
+        if expires_at.is_some_and(|e| e <= chrono::Utc::now()) {
+            continue;
+        }
+
+        let stored_hash: String = r.get("key_hash");
+        // bcrypt::verify is the only correct comparison for a stored key hash.
+        if bcrypt::verify(token, &stored_hash).unwrap_or(false) {
+            return Ok(Some(AuthenticatedUser {
+                account_id: r.get("user_id"),
+                email: r.get("email"),
+                role: "api_key".to_string(),
+                impersonating: None,
+            }));
+        }
+    }
+
+    Err(AppError::Unauthorized("Invalid API key".to_string()))
+}
+
+/// Legacy store: `api_credentials.key_identifier` + bcrypt hash. Unchanged
+/// behaviour — kept so any credential seeded outside `api_keys` keeps working.
+async fn verify_legacy_api_credential(
     state: &crate::state::AppState,
     token: &str,
 ) -> Result<Option<AuthenticatedUser>, AppError> {

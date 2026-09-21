@@ -47,6 +47,17 @@ pub struct UpdateApiKeyInput {
     pub is_active: Option<bool>,
 }
 
+/// Input for `POST /api/v1/api-keys/verify`.
+///
+/// The key is carried in the body because that is what the sibling services send
+/// (Multi-Directory's "Connect IncentiveSwift" flow posts `{"api_key": "..."}`).
+/// An `Authorization: Bearer <key>` header is accepted as well.
+#[derive(Deserialize, Default)]
+pub struct VerifyApiKeyInput {
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 /// Generate a random API key.
 /// Format: is_key_<random_alphanumeric>
 /// Returns (full_key, prefix, key_hash)
@@ -69,6 +80,58 @@ fn generate_api_key() -> Result<(String, String, String), AppError> {
         .map_err(|e| AppError::Internal(format!("Failed to hash API key: {}", e)))?;
 
     Ok((full_key, prefix, hash))
+}
+
+/// POST /api/v1/api-keys/verify
+///
+/// Answers 200 with `{"valid": bool}` for EVERY well-formed request — never a
+/// redirect to auth, never a 4xx for a merely-wrong key. Multi-Directory's
+/// "Connect IncentiveSwift" flow (`multi-directory/src/handlers/connected_services.rs`)
+/// treats a non-2xx response as "verification failed" and only reads `valid` out of a
+/// successful body, so `200 {"valid": false}` is the contract for a key we do not accept.
+///
+/// Validation goes through the SAME resolver that powers `AuthenticatedUser`
+/// (`security::auth::validate_api_key`), so "verifies here" and "authenticates for
+/// real" cannot drift apart. A key that is unknown, deactivated, expired or has the
+/// wrong secret answers `valid: false` — the reason is never disclosed. The presented
+/// key is never logged, and `last_used_at` is deliberately left alone: this is a
+/// validity check, not a use.
+///
+/// The key travels in the body (`{"api_key": "..."}`); `Authorization: Bearer <key>`
+/// is accepted as an alternative (send `{}` as the body in that case).
+pub async fn verify_api_key(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<VerifyApiKeyInput>,
+) -> Result<Json<Value>, AppError> {
+    let presented = body
+        .api_key
+        .or_else(|| {
+            headers
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let presented = presented.trim();
+
+    if presented.is_empty() {
+        return Ok(Json(json!({ "valid": false })));
+    }
+
+    match crate::security::auth::validate_api_key(&state, presented).await {
+        Ok(Some(user)) => Ok(Json(json!({
+            "valid": true,
+            // The IS account the key belongs to, so a caller can bind the key to its
+            // own account instead of only asking "is this some valid key?".
+            "account_id": user.account_id,
+        }))),
+        // A recognised-but-dead key (wrong secret, deactivated, expired) is just "not valid".
+        Ok(None) | Err(AppError::Unauthorized(_)) => Ok(Json(json!({ "valid": false }))),
+        // A real failure (db unreachable) must not masquerade as a bad key.
+        Err(e) => Err(e),
+    }
 }
 
 /// GET /api/v1/api-keys
