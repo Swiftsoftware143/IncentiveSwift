@@ -2017,7 +2017,18 @@ const OPS_PANELS = [
 "path": "/admin/stop-impersonation"
 }
 ]
-}
+},
+{"id": "campaign-earning", "title": "10 · Campaign milestones & referrals", "actions": [{"label": "List milestones", "method": "GET", "path": "/campaigns/:slug/milestones", "fields": ["slug"]}, {"label": "Milestones achieved", "method": "GET", "path": "/campaigns/:slug/milestones/achieved", "fields": ["slug"]}, {"label": "Update milestone", "method": "PUT", "path": "/campaigns/:slug/milestones/:milestone_id", "json": true, "fields": ["slug", "milestone_id", "json"], "hint": "{\"name\":\"5 visits\",\"points\":50}"}, {"label": "Delete milestone", "method": "DELETE", "path": "/campaigns/:slug/milestones/:milestone_id", "fields": ["slug", "milestone_id"]}, {"label": "Referral stats", "method": "GET", "path": "/campaigns/:slug/referral-stats", "fields": ["slug"]}]}
+,
+{"id": "loyalty-secret-codes", "title": "11 · Loyalty secret codes", "list": "/loyalty/secret-codes", "actions": [{"label": "List loyalty secret codes", "method": "GET", "path": "/loyalty/secret-codes"}, {"label": "Set program secret code", "method": "PUT", "path": "/loyalty/programs/:id/secret-code", "json": true, "fields": ["id", "json"], "hint": "{\"secret_code\":\"SPRING25\",\"secret_code_points\":25}"}, {"label": "Subscribe account to a loyalty plan", "method": "POST", "path": "/loyalty/subscribe", "json": true, "fields": ["json"], "hint": "{\"plan_slug\":\"...\"}"}]}
+,
+{"id": "email-ops", "title": "12 · Email delivery & templates", "list": "/email-templates/merge-fields", "actions": [{"label": "Email settings (read)", "method": "GET", "path": "/admin/email-settings"}, {"label": "Email settings (save)", "method": "PUT", "path": "/admin/email-settings", "json": true, "fields": ["json"], "hint": "{\"provider\":\"smtp\",\"from_email\":\"you@example.com\"}"}, {"label": "Send test email", "method": "POST", "path": "/admin/email-settings/test"}, {"label": "Resend an entry", "method": "POST", "path": "/delivery/resend", "json": true, "fields": ["json"], "hint": "{\"entry_id\":\"...\"}"}]}
+,
+{"id": "iqs-campaign", "title": "13 · IQS funnels on a campaign", "actions": [{"label": "Campaign IQS questions", "method": "GET", "path": "/campaigns/:slug/iqs-questions", "fields": ["slug"]}, {"label": "Upload IQS file", "method": "POST", "path": "/iqs/upload", "json": true, "fields": ["json"]}]}
+,
+{"id": "surfaces-kiosk", "title": "14 · Surfaces, kiosks & tablet sessions", "list": "/surfaces", "actions": [{"label": "Update surface", "method": "PUT", "path": "/surfaces/:id", "json": true, "fields": ["id", "json"]}, {"label": "Delete surface", "method": "DELETE", "path": "/surfaces/:id", "fields": ["id"]}, {"label": "Tablet session", "method": "GET", "path": "/tablet/:id", "fields": ["id"]}, {"label": "Tablet interact", "method": "POST", "path": "/tablet/:id/interact", "json": true, "fields": ["id", "json"]}]}
+,
+{"id": "loyalty-analytics", "title": "15 · Loyalty analytics, badges & raffles", "actions": [{"label": "Program dashboard", "method": "GET", "path": "/loyalty/dashboard/admin/:id", "fields": ["id"], "hint": "id = program slug, e.g. zaarhub-rewards"}, {"label": "Member badge", "method": "GET", "path": "/loyalty/badge/member/:member_id", "fields": ["member_id"]}, {"label": "Member scans", "method": "GET", "path": "/loyalty/scans/member/:member_id", "fields": ["member_id"]}, {"label": "Redraw a raffle", "method": "POST", "path": "/raffles/:slug/redraw", "fields": ["slug"]}]}
 ];
 
 const OpsAction = ({ act }) => {

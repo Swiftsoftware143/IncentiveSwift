@@ -585,19 +585,10 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::campaign_secret_codes::list_secret_codes)
                 .post(handlers::campaign_secret_codes::create_secret_code),
         )
-        .route(
-            "/api/v1/secret-codes",
-            get(handlers::secret_codes_handler::list_secret_codes)
-                .post(handlers::secret_codes_handler::create_secret_code),
-        )
-        .route(
-            "/api/v1/secret-codes/:id",
-            delete(handlers::secret_codes_handler::delete_secret_code),
-        )
-        .route(
-            "/api/v1/secret-codes/:id/toggle",
-            post(handlers::secret_codes_handler::toggle_secret_code),
-        )
+        // NOTE: the unprefixed /api/v1/secret-codes, /:id and /:id/toggle aliases were removed
+        // (dead-endpoint triage t_3db21b91): they bound the exact same secret_codes_handler
+        // functions as the canonical /api/v1/loyalty/secret-codes family, had no caller in any
+        // shipped surface, and two names for one behaviour only invites drift.
         .route(
             "/api/v1/campaigns/:campaign_id/secret-codes/:code_id",
             put(handlers::campaign_secret_codes::update_secret_code)
