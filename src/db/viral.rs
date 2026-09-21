@@ -33,9 +33,12 @@ pub async fn get_active_channel_by_code(
     pool: &PgPool,
     code: &str,
 ) -> Result<EarnChannel, AppError> {
+    // Every field of EarnChannel is listed: sqlx::FromRow fails the whole query with
+    // "no column found for name: <field>" when even one is missing from the SELECT list.
     sqlx::query_as::<_, EarnChannel>(
         r#"SELECT id, account_id, campaign_id, channel_code, label, description,
                   points_per_click, max_clicks_per_contact, redirect_url,
+                  verification_type, expected_answer, verification_label, approval_notes,
                   is_active, created_at, updated_at
            FROM earn_channels WHERE channel_code = $1 AND is_active = true"#,
     )
@@ -366,6 +369,7 @@ pub async fn list_campaign_earn_channels(
     let channels = sqlx::query_as::<_, EarnChannel>(
         r#"SELECT id, account_id, campaign_id, channel_code, label, description,
                   points_per_click, max_clicks_per_contact, redirect_url,
+                  verification_type, expected_answer, verification_label, approval_notes,
                   is_active, created_at, updated_at
            FROM earn_channels WHERE campaign_id = $1
            ORDER BY created_at DESC"#,

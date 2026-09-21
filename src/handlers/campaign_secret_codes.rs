@@ -171,16 +171,16 @@ pub async fn redeem_secret_code(
             "message":"You have already redeemed this code"})));
     }
 
-    sqlx::query(
-        "INSERT INTO campaign_points_balance (campaign_id,contact_id,points_balance)
-         VALUES ($1,$2,$3)
-         ON CONFLICT (campaign_id,contact_id)
-         DO UPDATE SET points_balance = campaign_points_balance.points_balance + $3",
+    // Award through the shared upsert so points_balance AND lifetime_points stay in sync --
+    // db/viral.rs:get_campaign_leaderboard() filters on lifetime_points > 0, so a hand-rolled
+    // points_balance-only UPDATE keeps the winner off the leaderboard. (The previous version also
+    // read "COALESCE(points,0)" from a column that has never existed.)
+    let cur_pts = crate::db::viral::upsert_campaign_points(
+        &app.db,
+        &campaign_id,
+        &body.contact_id,
+        sc.points,
     )
-    .bind(campaign_id)
-    .bind(body.contact_id)
-    .bind(sc.points)
-    .execute(&app.db)
     .await
     .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
 
@@ -200,16 +200,6 @@ pub async fn redeem_secret_code(
         .bind(sc.id)
         .execute(&app.db)
         .await;
-
-    let cur_pts = sqlx::query_scalar::<_, i32>(
-        "SELECT COALESCE(points,0) FROM campaign_points_balance
-         WHERE campaign_id=$1 AND contact_id=$2",
-    )
-    .bind(campaign_id)
-    .bind(body.contact_id)
-    .fetch_one(&app.db)
-    .await
-    .unwrap_or(0);
 
     let _ = crate::mechanics::milestone_engine::check_milestones(
         &app,

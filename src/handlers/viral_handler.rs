@@ -518,6 +518,7 @@ pub async fn create_earn_channel(
     )
     .bind(body.expected_answer.as_deref().unwrap_or(""))
     .bind(body.verification_label.as_deref().unwrap_or(""))
+    .bind(body.approval_notes.as_deref().unwrap_or(""))
     .execute(&state.db)
     .await
     .map_err(|e| {
@@ -577,6 +578,7 @@ pub async fn update_earn_channel(
     )
     .bind(body.expected_answer.as_deref().unwrap_or(""))
     .bind(body.verification_label.as_deref().unwrap_or(""))
+    .bind(body.approval_notes.as_deref().unwrap_or(""))
     .bind(ch_id)
     .execute(&state.db)
     .await?;
