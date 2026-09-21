@@ -511,7 +511,7 @@ pub async fn fire_marketing_boost_with_override(
         {
             k.to_string()
         } else {
-            sqlx::query_scalar::<_, String>(
+            let stored = sqlx::query_scalar::<_, String>(
                 "SELECT api_key FROM provider_keys WHERE account_id = (SELECT account_id FROM campaigns WHERE id = $1) AND provider = 'marketing_boost' AND is_active = true LIMIT 1"
             )
             .bind(campaign_id)
@@ -519,7 +519,11 @@ pub async fn fire_marketing_boost_with_override(
             .await
             .ok()
             .flatten()
-            .unwrap_or_default()
+            .unwrap_or_default();
+            // Stored as ciphertext at rest: decrypt before handing the value to the API.
+            crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored.trim())
+                .await
+                .unwrap_or_default()
         };
         let sender = if let Some(s) = boost
             .get("sender")

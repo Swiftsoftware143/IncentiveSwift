@@ -51,26 +51,31 @@ pub async fn list_provider_keys(
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<Value> = rows
-        .iter()
-        .map(|row| {
-            let raw_key: String = row.get("api_key");
-            json!({
-                "id": row.get::<Uuid, _>("id"),
-                "account_id": row.get::<Uuid, _>("account_id"),
-                "provider": row.get::<String, _>("provider"),
-                "api_key_masked": mask_key(&raw_key),
-                "base_url": row.get::<Option<String>, _>("base_url"),
-                "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
-                "is_active": row.get::<bool, _>("is_active"),
-                "scope": row.get::<String, _>("scope"),
-                "provider_name": row.get::<Option<String>, _>("provider_name"),
-                "provider_description": row.get::<Option<String>, _>("provider_description"),
-                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-                "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
-            })
-        })
-        .collect();
+    // provider_keys.api_key is CIPHERTEXT at rest (src/security/provider_key_crypto.rs), so
+    // the read-back mask is computed from the DECRYPTED value. The ciphertext is never
+    // returned to a client, and a row that cannot be decrypted is a hard error rather than a
+    // silent "***" mask.
+    let mut items: Vec<Value> = Vec::with_capacity(rows.len());
+    for row in rows.iter() {
+        let raw_key: String = row.get("api_key");
+        let plain =
+            crate::security::provider_key_crypto::decrypt_from_storage(&state.db, raw_key.trim())
+                .await?;
+        items.push(json!({
+            "id": row.get::<Uuid, _>("id"),
+            "account_id": row.get::<Uuid, _>("account_id"),
+            "provider": row.get::<String, _>("provider"),
+            "api_key_masked": mask_key(&plain),
+            "base_url": row.get::<Option<String>, _>("base_url"),
+            "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
+            "is_active": row.get::<bool, _>("is_active"),
+            "scope": row.get::<String, _>("scope"),
+            "provider_name": row.get::<Option<String>, _>("provider_name"),
+            "provider_description": row.get::<Option<String>, _>("provider_description"),
+            "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+        }));
+    }
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }
@@ -96,6 +101,14 @@ pub async fn upsert_provider_key(
             body.provider
         )));
     }
+
+    // Encrypt BEFORE the write so the column only ever holds 'enc:v1:' ciphertext. This
+    // FAILS CLOSED (500) when PROVIDER_KEY_ENC_SECRET is missing — a plaintext credential is
+    // never stored as a fallback. A blank/omitted api_key stays '' so the ON CONFLICT CASE
+    // below keeps the previously stored ciphertext untouched.
+    let plaintext = body.api_key.as_deref().unwrap_or("").trim().to_string();
+    let stored_api_key =
+        crate::security::provider_key_crypto::encrypt_for_storage(&state.db, &plaintext).await?;
 
     // Upsert using EXCLUDED pattern
     let row = sqlx::query(
@@ -123,7 +136,7 @@ pub async fn upsert_provider_key(
     )
     .bind(account_id)
     .bind(&body.provider)
-    .bind(body.api_key.as_deref().unwrap_or(""))
+    .bind(&stored_api_key)
     .bind(&body.base_url)
     .bind(&body.metadata)
     .bind(body.is_active.unwrap_or(true))
@@ -132,11 +145,20 @@ pub async fn upsert_provider_key(
     .await?;
 
     let raw_key: String = row.get("api_key");
+    // The response masks the credential that is actually in the row: the request value when
+    // one was supplied, otherwise the DECRYPTED previously-stored key. Ciphertext is never
+    // returned to the client.
+    let mask_source = if plaintext.is_empty() {
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, raw_key.trim())
+            .await?
+    } else {
+        plaintext.clone()
+    };
     let item = json!({
         "id": row.get::<Uuid, _>("id"),
         "account_id": row.get::<Uuid, _>("account_id"),
         "provider": row.get::<String, _>("provider"),
-        "api_key_masked": mask_key(&raw_key),
+        "api_key_masked": mask_key(&mask_source),
         "base_url": row.get::<Option<String>, _>("base_url"),
         "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
         "is_active": row.get::<bool, _>("is_active"),
@@ -232,7 +254,9 @@ pub async fn get_coreswift_conn(
     .map_err(|e| AppError::Database(format!("DB error: {e}")))?
     .ok_or_else(|| AppError::NotFound("CoreSwift is not connected".to_string()))?;
 
-    let api_key = row.0;
+    // Stored as ciphertext at rest: unwind before the value is used as a credential.
+    let api_key =
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, row.0.trim()).await?;
     let base_url = row
         .1
         .filter(|u| !u.is_empty())

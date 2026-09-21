@@ -463,6 +463,11 @@ async fn generate_ai_reply(
     .and_then(|r| r)
     .map(|(k,)| k)?;
 
+    // Stored as ciphertext at rest: unwind before the key is used as a credential.
+    let key = crate::security::provider_key_crypto::decrypt_from_storage(&state.db, key.trim())
+        .await
+        .ok()?;
+
     if key.is_empty() {
         return None;
     }
@@ -532,6 +537,12 @@ async fn send_telnyx_sms(state: &AppState, to: &str, message: &str) -> Result<()
     .ok_or_else(|| "No Telnyx key configured".to_string())?;
 
     let (api_key, meta) = creds;
+
+    // Stored as ciphertext at rest.
+    let api_key =
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, api_key.trim())
+            .await
+            .map_err(|e| format!("provider key decrypt failed: {e}"))?;
 
     let from_number = meta
         .as_ref()

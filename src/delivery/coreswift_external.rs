@@ -52,7 +52,11 @@ pub async fn get_coreswift_connection(
     .await
     .ok()??;
 
-    let api_key = row.0;
+    // Stored as ciphertext at rest: unwind before the key is used as a credential.
+    let api_key =
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, row.0.trim())
+            .await
+            .ok()?;
     if api_key.trim().is_empty() {
         return None;
     }

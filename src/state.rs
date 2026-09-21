@@ -22,6 +22,17 @@ impl AppState {
         // Run database migrations (filename-based, idempotent)
         crate::db::migrations::run_migrations(&pool).await;
 
+        // Posture line: a missing master key means BYOK writes fail closed by design. Say so
+        // in the boot log instead of discovering it on the first customer write.
+        if crate::security::provider_key_crypto::is_configured() {
+            tracing::info!("Provider key encryption: enabled (AES-256 at rest, enc:v1 format)");
+        } else {
+            tracing::error!(
+                "Provider key encryption: DISABLED — PROVIDER_KEY_ENC_SECRET missing/short; \
+                 BYOK writes fail closed (a plaintext credential is never stored)"
+            );
+        }
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
             .user_agent("IncentiveSwift/0.1.0")

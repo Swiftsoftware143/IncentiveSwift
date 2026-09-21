@@ -185,17 +185,31 @@ pub async fn get_external_program(
 
 /// Validate a system API key against provider_keys table.
 async fn validate_system_api_key(state: &AppState, key: &str) -> Result<(), AppError> {
-    let valid = sqlx::query_scalar::<_, i64>(
-        r#"SELECT COUNT(*) FROM provider_keys
+    // The stored key is CIPHERTEXT at rest, so the comparison happens in Rust against the
+    // DECRYPTED value — a SQL `api_key = $1` can never match once the column is encrypted.
+    let candidates = sqlx::query_scalar::<_, String>(
+        r#"SELECT api_key FROM provider_keys
            WHERE provider = 'system_api_key'
-             AND api_key = $1
              AND is_active = true
              AND (scope = 'internal' OR scope = 'external')"#,
     )
-    .bind(key)
-    .fetch_one(&state.db)
+    .fetch_all(&state.db)
     .await
     .map_err(|_| AppError::Internal("DB error validating API key".to_string()))?;
+
+    let mut valid = 0i64;
+    for stored in candidates {
+        // A row that cannot be decrypted is skipped, never treated as a match.
+        if let Ok(plain) =
+            crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored.trim())
+                .await
+        {
+            if plain == key {
+                valid = 1;
+                break;
+            }
+        }
+    }
 
     if valid == 0 {
         return Err(AppError::Unauthorized(

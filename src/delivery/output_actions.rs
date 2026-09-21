@@ -397,6 +397,13 @@ async fn send_sms_via_telnyx(state: &AppState, account_id: &Uuid, to: &str, mess
     let Ok(Some((api_key, _base_url, meta))) = creds else {
         return;
     };
+    // Stored as ciphertext at rest.
+    let Ok(api_key) =
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, api_key.trim()).await
+    else {
+        tracing::warn!("telnyx_sms key could not be decrypted — skipping SMS");
+        return;
+    };
     if api_key.is_empty() {
         return;
     }

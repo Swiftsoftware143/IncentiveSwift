@@ -131,8 +131,17 @@ pub async fn subscribe(
     .fetch_optional(&s.db)
     .await?;
 
+    // provider_keys.api_key is ciphertext at rest: decrypt before the key is used.
+    let stripe_key = crate::security::provider_key_crypto::decrypt_from_storage(
+        &s.db,
+        stripe_key.as_deref().unwrap_or("").trim(),
+    )
+    .await
+    .ok()
+    .filter(|k| !k.is_empty());
+
     let stripe_key = match stripe_key {
-        Some(k) if !k.is_empty() => k,
+        Some(k) => k,
         _ => {
             return Ok(Json(SubscribeResponse {
                 checkout_url: None,

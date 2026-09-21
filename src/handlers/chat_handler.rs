@@ -78,8 +78,16 @@ async fn resolve_llm_key(state: &AppState, account_id: &Uuid) -> Option<(String,
         .flatten();
 
         if let Some(r) = row {
-            let key: String = r.get("api_key");
+            let stored: String = r.get("api_key");
             let base: Option<String> = r.get("base_url");
+            // Stored as ciphertext at rest: a key that cannot be decrypted falls through to
+            // the next provider instead of being sent as a credential.
+            let key = crate::security::provider_key_crypto::decrypt_from_storage(
+                &state.db,
+                stored.trim(),
+            )
+            .await
+            .unwrap_or_default();
             if !key.is_empty() {
                 return Some((provider.to_string(), key, base.unwrap_or_default()));
             }

@@ -71,6 +71,11 @@ pub async fn load_system_smtp_fallback(pool: &PgPool) -> Option<SmtpConfig> {
     .ok()?;
 
     let (key,) = row?;
+    // Stored as ciphertext at rest: a key that cannot be decrypted must never be handed to
+    // the SMTP transport as if it were the credential.
+    let key = crate::security::provider_key_crypto::decrypt_from_storage(pool, key.trim())
+        .await
+        .ok()?;
 
     // Mailgun SMTP: username = 'postmaster@domain', password = API key, host = smtp.mailgun.org
     Some(SmtpConfig {

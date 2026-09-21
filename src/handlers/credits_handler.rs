@@ -280,8 +280,24 @@ pub async fn create_topup_checkout(
     .fetch_optional(&state.db)
     .await;
 
+    // provider_keys.api_key is ciphertext at rest: decrypt before the key is used as a
+    // credential. A row that cannot be decrypted is reported exactly like "not configured",
+    // never handed to Stripe as garbage.
+    let stripe_key = match stripe_key {
+        Ok(Some(stored)) => {
+            crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored.trim())
+                .await
+                .ok()
+                .filter(|k| !k.is_empty())
+        }
+        Ok(None) => None,
+        Err(e) => {
+            return Json(serde_json::json!({"success": false, "error": e.to_string()}));
+        }
+    };
+
     match stripe_key {
-        Ok(Some(key)) => {
+        Some(key) => {
             let account_id = auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil());
             let success_url = format!(
                 "https://app.incentiveswift.com/admin/credits?checkout=success&credits={}",
@@ -328,10 +344,9 @@ pub async fn create_topup_checkout(
                 })),
             }
         }
-        Ok(None) => Json(serde_json::json!({
+        None => Json(serde_json::json!({
             "success": false, "error": "Stripe not configured. Ask the admin to add Stripe API key in Provider Keys."
         })),
-        Err(e) => Json(serde_json::json!({"success": false, "error": e.to_string()})),
     }
 }
 
