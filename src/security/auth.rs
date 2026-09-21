@@ -87,6 +87,24 @@ pub(crate) async fn validate_api_key(
     verify_legacy_api_credential(state, token).await
 }
 
+/// Issued keys are `is_key_<48 random alphanumerics>`; `api_keys.prefix` stores the
+/// first 8 characters of the random part.
+const ISSUED_KEY_PREFIX: &str = "is_key_";
+const KEY_PREFIX_LEN: usize = 8;
+
+/// The `api_keys.prefix` value for a presented token, or `None` when the token is not
+/// an issued key at all.
+///
+/// Byte-safe on purpose: `str::get` refuses to slice inside a multi-byte character, so
+/// a hand-crafted token (`is_key_aéééé`) cannot panic the request — a real panic here
+/// was reachable unauthenticated on `POST /api/v1/api-keys/verify`. Such a token simply
+/// is not a key; anything non-ASCII can never match a stored prefix (they are alnum).
+fn issued_key_prefix(token: &str) -> Option<&str> {
+    token
+        .strip_prefix(ISSUED_KEY_PREFIX)
+        .and_then(|secret| secret.get(..KEY_PREFIX_LEN))
+}
+
 /// Look a key up in `api_keys` (the store the CRUD API and the UI write).
 ///
 /// `Ok(None)` = prefix unknown, not an issued key (caller may try the legacy store).
@@ -95,15 +113,9 @@ async fn verify_issued_api_key(
     state: &crate::state::AppState,
     token: &str,
 ) -> Result<Option<AuthenticatedUser>, AppError> {
-    let Some(secret) = token.strip_prefix("is_key_") else {
+    let Some(prefix) = issued_key_prefix(token) else {
         return Ok(None);
     };
-    // The stored `prefix` is the first 8 chars of the random part; a token too short
-    // to carry one cannot match a row.
-    if secret.len() < 8 {
-        return Ok(None);
-    }
-    let prefix = &secret[..8];
 
     // The column has no unique constraint, so verify against every row that shares
     // the prefix rather than assuming the first one is the key.
@@ -249,4 +261,39 @@ pub async fn admin_guard(
     }
 
     Ok(next.run(req).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{issued_key_prefix, KEY_PREFIX_LEN};
+
+    /// The column `POST /api/v1/api-keys` fills: first 8 chars of the random part.
+    #[test]
+    fn prefix_is_the_first_eight_of_the_random_part() {
+        let key = format!("is_key_{}", "aB3xY7zQ".to_owned() + &"k".repeat(40));
+        assert_eq!(issued_key_prefix(&key), Some("aB3xY7zQ"));
+        assert_eq!(issued_key_prefix(&key).unwrap().len(), KEY_PREFIX_LEN);
+    }
+
+    #[test]
+    fn short_and_foreign_tokens_are_not_keys() {
+        assert_eq!(issued_key_prefix("is_key_abc"), None);
+        assert_eq!(issued_key_prefix("is_key_"), None);
+        assert_eq!(issued_key_prefix(""), None);
+        assert_eq!(issued_key_prefix("eyJhbGciOiJIUzI1NiJ9.e30.sig"), None);
+        assert_eq!(issued_key_prefix("IS_KEY_abcdefgh"), None);
+    }
+
+    /// Regression: `&secret[..8]` panicked here ("byte index 8 is not a char boundary"),
+    /// reachable unauthenticated on POST /api/v1/api-keys/verify (live 2026-09-21).
+    #[test]
+    fn multibyte_token_is_rejected_without_panicking() {
+        // 'a' + 4x 'é': byte 8 falls inside a character — exactly the live panic
+        assert_eq!(issued_key_prefix("is_key_aéééé"), None);
+        // 8 bytes of multi-byte characters: index 8 is the end of the string, a valid
+        // boundary, so this is a (never-matching) value rather than a panic
+        assert_eq!(issued_key_prefix("is_key_éééé"), Some("éééé"));
+        // mixed: 3x 'é' is 6 bytes, so the 8-byte window closes on boundaries
+        assert_eq!(issued_key_prefix("is_key_éééab"), Some("éééab"));
+    }
 }
