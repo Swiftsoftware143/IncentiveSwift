@@ -135,6 +135,47 @@ pub async fn long_form_qualifier(
     let full_tag = if tag.is_empty() { outcome.clone() } else { tag };
     let namespaced_tag = format!("{}_{}", campaign.tag_namespace, full_tag);
 
+    // ── Outcome routing ──────────────────────────────────────────────────────
+    // Send the visitor onward once the outcome is known. Config has historically
+    // only carried a tag, so nothing routed anywhere. Accept both shapes:
+    //   1. per-outcome: config.outcomes[{ min_score, label, tag, redirect_url }]
+    //   2. top level:   config.qualified_redirect / config.disqualified_redirect
+    let matched_outcome = campaign
+        .config
+        .get("outcomes")
+        .and_then(|o| o.as_array())
+        .and_then(|arr| {
+            arr.iter().find(|o| {
+                let label = o.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                let t = o.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                label == outcome || (!full_tag.is_empty() && t == full_tag)
+            })
+        });
+
+    let is_qualified = outcome.eq_ignore_ascii_case("qualified")
+        || full_tag.eq_ignore_ascii_case("qualified")
+        || matched_outcome
+            .and_then(|o| o.get("tag").and_then(|v| v.as_str()))
+            .map(|t| t.eq_ignore_ascii_case("qualified"))
+            .unwrap_or(false);
+
+    let redirect_url = matched_outcome
+        .and_then(|o| o.get("redirect_url").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+        .or_else(|| {
+            let key = if is_qualified {
+                "qualified_redirect"
+            } else {
+                "disqualified_redirect"
+            };
+            campaign
+                .config
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .filter(|u| !u.trim().is_empty());
+
     // Persist outcome tag to the contact (notes2, comma-joined).
     let _ = sqlx::query(
         r#"UPDATE contacts SET notes2 = CASE
@@ -173,11 +214,41 @@ pub async fn long_form_qualifier(
     )
     .await?;
 
+    // Notify a configured endpoint. Fire-and-forget: the entry is already persisted, so a
+    // slow or dead receiver must never fail the submission. http(s) only.
+    if let Some(hook) = campaign
+        .config
+        .get("outcome_webhook")
+        .and_then(|v| v.as_str())
+    {
+        let hook = hook.trim().to_string();
+        if hook.starts_with("http://") || hook.starts_with("https://") {
+            let payload = json!({
+                "outcome": outcome,
+                "tag": namespaced_tag,
+                "score": total_score,
+                "qualified": is_qualified,
+                "entry_id": entry_id,
+                "contact_id": contact_id,
+                "campaign": campaign.slug,
+            });
+            tokio::spawn(async move {
+                let _ = reqwest::Client::new()
+                    .post(&hook)
+                    .json(&payload)
+                    .send()
+                    .await;
+            });
+        }
+    }
+
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,
         "score": total_score,
         "outcome": outcome,
         "tag": namespaced_tag,
+        "qualified": is_qualified,
+        "redirect_url": redirect_url,
     })))
 }
