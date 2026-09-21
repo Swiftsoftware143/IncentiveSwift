@@ -78,6 +78,8 @@
     <a href="#security">Webhook Security</a>
     <a href="#credits">Credits</a>
     <a href="#loyalty">Loyalty</a>
+    <a href="#points-expiry">Points Expiry</a>
+    <a href="#form-sections">Form Sections</a>
   </div>
 </nav>
 <div class="container">
@@ -324,6 +326,132 @@ GET /api/v1/admin/credits   — View all tenant credits (admin)</pre>
     </ul>
     <p>If a voucher has expired before the customer could use it, an admin can <strong>re-issue</strong> it with a new expiration date. This requires admin approval and is logged in the audit trail. Re-issued vouchers get a new voucher ID linked to the original in the audit record.</p>
     <div class="callout tip"><strong>Best practice:</strong> Set voucher expiration to a reasonable window (30–90 days) to encourage timely redemption while giving customers adequate time to use their rewards.</div>
+  </div>
+</section>
+
+<section id="points-expiry">
+  <h2 class="sec-title"><span class="sec-num">9</span> ⏳ Points Expiry</h2>
+
+  <div class="card">
+    <h3>What the Sweep Does</h3>
+    <p><code>POST /api/v1/admin/treasury/expire-points</code> expires loyalty points that have fallen outside their program's expiry window. It works by <strong>recomputing</strong> each member's unexpired balance from the point ledgers and <strong>setting</strong> the balance to that number — it does not decrement.</p>
+    <pre>unexpired_balance = GREATEST(0, unexpired_earned - redeemed)</pre>
+    <p>Because the inputs are the (immutable) ledgers, a second run computes the same number, sees the stored balance already matches, and writes nothing. <strong>Re-running the sweep is a no-op</strong>, so it is safe to call on a schedule — or twice by mistake.</p>
+    <div class="callout warn"><strong>The sweep only ever lowers a balance.</strong> Only members with a positive balance are considered, and a member whose ledger total is already at or above their stored balance is left untouched.</div>
+  </div>
+
+  <div class="card">
+    <h3>Running It</h3>
+    <p>From the admin app: open the <strong>Operator Console</strong> (🛠, admin-only) and find the panel <strong>8 &middot; Treasury, clearinghouse &amp; site ops</strong>. Click <strong>Expire points now</strong>. That control calls the endpoint with your session token and prints the raw JSON response inline with an OK / ERROR flag.</p>
+    <pre>POST /api/v1/admin/treasury/expire-points</pre>
+    <p>The endpoint takes no parameters and no request body, so there is nothing to fill in before running it.</p>
+  </div>
+
+  <div class="card">
+    <h3>Expiry Window (Per Program)</h3>
+    <p>The cutoff is resolved <strong>per program</strong>, not globally, from <code>loyalty_programs.points_expire_days</code>. A program with no value set falls back to <strong>365 days</strong>. Each member is cut off using their own program's window.</p>
+    <p>To shorten or extend a program's window, set <code>points_expire_days</code> on that program row. Nothing moves until the sweep runs — the window only affects the next expiry run, not existing balances.</p>
+  </div>
+
+  <div class="card">
+    <h3>Which Ledgers Count</h3>
+    <div class="twrap"><table>
+      <thead><tr><th>Direction</th><th>Ledger / Column</th><th>Timestamp Used</th></tr></thead>
+      <tbody>
+        <tr><td>Earn</td><td><code>loyalty_checkins.points_awarded</code></td><td><code>checked_in_at</code></td></tr>
+        <tr><td>Earn</td><td><code>loyalty_online_actions.points_earned</code></td><td><code>created_at</code></td></tr>
+        <tr><td>Earn</td><td><code>point_issuance_log.points_issued</code></td><td><code>created_at</code></td></tr>
+        <tr><td>Spend</td><td><code>point_redemption_log.points_redeemed</code></td><td>— (all-time total, not windowed)</td></tr>
+      </tbody>
+    </table></div>
+    <p>Redemptions are treated as consuming the <strong>oldest</strong> points first (FIFO) — the points a member still holds are their newest. That is why the full redemption total is subtracted from the unexpired earn total rather than allocated against individual earn rows.</p>
+    <p><code>loyalty_activity</code> is deliberately excluded: it mirrors the check-in rows, so counting it would double-count every check-in.</p>
+    <div class="callout info"><strong>All three earn ledgers matter.</strong> Because the balance is <em>set</em> to the recomputed figure, a ledger left out of the sum would not merely go un-expired — those points would be deleted. There are exactly three ledgers that credit <code>points_balance</code>.</div>
+  </div>
+
+  <div class="card">
+    <h3>Reading the Response</h3>
+    <div class="twrap"><table>
+      <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>success</code></td><td><code>true</code> on a completed run.</td></tr>
+        <tr><td><code>total_points_expired</code></td><td>Points actually removed across all members this run; <code>0</code> when nothing changed.</td></tr>
+        <tr><td><code>members_affected</code></td><td>How many members had a balance changed.</td></tr>
+        <tr><td><code>cutoff_date</code></td><td>The <em>default</em> (365-day) cutoff for this run.</td></tr>
+        <tr><td><code>message</code></td><td>Human-readable summary of the run.</td></tr>
+        <tr><td><code>treasury_liability_reduction</code></td><td>Dollar value removed from outstanding liability (1 point = $0.01).</td></tr>
+        <tr><td><code>program_cutoffs</code></td><td>Per-program list of <code>{ program_id, expire_days, cutoff_date }</code> — the window actually applied to that program's members.</td></tr>
+        <tr><td><code>audit_id</code></td><td>UUID of this run's row in <code>point_expiry_audit</code>. Keep it: it is the handle for auditing and reversing.</td></tr>
+        <tr><td><code>default_expire_days</code></td><td><code>365</code>, the fallback window.</td></tr>
+        <tr><td><code>skipped_conflicts</code></td><td>Members whose balance moved between planning and writing (for example a concurrent award) and were left untouched this run.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout info"><strong>Treasury liability</strong> is reduced once, after every member has been processed — never inside the per-member loop — and it is floored at zero.</div>
+  </div>
+
+  <div class="card">
+    <h3>Auditing and Reversing a Run</h3>
+    <p>Every run writes exactly one row to <code>point_expiry_audit</code>, and it is written <strong>before</strong> any balance is changed. The row carries the previous balance of every member the run intended to change, so a run is inspectable and reversible even if it dies halfway through.</p>
+    <div class="twrap"><table>
+      <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>Run id — the <code>audit_id</code> returned by the API.</td></tr>
+        <tr><td><code>run_at</code> / <code>completed_at</code></td><td>When the run started, and when it finished reconciling.</td></tr>
+        <tr><td><code>status</code></td><td><code>pending</code> while planned, then <code>applied</code> if any balance changed, or <code>noop</code> if none did.</td></tr>
+        <tr><td><code>default_expire_days</code></td><td>Fallback window used for the run (365).</td></tr>
+        <tr><td><code>members_affected</code>, <code>total_points_expired</code>, <code>treasury_liability_reduction</code></td><td>Run totals, matching the API response.</td></tr>
+        <tr><td><code>details</code></td><td>JSONB array, one entry per member. Planned before the write: <code>member_id</code>, <code>program_id</code>, <code>expire_days</code>, <code>cutoff</code>, <code>previous_balance</code>, <code>new_balance</code>, <code>expired_points</code>, <code>unexpired_earned</code>, <code>expired_earned</code>, <code>redeemed</code>. Once the run completes it is rewritten with the outcome per member — <code>applied</code> (carrying <code>previous_balance</code> and <code>new_balance</code>) or <code>skipped_conflict</code>.</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>To reverse a run:</strong> read <code>details</code> for the <code>audit_id</code>, set each listed member's <code>points_balance</code> back to its <code>previous_balance</code>, and add that run's <code>treasury_liability_reduction</code> back onto <code>point_treasury.outstanding_liability</code>. Because the sweep only ever sets a balance from the ledgers, the next run simply re-derives the current state.</p>
+    <div class="callout tip"><strong>Before you reverse:</strong> check the <code>status</code> first. A <code>noop</code> row changed nothing and needs no reversal.</div>
+    <div class="callout warn"><strong>Concurrent awards are not clobbered.</strong> Each member's write is guarded on the balance the plan observed; if a member's balance moved in between, that member is skipped and counted in <code>skipped_conflicts</code>, and the next run picks them up.</div>
+  </div>
+</section>
+
+<section id="form-sections">
+  <h2 class="sec-title"><span class="sec-num">10</span> 🧩 Grouped Form Sections</h2>
+
+  <div class="card">
+    <h3>What Sections Are</h3>
+    <p>Campaigns of Mechanic Type <strong>Long-Form Qualifier</strong> can group their questions into titled sections (for example <em>About you</em> → <em>Your business</em> → <em>Your goals</em>). Sections live in <code>campaigns.config.sections</code>:</p>
+    <pre>[
+  { "title": "About you",     "questions": ["full_name", "role"] },
+  { "title": "Your business", "questions": ["company", "monthly_revenue"] }
+]</pre>
+    <p>This is an <strong>ordering-only overlay</strong>. It decides the grouping and presentation order of the questions on the public form, and nothing else.</p>
+    <div class="callout warn"><strong>Sections cannot change qualification.</strong> Scoring, outcomes, tags, redirects and the outcome webhook all keep reading <code>config.rules</code> exactly as they did before sections existed. Grouping a question differently, or not at all, cannot change who passes.</div>
+  </div>
+
+  <div class="card">
+    <h3>Editing Sections</h3>
+    <p>Open a Long-Form Qualifier campaign in the campaign editor. A <strong>🧩 Sections</strong> block appears under the Config (JSON) field, annotated <em>presentation order only — scoring, outcomes, tags, redirects and the webhook are unchanged</em>.</p>
+    <ul>
+      <li><strong>+ Add section</strong> — appends a new section with an editable title and a ✕ remove button.</li>
+      <li><strong>Question checkboxes</strong> — the list is built from the question keys already present in <code>config.rules</code>. Tick a key to place it in that section, untick to take it out.</li>
+      <li>If <code>rules</code> is still empty the block says so: <em>No question keys in config.rules yet — add rules above, then group them here.</em></li>
+    </ul>
+    <p><code>campaigns.config</code> is JSONB and is replaced wholesale on save, so the editor <strong>merges</strong> <code>sections</code> into the config object alongside <code>rules</code> and <code>outcomes</code>. Saving sections never wipes the rules or outcomes.</p>
+  </div>
+
+  <div class="card">
+    <h3>Guaranteed Behaviour</h3>
+    <div class="twrap"><table>
+      <thead><tr><th>Case</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>A key in <code>sections</code> is not a question in <code>rules</code> (a typo)</td><td>Ignored. No error and no partial render.</td></tr>
+        <tr><td>A question in <code>rules</code> is named by no section</td><td>Still shown, in a trailing untitled group. A question can never be dropped by grouping.</td></tr>
+        <tr><td>The same question is listed in two sections</td><td>Rendered once, in the first section that names it.</td></tr>
+        <tr><td>A section's keys are all unknown</td><td>That section is omitted rather than rendered as a bare heading.</td></tr>
+        <tr><td><code>sections</code> is malformed (not an array)</td><td>Degrades to the flat <code>rules</code> order.</td></tr>
+        <tr><td>The campaign defines no <code>sections</code></td><td>Identical to previous behaviour: a flat list, and the <code>GET /api/v1/play/&lt;slug&gt;</code> payload contains no <code>form_sections</code> key at all.</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h3>Where It Renders</h3>
+    <p>The public form page (<code>https://incentiveswift.com/long-form-qualifier.html?slug=&lt;campaign&gt;</code>) consumes <code>form_sections</code> from <code>GET /api/v1/play/&lt;slug&gt;</code> and prints one heading per non-empty section, with that section's questions beneath it. When the key is absent the page falls back to the flat <code>config.rules</code> order.</p>
   </div>
 </section>
 

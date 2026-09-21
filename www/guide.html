@@ -161,6 +161,7 @@
       <a href="#iqs-campaign" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎯</span> Survey + Campaigns</a>
       <a href="#iqs-widget" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🪟</span> Popup Widget</a>
       <a href="#post-submit" class="nav-item" onclick="closeMobile()"><span class="nav-icon">✅</span> Post-Submit Flow</a>
+      <a href="#iqs-form-sections" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🧩</span> Grouped Form Sections</a>
       <div class="section-title">Integrations</div>
       <a href="#integration-hub" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔗</span> Integration Hub</a>
       <a href="#marketing-boost" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📈</span> Marketing Boost</a>
@@ -622,6 +623,35 @@
         <strong>No redirect:</strong> If no redirect URL is set, users see a clean themed thank-you page that matches their survey experience. No page jump, smooth transition, branded to your campaign's colors.
       </div>
 
+      <h2 id="iqs-form-sections">🧩 Grouped Form Sections</h2>
+      <p>The long-form qualifier form can be broken into titled sections — for example <em>About you</em>, then <em>Your business</em>, then <em>Your goals</em>. Sections are a <strong>presentation overlay</strong>: they control the grouping and the order of the questions on the public form, and nothing else.</p>
+
+      <div class="alert alert-info">
+        <strong>Grouping never changes qualification:</strong> scoring, outcomes, tags, redirects and the outcome webhook all keep reading <code>rules</code> exactly as before. Grouping a question differently, or not at all, cannot change who passes.
+      </div>
+
+      <h3>Configuring Sections</h3>
+      <ol class="step-list">
+        <li><strong>Open the Campaign</strong><p>In the campaign editor, set <strong>Mechanic Type</strong> to <strong>Long-Form Qualifier</strong>. A <strong>🧩 Sections</strong> block appears under the Config (JSON) field.</p></li>
+        <li><strong>Add a Section</strong><p>Click <strong>+ Add section</strong>, give it a title, and tick the question keys that belong in it. The tick list is built from the question keys already present in your <code>rules</code> — a question has to exist in <code>rules</code> before you can group it.</p></li>
+        <li><strong>Order It</strong><p>Sections render in the order you list them, and the questions inside a section render in the order you tick them. <strong>✕</strong> removes a section.</p></li>
+        <li><strong>Save</strong><p>Saving merges <code>sections</code> into the campaign <code>config</code> alongside <code>rules</code> and <code>outcomes</code> — it does not replace them.</p></li>
+      </ol>
+
+      <h3>Ungrouped and Unknown Keys</h3>
+      <table>
+        <thead><tr><th>Case</th><th>What Happens</th></tr></thead>
+        <tbody>
+          <tr><td>A question is in <code>rules</code> but in no section</td><td>It still appears on the form, in a trailing untitled group. A question can never be silently dropped by grouping.</td></tr>
+          <tr><td>A section names a key that is not in <code>rules</code> (a misspelling)</td><td>The key is ignored. No error, no warning, no broken form.</td></tr>
+          <tr><td>The same question is named in two sections</td><td>It renders once, in the first section that names it.</td></tr>
+          <tr><td>The campaign has no <code>sections</code> at all</td><td>The form renders as a plain flat list of questions, exactly as it did before sections existed.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>On the Public Form</h3>
+      <p>The form page at <code>https://incentiveswift.com/long-form-qualifier.html?slug=&lt;your-campaign&gt;</code> renders one heading per non-empty section, with that section's questions underneath. The server-resolved ordering comes back as <code>form_sections</code> in <code>GET /api/v1/play/&lt;slug&gt;</code>, and is present only when the campaign defines sections; without it the page falls back to the flat <code>rules</code> order.</p>
+
       <!-- ==================== INTEGRATIONS ==================== -->
       <h2 id="integration-hub">🔗 Integration Hub</h2>
       <p>The Integration Hub connects your campaigns and surveys to external services. Every time a user wins a prize or enters a campaign, configured integrations fire automatically.</p>
@@ -746,6 +776,10 @@
       <div class="faq-item">
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Does IncentiveSwift integrate with CoreSwift CRM?</button>
         <div class="faq-a">Yes — all survey submissions and campaign entries are automatically synced to CoreSwift CRM. Contacts are created/updated with their score, tags, classification, and source data. No manual configuration needed.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Do loyalty points expire?</button>
+        <div class="faq-a">Yes. Each loyalty program has a points expiration window (<code>points_expire_days</code>, 365 days by default when it isn't set), and an admin runs the expiry sweep to clear points that have fallen outside it. The sweep recalculates each member's balance from their earning and redemption records instead of subtracting a fixed amount, so running it twice changes nothing. Members are treated as spending their oldest points first, so the balance they hold is always their newest points.</div>
       </div>
 
     </div>
