@@ -138,6 +138,34 @@ pub async fn get_program(pool: &PgPool, program_id: &Uuid) -> Result<LoyaltyProg
     Ok(program)
 }
 
+/// Get the loyalty program attached to a campaign via the reverse pointer
+/// (`loyalty_programs.campaign_id`). The forward pointer on `campaigns`
+/// (`loyalty_program_id`) is the canonical link; this exists because
+/// `create_program` is also able to set the reverse one, so the public
+/// check-in path accepts either wiring.
+pub async fn get_program_by_campaign(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+) -> Result<LoyaltyProgram, AppError> {
+    let program = sqlx::query_as::<_, LoyaltyProgram>(
+        r#"SELECT id, campaign_id, name, recognition_method,
+                  points_per_checkin, max_checkins_per_day,
+                  point_decay_days, is_active, created_at,
+                  tiers_enabled, milestones_enabled, streak_enabled,
+                  streak_bonus, streak_days, referral_bonus, birthday_bonus,
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
+           FROM loyalty_programs WHERE campaign_id = $1 AND is_active = true
+           ORDER BY created_at ASC LIMIT 1"#,
+    )
+    .bind(campaign_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
+
+    Ok(program)
+}
+
 /// Check if a reward threshold has just been crossed.
 /// Returns the reward tier that was crossed (if any).
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]

@@ -40,10 +40,18 @@ pub async fn checkin(
     };
     let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
 
-    // 2. Get loyalty program by slug — lookup from campaign slug
+    // 2. Resolve the loyalty program wired to this campaign. `program_slug` is
+    //    a *campaign* slug: the campaigns row carries the canonical forward
+    //    link (loyalty_program_id), and loyalty_programs.campaign_id is the
+    //    reverse pointer, which create_program can also set. Accept either —
+    //    passing the campaign id straight to get_program() (which looks up by
+    //    program id) could never resolve.
     let campaign =
         crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
-    let program = loyalty::get_program(&state.db, &campaign.id).await?;
+    let program = match campaign.loyalty_program_id {
+        Some(program_id) => loyalty::get_program(&state.db, &program_id).await?,
+        None => loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
+    };
 
     // 3. Process checkin
     let result = loyalty_checkin::process_checkin(
@@ -57,11 +65,17 @@ pub async fn checkin(
     // 4. Return result
     match result {
         loyalty_checkin::CheckinResult::Success {
+            base_points,
             points_awarded,
+            multiplier,
+            tier_name,
             new_balance,
             rewards_awarded,
         } => Ok(Json(json!({
             "status": "ok",
+            "base_points": base_points,
+            "multiplier": multiplier,
+            "tier": tier_name,
             "points_awarded": points_awarded,
             "new_balance": new_balance,
             "rewards_awarded": rewards_awarded.iter().map(|r| json!({
@@ -608,9 +622,18 @@ pub async fn online_visit(
         })));
     }
 
-    let points = program.points_per_visit as i64;
+    // 3b. Resolve the member's tier multiplier on the balance they hold now
+    let member_id_str = member.id.to_string();
+    let award = loyalty_checkin::resolve_award(
+        &state,
+        &member.program_id.to_string(),
+        member.points_balance as i64,
+        program.points_per_visit,
+        program.tiers_enabled,
+    )
+    .await?;
 
-    // 4. Record the online action
+    // 4. Record the online action (base + multiplier preserved in metadata)
     let mut metadata = serde_json::Map::new();
     metadata.insert("url".to_string(), json!(body.url));
     if let Some(ref ua) = body.user_agent {
@@ -619,18 +642,24 @@ pub async fn online_visit(
     if let Some(ref r) = body.referrer {
         metadata.insert("referrer".to_string(), json!(r));
     }
+    metadata.insert("base_points".to_string(), json!(award.base_points));
+    metadata.insert("multiplier".to_string(), json!(award.multiplier));
+    metadata.insert(
+        "tier".to_string(),
+        json!(award.tier.as_ref().map(|t| t.name.clone())),
+    );
 
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
            VALUES ($1, 'daily_visit', $2, $3::jsonb)"#,
     )
     .bind(member.id)
-    .bind(points)
+    .bind(award.awarded as i64)
     .bind(json!(metadata).to_string())
     .execute(&state.db)
     .await?;
 
-    // 5. Award points to balance
+    // 5. Award the multiplied points to balance
     sqlx::query(
         r#"UPDATE loyalty_members
            SET points_balance = points_balance + $1,
@@ -640,10 +669,20 @@ pub async fn online_visit(
                last_activity_date = now()
            WHERE id = $2"#,
     )
-    .bind(points as i32)
+    .bind(award.awarded)
     .bind(member.id)
     .execute(&state.db)
     .await?;
+
+    // 5b. Member-facing audit trail + denormalised tier sync
+    let _ = loyalty_checkin::record_activity(
+        &state,
+        &member_id_str,
+        "daily_visit",
+        &award.audit_note("daily_visit"),
+        award.awarded,
+    )
+    .await;
 
     // 6. Fetch updated member for streak & balance
     #[derive(sqlx::FromRow, serde::Serialize)]
@@ -660,9 +699,22 @@ pub async fn online_visit(
     .fetch_one(&state.db)
     .await?;
 
+    // The denormalised tier column reflects the member's standing AFTER this award.
+    let _ = loyalty_checkin::sync_member_tier(
+        &state,
+        &member.program_id.to_string(),
+        &member_id_str,
+        updated.points_balance as i64,
+        program.tiers_enabled,
+    )
+    .await;
+
     Ok(Json(json!({
         "status": "ok",
-        "points_awarded": points,
+        "base_points": award.base_points,
+        "multiplier": award.multiplier,
+        "tier": award.tier.as_ref().map(|t| t.name.clone()),
+        "points_awarded": award.awarded,
         "current_streak": updated.current_streak,
         "total_balance": updated.points_balance
     })))
@@ -700,12 +752,24 @@ pub async fn online_share(
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
 
-    let points = program.social_share_points as i64;
+    // 2b. Resolve the member's tier multiplier on the balance they hold now
+    let member_id_str = member.id.to_string();
+    let award = loyalty_checkin::resolve_award(
+        &state,
+        &member.program_id.to_string(),
+        member.points_balance as i64,
+        program.social_share_points,
+        program.tiers_enabled,
+    )
+    .await?;
 
-    // 3. Record the action
+    // 3. Record the action (base + multiplier preserved in metadata)
     let metadata = json!({
         "platform": body.platform,
-        "url": body.url
+        "url": body.url,
+        "base_points": award.base_points,
+        "multiplier": award.multiplier,
+        "tier": award.tier.as_ref().map(|t| t.name.clone()),
     });
 
     sqlx::query(
@@ -713,22 +777,32 @@ pub async fn online_share(
            VALUES ($1, 'social_share', $2, $3::jsonb)"#,
     )
     .bind(member.id)
-    .bind(points)
+    .bind(award.awarded as i64)
     .bind(metadata.to_string())
     .execute(&state.db)
     .await?;
 
-    // 4. Award points
+    // 4. Award the multiplied points
     sqlx::query(
         r#"UPDATE loyalty_members
            SET points_balance = points_balance + $1,
                lifetime_points = lifetime_points + $1
            WHERE id = $2"#,
     )
-    .bind(points as i32)
+    .bind(award.awarded)
     .bind(member.id)
     .execute(&state.db)
     .await?;
+
+    // 4b. Member-facing audit trail + denormalised tier sync
+    let _ = loyalty_checkin::record_activity(
+        &state,
+        &member_id_str,
+        "social_share",
+        &award.audit_note("social_share"),
+        award.awarded,
+    )
+    .await;
 
     // 5. Get updated balance
     let new_balance: i32 =
@@ -737,9 +811,22 @@ pub async fn online_share(
             .fetch_one(&state.db)
             .await?;
 
+    // The denormalised tier column reflects the member's standing AFTER this award.
+    let _ = loyalty_checkin::sync_member_tier(
+        &state,
+        &member.program_id.to_string(),
+        &member_id_str,
+        new_balance as i64,
+        program.tiers_enabled,
+    )
+    .await;
+
     Ok(Json(json!({
         "status": "ok",
-        "points_awarded": points,
+        "base_points": award.base_points,
+        "multiplier": award.multiplier,
+        "tier": award.tier.as_ref().map(|t| t.name.clone()),
+        "points_awarded": award.awarded,
         "total_balance": new_balance
     })))
 }
