@@ -46,7 +46,10 @@ pub async fn process_due_emails(state: &AppState) -> usize {
     )
     .fetch_all(&state.db)
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        tracing::error!(error = %e, "pending_emails fetch failed — skipping this run");
+        Default::default()
+    });
 
     let mut sent = 0;
     for (id, account_id, to, template_type, vars) in due {

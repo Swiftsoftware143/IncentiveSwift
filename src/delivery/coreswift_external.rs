@@ -274,7 +274,10 @@ pub async fn build_field_mapping(state: &AppState, entry_id: &Uuid) -> Value {
     .bind(entry_id)
     .fetch_all(&state.db)
     .await
-    .unwrap_or_default();
+    .unwrap_or_else(|e| {
+        tracing::error!(error = %e, entry_id = %entry_id, "answers/questions fetch failed — emitting an empty field mapping");
+        Default::default()
+    });
 
     let mut fields = Map::new();
     for (question_text, crm_field, _qtype, value) in rows {

@@ -52,7 +52,10 @@ pub async fn list(
         .bind(offset)
         .fetch_all(&state.db)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "surfaces list query failed — returning an empty list");
+            Default::default()
+        });
     Ok(Json(
         json!({ "items": items, "count": items.len(), "limit": limit, "offset": offset }),
     ))

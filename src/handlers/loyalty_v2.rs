@@ -302,7 +302,7 @@ pub async fn list_my_vouchers(
         r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status,
                   COALESCE(b.name, '') as business_name, v.expires_at
            FROM vouchers v
-           LEFT JOIN businesses b ON b.id = v.target_business_id
+           LEFT JOIN portfolio_companies b ON b.id = v.target_business_id
            WHERE v.issued_to_contact_id = $1
            ORDER BY v.created_at DESC"#,
     )
@@ -1538,8 +1538,11 @@ pub async fn get_vouchers(
             json!({
                 "id": v.0,
                 "discount": v.1,
+                "discount_value": v.1,
                 "type": v.2,
+                "voucher_type": v.2,
                 "code": v.3,
+                "redemption_code": v.3,
                 "status": v.4,
                 "expires_at": v.5,
             })
