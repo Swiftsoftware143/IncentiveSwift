@@ -71,6 +71,7 @@ pub async fn checkin(
             tier_name,
             new_balance,
             rewards_awarded,
+            milestones_triggered,
         } => Ok(Json(json!({
             "status": "ok",
             "base_points": base_points,
@@ -82,6 +83,10 @@ pub async fn checkin(
                 "id": r.id,
                 "name": r.name,
                 "status": r.status,
+            })).collect::<Vec<_>>(),
+            "milestones_triggered": milestones_triggered.iter().map(|(name, action_type)| json!({
+                "name": name,
+                "action_type": action_type,
             })).collect::<Vec<_>>(),
         }))),
         loyalty_checkin::CheckinResult::DailyCapReached { message } => Ok(Json(json!({
@@ -709,6 +714,17 @@ pub async fn online_visit(
     )
     .await;
 
+    // Milestones are campaign-scoped and fired on every points award, not only
+    // on check-in — a member who only ever visits daily must still reach them.
+    let milestones_triggered = loyalty_checkin::fire_milestones(
+        &state,
+        &member.program_id.to_string(),
+        &member.contact_id.to_string(),
+        updated.points_balance,
+        program.milestones_enabled,
+    )
+    .await;
+
     Ok(Json(json!({
         "status": "ok",
         "base_points": award.base_points,
@@ -716,7 +732,11 @@ pub async fn online_visit(
         "tier": award.tier.as_ref().map(|t| t.name.clone()),
         "points_awarded": award.awarded,
         "current_streak": updated.current_streak,
-        "total_balance": updated.points_balance
+        "total_balance": updated.points_balance,
+        "milestones_triggered": milestones_triggered.iter().map(|(name, action_type)| json!({
+            "name": name,
+            "action_type": action_type,
+        })).collect::<Vec<_>>(),
     })))
 }
 
@@ -821,13 +841,26 @@ pub async fn online_share(
     )
     .await;
 
+    let milestones_triggered = loyalty_checkin::fire_milestones(
+        &state,
+        &member.program_id.to_string(),
+        &member.contact_id.to_string(),
+        new_balance,
+        program.milestones_enabled,
+    )
+    .await;
+
     Ok(Json(json!({
         "status": "ok",
         "base_points": award.base_points,
         "multiplier": award.multiplier,
         "tier": award.tier.as_ref().map(|t| t.name.clone()),
         "points_awarded": award.awarded,
-        "total_balance": new_balance
+        "total_balance": new_balance,
+        "milestones_triggered": milestones_triggered.iter().map(|(name, action_type)| json!({
+            "name": name,
+            "action_type": action_type,
+        })).collect::<Vec<_>>(),
     })))
 }
 

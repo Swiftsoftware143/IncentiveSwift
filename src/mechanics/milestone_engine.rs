@@ -89,7 +89,10 @@ async fn record_achieved(
         r#"INSERT INTO campaign_milestones_achieved
            (milestone_id, campaign_id, contact_id, action_executed, action_result)
            VALUES ($1, $2, $3, true, $4)
-           ON CONFLICT (milestone_id, contact_id) DO NOTHING"#,
+           ON CONFLICT (milestone_id, contact_id) DO UPDATE
+             SET achieved_at = now(),
+                 action_executed = true,
+                 action_result = EXCLUDED.action_result"#,
     )
     .bind(milestone_id)
     .bind(campaign_id)
@@ -115,9 +118,12 @@ pub async fn check_milestones(
     }
 
     let achieved = get_achieved_milestones(&state.db, campaign_id, contact_id).await?;
-    let achieved_set: std::collections::HashSet<Uuid> =
-        achieved.iter().map(|a| a.milestone_id).collect();
+    let achieved_at: std::collections::HashMap<Uuid, chrono::DateTime<chrono::Utc>> = achieved
+        .iter()
+        .map(|a| (a.milestone_id, a.achieved_at))
+        .collect();
 
+    let now = chrono::Utc::now();
     let mut triggered = Vec::new();
 
     for m in &milestones {
@@ -125,8 +131,16 @@ pub async fn check_milestones(
             break; // ordered by points, so no later milestone will match either
         }
 
-        if achieved_set.contains(&m.id) && !m.is_repeatable {
-            continue;
+        if let Some(when) = achieved_at.get(&m.id) {
+            if !m.is_repeatable {
+                continue; // already earned — a milestone fires once
+            }
+            // Repeatable: honour the cooldown, otherwise a single points award
+            // stream (daily check-ins) re-fires the action on every award.
+            let cooldown_hours = m.cooldown_hours.unwrap_or(0).max(0) as i64;
+            if cooldown_hours > 0 && *when + chrono::Duration::hours(cooldown_hours) > now {
+                continue;
+            }
         }
 
         // Fire action
@@ -140,7 +154,7 @@ pub async fn check_milestones(
         let action_result = match result {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("Milestone action failed: {} - {}", m.name, e);
+                tracing::warn!("milestone action failed: {} - {}", m.name, e);
                 None
             }
         };
@@ -166,19 +180,29 @@ async fn fire_award_coupon(
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
+    // campaign_wins has no `coupon_code` / `is_redeemed`: the real columns are
+    // prize_id (NOT NULL), prize_label, prize_type and redemption_code — the same
+    // shape prize_draw and the scratch card write. prize_id carries the milestone
+    // identity so the win is traceable back to the milestone that produced it.
     sqlx::query(
-        r#"INSERT INTO campaign_wins (campaign_id, contact_id, prize_label, coupon_code, is_redeemed)
-           VALUES ($1, $2, $3, $4, false)"#
+        r#"INSERT INTO campaign_wins
+             (contact_id, campaign_id, prize_id, prize_label, prize_type, redemption_code)
+           VALUES ($1, $2, $3, $4, 'coupon', $5)"#,
     )
-    .bind(campaign_id)
     .bind(contact_id)
+    .bind(campaign_id)
+    .bind(format!("milestone:{}", milestone.id))
     .bind(format!("Milestone: {} - ${} coupon", milestone.name, value))
     .bind(&coupon_code)
     .execute(pool)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
-    Ok(Some(json!({"coupon_code": coupon_code, "value": value})))
+    Ok(Some(json!({
+        "coupon_code": coupon_code,
+        "value": value,
+        "prize_id": format!("milestone:{}", milestone.id),
+    })))
 }
 
 /// Grant bonus entries/spins
@@ -194,13 +218,26 @@ async fn fire_bonus_entry(
         .and_then(|v| v.as_i64())
         .unwrap_or(1);
 
+    // `entries` has no source/is_bonus columns — the milestone provenance goes in
+    // the answers jsonb, which is where every other entry writer keeps its
+    // metadata. A bonus spin is a real entry row, so it shows up in analytics and
+    // in the campaign's entry stream rather than being an invisible counter.
     for _ in 0..spin_count {
         sqlx::query(
-            r#"INSERT INTO entries (campaign_id, contact_id, source, is_bonus)
-               VALUES ($1, $2, 'milestone', true)"#,
+            r#"INSERT INTO entries (contact_id, campaign_id, answers)
+               VALUES ($1, $2, $3::jsonb)"#,
         )
-        .bind(campaign_id)
         .bind(contact_id)
+        .bind(campaign_id)
+        .bind(
+            json!({
+                "source": "milestone",
+                "is_bonus": true,
+                "milestone": milestone.name,
+                "milestone_id": milestone.id,
+            })
+            .to_string(),
+        )
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;

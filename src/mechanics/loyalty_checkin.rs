@@ -12,6 +12,7 @@
 use crate::error::AppError;
 use crate::state::AppState;
 use sqlx::Row;
+use uuid::Uuid;
 
 /// Process a loyalty check-in for a contact in a given program.
 /// Returns a result indicating success or an error explaining why the check-in was rejected.
@@ -100,6 +101,14 @@ pub async fn process_checkin(
         tier_name: award.tier.as_ref().map(|t| t.name.clone()),
         new_balance,
         rewards_awarded,
+        milestones_triggered: fire_milestones(
+            state,
+            program_id,
+            contact_id,
+            new_balance,
+            program.milestones_enabled,
+        )
+        .await,
     })
 }
 
@@ -109,6 +118,8 @@ pub struct ProgramInfo {
     pub points_per_checkin: i32,
     pub max_checkins_per_day: i32,
     pub tiers_enabled: bool,
+    /// loyalty_programs.milestones_enabled — gates the campaign-milestone hook.
+    pub milestones_enabled: bool,
 }
 
 /// The tier a member currently holds, and the multiplier it earns at.
@@ -175,6 +186,8 @@ pub enum CheckinResult {
         tier_name: Option<String>,
         new_balance: i32,
         rewards_awarded: Vec<RewardInfo>,
+        /// Campaign milestones fired by this award, as (name, action_type).
+        milestones_triggered: Vec<(String, String)>,
     },
     DailyCapReached {
         message: String,
@@ -183,7 +196,7 @@ pub enum CheckinResult {
 
 async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, AppError> {
     let row = sqlx::query(
-        "SELECT id::text AS id, points_per_checkin, max_checkins_per_day, tiers_enabled FROM loyalty_programs WHERE id = $1::uuid AND is_active = true"
+        "SELECT id::text AS id, points_per_checkin, max_checkins_per_day, tiers_enabled, milestones_enabled FROM loyalty_programs WHERE id = $1::uuid AND is_active = true"
     )
     .bind(program_id)
     .fetch_optional(&state.db)
@@ -195,6 +208,7 @@ async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, 
         points_per_checkin: row.get("points_per_checkin"),
         max_checkins_per_day: row.get("max_checkins_per_day"),
         tiers_enabled: row.get("tiers_enabled"),
+        milestones_enabled: row.get("milestones_enabled"),
     })
 }
 
@@ -584,7 +598,92 @@ pub async fn process_checkin_from_entry(
             // Use the program's default points_per_checkin
             vec![]
         },
+        milestones_triggered: fire_milestones(
+            state,
+            program_id,
+            contact_id,
+            new_balance,
+            program.milestones_enabled,
+        )
+        .await,
     })
+}
+
+/// The campaign a loyalty program reports to.
+///
+/// `campaigns.loyalty_program_id` is the canonical pointer (the same one the
+/// check-in handler resolves a program from); `loyalty_programs.campaign_id` is
+/// the historical forward link and is NULL on the live program, so it is only a
+/// fallback. Milestones are campaign-scoped, so without a campaign there is
+/// nothing to evaluate.
+pub async fn program_campaign_id(
+    state: &AppState,
+    program_id: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let by_campaign: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM campaigns WHERE loyalty_program_id = $1::uuid \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(program_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if by_campaign.is_some() {
+        return Ok(by_campaign);
+    }
+
+    let forward: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT campaign_id FROM loyalty_programs WHERE id = $1::uuid")
+            .bind(program_id)
+            .fetch_optional(&state.db)
+            .await?;
+    Ok(forward.flatten())
+}
+
+/// Fire campaign milestones for a completed points award; returns the milestones
+/// that triggered as (name, action_type).
+///
+/// No-op when the program has `milestones_enabled = false` or is not attached to
+/// a campaign. Never fails the caller: the award is already persisted, so a
+/// milestone problem must not roll it back or 500 the request — it is logged.
+pub async fn fire_milestones(
+    state: &AppState,
+    program_id: &str,
+    contact_id: &str,
+    new_balance: i32,
+    enabled: bool,
+) -> Vec<(String, String)> {
+    if !enabled {
+        return Vec::new();
+    }
+
+    let campaign_id = match program_campaign_id(state, program_id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return Vec::new(),
+        Err(e) => {
+            tracing::warn!("milestone check skipped (campaign lookup failed): {}", e);
+            return Vec::new();
+        }
+    };
+
+    let contact_uuid = match Uuid::parse_str(contact_id) {
+        Ok(u) => u,
+        Err(_) => return Vec::new(),
+    };
+
+    match crate::mechanics::milestone_engine::check_milestones(
+        state,
+        &campaign_id,
+        &contact_uuid,
+        new_balance,
+    )
+    .await
+    {
+        Ok(triggered) => triggered,
+        Err(e) => {
+            tracing::warn!("milestone check failed: {}", e);
+            Vec::new()
+        }
+    }
 }
 
 /// Record a checkin for an entry-based loyalty award.
@@ -679,5 +778,17 @@ pub async fn award_points_from_action(
             }
         }
     }
+
+    // Same hook as the check-in paths: an earn click must be able to cross a
+    // milestone threshold, not just a reward-tier threshold.
+    let _ = fire_milestones(
+        state,
+        program_id,
+        contact_id,
+        _new_balance,
+        program.milestones_enabled,
+    )
+    .await;
+
     Ok(())
 }
