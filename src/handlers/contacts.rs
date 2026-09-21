@@ -60,7 +60,10 @@ pub async fn get_contact(
     for entry in &entry_history {
         let qa = questions_answers::get_questions_with_answers(&state.db, &entry.id)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, entry_id = %entry.id, "Q&A history decode failed — this entry renders with an empty question list");
+                Vec::new()
+            });
         entries_with_qa.push(json!({
             "entry": entry,
             "questions_and_answers": qa,
