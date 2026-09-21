@@ -380,7 +380,7 @@ pub async fn get_play_view(
     let created_at: chrono::DateTime<chrono::Utc> = campaign.get("created_at");
     let theme = crate::theme::resolve_theme(&surface_config);
 
-    Ok(Json(json!({
+    let mut payload = json!({
         "campaign": {
             "id": cid,
             "name": name,
@@ -397,7 +397,22 @@ pub async fn get_play_view(
         "delivery_method": delivery_method,
         "delivery_config": delivery_config,
         "company": company_info,
-    })))
+    });
+
+    // Grouped presentation order for the long-form qualifier. `config.sections` is an
+    // ORDERING-ONLY overlay: it never touches scoring, outcomes, tags, redirects or the
+    // webhook. It is exposed ONLY when the campaign actually defines sections, so a
+    // campaign without them returns exactly the payload it returned before.
+    if config
+        .get("sections")
+        .and_then(|s| s.as_array())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        payload["form_sections"] = json!(super::form_sections::resolve_form_sections(&config));
+    }
+
+    Ok(Json(payload))
 }
 
 /// GET /api/v1/play/{id}/dashboard

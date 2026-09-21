@@ -20,6 +20,23 @@
 <body class="min-h-screen">
 <div id="app" class="flex min-h-screen"></div>
 
+<script>
+/* Long-form qualifier config merge.
+   `config.sections` is an ORDERING-ONLY overlay: it decides the public form's presentation
+   order and never touches scoring, outcomes, tags, redirects or the webhook.
+   `campaigns.config` is JSONB and is replaced WHOLESALE on save, so sections MUST be merged
+   INTO the existing config object -- never replace it -- or rules/outcomes get wiped.
+   Pure and DOM-free on purpose, so it can be unit-tested outside the browser. */
+function islfMergeSections(cfg, sections) {
+  var out = {};
+  if (cfg && typeof cfg === 'object') {
+    for (var k in cfg) { if (Object.prototype.hasOwnProperty.call(cfg, k)) out[k] = cfg[k]; }
+  }
+  out.sections = Array.isArray(sections) ? sections : [];
+  return out;
+}
+</script>
+
 <script type="module">
 import { h, render } from 'https://esm.sh/preact@10.26.4';
 // Hooks are NOT exported from preact's root module — they live in /hooks. Importing useEffect
@@ -343,7 +360,7 @@ const MECHANIC_DEFAULT_CONFIG = {
   chat: { chat_flow: ['Welcome! How can we help you today?'], system_prompt: 'You are a friendly sales assistant.' },
   leaderboard: {},
   raffle: {},
-  long_form_qualifier: { rules: [], outcomes: [] },
+  long_form_qualifier: { rules: [], outcomes: [], sections: [] },
   quiz: { passing_score: 70 },
   loyalty: {},
   b2b_loyalty: {},
@@ -420,6 +437,29 @@ const Campaigns = () => {
             const payload = isEdit ? { name, config: parsed } : { name, type, tag_namespace: tagNamespace || (name || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '_'), config: parsed };
             save(payload);
           };
+          // ── Long-form qualifier: sections (ordering-only overlay) ──────────────
+          // Sections group existing question keys. They must NEVER wipe rules/outcomes,
+          // so every mutation re-parses the live JSON and merges via islfMergeSections.
+          let parsedCfg = {};
+          try { parsedCfg = config && config.trim() ? JSON.parse(config) : {}; } catch(e) { parsedCfg = {}; }
+          const lfOn = type === 'long_form_qualifier';
+          const ruleKeys = (lfOn && Array.isArray(parsedCfg.rules) ? parsedCfg.rules : [])
+            .map(r => r && r.question).filter(k => typeof k === 'string' && k.length);
+          const sections = (lfOn && Array.isArray(parsedCfg.sections)) ? parsedCfg.sections : [];
+          const commitSections = (next) => {
+            let base = parsedCfg;
+            try { base = config && config.trim() ? JSON.parse(config) : parsedCfg; } catch(e) { base = parsedCfg; }
+            config = JSON.stringify(islfMergeSections(base, next), null, 2);   // merge, never overwrite
+            renderApp();
+          };
+          const addSection = () => commitSections([...sections, { title: 'Section ' + (sections.length + 1), questions: [] }]);
+          const setSectionTitle = (i, v) => commitSections(sections.map((s, j) => j === i ? { ...s, title: v } : s));
+          const removeSection = (i) => commitSections(sections.filter((_, j) => j !== i));
+          const toggleKey = (i, k) => commitSections(sections.map((s, j) => {
+            if (j !== i) return s;
+            const cur = Array.isArray(s.questions) ? s.questions : [];
+            return { ...s, questions: cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k] };
+          }));
           // Theme editor (surface_config.theme) — edit-only (needs an existing campaign id).
           const theme = st.theme || { ...THEME_DEFAULTS };
           const setTheme = (k, v) => { st.theme = { ...(st.theme || THEME_DEFAULTS), [k]: v }; renderApp(); };
@@ -441,6 +481,22 @@ const Campaigns = () => {
               <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${tagNamespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { tagNamespace = e.target.value; }} /></div>
             </div>
             <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${config} onInput=${e => { config = e.target.value; }}></textarea></div>
+            ${lfOn && html`<div class="border-t border-gray-100 pt-3 mt-3">
+              <div class="flex items-center justify-between mb-2">
+                <div class="text-sm font-semibold">🧩 Sections <span class="text-xs text-gray-400">(presentation order only — scoring, outcomes, tags, redirects and the webhook are unchanged)</span></div>
+                <button class="btn btn-sm btn-outline" onClick=${addSection}>+ Add section</button>
+              </div>
+              ${ruleKeys.length === 0 && html`<div class="text-xs text-gray-400 mb-2">No question keys in config.rules yet — add rules above, then group them here.</div>`}
+              ${sections.map((s, i) => html`<div class="p-2 mb-2 rounded" style="border:1px solid #e2e8f0">
+                <div class="flex gap-2 items-center mb-1">
+                  <input class="input" value=${s.title || ''} placeholder="Section title" onInput=${e => setSectionTitle(i, e.target.value)} />
+                  <button class="btn btn-sm btn-red" onClick=${() => removeSection(i)}>✕</button>
+                </div>
+                <div class="flex flex-wrap gap-3">${ruleKeys.map(k => html`<label class="text-xs" style="display:flex;align-items:center;gap:4px">
+                  <input type="checkbox" checked=${(s.questions || []).includes(k)} onChange=${() => toggleKey(i, k)} />${k}</label>`)}</div>
+              </div>`)}
+              <div class="text-xs text-gray-400">Saving merges <code>sections</code> into <code>config</code> — <code>rules</code> and <code>outcomes</code> are preserved. Questions not assigned to a section still appear on the public form (trailing); unknown keys are ignored.</div>
+            </div>`}
             ${isEdit && html`<div class="border-t border-gray-100 pt-3 mt-3">
               <div class="flex items-center justify-between mb-2">
                 <div class="text-sm font-semibold">🎨 Theme</div>

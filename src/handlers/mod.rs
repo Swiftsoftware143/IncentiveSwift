@@ -28,6 +28,7 @@ pub mod countdown_handler;
 pub mod custom_fields_handler;
 pub mod dashboard_handler;
 pub mod email_settings_handler;
+pub mod form_sections;
 pub mod industries_handler;
 pub mod iqs_handler;
 pub mod long_form_qualifier_handler;

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Long-Form Qualifier</title>
+<style>
+:root{--p:#2563eb}
+*{box-sizing:border-box}
+body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;color:#0f172a;margin:0;padding:24px}
+.wrap{max-width:720px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin:26px 0 8px;padding-bottom:6px;border-bottom:1px solid #e2e8f0}
+.q{margin:14px 0}
+.q label{display:block;font-weight:600;font-size:14px;margin-bottom:6px}
+.q input{width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}
+button{background:var(--p);color:#fff;border:0;border-radius:8px;padding:12px 20px;font-weight:600;font-size:15px;cursor:pointer;margin-top:12px}
+.muted{color:#64748b;font-size:13px}
+.result{margin-top:16px;padding:14px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe;font-size:14px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="lf-title">Long-Form Qualifier</h1>
+  <p class="muted" id="lf-sub">Loading&hellip;</p>
+  <form id="lf-form"></form>
+  <div id="lf-result"></div>
+</div>
+<script>
+/* ---------------------------------------------------------------------------
+   The public long-form qualifier form.
+
+   Form definition comes from GET /api/v1/play/<slug>:
+     config.rules    [{ question, answer, score, outcome, tag }]  <- source of truth
+     config.sections [{ title, questions: [question key] }]       <- ORDERING ONLY
+     form_sections   the server-resolved ordering (same algorithm as
+                     src/handlers/form_sections.rs) — present only when the
+                     campaign defines sections.
+
+   Invariants (all proven live):
+     * a question NOT named in any section still appears (trailing group)
+     * unknown / typo'd question keys are IGNORED, never an error
+     * with no `sections` the form renders exactly today's flat list
+   `sections` never influences scoring, outcomes, tags, redirects or the webhook —
+   those are computed server-side from `rules` alone.
+   ------------------------------------------------------------------------- */
+function islfOrderedGroups(def) {
+  var cfg = (def && def.config) || {};
+  var rules = Array.isArray(cfg.rules) ? cfg.rules : [];
+  var keys = [];
+  rules.forEach(function (r) { if (r && typeof r.question === 'string' && r.question) keys.push(r.question); });
+  var known = {};
+  keys.forEach(function (k) { known[k] = true; });
+  var seen = {};
+  var groups = [];
+  (Array.isArray(cfg.sections) ? cfg.sections : []).forEach(function (s) {
+    var keep = [];
+    (Array.isArray(s && s.questions) ? s.questions : []).forEach(function (q) {
+      if (typeof q === 'string' && known[q] && !seen[q] && keep.indexOf(q) < 0) { keep.push(q); seen[q] = true; }
+    });
+    if (keep.length) groups.push({ title: (s && typeof s.title === 'string') ? s.title : '', questions: keep });
+  });
+  var left = keys.filter(function (k) { return !seen[k]; });
+  if (left.length) groups.push({ title: '', questions: left });
+  return groups;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function slugFromUrl() {
+  var p = new URLSearchParams(window.location.search);
+  if (p.get('slug')) return p.get('slug');
+  if (p.get('campaign')) return p.get('campaign');
+  var parts = window.location.pathname.split('/').filter(Boolean);
+  return parts.length ? decodeURIComponent(parts[parts.length - 1]) : '';
+}
+
+function renderForm(def) {
+  var groups = (Array.isArray(def.form_sections) && def.form_sections.length)
+    ? def.form_sections
+    : islfOrderedGroups(def);
+  var flat = groups.length === 1 && !groups[0].title;
+  document.getElementById('lf-form').innerHTML = groups.map(function (g) {
+    return (flat ? '' : '<h2>' + esc(g.title) + '</h2>') +
+      g.questions.map(function (k) {
+        return '<div class="q"><label for="q_' + esc(k) + '">' + esc(k) + '</label>' +
+               '<input id="q_' + esc(k) + '" name="' + esc(k) + '" autocomplete="off"></div>';
+      }).join('');
+  }).join('') +
+  '<div class="q"><label for="c_email">Email</label><input id="c_email" name="__email" type="email" required autocomplete="email"></div>' +
+  '<button type="submit">Submit</button>';
+}
+
+function boot() {
+  var slug = slugFromUrl();
+  if (!slug) {
+    document.getElementById('lf-sub').textContent = 'No campaign slug in the URL (?slug=my-campaign).';
+    return;
+  }
+  fetch('/api/v1/play/' + encodeURIComponent(slug), { headers: { Accept: 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (def) {
+      document.getElementById('lf-title').textContent = (def.campaign && def.campaign.name) || 'Long-Form Qualifier';
+      document.getElementById('lf-sub').textContent = 'Answer the questions below.';
+      renderForm(def);
+
+      document.getElementById('lf-form').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var answers = {};
+        document.querySelectorAll('#lf-form .q input').forEach(function (inp) {
+          if (inp.name === '__email' || inp.value.trim() === '') return;
+          answers[inp.name] = inp.value.trim();
+        });
+        var email = document.getElementById('c_email').value.trim();
+        var q = new URLSearchParams(window.location.search);
+        var body = {
+          contact: { email: email },
+          answers: answers,
+          utm_source: q.get('utm_source') || undefined,
+          utm_medium: q.get('utm_medium') || undefined,
+          utm_campaign: q.get('utm_campaign') || undefined,
+          page_url: window.location.href,
+          referrer_url: document.referrer || undefined
+        };
+        var out = document.getElementById('lf-result');
+        out.className = 'result';
+        out.textContent = 'Submitting…';
+        fetch('/api/v1/campaigns/' + encodeURIComponent(slug) + '/long-form-qualifier', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (res) {
+            if (!res.ok) { out.textContent = 'Error: ' + (res.j.message || JSON.stringify(res.j)); return; }
+            var d = res.j;
+            out.textContent = 'Score: ' + d.score + '\nOutcome: ' + d.outcome +
+                              (d.qualified ? '  ✅' : '') + '\nTag: ' + d.tag;
+            if (d.redirect_url) window.location.href = d.redirect_url;
+          })
+          .catch(function (e) { out.textContent = 'Error: ' + e.message; });
+      });
+    })
+    .catch(function (e) {
+      document.getElementById('lf-sub').textContent = 'Could not load this campaign: ' + e.message;
+    });
+}
+boot();
+</script>
+</body>
+</html>
