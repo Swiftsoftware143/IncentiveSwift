@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Play</title>
+<!-- no icon in this root; the empty data URI stops the browser's /favicon.ico request
+     from 404-ing in the customer's console on every campaign page -->
+<link rel="icon" href="data:,">
+<!--
+  The page a CUSTOMER lands on from a campaign link (the app's own share/earn links
+  build /play/<slug>, and so does GET /api/v1/c/<slug>). It is deliberately outside
+  the tenant SPA: the visitor has no account, so there is no auth guard, no token and
+  no login bounce -- before this page existed /play/<slug> returned the 7,856-byte SPA
+  shell byte-identical to "/", whose auth guard sent the customer to /login.
+
+  Public endpoints only:
+    GET  /api/v1/play/<slug>                    -> campaign + theme to render
+    POST /api/v1/campaigns/<slug>/spin          -> spin_wheel mechanic
+    POST /api/v1/raffles/<slug>/enter           -> raffle mechanic
+    POST /api/v1/entries                        -> every other mechanic (calculator,
+                                                   quiz-by-entry, countdown, ...)
+  Served for /play/* by an nginx location in
+  /opt/swift/nginx/sites/incentiveswift.conf.
+-->
+<style>
+:root{--brand:#2563eb;--text:#0f172a;--bg:#f1f5f9;--radius:12px;--btn-text:#fff}
+*{box-sizing:border-box}
+body{font-family:Inter,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+.card{background:#fff;border-radius:var(--radius);box-shadow:0 4px 24px rgba(0,0,0,.08);padding:28px;width:100%;max-width:440px}
+h1{font-size:22px;margin:0 0 4px}
+.biz{color:#64748b;font-size:14px;margin:0 0 18px}
+.pill{display:inline-block;background:rgba(0,0,0,.05);color:var(--brand);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;margin-bottom:18px}
+label{font-size:13px;font-weight:500;color:#475569;display:block;margin-bottom:6px}
+input[type=text],input[type=email],input[type=tel]{border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;width:100%;font-size:15px;outline:0;margin-bottom:14px;font-family:inherit}
+input:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+button{background:var(--brand);color:var(--btn-text);padding:13px 20px;border-radius:8px;cursor:pointer;border:none;font-weight:600;width:100%;font-size:16px;font-family:inherit}
+button:hover{filter:brightness(.93)}
+button:disabled{opacity:.6;cursor:not-allowed}
+.msg{border-radius:8px;padding:12px 14px;font-size:14px;margin-bottom:14px;display:none}
+.err{background:#fee2e2;color:#991b1b}
+.ok{background:#dcfce7;color:#166534}
+.hint{font-size:12px;color:#94a3b8;text-align:center;margin:16px 0 0}
+.big{font-size:26px;font-weight:700;text-align:center;margin:10px 0}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:10px;text-align:center;margin-top:12px;font-size:14px}
+.consent{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:#475569;margin:2px 0 14px}
+.consent input{width:auto;margin:2px 0 0}
+.spin{background:linear-gradient(135deg,var(--brand),rgba(0,0,0,.35));font-size:18px;padding:18px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="loading" style="text-align:center;color:#64748b;padding:30px 0">Loading…</div>
+
+  <div id="panel" style="display:none">
+    <h1 id="campaignName">Campaign</h1>
+    <p class="biz" id="businessName"></p>
+    <div class="pill" id="mechanicPill"></div>
+
+    <div class="msg err" id="error"></div>
+    <div class="msg ok" id="success"></div>
+
+    <form id="playForm">
+      <label for="firstName">First name</label>
+      <input id="firstName" type="text" autocomplete="given-name" required>
+      <label for="lastName">Last name</label>
+      <input id="lastName" type="text" autocomplete="family-name">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" required>
+      <div class="consent" id="consentRow" style="display:none">
+        <input id="consent" type="checkbox">
+        <label for="consent" style="margin:0;font-weight:400">I agree to be contacted about this promotion.</label>
+      </div>
+      <button type="submit" id="btn">Enter</button>
+    </form>
+
+    <p class="hint">No account needed — just play.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var slug = decodeURIComponent(window.location.pathname.replace(/^\/play\//, '').replace(/\/+$/, ''));
+  var api = window.location.origin + '/api/v1';
+  var el = function (id) { return document.getElementById(id); };
+  var campaign = null;
+  var theme = {};
+
+  function show(text, banner) {
+    el('loading').style.display = 'none';
+    el('panel').style.display = 'block';
+    el('error').textContent = text;
+    el('error').style.display = 'block';
+    if (banner) { el('playForm').style.display = 'none'; }
+  }
+
+  function applyTheme(t) {
+    if (!t) { return; }
+    theme = t;
+    var root = document.documentElement.style;
+    if (t.primary_color) { root.setProperty('--brand', t.primary_color); }
+    if (t.text_color) { root.setProperty('--text', t.text_color); }
+    if (t.background_color) { root.setProperty('--bg', t.background_color); }
+    if (t.button_text_color) { root.setProperty('--btn-text', t.button_text_color); }
+    if (t.border_radius) { root.setProperty('--radius', /^\d+$/.test(t.border_radius) ? t.border_radius + 'px' : t.border_radius); }
+    if (t.font_family) { document.body.style.fontFamily = t.font_family; }
+    if (t.dark_mode === true) { document.querySelector('.card').style.background = 'rgba(255,255,255,.06)'; }
+  }
+
+  function labelFor(type) {
+    return ({ spin_wheel: 'Spin the wheel', raffle: 'Enter the raffle', quiz: 'Start the quiz',
+      calculator: 'Get my result', scratch_card: 'Scratch & win', score_reveal: 'Reveal my score',
+      mystery: 'Reveal the mystery prize', countdown: 'Claim my reward', poll: 'Cast my vote',
+      chat: 'Start', long_form_qualifier: 'Start' })[type] || 'Enter';
+  }
+
+  function payload() {
+    return {
+      contact: {
+        first_name: el('firstName').value || null,
+        last_name: el('lastName').value || null,
+        email: el('email').value || null
+      },
+      campaign_slug: campaign.slug,
+      page_url: window.location.href,
+      referrer_url: document.referrer || null
+    };
+  }
+
+  function render(result, data) {
+    el('playForm').style.display = 'none';
+    var won = result && result.won === true;
+    var prize = result && (result.prize_label || result.label);
+    var html = '';
+    if (data && data.result && data.result.won === true) {
+      html = '<div class="big" style="color:#166534">🎉 You won' + (prize ? ': ' + escapeHtml(prize) : '!') + '</div>';
+    } else if (data && data.status === 'entered') {
+      html = '<div class="big">You\'re in!</div>';
+    } else if (won) {
+      html = '<div class="big" style="color:#166534">🎉 You won' + (prize ? ': ' + escapeHtml(prize) : '!') + '</div>';
+    } else {
+      html = '<div class="big">Thanks for playing!</div><p style="text-align:center;color:#64748b;font-size:14px;margin:0">' +
+        (prize ? 'You got: ' + escapeHtml(prize) : 'Better luck next time — come back soon.') + '</p>';
+    }
+    if (data && data.redemption_code) {
+      html += '<div class="code">Your code: <b>' + escapeHtml(data.redemption_code) + '</b></div>';
+    }
+    el('success').innerHTML = html;
+    el('success').style.display = 'block';
+    if (data && data.redirect_url) {
+      setTimeout(function () { window.location.href = data.redirect_url; }, 1800);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
+  if (!slug) { show('This campaign link is incomplete. Please use the link you were given.', true); return; }
+
+  fetch(api + '/play/' + encodeURIComponent(slug))
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+    .then(function (res) {
+      if (!res.ok || !res.data || !res.data.campaign) {
+        show((res.data && res.data.message) || 'This campaign is not available right now.', true);
+        return;
+      }
+      campaign = res.data.campaign;
+      applyTheme(res.data.theme);
+      if (res.data.company && res.data.company.name) { el('businessName').textContent = 'by ' + res.data.company.name; }
+      document.title = campaign.name + ' — Play';
+      el('campaignName').textContent = campaign.name;
+      el('mechanicPill').textContent = (campaign.type || 'campaign').replace(/_/g, ' ');
+      el('btn').textContent = labelFor(campaign.type);
+      if (campaign.type === 'raffle') { el('consentRow').style.display = 'flex'; }
+      el('loading').style.display = 'none';
+      el('panel').style.display = 'block';
+    })
+    .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
+
+  el('playForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!campaign) { return; }
+    var btn = el('btn');
+    el('error').style.display = 'none';
+    el('success').style.display = 'none';
+
+    if (campaign.type === 'raffle' && !el('consent').checked) {
+      el('error').textContent = 'Please tick the consent box to enter the raffle.';
+      el('error').style.display = 'block';
+      return;
+    }
+
+    var url, body;
+    if (campaign.type === 'spin_wheel') {
+      // POST /api/v1/campaigns/<slug>/spin takes the identity at the TOP level
+      // (SpinRequestBody: contact_id | email | phone), not nested under `contact` --
+      // sending {contact:{...}} answers 400 "Either contact_id, email, or phone is required".
+      url = api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/spin';
+      body = {
+        email: el('email').value || null,
+        first_name: el('firstName').value || null,
+        last_name: el('lastName').value || null,
+        page_url: window.location.href,
+        referrer_url: document.referrer || null
+      };
+    } else if (campaign.type === 'raffle') {
+      // POST /api/v1/raffles/<slug>/enter takes {contact:{...}, consent_gathered:true}
+      url = api + '/raffles/' + encodeURIComponent(campaign.slug) + '/enter';
+      body = payload();
+      delete body.campaign_slug;
+      body.consent_gathered = true;
+    } else {
+      // POST /api/v1/entries takes {contact:{...}, campaign_slug}
+      url = api + '/entries';
+      body = payload();
+    }
+
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Working…';
+
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }); })
+      .then(function (out) {
+        if (!out.ok) {
+          var m = out.data && (out.data.message || out.data.error) ? (out.data.message || out.data.error) : 'That did not work. Please try again.';
+          el('error').textContent = m;
+          el('error').style.display = 'block';
+          btn.disabled = false; btn.textContent = original;
+          return;
+        }
+        render(out.data && out.data.result, out.data);
+      })
+      .catch(function () {
+        el('error').textContent = 'Something went wrong. Please try again.';
+        el('error').style.display = 'block';
+        btn.disabled = false; btn.textContent = original;
+      });
+  });
+})();
+</script>
+</body>
+</html>
