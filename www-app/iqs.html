@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IQS — Qualifying Surveys</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:Inter,system-ui,sans-serif;background:#f1f5f9;margin:0;color:#0f172a}
+*{box-sizing:border-box}
+.hdr{background:#0f172a;color:#fff;padding:0 20px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.hdr a{color:#cbd5e1;text-decoration:none;font-size:13px;margin-left:18px}
+.hdr a:hover{color:#fff}
+.wrap{max-width:1200px;margin:0 auto;padding:24px 20px}
+.btn{display:inline-flex;align-items:center;gap:6px;background:#6366f1;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn:hover{background:#4f46e5}
+.btn.gray{background:#e2e8f0;color:#334155}
+.btn.gray:hover{background:#cbd5e1}
+.btn.red{background:#ef4444}.btn.red:hover{background:#dc2626}
+.btn.sm{padding:5px 10px;font-size:12px}
+.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
+.input,select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;font-size:14px;outline:0}
+.input:focus,select:focus,textarea:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
+label{font-size:12px;font-weight:600;color:#475569;display:block;margin:12px 0 4px}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.grow{flex:1;min-width:200px}
+.qcard{border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:12px;background:#fff}
+.qhead{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.opt-row{display:flex;gap:8px;align-items:center;margin-top:6px}
+.opt-row input{flex:1}
+.opt-row .pts{width:64px}.opt-row .tg{width:120px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.badge.hot{background:#fee2e2;color:#991b1b}.badge.warm{background:#fef3c7;color:#92400e}.badge.cold{background:#dbeafe;color:#1e40af}
+.badge.draft{background:#f1f5f9;color:#475569}.badge.active{background:#dcfce7;color:#166534}
+.nav{position:static}
+.tabbar{display:flex;gap:4px;border-bottom:2px solid #e2e8f0;margin-bottom:20px;overflow-x:auto}
+.tab{padding:10px 16px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px}
+.tab.on{color:#6366f1;border-bottom-color:#6366f1}
+.msg{padding:10px 14px;border-radius:8px;font-size:13px;margin:12px 0;display:none}
+.msg.ok{background:#dcfce7;color:#166534;display:block}
+.msg.err{background:#fee2e2;color:#991b1b;display:block}
+.spinner{border:2px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;width:14px;height:14px;display:inline-block;animation:spin .6s linear infinite;vertical-align:-2px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none}
+h2{font-size:16px;font-weight:700;margin:0 0 8px}
+h3{font-size:14px;font-weight:600;margin:0}
+.muted{color:#64748b;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid #f1f5f9}
+th{color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+tr:hover td{background:#f8fafc}
+.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+.modal{background:#fff;border-radius:14px;width:100%;max-width:560px;max-height:90vh;overflow:auto;padding:24px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div style="font-weight:700;font-size:15px">🎯 IQS <span class="muted" style="color:#94a3b8">Intelligent Qualifying Surveys</span></div>
+  <div><a href="/dashboard">Dashboard</a><a href="/" id="logout">Sign Out</a></div>
+</div>
+<div class="wrap">
+
+  <div class="tabbar" id="tabbar">
+    <div class="tab on" data-view="funnels">Funnels</div>
+    <div class="tab" data-view="editor">Builder</div>
+    <div class="tab" data-view="submissions">Submissions</div>
+  </div>
+  <div id="msg" class="msg"></div>
+
+  <!-- ===== FUNNELS LIST ===== -->
+  <div id="view-funnels">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2 style="margin:0">Your Funnels</h2>
+        <button class="btn" onclick="newFunnel()">+ New Funnel</button>
+      </div>
+      <div id="funnelList" style="margin-top:16px"></div>
+    </div>
+  </div>
+
+  <!-- ===== EDITOR ===== -->
+  <div id="view-editor" class="hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div class="grow">
+          <h2 id="edName" style="margin:0">Funnel Builder</h2>
+          <span id="edMeta" class="muted"></span>
+        </div>
+        <button class="btn gray sm" onclick="showView('funnels')">← Back</button>
+      </div>
+      <div id="editorBody"></div>
+    </div>
+  </div>
+
+  <!-- ===== SUBMISSIONS ===== -->
+  <div id="view-submissions" class="hidden">
+    <div class="card">
+      <h2>Submissions</h2>
+      <p class="muted">Select a funnel to view its leads, scores and classification.</p>
+      <div id="subFunnelSelect" style="margin:12px 0"></div>
+      <div id="subList"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = (window.location.origin || '') + '/api/v1';
+const TOKEN = sessionStorage.getItem('is_token') || localStorage.getItem('is_token') || localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
+if (!TOKEN) { location.href = '/'; }
+const H = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN };
+
+let funnels = [];
+let currentFunnel = null;
+let questions = [];
+let rules = [];
+let campaigns = [];
+let csConnected = false;
+let csLists = [];
+let csListId = '';
+
+function msg(t, cls) {
+  const m = document.getElementById('msg');
+  m.className = 'msg ' + cls;
+  m.textContent = t;
+  if (cls === 'ok') setTimeout(() => { m.className = 'msg'; }, 4000);
+}
+async function api(path, method, body) {
+  const r = await fetch(API + path, { method, headers: H, body: body ? JSON.stringify(body) : undefined });
+  let d = null;
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((d && (d.error || d.message)) || ('HTTP ' + r.status));
+  return d;
+}
+
+// ---------- navigation ----------
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => showView(t.dataset.view));
+function showView(v) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.view === v));
+  ['funnels','editor','submissions'].forEach(x => document.getElementById('view-' + x).classList.toggle('hidden', x !== v));
+  if (v === 'funnels') loadFunnels();
+  if (v === 'submissions') loadSubSelect();
+}
+
+// ---------- funnels list ----------
+async function loadFunnels() {
+  try {
+    const d = await api('/iqs/funnels');
+    funnels = d.data || [];
+    const el = document.getElementById('funnelList');
+    if (!funnels.length) { el.innerHTML = '<p class="muted">No funnels yet. Create your first qualifying survey.</p>'; return; }
+    el.innerHTML = '<table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Responses</th><th>Slug</th><th></th></tr></thead><tbody>' +
+      funnels.map(f => `<tr>
+        <td><a href="#" style="color:#6366f1;font-weight:600" onclick="openEditor('${f.id}')">${esc(f.name)}</a></td>
+        <td>${esc(f.funnel_type||'survey')}</td>
+        <td><span class="badge ${f.status==='active'?'active':'draft'}">${esc(f.status||'draft')}</span></td>
+        <td>${f.response_count||0}</td>
+        <td class="muted">${esc(f.slug||'')}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button class="btn gray sm" onclick="openEditor('${f.id}')">Edit</button>
+          <button class="btn red sm" onclick="delFunnel('${f.id}')">Delete</button>
+        </td></tr>`).join('') + '</tbody></table>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+async function newFunnel() {
+  const name = prompt('Funnel name:');
+  if (!name) return;
+  try {
+    const d = await api('/iqs/funnels', 'POST', { name });
+    msg('Funnel created', 'ok');
+    await loadFunnels();
+    openEditor(d.data.id);
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+async function delFunnel(id) {
+  if (!confirm('Delete this funnel and all its questions?')) return;
+  try { await api('/iqs/funnels/' + id, 'DELETE'); msg('Funnel deleted', 'ok'); loadFunnels(); }
+  catch (e) { msg(e.message, 'err'); }
+}
+
+function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ---------- editor ----------
+async function openEditor(id) {
+  try {
+    const d = await api('/iqs/funnels/' + id);
+    currentFunnel = d.data || d;
+    document.getElementById('edName').textContent = currentFunnel.name;
+    document.getElementById('edMeta').textContent = (currentFunnel.slug || '') + ' · ' + (currentFunnel.status || 'draft');
+    showView('editor');
+    await loadQuestions();
+    await loadRules();
+    await loadCampaigns();
+    await loadCoreSwiftState(true);
+    renderEditor();
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+async function loadQuestions() {
+  const d = await api('/iqs/funnels/' + currentFunnel.id + '/questions');
+  questions = d.data || [];
+}
+async function loadRules() {
+  const d = await api('/iqs/funnels/' + currentFunnel.id + '/rules');
+  rules = d.data || [];
+}
+async function loadCampaigns() {
+  try { const d = await api('/campaigns'); campaigns = d.campaigns || []; }
+  catch (e) { campaigns = []; }
+}
+
+function cfg() { return currentFunnel.config && typeof currentFunnel.config === 'object' ? currentFunnel.config : JSON.parse(currentFunnel.config || '{}'); }
+function theme() { return currentFunnel.theme && typeof currentFunnel.theme === 'object' ? currentFunnel.theme : (currentFunnel.theme ? JSON.parse(currentFunnel.theme) : {}); }
+
+const Q_TYPES = ['single_choice','multiple_choice','text','email','phone','rating','date','slider','image_choice','dropdown','matrix','number','url','field_consent'];
+
+function renderEditor() {
+  const c = cfg();
+  const passing = c.passing_score != null ? c.passing_score : 70;
+  const ranges = c.classification_ranges || [];
+  const el = document.getElementById('editorBody');
+
+  let html = `<!-- CONFIG -->
+  <div style="border-top:1px solid #e2e8f0;margin:16px 0"></div>
+  <h3>⚙️ Funnel Settings</h3>
+  <div class="row">
+    <div class="grow"><label>Passing Score (qualified ≥ %)</label><input type="number" step="5" min="0" max="100" class="input" id="setPassing" value="${passing}"></div>
+    <div class="grow"><label>Max Attempts</label><input type="number" min="1" class="input" id="setAttempts" value="${c.max_attempts||1}"></div>
+    <div class="grow"><label>Redirect URL (after completion)</label><input type="url" class="input" id="setRedirect" value="${esc(c.redirect_url||'')}" placeholder="https://..."></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setProgress" ${c.show_progress_bar!==false?'checked':''}> Progress bar</label>
+    <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSkip" ${c.allow_skip?'checked':''}> Allow skip</label>
+    <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setName" ${c.collect_name!==false?'checked':''}> Collect name</label>
+    <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setEmail" ${c.collect_email!==false?'checked':''}> Collect email</label>
+    <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setPhone" ${c.collect_phone?'checked':''}> Collect phone</label>
+  </div>
+
+  <div style="border-top:1px solid #e2e8f0;margin:16px 0"></div>
+  <h3>🔥 Auto-Classification (Hot / Warm / Cold)</h3>
+  <p class="muted">Leads scoring at or above each % get that label + optional tag.</p>
+  <div id="rangeEditor">${rangesHtml(ranges)}</div>
+  <button class="btn gray sm" onclick="addRange()">+ Add Range</button>
+
+  <div style="border-top:1px solid #e2e8f0;margin:16px 0"></div>
+  <h3>📎 Campaign Gate <span class="muted">(ISQ1 — attach to a campaign)</span></h3>
+  <div class="row">
+    <div class="grow"><label>Attach IQS to Campaign (survey shows before entry)</label>
+      <select class="input" id="setCampaign" onchange="onCampaignChange()"><option value="">— none —</option>${campaigns.map(cp => `<option value="${cp.id}" ${cp.iqs_funnel_id===currentFunnel.id?'selected':''}>${esc(cp.name||cp.title||cp.slug)}${cp.iqs_funnel_id===currentFunnel.id?' ✓ gated':''}</option>`).join('')}</select>
+    </div>
+    <div class="grow">
+      <label>Push leads to CoreSwift list</label>
+      <select class="input" id="setCsList" ${csConnected?'':'disabled'}>
+        <option value="">— ${csConnected?'select a list':'connect CoreSwift in Integrations first'} —</option>
+        ${csLists.map(cl => `<option value="${cl.id}" ${csListId===cl.id?'selected':''}>${esc(cl.name)}</option>`).join('')}
+      </select>
+      <button class="btn gray sm" style="margin-top:8px" onclick="refreshCsLists()" ${csConnected?'':'disabled'}>↻ Refresh lists</button>
+    </div>
+  </div>
+
+  <div style="border-top:1px solid #e2e8f0;margin:16px 0"></div>
+  <h3>❓ Questions</h3>
+  <div id="qList">${questions.map((q,i) => questionHtml(q,i)).join('') || '<p class="muted">No questions yet.</p>'}</div>
+  <button class="btn" onclick="addQuestion()">+ Add Question</button>
+  <div style="margin-top:20px">
+    <button class="btn" onclick="saveAll()">💾 Save Funnel</button>
+    <button class="btn gray sm" onclick="publishToggle()">${currentFunnel.status==='active'?'Set Draft':'Publish'}</button>
+  </div>`;
+
+  el.innerHTML = html;
+}
+
+function rangesHtml(ranges) {
+  if (!ranges.length) return '<p class="muted">No ranges configured (defaults to qualified/disqualified only).</p>';
+  return ranges.map((r,i) => `<div class="opt-row">
+    <input class="input" placeholder="Label (Hot/Warm/Cold)" value="${esc(r.label||'')}" data-r="${i}" data-k="label">
+    <input class="input pts" type="number" placeholder="min %" value="${r.min!=null?r.min:''}" data-r="${i}" data-k="min" style="width:110px">
+    <input class="input tg" placeholder="tag" value="${esc(r.tag||'')}" data-r="${i}" data-k="tag">
+    <button class="btn red sm" onclick="delRange(${i})">×</button>
+  </div>`).join('');
+}
+
+function questionHtml(q, i) {
+  const opts = Array.isArray(q.options) ? q.options : [];
+  const hasOpts = ['single_choice','multiple_choice','dropdown','image_choice','matrix','rating'].includes(q.question_type);
+  const qc = (q.config && typeof q.config === 'object') ? q.config : {};
+  const showIf = qc.show_if || q.config && q.config.show_if || '';
+  const branches = questions.map(oq => oq.question_key).filter(k => k && k !== q.question_key);
+  return `<div class="qcard" data-qid="${q.id}" data-idx="${i}">
+    <div class="qhead">
+      <h3>Q${i+1}</h3>
+      <div class="row" style="margin:0">
+        <button class="btn gray sm" onclick="moveQ(${i},-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="btn gray sm" onclick="moveQ(${i},1)" ${i===questions.length-1?'disabled':''}>↓</button>
+        <button class="btn red sm" onclick="delQuestion(${i})">Delete</button>
+      </div>
+    </div>
+    <label>Key</label><input class="input" data-q="${i}" data-k="question_key" value="${esc(q.question_key||'')}" placeholder="q_budget">
+    <label>Question Text</label><input class="input" data-q="${i}" data-k="question_text" value="${esc(q.question_text||'')}">
+    <div class="row">
+      <div class="grow"><label>Type</label><select class="input" data-q="${i}" data-k="question_type" onchange="typeChanged(${i})">${Q_TYPES.map(t => `<option value="${t}" ${q.question_type===t?'selected':''}>${t.replace(/_/g,' ')}</option>`).join('')}</select></div>
+      <div><label style="margin-top:0">&nbsp;</label><label style="display:flex;align-items:center;gap:6px;margin:14px 0 0"><input type="checkbox" data-q="${i}" data-k="required" ${q.required?'checked':''}> Required</label></div>
+    </div>
+    <label>Conditional Branch (ISQ4) — show only if previous answer equals</label>
+    <select class="input" data-q="${i}" data-k="show_if"> <option value="">— always show —</option>
+      ${branches.map(bk => `<option value="${esc(bk)}" ${showIf===bk?'selected':''}>if "${esc(bk)}" is answered</option>`).join('')}
+    </select>
+    <div class="row" style="margin-top:10px">
+      <div class="grow">
+        <label>Map to CoreSwift field <span class="muted">(leave blank for auto name-match)</span></label>
+        <input class="input" data-q="${i}" data-k="crm_field" value="${esc(q.crm_field||'')}" placeholder="e.g. budget — or __ignore__ to skip">
+      </div>
+      <div style="width:180px">
+        <label>Field type</label>
+        <select class="input" data-q="${i}" data-k="crm_field_type">
+          <option value="">auto</option>
+          ${['text','number','date','boolean','url'].map(t => `<option value="${t}" ${q.crm_field_type===t?'selected':''}>${t}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${hasOpts ? optionEditor(q, i, opts) : ''}
+  </div>`;
+}
+
+function optionEditor(q, i, opts) {
+  return `<div style="margin-top:12px">
+    <label>Options <span class="muted">(value · score · tag)</span></label>
+    <div id="opts-${i}">${(opts.length?opts:[{}]).map((o,oi) => `<div class="opt-row">
+      <input class="input" placeholder="label" value="${esc(o.label||'')}" data-q="${i}" data-o="${oi}" data-k="label">
+      <input class="input" placeholder="value" value="${esc(o.value||'')}" data-q="${i}" data-o="${oi}" data-k="value">
+      <input class="input pts" type="number" placeholder="pts" value="${o.score!=null?o.score:''}" data-q="${i}" data-o="${oi}" data-k="score" title="Score (ISQ2)">
+      <input class="input tg" placeholder="tag" value="${esc(o.tag||'')}" data-q="${i}" data-o="${oi}" data-k="tag" title="Tag on this answer">
+      <button class="btn gray sm" onclick="addOption(${i})">+</button>
+      ${opts.length>1?`<button class="btn red sm" onclick="rmOption(${i},${oi})">×</button>`:''}
+    </div>`).join('')}</div>
+  </div>`;
+}
+
+// ---------- question mutations (client state) ----------
+function addQuestion() {
+  questions.push({ id: 'new_' + Date.now(), question_key: 'q_' + (questions.length + 1), question_text: '', question_type: 'single_choice', required: true, options: [{label:'',value:'',score:0,tag:''}], config: {}, _new: true });
+  renderEditor();
+}
+function delQuestion(i) { questions.splice(i, 1); renderEditor(); }
+function moveQ(i, d) {
+  const j = i + d; if (j < 0 || j >= questions.length) return;
+  [questions[i], questions[j]] = [questions[j], questions[i]]; renderEditor();
+}
+function addOption(i) { if (!Array.isArray(questions[i].options)) questions[i].options = []; questions[i].options.push({label:'',value:'',score:0,tag:''}); renderEditor(); }
+function rmOption(i, oi) { questions[i].options.splice(oi, 1); renderEditor(); }
+function typeChanged(i) { renderEditor(); }
+function addRange() { renderEditor(); }
+function delRange(i) { renderEditor(); }
+
+
+
+// ---- CoreSwift integration helpers ----
+async function loadCoreSwiftState(reloadLists) {
+  try {
+    const st = await api('/integrations/coreswift/status');
+    csConnected = !!(st && st.connected);
+  } catch (e) { csConnected = false; }
+  if (csConnected && reloadLists) {
+    try {
+      const d = await api('/integrations/coreswift/lists');
+      csLists = d.lists || d.data || [];
+    } catch (e) { csLists = []; }
+  }
+}
+async function refreshCsLists() {
+  await loadCoreSwiftState(true);
+  renderEditor();
+}
+function onCampaignChange() {
+  renderEditor();
+}
+
+// ---------- capture edits from DOM → state ----------
+function syncDomToState() {
+  document.querySelectorAll('[data-q]').forEach(inp => {
+    const i = +inp.dataset.q;
+    const k = inp.dataset.k;
+    if (i >= questions.length) return;
+    if (k === 'required') questions[i][k] = inp.checked;
+    else if (k === 'show_if') { questions[i].config = questions[i].config || {}; questions[i].config.show_if = inp.value; }
+    else questions[i][k] = inp.value;
+  });
+  document.querySelectorAll('[data-o]').forEach(inp => {
+    const i = +inp.dataset.q, oi = +inp.dataset.o;
+    if (i >= questions.length) return;
+    if (!Array.isArray(questions[i].options)) questions[i].options = [];
+    if (!questions[i].options[oi]) questions[i].options[oi] = {};
+    const k = inp.dataset.k;
+    const v = inp.value;
+    questions[i].options[oi][k] = (k === 'score') ? (v === '' ? null : +v) : v;
+  });
+  // ranges
+  const ranges = [];
+  document.querySelectorAll('[data-r]').forEach(inp => {
+    const i = +inp.dataset.r;
+    if (!ranges[i]) ranges[i] = { label: '', min: 0, tag: '' };
+    const k = inp.dataset.k;
+    ranges[i][k] = (k === 'min') ? (+inp.value || 0) : inp.value;
+  });
+  const activeRanges = ranges.filter(Boolean);
+  // funnel config
+  const c = cfg();
+  c.passing_score = +document.getElementById('setPassing').value || 70;
+  c.max_attempts = +document.getElementById('setAttempts').value || 1;
+  c.redirect_url = document.getElementById('setRedirect').value || null;
+  c.show_progress_bar = document.getElementById('setProgress').checked;
+  c.allow_skip = document.getElementById('setSkip').checked;
+  c.collect_name = document.getElementById('setName').checked;
+  c.collect_email = document.getElementById('setEmail').checked;
+  c.collect_phone = document.getElementById('setPhone').checked;
+  c.classification_ranges = activeRanges;
+  currentFunnel.config = c;
+  csListId = document.getElementById('setCsList').value;
+  return { ranges: activeRanges, campaignId: document.getElementById('setCampaign').value }; // campaign whose iqs_funnel_id we'll set
+}
+
+// ---------- save ----------
+async function saveAll() {
+  const state = syncDomToState();
+  try {
+    // save funnel config
+    await api('/iqs/funnels/' + currentFunnel.id, 'PUT', { config: currentFunnel.config });
+    // ISQ1 gate: set/clear iqs_funnel_id on the selected campaign
+    let targetCampaign = campaigns.find(c => c.id === state.campaignId);
+    // If a campaign is currently gated by this funnel but now deselected, clear it
+    const previouslyGated = campaigns.filter(c => c.iqs_funnel_id === currentFunnel.id);
+    for (const pc of previouslyGated) {
+      if (pc.id !== state.campaignId) {
+        await api('/campaigns/' + (pc.slug || pc.id), 'PUT', { iqs_funnel_id: null });
+      }
+    }
+    if (state.campaignId && targetCampaign) {
+      const csList = document.getElementById('setCsList').value;
+      const deliveryConfig = { coreswift: csList ? { list_id: csList } : {} };
+      await api('/campaigns/' + (targetCampaign.slug || targetCampaign.id), 'PUT', { iqs_funnel_id: currentFunnel.id, delivery_config: deliveryConfig });
+    }
+    // save questions (create new, update existing)
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      const body = {
+        question_key: q.question_key, question_text: q.question_text,
+        question_type: q.question_type, sort_order: i, required: !!q.required,
+        options: q.options, config: q.config, crm_field: q.crm_field || null, crm_field_type: q.crm_field_type || null
+      };
+      if (q._new) { await api('/iqs/funnels/' + currentFunnel.id + '/questions', 'POST', body); }
+      else { await api('/iqs/funnels/' + currentFunnel.id + '/questions/' + q.id, 'PUT', body); }
+    }
+    msg('Funnel saved', 'ok');
+    await loadQuestions(); await loadFunnels(); renderEditor();
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+async function publishToggle() {
+  syncDomToState();
+  const newStatus = currentFunnel.status === 'active' ? 'draft' : 'active';
+  try {
+    await api('/iqs/funnels/' + currentFunnel.id, 'PUT', { status: newStatus, config: currentFunnel.config });
+    currentFunnel.status = newStatus;
+    msg('Funnel ' + (newStatus === 'active' ? 'published' : 'set to draft'), 'ok');
+    renderEditor();
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+// ---------- submissions ----------
+async function loadSubSelect() {
+  try {
+    if (!funnels.length) await loadFunnels();
+    document.getElementById('subFunnelSelect').innerHTML = '<select class="input" onchange="loadSubs(this.value)"><option value="">Select a funnel…</option>' +
+      funnels.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('') + '</select>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+async function loadSubs(id) {
+  if (!id) { document.getElementById('subList').innerHTML = ''; return; }
+  try {
+    const d = await api('/iqs/funnels/' + id + '/submissions');
+    const subs = d.data || d.submissions || [];
+    document.getElementById('subList').innerHTML = !subs.length ? '<p class="muted">No submissions yet.</p>' :
+      '<table><thead><tr><th>Email</th><th>Score</th><th>Outcome</th><th>Class</th><th>Tags</th><th>Date</th></tr></thead><tbody>' +
+      subs.map(s => `<tr>
+        <td>${esc((s.contact && s.contact.email) || (s.email) || '')}</td>
+        <td>${s.total_score!=null?s.total_score:'—'}</td>
+        <td>${esc(s.outcome||'')}</td>
+        <td>${s.classification?`<span class="badge ${s.classification.toLowerCase()}">${esc(s.classification)}</span>`:'—'}</td>
+        <td>${(s.tags_applied||[]).map(esc).join(', ')}</td>
+        <td class="muted">${(s.created_at||'').slice(0,10)}</td></tr>`).join('') + '</tbody></table>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+document.getElementById('logout').onclick = () => {
+  sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user');
+  localStorage.removeItem('is_token'); localStorage.removeItem('ws_fs_token'); localStorage.removeItem('is_user'); location.href = '/';
+};
+
+loadFunnels();
+</script>
+</body>
+</html>

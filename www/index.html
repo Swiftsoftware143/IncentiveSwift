@@ -3,27 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IncentiveSwift — Viral Campaigns &amp; Loyalty Rewards Platform</title>
-<meta name="description" content="IncentiveSwift powers viral referral campaigns, loyalty programs, and gamified rewards. Boost engagement, drive referrals, and reward your best customers.">
-<meta name="keywords" content="referral program, loyalty rewards, gamification, viral marketing, customer engagement, incentive platform, referral software">
+<title>IncentiveSwift | Viral Campaigns & Loyalty Rewards Platform</title>
+<meta name="description" content="Create viral incentive campaigns, loyalty programs, raffles, and sweepstakes with IncentiveSwift. Boost engagement and retention with gamified rewards.">
+<meta name="keywords" content="incentive platform, viral campaigns, loyalty rewards, raffle software, sweepstakes, gamification">
 <link rel="canonical" href="https://incentiveswift.com">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://incentiveswift.com">
-<meta property="og:title" content="IncentiveSwift — Viral Campaigns &amp; Loyalty Rewards">
-<meta property="og:description" content="Power viral referral campaigns, loyalty programs, and gamified rewards. Boost engagement and drive referrals.">
+<meta property="og:title" content="IncentiveSwift — Viral Campaigns & Loyalty Rewards">
+<meta property="og:description" content="Create viral incentive campaigns, loyalty programs, raffles, and sweepstakes that drive engagement.">
+<meta property="og:image" content="">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="IncentiveSwift — Viral Campaigns &amp; Loyalty Rewards">
+<meta name="twitter:description" content="Power viral referral campaigns, loyalty programs, and gamified rewards. Boost engagement and drive referrals.">
+<meta name="twitter:image" content="https://incentiveswift.com/assets/og-incentiveswift.png">
 <meta name="theme-color" content="#0f1117">
 
-<script type="application/ld+json">
-{
- "@context": "https://schema.org",
- "@type": "SoftwareApplication",
- "name": "IncentiveSwift",
- "applicationCategory": "BusinessApplication",
- "operatingSystem": "Web-based",
- "offers": {"@type":"Offer","priceCurrency":"USD"},
- "description": "Viral referral campaigns and loyalty rewards platform. Gamified engagement tools to drive customer referrals and retention."
-}
-</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"IncentiveSwift","operatingSystem":"All","applicationCategory":"BusinessApplication","offers":{"@type":"Offer","price":"0.00","priceCurrency":"USD"},"description":"Viral incentive campaigns, loyalty programs, raffles, and sweepstakes platform."}</script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,8 +34,35 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
 .cta-gradient{background:linear-gradient(135deg,#a78bfa 0%,#22d3ee 100%)}
 .card-hover{transition:all .2s ease}.card-hover:hover{transform:translateY(-2px);box-shadow:0 12px 40px rgba(0,0,0,.3)}
 .grid-pattern{background-image:radial-gradient(rgba(167,139,250,.08) 1px,transparent 1px);background-size:40px 40px}
+
+/* Registration Modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 10000; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+.modal-overlay.active { display: flex; }
+.modal-box { background: #fff; border-radius: 20px; padding: 40px; max-width: 460px; width: 90%; position: relative; animation: modalIn 0.25s ease; box-shadow: 0 25px 60px rgba(0,0,0,0.3); }
+@keyframes modalIn { from { opacity: 0; transform: translateY(16px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.modal-close { position: absolute; top: 16px; right: 16px; background: none; border: none; color: #9ca3af; font-size: 1.5rem; cursor: pointer; line-height: 1; }
+.modal-close:hover { color: #374151; }
+.modal-box h3 { margin-bottom: 4px; color: #111827; }
+.modal-box .modal-sub { color: #6b7280; font-size: 0.9rem; margin-bottom: 24px; line-height: 1.4; }
+.modal-box label { display: block; font-size: 0.75rem; font-weight: 700; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+.modal-box input { width: 100%; padding: 12px 14px; border: 1.5px solid #e5e7eb; border-radius: 10px; font-size: 0.95rem; font-family: inherit; margin-bottom: 14px; transition: border-color 0.2s; box-sizing: border-box; color: #111827; background: #f9fafb; }
+.modal-box input:focus { outline: none; border-color: #8b5cf6; background: #fff; }
+.modal-submit { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 1rem; font-weight: 700; cursor: pointer; font-family: inherit; transition: opacity 0.2s, transform 0.1s; }
+.modal-submit:hover { opacity: 0.92; transform: translateY(-1px); }
+.modal-submit:disabled { opacity: 0.6; cursor: default; transform: none; }
+.modal-error { display: none; color: #ef4444; font-size: 0.85rem; margin-bottom: 8px; text-align: center; }
+.modal-success { display: none; color: #10b981; font-size: 0.85rem; margin-bottom: 8px; text-align: center; }
+.modal-footer { text-align: center; margin-top: 14px; font-size: 0.85rem; color: #6b7280; }
+.modal-footer a { color: #8b5cf6; text-decoration: none; font-weight: 600; }
+.modal-footer a:hover { text-decoration: underline; }
+.spinner { display: inline-block; width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 </style>
-</head>
+
+  
+  
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-IS2026"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-IS2026');</script></head>
 <body>
 
 <nav class="hero-gradient border-b border-gray-800/50 sticky top-0 z-40">
@@ -49,9 +73,8 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
     </div>
     <div class="hidden md:flex items-center gap-6">
       <a href="#features" class="text-gray-300 hover:text-white text-sm">Features</a>
-      <a href="#pricing" class="text-gray-300 hover:text-white text-sm">Pricing</a>
       <a href="https://app.incentiveswift.com/login" class="text-gray-300 hover:text-white text-sm">Sign In</a>
-      <a href="https://app.incentiveswift.com/login" class="cta-gradient text-white px-5 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity">Get Started</a>
+      <button onclick="openRegister()" class="cta-gradient text-white px-5 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-opacity" style="cursor:pointer;border:none;background:none;padding:0;font:inherit;">Get Started</a>
     </div>
   </div>
 </nav>
@@ -69,7 +92,7 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
       IncentiveSwift powers viral referral campaigns, gamified loyalty programs, and smart rewards. Watch your customers bring you new customers — automatically.
     </p>
     <div class="flex flex-col sm:flex-row gap-4 justify-center">
-      <a href="https://app.incentiveswift.com/login" class="cta-gradient text-white px-8 py-4 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25">
+      <button onclick="openRegister()" class="cta-gradient text-white px-8 py-4 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25" style="border:none;font-family:inherit;">
         Launch Your First Campaign →
       </a>
       <a href="#features" class="text-gray-300 border border-gray-700 px-8 py-4 rounded-xl text-lg font-medium hover:bg-gray-800/50">See Features</a>
@@ -123,53 +146,13 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
   </div>
 </section>
 
-<section id="pricing" class="py-20 px-6 bg-[#0f1117]">
-  <div class="max-w-5xl mx-auto text-center">
-    <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Simple <span class="gradient-text">Pricing</span></h2>
-    <p class="text-gray-400 mb-16 max-w-xl mx-auto">Start building campaigns for free. Scale as you grow.</p>
-    <div class="grid md:grid-cols-3 gap-8">
-      <div class="card-hover bg-[#1a1d27] border border-gray-800 rounded-2xl p-8 text-left">
-        <h3 class="text-xl font-semibold text-white mb-2">Starter</h3>
-        <p class="text-gray-400 text-sm mb-6">For small businesses testing the waters.</p>
-        <div class="text-4xl font-extrabold text-white mb-1">Free</div>
-        <p class="text-gray-500 text-sm mb-8">1 active campaign, up to 500 participants</p>
-        <ul class="space-y-3 mb-8">
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> 1 referral campaign</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Basic analytics</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Shareable links</li>
-        </ul>
-        <a href="https://app.incentiveswift.com/login" class="block text-center border border-gray-600 text-white rounded-xl py-3 font-medium hover:bg-gray-700/50">Start Free</a>
-      </div>
-      <div class="card-hover bg-[#1a1d27] border-2 border-purple-500/50 rounded-2xl p-8 text-left relative">
-        <div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-xs font-semibold px-4 py-1 rounded-full">MOST POPULAR</div>
-        <h3 class="text-xl font-semibold text-white mb-2">Pro</h3>
-        <p class="text-gray-400 text-sm mb-6">For growing businesses running active programs.</p>
-        <div class="text-4xl font-extrabold text-white mb-1">$49<span class="text-lg text-gray-400 font-normal">/mo</span></div>
-        <p class="text-gray-500 text-sm mb-8">10 campaigns, 5,000 participants</p>
-        <ul class="space-y-3 mb-8">
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> 10 active campaigns</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Loyalty tiers &amp; points</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Leaderboards &amp; badges</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Advanced analytics</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Widget embeds</li>
-        </ul>
-        <a href="https://app.incentiveswift.com/login" class="block text-center cta-gradient text-white rounded-xl py-3 font-semibold hover:opacity-90">Start Free Trial</a>
-      </div>
-      <div class="card-hover bg-[#1a1d27] border border-gray-800 rounded-2xl p-8 text-left">
-        <h3 class="text-xl font-semibold text-white mb-2">Enterprise</h3>
-        <p class="text-gray-400 text-sm mb-6">For agencies and large-scale programs.</p>
-        <div class="text-4xl font-extrabold text-white mb-1">Custom</div>
-        <p class="text-gray-500 text-sm mb-8">Unlimited everything</p>
-        <ul class="space-y-3 mb-8">
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Unlimited campaigns</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> API access</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Webhooks &amp; Zapier</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> White-label</li>
-          <li class="flex text-sm text-gray-300 gap-2"><span class="text-green-400">✓</span> Priority support</li>
-        </ul>
-        <a href="https://app.incentiveswift.com/login" class="block text-center border border-gray-600 text-white rounded-xl py-3 font-medium hover:bg-gray-700/50">Contact Sales</a>
-      </div>
-    </div>
+<section class="py-24 px-6 hero-gradient grid-pattern">
+  <div class="max-w-3xl mx-auto text-center">
+    <h2 class="text-3xl md:text-5xl font-bold text-white mb-6">Start Free.<br><span class="gradient-text">Scale When Ready.</span></h2>
+    <p class="text-lg text-gray-400 mb-10">Launch campaigns, build loyalty programs, and track referrals from day one. No credit card required. Upgrades and pricing are managed inside the platform when your program grows.</p>
+    <button onclick="openRegister()" class="inline-block cta-gradient text-white px-10 py-5 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25" style="cursor:pointer;border:none;background:none;padding:0;font:inherit;">
+      Get Started Free →
+    </a>
   </div>
 </section>
 
@@ -177,7 +160,7 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
   <div class="max-w-3xl mx-auto text-center">
     <h2 class="text-3xl md:text-5xl font-bold text-white mb-6">Your Customers Are Already<br><span class="gradient-text">Talking About You</span></h2>
     <p class="text-lg text-gray-400 mb-10">Give them a reason to share. IncentiveSwift turns happy customers into your most powerful growth channel.</p>
-    <a href="https://app.incentiveswift.com/login" class="inline-block cta-gradient text-white px-10 py-5 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25">
+    <button onclick="openRegister()" class="cta-gradient text-white px-10 py-5 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25" style="border:none;font-family:inherit;">
       Launch Your First Campaign →
     </a>
   </div>
@@ -189,12 +172,128 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
       <div class="w-7 h-7 bg-purple-600 rounded-lg flex items-center justify-center text-white text-xs font-bold">🔥</div>
       <span class="text-gray-400 text-sm">IncentiveSwift © 2026</span>
     </div>
-    <div class="flex gap-6">
+    <div class="flex gap-4 flex-wrap justify-center">
       <a href="https://app.incentiveswift.com/login" class="text-gray-500 hover:text-gray-300 text-sm">Login</a>
       <a href="https://admin.incentiveswift.com/login" class="text-gray-500 hover:text-gray-300 text-sm">Admin</a>
+      <span class="text-gray-700">·</span>
+      <a href="/terms.html" class="text-gray-500 hover:text-gray-300 text-sm">Terms</a>
+      <a href="/privacy.html" class="text-gray-500 hover:text-gray-300 text-sm">Privacy</a>
+      <a href="/refunds.html" class="text-gray-500 hover:text-gray-300 text-sm">Refunds</a>
     </div>
   </div>
 </footer>
 
+<!-- REGISTRATION MODAL -->
+<div class="modal-overlay" id="register-modal">
+ <div class="modal-box">
+  <button onclick="closeRegister()" class="modal-close">&times;</button>
+  <h3>Create Your Account</h3>
+  <p class="modal-sub">Launch campaigns and build loyalty programs from day one.<br>No credit card required.</p>
+  <form id="register-form" onsubmit="handleRegister(event)">
+   <label>Full Name</label>
+   <input type="text" id="reg-name" placeholder="Your name" autocomplete="name">
+   <label>Email Address</label>
+   <input type="email" id="reg-email" placeholder="you@company.com" required autocomplete="email">
+   <label>Password</label>
+   <input type="password" id="reg-password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password">
+   
+   <div class="modal-error" id="reg-error"></div>
+   <div class="modal-success" id="reg-success"></div>
+   <button type="submit" class="modal-submit" id="reg-submit" style="background: #8b5cf6; color: #fff;">Create Free Account</button>
+  </form>
+  <p class="modal-footer">Already have an account? <a href="https://app.incentiveswift.com/login">Sign in</a></p>
+ </div>
+</div>
+
+<!-- Cookie Consent Banner -->
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:14px">🍪 Cookie Consent</strong>
+      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var choice = localStorage.getItem('cookie_consent');
+  if (!choice) {
+    document.getElementById('cookie-banner').style.display = 'block';
+  }
+  window.acceptCookies = function(){
+    localStorage.setItem('cookie_consent','accepted');
+    document.getElementById('cookie-banner').style.display = 'none';
+  };
+  window.declineCookies = function(){
+    localStorage.setItem('cookie_consent','declined');
+    document.getElementById('cookie-banner').style.display = 'none';
+    // Disable GA/GTM if present
+    if (typeof gtag === 'function') { window['ga-disable-all'] = true; }
+    var scripts = document.querySelectorAll('script[src*="googletagmanager"],script[src*="analytics"]');
+    scripts.forEach(function(s){ s.remove(); });
+  };
+})();
+</script>
+
 </body>
+
+<!-- MODAL SCRIPTS -->
+<script>
+function openRegister() {
+ document.getElementById('register-modal').classList.add('active');
+ document.body.style.overflow = 'hidden';
+ setTimeout(function() { var n = document.getElementById('reg-name'); if (n) n.focus(); }, 100);
+}
+function closeRegister() {
+ document.getElementById('register-modal').classList.remove('active');
+ document.body.style.overflow = '';
+}
+document.getElementById('register-modal').addEventListener('click', function(e) { if (e.target === this) closeRegister(); });
+
+async function handleRegister(e) {
+ e.preventDefault();
+ var btn = document.getElementById('reg-submit');
+ var errEl = document.getElementById('reg-error');
+ var successEl = document.getElementById('reg-success');
+ errEl.style.display = 'none';
+ successEl.style.display = 'none';
+
+ var name = document.getElementById('reg-name').value.trim();
+ var email = document.getElementById('reg-email').value.trim();
+ var password = document.getElementById('reg-password').value;
+
+ if (!email || !password) { errEl.textContent = 'Please fill in all required fields.'; errEl.style.display = 'block'; return; }
+ if (password.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; errEl.style.display = 'block'; return; }
+
+ btn.disabled = true;
+ btn.innerHTML = '<span class="spinner"></span> Creating account...';
+
+ try {
+  var payload = { email: email, password: password, name: name || email.split('@')[0] };
+  
+  var res = await fetch('https://app.incentiveswift.com/api/v1/auth/register', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json' },
+   body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+   var data = await res.json().catch(function(){ return {}; });
+   throw new Error(data.error || data.message || 'Registration failed. Please try again.');
+  }
+  successEl.textContent = 'Account created! Redirecting...';
+  successEl.style.display = 'block';
+  sessionStorage.setItem('is_token', data.token); window.location.href = 'https://app.incentiveswift.com/dashboard';
+ } catch (err) {
+  errEl.textContent = err.message || 'An error occurred. Please try again.';
+  errEl.style.display = 'block';
+  btn.disabled = false;
+  btn.innerHTML = 'Create Free Account';
+ }
+}
+</script>
+
 </html>

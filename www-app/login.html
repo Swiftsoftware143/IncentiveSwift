@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Login — Incentiveswift</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
+.c{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:95vw;box-shadow:0 12px 40px rgba(0,0,0,.3);text-align:center}
+.c h1{font-size:22px;color:#1e1b4b;margin-bottom:4px}
+.c p.sub{font-size:13px;color:#64748b;margin-bottom:24px}
+.c input{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px;display:block;outline:none}
+.c input:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
+.c button{width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+.c button:hover{background:#4f46e5}
+.c button:disabled{opacity:.5}
+.msg{padding:10px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
+.msg.e{background:#fee2e2;color:#991b1b;display:block}
+.msg.i{color:#6366f1;display:block}
+.lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px}
+.lk a{color:#6366f1}
+</style>
+</head>
+<body>
+<div class="c">
+<h1>Incentiveswift</h1>
+<p class="sub">Lead Generation &amp; Affiliate Marketing</p>
+<input id="e" type="email" placeholder="Email">
+<input id="p" type="password" placeholder="Password">
+<button id="b" onclick="L()">Sign In</button>
+<div id="m" class="msg"></div>
+<div class="lk"><a href="/admin">Admin Portal</a></div>
+</div>
+<script>
+function L(){
+var e=document.getElementById("e").value.trim(),p=document.getElementById("p").value,m=document.getElementById("m"),b=document.getElementById("b");
+if(!e||!p){m.className="msg e";m.textContent="Enter email and password";return}
+m.className="msg i";m.textContent="Signing in...";b.disabled=true;
+fetch("/api/v1/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:e,password:p})})
+.then(function(r){if(!r.ok)throw new Error("Invalid credentials");return r.json()})
+.then(function(d){var t=d.token||d.access_token;
+if(!t){m.className="msg e";m.textContent="Login response carried no session token";b.disabled=false;return}
+try{localStorage.setItem("ws_fs_token",t)}catch(ex){}
+/* Hand the session over OUT OF BAND (kanban t_a724790f).
+   This used to be window.location.href="/app?token="+encodeURIComponent(t), which put the
+   24h bearer token in the URL: it landed in the nginx access log, browser history and the
+   Referer header of every subsequent request. app.incentiveswift.com/login and .../app are
+   the SAME origin, so the storage write above is already visible to the SPA (its boot path
+   reads localStorage 'ws_fs_token'); no URL transport is needed. */
+window.location.replace("/app")})
+.catch(function(err){m.className="msg e";m.textContent=err.message;b.disabled=false});
+}
+</script>
+</body>
+</html>
