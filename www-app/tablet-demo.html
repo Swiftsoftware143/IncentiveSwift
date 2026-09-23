@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%236c5ce7'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23ffd166'/%3E%3C/svg%3E">
 <title>IncentiveSwift — Spin &amp; Win (Tablet Kiosk)</title>
 <style>
   :root{
@@ -129,11 +130,12 @@
   var SLUG = params.get("campaign") || CONFIG.defaultCampaign;
 
   var el = function (id) { return document.getElementById(id); };
-  var screens = { idle: el("s-idle"), wheel: el("s-wheel"), result: el("s-result"), blocked: el("s-blocked") };
+  // keyed by DOM id, so the tap-to-restart wiring below can index it directly
+  var screens = { "s-idle": el("s-idle"), "s-wheel": el("s-wheel"), "s-result": el("s-result"), "s-blocked": el("s-blocked") };
   var state = { prizes: [], campaign: null, timer: null, busy: false, rotation: 0 };
 
   function show(name) {
-    Object.keys(screens).forEach(function (k) { screens[k].classList.toggle("on", k === name); });
+    Object.keys(screens).forEach(function (k) { screens[k].classList.toggle("on", k === "s-" + name); });
   }
   function later(fn, ms) { clearTimeout(state.timer); state.timer = setTimeout(fn, ms); }
 
