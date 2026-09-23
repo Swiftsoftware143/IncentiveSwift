@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="robots" content="noindex">
+<title>IncentiveSwift — Spin &amp; Win (Tablet Kiosk)</title>
+<style>
+  :root{
+    --bg1:#0b1020; --bg2:#141a33; --card:#1b2140; --ink:#f4f6ff; --muted:#9aa3c7;
+    --accent:#6c5ce7; --accent2:#00d2a8; --danger:#ff6b6b; --gold:#ffd166;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0;overflow:hidden;background:radial-gradient(1200px 800px at 20% 0%,var(--bg2),var(--bg1));
+    color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-user-select:none;user-select:none}
+  #app{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2vh;padding:3vh 4vw}
+
+  /* ---- shared ---- */
+  .brand{position:fixed;top:2.2vh;left:3vw;display:flex;align-items:center;gap:.6rem;opacity:.75;font-weight:700;letter-spacing:.3px}
+  .brand .dot{width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .hint{position:fixed;bottom:2vh;width:100%;text-align:center;color:var(--muted);font-size:clamp(11px,1.2vw,15px)}
+  h1{font-size:clamp(26px,4.4vw,58px);margin:0;text-align:center;line-height:1.1}
+  h2{font-size:clamp(20px,2.6vw,34px);margin:0 0 .6rem;text-align:center}
+  p{margin:0;color:var(--muted);text-align:center;font-size:clamp(13px,1.5vw,19px)}
+  .screen{display:none;flex-direction:column;align-items:center;justify-content:center;gap:2.2vh;width:100%;height:100%}
+  .screen.on{display:flex}
+
+  /* ---- idle / email gate ---- */
+  .cta{font-size:clamp(15px,1.7vw,22px);color:var(--gold);font-weight:600;text-align:center}
+  .field{display:flex;flex-direction:column;gap:1.4vh;width:min(620px,86vw)}
+  input[type=email]{width:100%;padding:1.5rem 1.4rem;font-size:clamp(17px,2vw,26px);border-radius:16px;
+    border:2px solid #2c3565;background:#131a33;color:var(--ink);outline:none;text-align:center}
+  input[type=email]:focus{border-color:var(--accent);box-shadow:0 0 0 6px rgba(108,92,231,.18)}
+  button{font-family:inherit;font-weight:800;cursor:pointer;border:0;border-radius:16px;
+    padding:1.5rem 2rem;font-size:clamp(17px,2vw,26px);color:#fff;
+    background:linear-gradient(135deg,var(--accent),#8f7bff);box-shadow:0 12px 34px rgba(108,92,231,.35)}
+  button:active{transform:translateY(1px)}
+  button[disabled]{opacity:.45;box-shadow:none}
+  .err{color:var(--danger);font-size:clamp(12px,1.4vw,18px);min-height:1.4em;text-align:center}
+
+  /* ---- wheel ---- */
+  .wheelWrap{position:relative;display:flex;align-items:center;justify-content:center}
+  canvas{max-width:min(74vh,74vw);max-height:min(74vh,74vw);width:74vmin;height:74vmin;
+    border-radius:50%;box-shadow:0 0 0 12px #232a52,0 0 0 20px #1a2044,0 24px 60px rgba(0,0,0,.55)}
+  .pointer{position:absolute;top:-2.2vmin;width:0;height:0;border-left:3.2vmin solid transparent;
+    border-right:3.2vmin solid transparent;border-top:6vmin solid var(--gold);filter:drop-shadow(0 3px 6px rgba(0,0,0,.5));z-index:2}
+  .spinning canvas{transition:none}
+
+  /* ---- result ---- */
+  .prizeCard{background:var(--card);border:2px solid #333c6e;border-radius:24px;padding:3.2rem 3.6rem;
+    display:flex;flex-direction:column;align-items:center;gap:1.4rem;max-width:min(760px,90vw);
+    box-shadow:0 24px 70px rgba(0,0,0,.5)}
+  .prizeLabel{font-size:clamp(28px,4.6vw,64px);font-weight:900;text-align:center;line-height:1.05}
+  .prizeType{color:var(--muted);font-size:clamp(13px,1.5vw,20px);text-transform:uppercase;letter-spacing:.12em}
+  .code{font-family:ui-monospace,Menlo,Consolas,monospace;background:#0f1530;border:1px dashed #46508c;
+    border-radius:12px;padding:.9rem 1.4rem;font-size:clamp(16px,2vw,26px);letter-spacing:.08em}
+  .big{font-size:clamp(20px,2.6vw,34px);font-weight:800;text-align:center}
+  .reset{color:var(--muted);font-size:clamp(12px,1.3vw,17px)}
+  .nope{color:var(--danger)}
+  .fullscreen{position:fixed;top:2vh;right:3vw;background:transparent;box-shadow:none;padding:.6rem 1rem;
+    font-size:clamp(12px,1.3vw,16px);color:var(--muted);border:1px solid #333c6e;border-radius:12px}
+</style>
+</head>
+<body>
+<div class="brand"><span class="dot"></span><span id="brandName">IncentiveSwift</span></div>
+<button class="fullscreen" id="fsBtn" type="button">⛶ Full screen</button>
+
+<div id="app">
+
+  <!-- 1. IDLE / EMAIL GATE -->
+  <section class="screen on" id="s-idle">
+    <h1 id="idleTitle">Spin &amp; Win</h1>
+    <p class="cta">Enter your email to unlock your spin</p>
+    <div class="field">
+      <input type="email" id="email" inputmode="email" autocomplete="email"
+             placeholder="you@example.com" aria-label="Email address">
+      <button id="claimBtn" type="button" disabled>Claim My Spin</button>
+      <div class="err" id="idleErr" role="alert"></div>
+    </div>
+  </section>
+
+  <!-- 2. WHEEL -->
+  <section class="screen" id="s-wheel">
+    <h2 id="wheelTitle">Good luck!</h2>
+    <div class="wheelWrap">
+      <div class="pointer"></div>
+      <canvas id="wheel" width="900" height="900" aria-label="Prize wheel"></canvas>
+    </div>
+    <p class="reset" id="wheelMsg">Spinning…</p>
+  </section>
+
+  <!-- 3. RESULT -->
+  <section class="screen" id="s-result">
+    <div class="prizeCard">
+      <div class="prizeType" id="rType">Your prize</div>
+      <div class="prizeLabel" id="rLabel">—</div>
+      <div class="code" id="rCode" style="display:none"></div>
+      <div class="big" id="rNote"></div>
+      <div class="reset" id="rReset"></div>
+    </div>
+  </section>
+
+  <!-- 4. NOT-ENABLED / ERROR -->
+  <section class="screen" id="s-blocked">
+    <h1 class="nope" id="bTitle">Not enabled yet</h1>
+    <p id="bMsg" style="max-width:70vw"></p>
+    <div class="reset" id="bReset"></div>
+  </section>
+
+</div>
+<div class="hint">Powered by IncentiveSwift · tap the screen to start over</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── configuration (one place, no prize data hardcoded) ────────────────────
+  var CONFIG = {
+    // Override per venue with ?campaign=<slug>. Prizes, colours and odds always
+    // come from the server (GET /api/v1/play/<slug>); nothing here mirrors them.
+    defaultCampaign: "finalgate-spin-874ee0c6",
+    apiBase: "/api/v1",
+    resetSeconds: 12,          // idle time before a kiosk returns to the start screen
+    spinMs: 4200               // wheel animation length
+  };
+
+  var params = new URLSearchParams(location.search);
+  var SLUG = params.get("campaign") || CONFIG.defaultCampaign;
+
+  var el = function (id) { return document.getElementById(id); };
+  var screens = { idle: el("s-idle"), wheel: el("s-wheel"), result: el("s-result"), blocked: el("s-blocked") };
+  var state = { prizes: [], campaign: null, timer: null, busy: false, rotation: 0 };
+
+  function show(name) {
+    Object.keys(screens).forEach(function (k) { screens[k].classList.toggle("on", k === name); });
+  }
+  function later(fn, ms) { clearTimeout(state.timer); state.timer = setTimeout(fn, ms); }
+
+  // ── load the campaign so the wheel matches the real prize pool ─────────────
+  function loadCampaign() {
+    return fetch(CONFIG.apiBase + "/play/" + encodeURIComponent(SLUG), { headers: { Accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("campaign " + r.status); return r.json(); })
+      .then(function (data) {
+        state.campaign = data.campaign || {};
+        var pool = (data.config && data.config.prize_pool && data.config.prize_pool.prizes) || [];
+        state.prizes = pool.filter(function (p) { return p && p.label; });
+        if (state.campaign.name) {
+          el("idleTitle").textContent = state.campaign.name;
+          document.title = state.campaign.name + " — Spin & Win";
+        }
+        drawWheel();
+      });
+  }
+
+  // ── wheel drawing: labels and colours only. Odds are never shown. ──────────
+  var FALLBACK = ["#6c5ce7", "#00b894", "#fdcb6e", "#e17055", "#0984e3", "#e84393", "#00cec9", "#d63031"];
+  function sliceColor(p, i) { return (p && p.color) || FALLBACK[i % FALLBACK.length]; }
+
+  function drawWheel() {
+    var c = el("wheel"), ctx = c.getContext("2d");
+    var n = state.prizes.length, cx = c.width / 2, cy = c.height / 2, r = cx - 8;
+    ctx.clearRect(0, 0, c.width, c.height);
+    if (!n) {                                  // no pool configured on the server
+      ctx.fillStyle = "#1b2140"; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#9aa3c7"; ctx.font = "bold 34px system-ui"; ctx.textAlign = "center";
+      ctx.fillText("No prizes configured", cx, cy + 10);
+      return;
+    }
+    var per = (Math.PI * 2) / n;
+    for (var i = 0; i < n; i++) {
+      var start = i * per;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, start, start + per); ctx.closePath();
+      ctx.fillStyle = sliceColor(state.prizes[i], i); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 3; ctx.stroke();
+      // label
+      ctx.save();
+      ctx.translate(cx, cy); ctx.rotate(start + per / 2);
+      ctx.textAlign = "right"; ctx.fillStyle = "#fff";
+      ctx.font = "bold " + Math.max(18, Math.min(40, 520 / n)) + "px system-ui";
+      var label = String(state.prizes[i].label);
+      if (label.length > 18) label = label.slice(0, 17) + "…";
+      ctx.fillText(label, r - 26, 12);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.16, 0, Math.PI * 2);
+    ctx.fillStyle = "#0f1530"; ctx.fill();
+    ctx.strokeStyle = "#46508c"; ctx.lineWidth = 6; ctx.stroke();
+  }
+
+  // ── spin: the SERVER decides the prize; the wheel just lands on it ─────────
+  function spin(email) {
+    return fetch(CONFIG.apiBase + "/campaigns/" + encodeURIComponent(SLUG) + "/spin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        email: email,
+        page_url: "kiosk:tablet-demo",
+        utm_source: "tablet-kiosk"
+      })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        return { ok: r.ok, status: r.status, body: body };
+      });
+    });
+  }
+
+  function animateTo(prizeId, done) {
+    var n = state.prizes.length || 1;
+    var idx = 0;
+    for (var i = 0; i < state.prizes.length; i++) {
+      if (String(state.prizes[i].id) === String(prizeId)) { idx = i; break; }
+    }
+    var per = 360 / n;
+    // pointer sits at the top (-90deg); land the winning slice centre under it
+    var targetSlice = 360 - (idx * per + per / 2);
+    var turns = 5 * 360;
+    var from = state.rotation % 360;
+    var to = state.rotation - from + turns + targetSlice;
+    if (to < state.rotation + turns) to += 360;
+    var started = null;
+    el("s-wheel").classList.add("spinning");
+    function frame(ts) {
+      if (started === null) started = ts;
+      var t = Math.min(1, (ts - started) / CONFIG.spinMs);
+      var eased = 1 - Math.pow(1 - t, 3);                 // ease-out cubic
+      state.rotation = from + (to - from) * eased;
+      el("wheel").style.transform = "rotate(" + state.rotation + "deg)";
+      if (t < 1) { requestAnimationFrame(frame); } else { el("s-wheel").classList.remove("spinning"); done(); }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function result(prize, res, extra) {
+    el("rLabel").textContent = (prize && prize.prize_label) || "Prize";
+    el("rType").textContent = prize && prize.won === false ? "Better luck next time" : "You won";
+    var code = extra && extra.redemption_code;
+    el("rCode").style.display = code ? "" : "none";
+    el("rCode").textContent = code || "";
+    el("rNote").textContent = code ? "Show this code to claim" : "";
+    startCountdown();
+    show("result");
+  }
+
+  function blocked(title, msg) {
+    el("bTitle").textContent = title;
+    el("bMsg").textContent = msg;
+    startCountdown();
+    show("blocked");
+  }
+
+  function startCountdown() {
+    var left = CONFIG.resetSeconds;
+    var tick = function () {
+      el("rReset").textContent = "Starting over in " + left + "s…";
+      el("bReset").textContent = "Starting over in " + left + "s…";
+      if (left-- <= 0) { reset(); return; }
+      later(tick, 1000);
+    };
+    tick();
+  }
+
+  function reset() {
+    clearTimeout(state.timer);
+    state.busy = false;
+    el("email").value = "";
+    el("idleErr").textContent = "";
+    el("claimBtn").disabled = true;
+    el("wheelMsg").textContent = "Spinning…";
+    el("wheel").style.transform = "rotate(0deg)";
+    drawWheel();
+    show("idle");
+  }
+
+  // ── wiring ────────────────────────────────────────────────────────────────
+  el("email").addEventListener("input", function () {
+    var v = el("email").value.trim();
+    var ok = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v);
+    el("claimBtn").disabled = !ok;
+    el("idleErr").textContent = "";
+  });
+
+  el("claimBtn").addEventListener("click", function () {
+    if (state.busy) return;
+    var v = el("email").value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v)) { el("idleErr").textContent = "That email doesn't look right."; return; }
+    state.busy = true;
+    el("claimBtn").disabled = true;
+    el("wheelMsg").textContent = "Spinning…";
+    show("wheel");
+    spin(v).then(function (res) {
+      if (res.ok && res.body && res.body.result) {
+        var id = res.body.result.prize_id;
+        later(function () { animateTo(id, function () { result(res.body.result, res, res.body); }); }, 150);
+        return;
+      }
+      // honest failure — never fake a win
+      var st = res.status, b = res.body || {};
+      if (st === 402 || /plan/i.test(b.error || "")) {
+        blocked("Not enabled yet",
+          "This game isn't switched on for this venue. Ask a member of staff — or the owner can enable the Spin mechanic for this account's plan.");
+      } else if (st === 429) {
+        blocked("Slow down a moment", "That email has already played recently. Please try again later.");
+      } else {
+        blocked("Couldn't complete the spin",
+          (b.error || b.message || ("Server said " + st + ".")) + " Please ask a member of staff.");
+      }
+    }).catch(function () {
+      blocked("Connection problem", "We couldn't reach the game server. Please ask a member of staff.");
+    });
+  });
+
+  el("fsBtn").addEventListener("click", function () {
+    if (document.fullscreenElement) { document.exitFullscreen(); }
+    else if (document.documentElement.requestFullscreen) { document.documentElement.requestFullscreen(); }
+  });
+
+  // kiosk hygiene: tapping anywhere on a finished screen restarts immediately
+  ["s-result", "s-blocked"].forEach(function (id) {
+    screens[id].addEventListener("click", reset);
+  });
+  document.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+  reset();
+  loadCampaign().catch(function () {
+    blocked("Game unavailable", "We couldn't load this campaign. Please ask a member of staff.");
+  });
+})();
+</script>
+</body>
+</html>
