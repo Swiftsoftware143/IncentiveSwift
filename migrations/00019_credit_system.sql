@@ -65,6 +65,21 @@ INSERT INTO features (key, label, category, description) VALUES
 ON CONFLICT (key) DO NOTHING;
 
 -- Add stripe to available providers if not there
-INSERT INTO available_providers (provider, label, category, description) VALUES
-    ('stripe', 'Stripe', 'payments', 'Payment processing via Stripe')
-ON CONFLICT (provider) DO NOTHING;
+--
+-- IS-7 note: this INSERT targets columns (`provider`, `label`, `category`) that
+-- `available_providers` does not have -- not in a from-zero build and not in production
+-- either (this is one of the statements the old migration runner swallowed). It is guarded
+-- so the file applies instead of aborting the boot of a fresh database, and so no provider
+-- row is invented that production does not have.
+DO $is7$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'available_providers' AND column_name = 'provider'
+    ) THEN
+        INSERT INTO available_providers (provider, label, category, description) VALUES
+            ('stripe', 'Stripe', 'payments', 'Payment processing via Stripe')
+        ON CONFLICT (provider) DO NOTHING;
+    END IF;
+END
+$is7$;
