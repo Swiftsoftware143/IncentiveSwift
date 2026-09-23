@@ -191,8 +191,13 @@ create table public.loyalty_checkins (
 );
 
 -- Enforce daily cap at DB level (common case: 1/day)
+-- The UTC-normalised expression is load-bearing: `checked_in_at::date` resolves
+-- through the session TimeZone, so PostgreSQL refuses it in an index expression
+-- ("functions in index expression must be marked IMMUTABLE") and the whole file
+-- aborts — no later migration could run on a database built from zero because of
+-- this one line. The definition below is the one the live database carries.
 create unique index loyalty_checkins_daily_cap
-    on public.loyalty_checkins (member_id, (checked_in_at::date));
+    on public.loyalty_checkins (member_id, (timezone('UTC', checked_in_at)::date));
 
 create table public.loyalty_reward_tiers (
     id uuid primary key default gen_random_uuid(),
@@ -266,19 +271,27 @@ create policy "public_read_active_programs" on public.loyalty_programs for selec
 create policy "public_insert_checkins" on public.loyalty_checkins for insert with check (true);
 
 -- Authenticated access
-create policy "auth_all_contacts" on public.contacts for all using (auth.role() = 'authenticated');
-create policy "auth_all_campaigns" on public.campaigns for all using (auth.role() = 'authenticated');
-create policy "auth_read_entries" on public.entries for select using (auth.role() = 'authenticated');
-create policy "auth_all_questions" on public.questions for all using (auth.role() = 'authenticated');
-create policy "auth_read_delivery_log" on public.delivery_log for select using (auth.role() = 'authenticated');
-create policy "auth_all_plan_tiers" on public.plan_tiers for all using (auth.role() = 'authenticated');
-create policy "auth_all_features" on public.features for all using (auth.role() = 'authenticated');
-create policy "auth_all_tier_features" on public.tier_features for all using (auth.role() = 'authenticated');
-create policy "auth_all_loyalty_programs" on public.loyalty_programs for all using (auth.role() = 'authenticated');
-create policy "auth_all_loyalty_members" on public.loyalty_members for all using (auth.role() = 'authenticated');
-create policy "auth_read_loyalty_checkins" on public.loyalty_checkins for select using (auth.role() = 'authenticated');
-create policy "auth_all_reward_tiers" on public.loyalty_reward_tiers for all using (auth.role() = 'authenticated');
-create policy "auth_all_rewards_earned" on public.loyalty_rewards_earned for all using (auth.role() = 'authenticated');
+--
+-- The 13 `auth.role()` policies that used to sit here are GONE, deliberately.
+-- They are Supabase heritage: `auth.role()` is a function of the Supabase auth
+-- schema, and no database in this deployment has an `auth` schema at all (the
+-- live one has only `public`) — the app authenticates with its own Rust layer.
+-- PostgreSQL resolves policy expressions when the policy is created, so every one
+-- of these statements failed with `schema "auth" does not exist` and took the whole
+-- file with it, which is why nothing built from zero.
+--
+-- Measured 2026-09-23 by building a scratch database from these files alone
+-- (each file one transaction, ON_ERROR_STOP, in filename order):
+--   before  1 of 60 files applied   (59 failed)
+--   after  43 of 60 files applied   (17 failed)
+-- The 17 that still fail are a DIFFERENT and larger gap: the base tables they
+-- reference (accounts, plans, provider_keys, vouchers, email_templates,
+-- available_providers, campaign_points_balance, rotation_configs, ...) are created
+-- by no migration at all — this directory is a delta history, not a baseline. See
+-- the IS-7 note in /opt/swift/queue/OFFPEAK-QUEUE.md.
+--
+-- RLS on this database is governed by the policies the other migrations create
+-- (e.g. `public_insert_checkins`), not by these.
 
 -- ============================================================
 -- API KEYS (for CoreSwift webhook push)
