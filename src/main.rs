@@ -280,6 +280,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/external/program/{id}",
             get(handlers::external_grants::get_external_program),
         )
+        // Public program lookup for the QR landing page. The customer who scans
+        // the QR has no account, so this one carries no auth and no API key.
+        .route(
+            "/api/v1/loyalty/public/program/:slug",
+            get(handlers::loyalty::public_program),
+        )
         // Survey response from MultiDirectory (onboarding completion)
         .route(
             "/api/v1/campaigns/external/survey-response",

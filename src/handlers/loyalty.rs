@@ -1119,6 +1119,78 @@ pub async fn program_qr(
     })))
 }
 
+/// GET /api/v1/loyalty/public/program/:slug — PUBLIC, no auth, no API key.
+///
+/// The QR on a business's counter encodes
+/// `https://app.incentiveswift.com/loyalty-checkin/<slug>` and the person who
+/// scans it has no account yet, so this lookup cannot be authenticated. It
+/// answers with only what that page renders — never a member balance, a contact
+/// or a secret — and returns 404 for anything unknown.
+///
+/// `slug` is accepted in BOTH forms the app itself produces, because the two
+/// disagree: `program_qr` writes the *program name* slug into the QR
+/// (`name.to_lowercase().replace(' ', "-")`), while the check-in endpoint
+/// resolves `program_slug` through `get_campaign_by_slug`. The response always
+/// carries the campaign slug, so a page loaded from either form can still
+/// complete a check-in.
+pub async fn public_program(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let campaign = match crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await {
+        Ok(c) => c,
+        Err(AppError::NotFound(_)) => {
+            // Program-name slug, spelled exactly the way program_qr derived it.
+            let program_id: Option<Uuid> = sqlx::query_scalar(
+                r#"SELECT id FROM loyalty_programs
+                    WHERE lower(replace(name, ' ', '-')) = lower($1)
+                    ORDER BY created_at ASC
+                    LIMIT 1"#,
+            )
+            .bind(&slug)
+            .fetch_optional(&state.db)
+            .await?;
+            let program_id = program_id.ok_or_else(|| {
+                AppError::NotFound("No loyalty program or campaign for that link".to_string())
+            })?;
+            let program = loyalty::get_program(&state.db, &program_id).await?;
+            let campaign_id = program.campaign_id.ok_or_else(|| {
+                AppError::NotFound("That program is not linked to a campaign".to_string())
+            })?;
+            crate::db::campaigns::get_campaign_by_id(&state.db, &campaign_id).await?
+        }
+        Err(e) => return Err(e),
+    };
+
+    let program = match campaign.loyalty_program_id {
+        Some(program_id) => loyalty::get_program(&state.db, &program_id).await?,
+        None => loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
+    };
+
+    let business_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
+            .bind(campaign.account_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+
+    Ok(Json(json!({
+        "campaign_slug": campaign.slug,
+        "campaign_name": campaign.name,
+        "business_name": business_name,
+        "program_name": program.name,
+        "points_per_checkin": program.points_per_checkin,
+        "points_per_visit": program.points_per_visit,
+        "currency_name": program.currency_name,
+        "currency_icon": program.currency_icon,
+        "currency_color": program.currency_color,
+        "is_active": program.is_active,
+        "streak_enabled": program.streak_enabled,
+        "tiers_enabled": program.tiers_enabled,
+        "milestones_enabled": program.milestones_enabled,
+    })))
+}
+
 /// Simple URL encoder.
 fn urlencoding(s: &str) -> String {
     s.chars()

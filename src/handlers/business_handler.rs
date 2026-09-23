@@ -257,20 +257,55 @@ pub async fn get_business_stats(
     .await
     .unwrap_or(0);
 
-    // Total checkins (loyalty activity at this business)
-    let total_checkins: i64 =
-        sqlx::query_scalar("SELECT COALESCE(COUNT(*), 0) FROM loyalty_checkins WHERE 1=0")
-            .fetch_one(&s.db)
-            .await
-            .unwrap_or(0);
-
-    // Total rewards redeemed
-    let total_redemptions: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(COUNT(*), 0) FROM loyalty_rewards_earned WHERE status = 'redeemed' AND 1=0"
+    // Total checkins — every loyalty event attributed to this business, summed
+    // across the three real ledgers. A check-in reaches the business two ways:
+    // through the business's own loyalty program (loyalty_checkins ->
+    // loyalty_members -> loyalty_programs -> campaigns.account_id) and directly
+    // (point_issuance_log.issuing_business_id). Online actions are member-level
+    // too, so they take the same program path. This used to read `WHERE 1=0`,
+    // which is why the number was always 0 no matter how much activity existed.
+    let total_checkins: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(COUNT(*), 0) FROM (
+               SELECT lc.id FROM loyalty_checkins lc
+                 JOIN loyalty_members lm ON lm.id = lc.member_id
+                 JOIN loyalty_programs lp ON lp.id = lm.program_id
+                 JOIN campaigns c ON c.id = lp.campaign_id
+                WHERE c.account_id = $1
+               UNION ALL
+               SELECT pil.id FROM point_issuance_log pil
+                WHERE pil.issuing_business_id = $1
+               UNION ALL
+               SELECT loa.id FROM loyalty_online_actions loa
+                 JOIN loyalty_members lm2 ON lm2.id = loa.member_id
+                 JOIN loyalty_programs lp2 ON lp2.id = lm2.program_id
+                 JOIN campaigns c2 ON c2.id = lp2.campaign_id
+                WHERE c2.account_id = $1
+           ) activity"#,
     )
+    .bind(biz_id)
     .fetch_one(&s.db)
     .await
-    .unwrap_or(0);
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, business = %biz_id, "business stats: checkin count failed; reporting 0");
+        0
+    });
+
+    // Total rewards redeemed — real rows, same member->program->campaign path.
+    let total_redemptions: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(COUNT(*), 0)
+             FROM loyalty_rewards_earned re
+             JOIN loyalty_members lm ON lm.id = re.member_id
+             JOIN loyalty_programs lp ON lp.id = lm.program_id
+             JOIN campaigns c ON c.id = lp.campaign_id
+            WHERE c.account_id = $1 AND re.status = 'redeemed'"#,
+    )
+    .bind(biz_id)
+    .fetch_one(&s.db)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, business = %biz_id, "business stats: redemptions count failed; reporting 0");
+        0
+    });
 
     // Active campaigns
     let active_campaigns: i64 = sqlx::query_scalar(

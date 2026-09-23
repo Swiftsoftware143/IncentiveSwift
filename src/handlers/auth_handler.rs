@@ -764,11 +764,20 @@ pub async fn forgot_password(
     .execute(&state.db)
     .await?;
 
-    // Try to send email, but log the token to server logs as fallback
+    // NEVER log the raw token. It is a bearer credential: whoever reads the log
+    // can POST it to /api/v1/auth/reset-password and take the account over, so
+    // the fallback log line was itself the vulnerability. Log a short SHA-256
+    // hint instead — enough to correlate a support request with a reset row,
+    // useless for redeeming one.
+    let token_hint = {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(token.as_bytes());
+        hex::encode(&digest[..4])
+    };
     tracing::info!(
-        "Password reset token for {}: {} (expires at {})",
+        "Password reset token issued for {} (hint {}, expires at {})",
         body.email,
-        token,
+        token_hint,
         expires_at
     );
 
