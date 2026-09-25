@@ -16,10 +16,17 @@
 -- CLOSED at the database instead of silently storing a plaintext credential. An empty
 -- string stays allowed so an empty slot is still representable.
 --
--- NOT VALID by design: rows written before today (legacy plaintext) stay exempt so the app
--- keeps reading them, while every NEW insert/update is checked. After the one-off backfill
--- the constraint is validated once with
---     ALTER TABLE provider_keys VALIDATE CONSTRAINT provider_keys_api_key_encrypted
+-- NOT VALID was the correct shape ON THE LIVE DATABASE on the day this first ran: rows
+-- written before the backfill stayed exempt so the app kept reading them, and the
+-- constraint was validated once by hand afterwards. Measured 2026-09-25, live carries it
+-- VALID (pg_constraint.convalidated = true for provider_keys_api_key_encrypted).
+--
+-- A from-zero build has no legacy rows to exempt, so leaving it NOT VALID here made a fresh
+-- database diverge from live permanently (000000_baseline_core_tables.sql, a pg_dump of
+-- live, already creates the constraint VALID, and this file then dropped it and re-added it
+-- unvalidated). It is now added valid: a fresh build reproduces the live state exactly, and
+-- a database that still holds plaintext rows (backfill never run) fails the deploy loudly
+-- instead of serving with the guard present but unvalidated.  (Card t_468c4e29.)
 --
 -- The no-semicolon rule applies to every comment above: the migration runner splits files on
 -- the statement separator, so a comment must never contain one.
@@ -28,4 +35,4 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 ALTER TABLE provider_keys DROP CONSTRAINT IF EXISTS provider_keys_api_key_encrypted;
 
-ALTER TABLE provider_keys ADD CONSTRAINT provider_keys_api_key_encrypted CHECK (api_key = '' OR api_key LIKE 'enc:v1:%') NOT VALID;
+ALTER TABLE provider_keys ADD CONSTRAINT provider_keys_api_key_encrypted CHECK (api_key = '' OR api_key LIKE 'enc:v1:%');

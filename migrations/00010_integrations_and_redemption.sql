@@ -72,5 +72,11 @@ CREATE INDEX IF NOT EXISTS idx_campaign_redirect_pages_campaign ON campaign_redi
 -- ============================================================
 -- PROVIDER KEYS TABLE (BYOK — bring your own key for email/SMS)
 -- ============================================================
--- This already exists as `provider_keys`, verify it has all needed columns
-ALTER TABLE provider_keys ADD COLUMN IF NOT EXISTS provider_type text DEFAULT 'email'; -- email, sms, webhook, autoresponder
+-- `provider_keys` is created, complete, by 000000_baseline_core_tables.sql (a pg_dump of
+-- the live database) and by migrations-manual/provider_keys.sql, and neither has a
+-- `provider_type` column. The live database does not have one either: measured
+-- 2026-09-25, `select column_name from information_schema.columns where
+-- table_name='provider_keys'` returns the 10 columns above and no `provider_type`.
+-- No Rust source reads provider_keys.provider_type (every `provider_type` in src/ belongs
+-- to `payment_providers`, a different table), so this file must not add one: a from-zero
+-- build has to reproduce the live schema, not a schema live never had.  (Card t_468c4e29.)
