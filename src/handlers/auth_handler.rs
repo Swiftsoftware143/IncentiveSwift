@@ -78,11 +78,17 @@ pub async fn register(
         ));
     }
 
-    // Get the Free plan tier id
-    let free_plan_id: Uuid = sqlx::query_scalar("SELECT id FROM plans WHERE slug = 'free' LIMIT 1")
-        .fetch_one(&state.db)
-        .await
-        .map_err(|_| AppError::Internal("Free plan not configured".to_string()))?;
+    // Get the Free plan TIER id. `accounts.plan_tier_id` has an FK to `plan_tiers(id)`, so the
+    // lookup belongs on `plan_tiers`: resolving it from `plans` (the marketing/checkout table)
+    // worked only while both tables' `free` rows happened to share the uuid `8b8cc0e5…`, and would
+    // start failing the FK — a 500 on every signup — the moment the free TIER row was recreated.
+    // The `plans` row is still what checkout/marketing read; it is just not the accounting identity
+    // of an account's tier (kanban t_329b61b2).
+    let free_tier_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = 'free' LIMIT 1")
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| AppError::Internal("Free plan tier not configured".to_string()))?;
 
     // Generate account id first (so we can use as tenant_id)
     let account_id = Uuid::new_v4();
@@ -105,7 +111,7 @@ pub async fn register(
     .bind(&name)
     .bind(&body.email)
     .bind(&password_hash)
-    .bind(free_plan_id)
+    .bind(free_tier_id)
     .bind(account_id) // tenant_id = self
     .bind(&slug)
     .execute(&state.db)

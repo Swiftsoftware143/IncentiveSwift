@@ -142,6 +142,72 @@ pub async fn industry_limit(db: &PgPool, account_id: Uuid) -> Result<i64, AppErr
     Ok(configured.map(i64::from).unwrap_or(INDUSTRY_LIMIT_DEFAULT))
 }
 
+/// The credit allowance entitlement keys. Both are read by `GET /api/v1/credits/balance`
+/// (`handlers/credits_handler.rs`) through `credit_limit` below.
+pub const CREDIT_MONTHLY_KEY: &str = "credits_monthly";
+pub const CREDIT_OVERDRAFT_KEY: &str = "credits_overdraft";
+
+/// Fallback allowance for a tier with no ENABLED row for a credit key — and the documented default
+/// when `limit_value` is NULL (a numeric allowance with no number is not a grant).
+///
+/// 0 = "no credits included", which is exactly what every one of the 56 live accounts advertises
+/// today (measured 2026-09-25, kanban t_329b61b2), so seating the keys does not move any account
+/// until the owner assigns a numeric limit in the UI. It is deliberately not the
+/// `enforce_feature_limit` "no row = not configured = allow" convention: an allowance has no
+/// permissive reading.
+pub const CREDIT_LIMIT_DEFAULT: i64 = 0;
+
+/// The credit allowance (`credits_monthly` / `credits_overdraft`) for one account, resolved from
+/// the canonical entitlement model: `tier_features.limit_value` for the key on the account's OWN
+/// plan tier — the same table `enforce_feature_limit` and `industry_limit` read and the same table
+/// the admin UI writes (`POST /api/v1/admin/plans/:id/features`).
+///
+/// It deliberately does NOT read `plans.features`: `plans` is the marketing and checkout table,
+/// `accounts.plan_tier_id` has an FK to `plan_tiers(id)`, and `plans.features` is a jsonb ARRAY.
+/// A `plans`-shaped read therefore has two independent ways to be inert (kanban t_329b61b2,
+/// measured live before this fix): the 4 accounts on the `pro` tier got NO row at all (only the
+/// `free` tier id coincides with the `free` plan id, `8b8cc0e5…`), and the row that did match
+/// answered NULL for every key because an array has no object keys — which `COALESCE(…,0)` then
+/// published as "0 monthly credits / 0 overdraft" for all 56 accounts, including tiers explicitly
+/// configured with an allowance.
+///
+/// `limit_value` is INT4, so it decodes as `i32`. `-1`/`0`/`N` semantics are the app's standard
+/// entitlement semantics (see `check_limit`): -1 unlimited, 0 none included, N > 0 => N.
+pub async fn credit_limit(db: &PgPool, account_id: Uuid, key: &str) -> Result<i64, AppError> {
+    let configured: Option<i32> = sqlx::query_scalar(
+        "SELECT tf.limit_value
+           FROM accounts a
+           JOIN tier_features tf ON tf.tier_id = a.plan_tier_id AND tf.enabled
+           JOIN features f ON f.id = tf.feature_id
+          WHERE a.id = $1 AND f.key = $2",
+    )
+    .bind(account_id)
+    .bind(key)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+
+    Ok(configured.map(i64::from).unwrap_or(CREDIT_LIMIT_DEFAULT))
+}
+
+/// The account's own plan tier name — the human label of the plan it is actually on
+/// (`plan_tiers.name`), never `plans.name`. `plans.name` is the marketing row's name and can only
+/// be reached by the id coincidence described on `credit_limit`: before this fix the 4 accounts on
+/// the `pro` tier were told their plan was "Unknown" while `GET /api/v1/credits/balance` answered
+/// 200. `None` when the account has no tier.
+pub async fn plan_tier_name(db: &PgPool, account_id: Uuid) -> Result<Option<String>, AppError> {
+    let name: Option<String> = sqlx::query_scalar(
+        "SELECT pt.name
+           FROM accounts a
+           JOIN plan_tiers pt ON pt.id = a.plan_tier_id
+          WHERE a.id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(name)
+}
+
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
     let campaigns = count_usage(db, account_id, "max_campaigns")
         .await

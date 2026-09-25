@@ -28,6 +28,18 @@ pub struct CreditHistoryQuery {
     pub action: Option<String>,
 }
 
+/// Credits charged for one billable action (`usage_spin`, `usage_chat`, `usage_sms`, …) when no
+/// per-plan price is configured, which is every plan today.
+///
+/// Action pricing is an explicit CONSTANT, not a tier entitlement: no `features` catalog row backs
+/// a `cost_<action>` key (measured live 2026-09-25, kanban t_329b61b2: 31 catalog rows, 0 keys
+/// matching `cost%`), so the reads that used to look for `plans.features->>'cost_<action>'` could
+/// only ever fall through to their `unwrap_or(1)` default. This constant IS that default, so
+/// behaviour is unchanged. Making the price of a spin / chat / SMS tierable would be inventing a
+/// product model — the operator's lever for credits is the per-plan allowance
+/// (`features::credit_limit`), and `cost_<action>` keys are deliberately NOT seated in the catalog.
+pub const DEFAULT_ACTION_COST: i32 = 1;
+
 /// GET /api/v1/credits/balance — get current credit balance
 pub async fn get_balance(
     State(state): State<AppState>,
@@ -45,23 +57,19 @@ pub async fn get_balance(
 
     match row {
         Ok(Some((balance, lifetime_used))) => {
-            // Get plan info for monthly + overdraft limits
-            let plan_info = sqlx::query_as::<_, (Option<i32>, Option<i32>, Option<String>)>(
-                "SELECT (p.features->>'credits_monthly')::int, (p.features->>'credits_overdraft')::int, p.name
-                 FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $1"
-            )
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await;
-
-            let (credits_monthly, credits_overdraft, plan_name) = match plan_info {
-                Ok(Some((cm, co, pn))) => (
-                    cm.unwrap_or(0),
-                    co.unwrap_or(0),
-                    pn.unwrap_or_else(|| "Unknown".to_string()),
-                ),
-                _ => (0, 0, "Unknown".to_string()),
-            };
+            // Credit allowance + plan label, from the canonical entitlement model. The previous
+            // read was a `plans` join on `a.plan_tier_id = p.id` — a tier shape
+            // reached through the MARKETING table, which can only ever match by id coincidence
+            // (accounts.plan_tier_id has an FK to plan_tiers(id)) and always answered NULL on the
+            // row that did match, because plans.features is a jsonb ARRAY. See
+            // features::credit_limit / features::plan_tier_name (kanban t_329b61b2).
+            let (credits_monthly, credits_overdraft, plan_name) =
+                match credit_settings(pool, account_id).await {
+                    Ok(settings) => settings,
+                    Err(e) => {
+                        return Json(serde_json::json!({"success": false, "error": e.to_string()}))
+                    }
+                };
 
             Json(serde_json::json!({
                 "success": true,
@@ -75,6 +83,27 @@ pub async fn get_balance(
         Ok(None) => Json(serde_json::json!({"success": false, "error": "Account not found"})),
         Err(e) => Json(serde_json::json!({"success": false, "error": e.to_string()})),
     }
+}
+
+/// One read for the whole credit block: the two credit allowances plus the account's own plan tier
+/// name, all from the canonical entitlement model (`features` catalog + `tier_features.limit_value`
+/// on `accounts.plan_tier_id`) — the same model `access::feature_gate` enforces and
+/// `POST /api/v1/admin/plans/:id/features` writes. Nothing here reads `plans`: see
+/// `features::credit_limit` for why a `plans`-shaped read of a tier is inert for every account.
+async fn credit_settings(
+    pool: &sqlx::PgPool,
+    account_id: Uuid,
+) -> Result<(i64, i64, String), crate::error::AppError> {
+    let monthly =
+        crate::features::credit_limit(pool, account_id, crate::features::CREDIT_MONTHLY_KEY)
+            .await?;
+    let overdraft =
+        crate::features::credit_limit(pool, account_id, crate::features::CREDIT_OVERDRAFT_KEY)
+            .await?;
+    let plan_name = crate::features::plan_tier_name(pool, account_id)
+        .await?
+        .unwrap_or_else(|| "Unknown".to_string());
+    Ok((monthly, overdraft, plan_name))
 }
 
 /// GET /api/v1/credits/history — get credit transaction history
@@ -160,7 +189,15 @@ pub async fn get_history(
     }
 }
 
-/// Deduct credits for a specific action
+/// Deduct credits for a specific action.
+///
+/// NOTE (2026-09-25, kanban t_329b61b2): this function has no caller anywhere in the crate — the
+/// only live credit writers are `add_credits_internal` (Stripe top-ups, admin adjust, external
+/// grants) which only ever ADD. The read shape it used to carry was still wrong (it resolved
+/// monthly/overdraft/cost from `plans` via `accounts.plan_tier_id`, a table the FK does not point
+/// at) so it is fixed in place rather than left as a trap for the lane that wires deduction up.
+/// If you wire this up, the per-plan allowance is `features::credit_limit`; the per-action price is
+/// `DEFAULT_ACTION_COST`.
 pub async fn deduct_credits(
     pool: &sqlx::PgPool,
     account_id: Uuid,
@@ -169,32 +206,22 @@ pub async fn deduct_credits(
     reference_id: Option<&str>,
     description: Option<&str>,
 ) -> Result<(bool, i32, i32), String> {
-    // Get plan + credit costs
-    let plan_info = sqlx::query_as::<_, (i32, i32, i32)>(
-        "SELECT COALESCE(a.credits_balance, 0),
-                COALESCE((p.features->>'credits_monthly')::int, 0),
-                COALESCE((p.features->>'credits_overdraft')::int, 0)
-         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $1",
-    )
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "Account not found".to_string())?;
+    // Balance only. `accounts.credits_balance` is NOT NULL, and the two credit allowances this
+    // statement used to read through a `plans` join on `a.plan_tier_id` were discarded on the
+    // very next line — and were 0 in every case anyway, because `plans.features` is a jsonb ARRAY
+    // (kanban t_329b61b2). The join also made this function answer "Account not found" for the
+    // accounts on a tier with no coinciding `plans` id.
+    let balance: i32 = sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
 
-    let (balance, _credits_monthly, _credits_overdraft) = plan_info;
-
-    // Get cost for this action from plan features
-    let cost_key = format!("cost_{}", action.replace("usage_", ""));
-    let cost = sqlx::query_scalar::<_, Option<i32>>(
-        &format!("SELECT (p.features->>'{}')::int FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $1", cost_key)
-    )
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    .flatten()
-    .unwrap_or(1);
+    // Action cost: explicit documented constant (see DEFAULT_ACTION_COST) — the old
+    // `(p.features->>'cost_<action>')` read had no catalog row backing it, so it always fell back
+    // to 1. No `plans` join, no format!()-built SQL, no per-action key.
+    let cost = DEFAULT_ACTION_COST;
 
     // Check if user has enough credits
     if balance < cost {
@@ -233,27 +260,27 @@ pub async fn deduct_credits(
     Ok((true, new_balance, cost))
 }
 
-/// Check if account has enough credits (without deducting)
+/// Check if account has enough credits (without deducting).
+///
+/// NOTE (2026-09-25, kanban t_329b61b2): no caller anywhere in the crate (see `deduct_credits`).
+/// The old read resolved the action price from `plans.features->>'cost_<action>'` through
+/// a `plans` join on `a.plan_tier_id = p.id` — a key no catalog row backs and a table the FK does not
+/// point at — so the price was *always* the `unwrap_or(1)` fallback. It is now the explicit
+/// `DEFAULT_ACTION_COST` constant; `action` is kept in the signature for the callers this is
+/// waiting for.
 pub async fn check_credits(
     pool: &sqlx::PgPool,
     account_id: Uuid,
-    action: &str,
+    _action: &str,
 ) -> Result<(bool, i32, i32), String> {
-    let info = sqlx::query_as::<_, (i32, Option<i32>)>(
-        "SELECT a.credits_balance, (p.features->>$1)::int
-         FROM accounts a JOIN plans p ON a.plan_tier_id = p.id WHERE a.id = $2",
-    )
-    .bind(format!("cost_{}", action))
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "Account not found".to_string())?;
+    let balance: i32 = sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Account not found".to_string())?;
 
-    let (balance, cost_raw) = info;
-    let cost = cost_raw.unwrap_or(1);
-
-    Ok((balance >= cost, balance, cost))
+    Ok((balance >= DEFAULT_ACTION_COST, balance, DEFAULT_ACTION_COST))
 }
 
 // --- Credit top-up via Stripe ---
