@@ -16,14 +16,6 @@ pub async fn dashboard_stats(
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let tenant_id: Option<Uuid> = sqlx::query_scalar::<_, Option<Uuid>>(
-        "SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1",
-    )
-    .bind(account_id)
-    .fetch_one(&state.db)
-    .await?;
-    let tenant_id = tenant_id.unwrap_or(account_id);
-
     // Count campaigns for this tenant
     let total_campaigns: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT COUNT(*) FROM campaigns c

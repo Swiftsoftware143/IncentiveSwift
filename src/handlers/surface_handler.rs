@@ -1,6 +1,7 @@
 //! Surface handlers — widget, tablet, play, embed views, and domain management.
 
 use crate::error::AppError;
+use crate::handlers::api_keys::resolve_owner_account_id;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -741,27 +742,21 @@ pub async fn list_domains(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    // Get the account's tenant_id
-    let tenant_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten();
+    // The accounts row that owns this account's custom domains. `accounts.tenant_id` is a legacy
+    // free-form uuid that does NOT always name an accounts row, so the shared resolver is the only
+    // way to get here: it keeps `accounts.tenant_id` when it really names an account and otherwise
+    // falls back to the account's own id (kanban t_9a9ba67a).
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
-    let domains = if let Some(tid) = tenant_id {
-        sqlx::query_as::<_, CustomDomain>(
-            r#"SELECT id, tenant_id, domain, target_type, verification_token,
+    let domains = sqlx::query_as::<_, CustomDomain>(
+        r#"SELECT id, tenant_id, domain, target_type, verification_token,
                       verified_at, ssl_provisioned_at, is_active, created_at, updated_at
                FROM custom_domains WHERE tenant_id = $1
                ORDER BY created_at DESC"#,
-        )
-        .bind(tid)
-        .fetch_all(&state.db)
-        .await?
-    } else {
-        Vec::new()
-    };
+    )
+    .bind(tenant_id)
+    .fetch_all(&state.db)
+    .await?;
 
     Ok(Json(json!({ "domains": domains })))
 }
@@ -775,11 +770,10 @@ pub async fn register_domain(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid =
-        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await?;
+    // Owner resolution is shared with the api_keys path — see `resolve_owner_account_id`
+    // (kanban t_9a9ba67a). Binding `accounts.tenant_id` raw would file the row under a uuid no
+    // account resolves to, so the account's own list would come back empty.
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     let id = Uuid::new_v4();
     let target_type = body
@@ -826,11 +820,7 @@ pub async fn remove_domain(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid =
-        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await?;
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     let result = sqlx::query("DELETE FROM custom_domains WHERE id = $1 AND tenant_id = $2")
         .bind(domain_id)
@@ -856,11 +846,7 @@ pub async fn verify_domain(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let tenant_id: Uuid =
-        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await?;
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     let domain = sqlx::query(
         r#"SELECT id, domain, verification_token, verified_at, is_active

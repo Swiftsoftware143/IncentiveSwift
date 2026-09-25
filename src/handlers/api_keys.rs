@@ -167,7 +167,8 @@ pub async fn list_api_keys(
 /// 2026-09-25, 53 set it to the account's own id, but 3 point at a uuid that is not an accounts row
 /// at all (two dangle, one is the single row in `tenants`). `api_keys.tenant_id` does carry
 /// `FOREIGN KEY (tenant_id) REFERENCES accounts(id) ON DELETE CASCADE`, so binding the raw
-/// `COALESCE(tenant_id, id)` made `POST /api/v1/api-keys` return 500 for exactly those 3 accounts
+/// `COALESCE(accounts.tenant_id, accounts.id)` made `POST /api/v1/api-keys` return 500 for exactly
+/// those 3 accounts
 /// (Zaarhub@gmail.com, Swiftimpactsolutions@gmail.com, swiftsoftware143@yahoo.com) while the other
 /// 53 kept working (kanban t_47dcc978).
 ///
@@ -202,7 +203,8 @@ pub async fn create_api_key(
 
     // The account that owns the key. `api_keys.tenant_id` carries a real foreign key to
     // `accounts(id)`, so the bound value must name an accounts row —
-    // see `resolve_owner_account_id` for why the raw `COALESCE(tenant_id, id)` is not enough.
+    // see `resolve_owner_account_id` for why the raw `COALESCE(accounts.tenant_id, accounts.id)`
+    // is not enough.
     let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     let id = Uuid::new_v4();
