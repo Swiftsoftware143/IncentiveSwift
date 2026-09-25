@@ -365,25 +365,37 @@ pub async fn admin_assign_plan(
         .await?
         .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
 
-    // Find the plan by slug
+    // The admin picks a row in `plans` — the checkout/marketing table. The account's TIER is
+    // `plan_tiers`: `accounts.plan_tier_id` carries the FK
+    // `accounts_plan_tier_id_fkey FOREIGN KEY (plan_tier_id) REFERENCES plan_tiers(id)`. So the
+    // plan row must be mapped to its canonical TIER row through the shared slug, never by
+    // re-reading `plans.id`. Measured live 2026-09-25: 2 of the 3 `plans` ids are NOT
+    // `plan_tiers` ids (`pro=a43b9f9e…`, `enterprise=f0bbc994…`; the `pro` TIER is
+    // `c3a2d26b…`), so binding a `plans` id here was an FK violation on the UPDATE — HTTP 500
+    // for every plan except `free`, whose two rows coincide on `8b8cc0e5…`, and the account's
+    // tier silently never changed. Same direction as `tier_handler::post_plan_features`.
+    // `plans` keeps its checkout/marketing role: `attribute_plan_upgrade` below legitimately
+    // still receives a `plans.id` (it reads `plans.name` / `price_monthly`).
+    let mapping = sqlx::query(
+        r#"SELECT p.slug AS plan_slug, pt.id AS tier_id
+             FROM plans p
+             LEFT JOIN plan_tiers pt ON pt.slug = p.slug
+            WHERE p.id = $1"#,
+    )
+    .bind(plan_id)
+    .fetch_one(&state.db)
+    .await?;
+    let plan_slug: String = mapping.get("plan_slug");
+    let tier_id: Option<Uuid> = mapping.get("tier_id");
 
-    let plan_info = sqlx::query("SELECT slug FROM plans WHERE id = $1")
-        .bind(plan_id)
-        .fetch_one(&state.db)
-        .await?;
-    let plan_slug: String = plan_info.get("slug");
-
-    // Find plan by slug
-    let tier_id = sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = $1")
-        .bind(&plan_slug)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| {
-            AppError::NotFound(format!(
-                "No plan found matching plan slug '{}' — create the plan first",
-                plan_slug
-            ))
-        })?;
+    // Honest failure when the plan has no tier of that slug: the account must not be left on a
+    // stale tier, so nothing is written.
+    let tier_id = tier_id.ok_or_else(|| {
+        AppError::NotFound(format!(
+            "No plan found matching plan slug '{}' — create the plan first",
+            plan_slug
+        ))
+    })?;
 
     sqlx::query("UPDATE accounts SET plan_tier_id = $1 WHERE id = $2")
         .bind(tier_id)
