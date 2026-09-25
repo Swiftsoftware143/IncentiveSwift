@@ -12,3 +12,32 @@ incentiveswift-api-bak-*
 incentiveswift-api.new
 *.zip
 C:UsersAdministrator/
+
+# >>> fleet envclass ignore (kanban t_8922e052) - do not duplicate <<<
+# Secrets never enter the tree. Real values live in /etc/swift/env/incentiveswift.env. The patterns below cover the
+# CLASS that fleet/tracked-secret-check.sh refuses to publish (.env / .env.<anything>,
+# .pem/.key/.p12/.pfx/.keystore/.jks, id_rsa id_ed25519 id_ecdsa .npmrc .netrc .pgpass
+# credentials.json), so no lane can `git add` a path that would then refuse every push from
+# this repo. Written as character classes because the gate lowercases every basename and git
+# does not: a plain `*.pem` rule still lets SERVER.PEM be committed first. The three
+# negations are exactly the gate's TEMPLATE allowlist (.example/.sample/.template) and must
+# stay LAST, or .env.example stops being committable and the documented fix for this class
+# becomes impossible in this repo.
+.[eE][nN][vV]
+.[eE][nN][vV].*
+*.[pP][eE][mM]
+*.[kK][eE][yY]
+*.[pP]12
+*.[pP][fF][xX]
+*.[kK][eE][yY][sS][tT][oO][rR][eE]
+*.[jJ][kK][sS]
+id_rsa
+id_ed25519
+id_ecdsa
+.npmrc
+.netrc
+.pgpass
+credentials.json
+!*.example
+!*.sample
+!*.template
