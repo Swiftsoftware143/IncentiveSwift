@@ -280,13 +280,14 @@ async function handleRegister(e) {
    headers: { 'Content-Type': 'application/json' },
    body: JSON.stringify(payload)
   });
-  if (!res.ok) {
    var data = await res.json().catch(function(){ return {}; });
+  if (!res.ok) {
    throw new Error(data.error || data.message || 'Registration failed. Please try again.');
   }
+  if (!data.token) { throw new Error('Your account was created, but no session was returned. Please sign in.'); }
   successEl.textContent = 'Account created! Redirecting...';
   successEl.style.display = 'block';
-  sessionStorage.setItem('is_token', data.token); window.location.href = 'https://app.incentiveswift.com/dashboard';
+  window.location.href = 'https://app.incentiveswift.com/#token=' + encodeURIComponent(data.token);
  } catch (err) {
   errEl.textContent = err.message || 'An error occurred. Please try again.';
   errEl.style.display = 'block';
