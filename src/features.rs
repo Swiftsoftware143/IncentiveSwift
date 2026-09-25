@@ -101,6 +101,47 @@ async fn check_limit(
     Ok(())
 }
 
+/// The `industry_limit` entitlement for one account — how many industry dashboards
+/// (industry = dashboard = template category) the account may hold at once.
+///
+/// Canonical read: `tier_features.limit_value` for the feature key `industry_limit` on the
+/// account's OWN plan tier — the same table `enforce_feature_limit` reads and the same table the
+/// admin UI writes (`/api/v1/admin/plans/:id/features`). It deliberately does NOT read
+/// `plans.features`: `plans` is the marketing and checkout table, its `features` column is a jsonb
+/// ARRAY, and `accounts.plan_tier_id` has an FK to `plan_tiers(id)`, so a plan-shaped read can only
+/// ever match by id COINCIDENCE (that was the third and last `plans`-shaped statement in
+/// `src/handlers/auth_handler.rs`, kanban t_0961f382 — the cap resolved to 1 for all 56 accounts).
+///
+/// Returns the configured `limit_value` when the tier has an ENABLED row for the key that carries a
+/// numeric limit, otherwise `INDUSTRY_LIMIT_DEFAULT`. That default is deliberately RESTRICTIVE and
+/// is NOT the `enforce_feature_limit` "no row = not configured = allow" convention: this
+/// entitlement has always meant "one dashboard on the base plan" (migration 00017 intended 1 for
+/// the free plan too), and loosening it silently would hand every account unlimited industries.
+/// A tier that grants the feature but leaves `limit_value` NULL also gets the default (the key is a
+/// numeric cap, so "enabled, no number" is not a meaningful grant).
+///
+/// `limit_value` is INT4, so it decodes as `i32` — asking sqlx for `i64` is a runtime
+/// "mismatched types ... SQL type INT4" error the moment a tier actually carries a limit.
+///
+/// -1 => unlimited, 0 => not available on this plan, N > 0 => cap N (see `check_limit`).
+pub const INDUSTRY_LIMIT_DEFAULT: i64 = 1;
+
+pub async fn industry_limit(db: &PgPool, account_id: Uuid) -> Result<i64, AppError> {
+    let configured: Option<i32> = sqlx::query_scalar(
+        "SELECT tf.limit_value
+           FROM accounts a
+           JOIN tier_features tf ON tf.tier_id = a.plan_tier_id AND tf.enabled
+           JOIN features f ON f.id = tf.feature_id
+          WHERE a.id = $1 AND f.key = 'industry_limit'",
+    )
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?
+    .flatten();
+
+    Ok(configured.map(i64::from).unwrap_or(INDUSTRY_LIMIT_DEFAULT))
+}
+
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
     let campaigns = count_usage(db, account_id, "max_campaigns")
         .await

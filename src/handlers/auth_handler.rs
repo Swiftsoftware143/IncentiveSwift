@@ -491,11 +491,13 @@ pub async fn me(
     })
     .collect();
 
-    // Industry limit from plan features
-    let industry_limit: i32 = features
-        .get("industry_limit")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1) as i32;
+    // Industry limit — ONE definition of the entitlement, shared with the PUT enforcement in
+    // update_profile: features::industry_limit reads `tier_features.limit_value` for this account's
+    // plan tier. Deliberately not `plans.features`: that is a jsonb ARRAY on the marketing/checkout
+    // table and only ever matched by id coincidence, which pinned this field at 1 for every account
+    // (kanban t_0961f382). No row for the key => the documented default 1.
+    let industry_limit: i32 =
+        crate::features::industry_limit(&state.db, account_uuid).await? as i32;
 
     Ok(Json(json!({
         "user": {
@@ -557,22 +559,15 @@ pub async fn update_profile(
             > 0;
 
             if !already_assigned {
-                // Check plan limit
-                let plan_features: serde_json::Value = sqlx::query_scalar(
-                    r#"SELECT COALESCE(p.features::text, '{}')::jsonb
-                       FROM accounts a
-                       LEFT JOIN plans p ON a.plan_tier_id = p.id
-                       WHERE a.id = $1"#,
-                )
-                .bind(account_uuid)
-                .fetch_optional(&state.db)
-                .await?
-                .unwrap_or(serde_json::json!({}));
-
-                let industry_limit: i64 = plan_features
-                    .get("industry_limit")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(1);
+                // Plan limit, resolved from the entitlement model (`tier_features.limit_value` for
+                // the account's plan tier) by `features::industry_limit`. This statement used to
+                // join `plans` — the marketing/checkout table, whose `features` column is a jsonb
+                // ARRAY and whose ids only coincide with `plan_tiers` for one row — so the cap was
+                // silently ALWAYS 1 (never a 500, which is why two sweeps missed it; kanban
+                // t_0961f382). Semantics of the returned value: -1 unlimited, 0 not available on
+                // this plan, N > 0 cap N, and 1 when the tier does not configure the key.
+                let industry_limit =
+                    crate::features::industry_limit(&state.db, account_uuid).await?;
 
                 let current_count = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT COUNT(*) FROM account_industries WHERE account_id = $1",
@@ -582,7 +577,14 @@ pub async fn update_profile(
                 .await?
                 .unwrap_or(0);
 
-                if current_count >= industry_limit {
+                if industry_limit == 0 {
+                    return Err(AppError::UpgradeRequired(
+                        "Industry dashboards are not available on your current plan. Upgrade to add one."
+                            .to_string(),
+                    ));
+                }
+
+                if industry_limit > 0 && current_count >= industry_limit {
                     return Err(AppError::BadRequest(format!(
                         "Plan limit reached: maximum {} industries. Upgrade your plan to add more.",
                         industry_limit
@@ -679,10 +681,10 @@ pub async fn update_profile(
     })
     .collect();
 
-    let industry_limit: i32 = features
-        .get("industry_limit")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1) as i32;
+    // Same entitlement definition as me() and as the PUT enforcement above — see
+    // features::industry_limit (kanban t_0961f382).
+    let industry_limit: i32 =
+        crate::features::industry_limit(&state.db, account_uuid).await? as i32;
 
     let plan_name: Option<String> = row.get("plan_name");
     let plan_slug: Option<String> = row.get("plan_slug");
