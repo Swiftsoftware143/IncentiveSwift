@@ -770,9 +770,12 @@ pub async fn redeem_reward(
     .await?
     .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
 
-    let tier = sqlx::query_as::<_, (Uuid, String, i32, bool, Option<String>, Option<Value>, Option<Value>)>(
-        "SELECT id, name, points_required, requires_approval, reward_tag, redeem_action_config, marketing_boost
-         FROM loyalty_reward_tiers WHERE id = $1 LIMIT 1"
+    // `loyalty_reward_tiers` has no `redeem_action_config` column; the value was destructured
+    // and never read, so the column is gone from the statement rather than added as an
+    // always-NULL column nothing writes (plain-statement drift, kanban t_cf7469bb).
+    let tier = sqlx::query_as::<_, (Uuid, String, i32, bool, Option<String>, Option<Value>)>(
+        "SELECT id, name, points_required, requires_approval, reward_tag, marketing_boost
+         FROM loyalty_reward_tiers WHERE id = $1 LIMIT 1",
     )
     .bind(req.reward_tier_id)
     .fetch_optional(&s.db)
@@ -807,16 +810,32 @@ pub async fn redeem_reward(
     .execute(&s.db)
     .await?;
 
-    // Record the reward
-    sqlx::query(
-        "INSERT INTO loyalty_rewards_earned (id, campaign_id, contact_id, reward_tier_id, points_spent, status)
-         VALUES ($1, $2, $3, $4, $5, 'active')"
+    // Record the reward.
+    //
+    // `loyalty_rewards_earned`'s shape is (member_id, tier_id) — db/loyalty.rs, loyalty.rs and
+    // mechanics/loyalty_checkin.rs all join on those two, and the table has no
+    // campaign_id/contact_id/reward_tier_id/points_spent (plain-statement drift, kanban
+    // t_cf7469bb). The member row is resolved through the campaign's loyalty program; a contact
+    // that earned campaign points without ever enrolling has no member row, and member_id is
+    // nullable, so the redemption is still recorded.
+    let member_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT lm.id FROM loyalty_members lm
+           JOIN loyalty_programs lp ON lp.id = lm.program_id
+          WHERE lp.campaign_id = $1 AND lm.contact_id = $2
+          LIMIT 1",
     )
-    .bind(Uuid::new_v4())
     .bind(campaign.0)
     .bind(req.contact_id)
+    .fetch_optional(&s.db)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO loyalty_rewards_earned (id, member_id, tier_id, status)
+         VALUES ($1, $2, $3, 'active')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(member_id)
     .bind(tier.0)
-    .bind(tier.2)
     .execute(&s.db)
     .await?;
 
@@ -870,7 +889,7 @@ pub async fn redeem_reward(
         &campaign.0,
         "reward_redeemed",
         &mb_payload,
-        tier.6.as_ref(), // tier.6 = marketing_boost column
+        tier.5.as_ref(), // tier.5 = marketing_boost column
     )
     .await;
 
@@ -897,11 +916,15 @@ pub async fn list_rewards_earned(
             Option<chrono::DateTime<chrono::Utc>>,
         ),
     >(
-        r#"SELECT lre.id, lrt.name, lre.points_spent, lre.status, lre.created_at
+        // Canonical shape (member_id, tier_id, earned_at); the points reported for a reward are
+        // the tier's own point cost. The previous statement named four columns this table never
+        // had (plain-statement drift, kanban t_cf7469bb) and 500'd on every call.
+        r#"SELECT lre.id, lrt.name, lrt.points_required, COALESCE(lre.status, 'pending') AS status, lre.earned_at
            FROM loyalty_rewards_earned lre
-           JOIN loyalty_reward_tiers lrt ON lrt.id = lre.reward_tier_id
-           WHERE lre.contact_id = $1
-           ORDER BY lre.created_at DESC LIMIT 50"#,
+           JOIN loyalty_reward_tiers lrt ON lrt.id = lre.tier_id
+           JOIN loyalty_members lm ON lm.id = lre.member_id
+           WHERE lm.contact_id = $1
+           ORDER BY lre.earned_at DESC LIMIT 50"#,
     )
     .bind(contact_id)
     .fetch_all(&s.db)

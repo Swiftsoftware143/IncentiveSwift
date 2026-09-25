@@ -26,7 +26,10 @@ pub async fn send_template_email(
 
     // Try to load template from DB
     let template = sqlx::query_as::<_, EmailTemplateRow>(
-        r#"SELECT id, name, subject, body, html_body, is_html, is_default
+        r#"-- the template's HTML body IS the is_html flag: `email_templates` has no
+           -- `is_html` column (plain-statement drift, kanban t_cf7469bb), and a row only
+           -- sends HTML when it carries an `html_body`.
+           SELECT id, name, subject, body, html_body, is_default
            FROM email_templates
            WHERE template_type = $1 AND (aid = '00000000-0000-0000-0000-000000000000' OR is_default = true)
            ORDER BY is_default ASC, created_at DESC
@@ -51,7 +54,7 @@ pub async fn send_template_email(
                 .map(|h| render_template(h, vars))
                 .unwrap_or_default();
             let text_body = render_template(&t.body.unwrap_or_default(), vars);
-            let use_html = t.is_html.unwrap_or(true);
+            let use_html = t.html_body.is_some();
             send_email_request(
                 pool,
                 to,
@@ -202,6 +205,5 @@ struct EmailTemplateRow {
     subject: Option<String>,
     body: Option<String>,
     html_body: Option<String>,
-    is_html: Option<bool>,
     is_default: Option<bool>,
 }

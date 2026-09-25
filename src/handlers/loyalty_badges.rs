@@ -1055,9 +1055,9 @@ pub struct CreateIntegrationKeyRequest {
 #[allow(dead_code)]
 struct ApiKeyRow {
     id: Uuid,
-    key_prefix: Option<String>,
+    prefix: Option<String>,
     service_type: Option<String>,
-    label: Option<String>,
+    name: Option<String>,
     is_active: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     last_used_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -1084,24 +1084,26 @@ pub async fn create_integration_key(
     }
 
     let key_id = Uuid::new_v4();
-    let raw_key = format!(
-        "{}_live_{}",
-        &req.service_type[..2],
-        Uuid::new_v4().simple()
-    );
-    let key_prefix = format!("{}_live", &req.service_type[..2]);
+    // The key has to be the shape security::auth::validate_api_key() verifies: `is_key_<48
+    // alphanumerics>`, `prefix` = the first 8 characters of the random part, `key_hash` = bcrypt
+    // of the WHOLE key. The old `{svc}_live_<uuid>` literal went into api_keys.api_key /
+    // key_prefix / label, none of which exist — and it also left the NOT NULL tenant_id/user_id
+    // unset — so every integration key 500'd on creation (plain-statement drift, kanban
+    // t_cf7469bb). tenant_id/user_id mirror the business-key precedent in business_handler.rs.
+    let (raw_key, key_prefix, key_hash) = crate::handlers::api_keys::generate_api_key()?;
 
     sqlx::query(
-        r#"INSERT INTO api_keys (id, key_prefix, api_key, owner_type, owner_id, service_type, label, is_active, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, true, now())"#
+        r#"INSERT INTO api_keys (id, tenant_id, user_id, prefix, key_hash, name, permissions,
+                                 service_type, owner_type, owner_id, is_active, created_at)
+           VALUES ($1, $2, $2, $3, $4, $5, '[]'::jsonb, $6, $7, $2, true, now())"#,
     )
     .bind(key_id)
-    .bind(&key_prefix)
-    .bind(&raw_key)
-    .bind(&req.owner_type)
     .bind(req.owner_id)
-    .bind(&req.service_type)
+    .bind(&key_prefix)
+    .bind(&key_hash)
     .bind(&req.label)
+    .bind(&req.service_type)
+    .bind(&req.owner_type)
     .execute(&state.db)
     .await?;
 
@@ -1133,7 +1135,9 @@ pub async fn list_integration_keys(
     Path((owner_type, owner_id)): Path<(String, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
     let keys: Vec<ApiKeyRow> = sqlx::query_as::<_, ApiKeyRow>(
-        r#"SELECT id, key_prefix, service_type, label, is_active, created_at, last_used_at
+        // The real columns are (prefix, name); the JSON keys below keep their published names
+        // (plain-statement drift, kanban t_cf7469bb).
+        r#"SELECT id, prefix, service_type, name, is_active, created_at, last_used_at
            FROM api_keys WHERE owner_type = $1 AND owner_id = $2 ORDER BY created_at DESC"#,
     )
     .bind(&owner_type)
@@ -1146,9 +1150,9 @@ pub async fn list_integration_keys(
         .map(|k| {
             json!({
                 "id": k.id.to_string(),
-                "key_prefix": k.key_prefix,
+                "key_prefix": k.prefix,
                 "service_type": k.service_type,
-                "label": k.label,
+                "label": k.name,
                 "is_active": k.is_active,
                 "created_at": k.created_at.to_rfc3339(),
                 "last_used_at": k.last_used_at.map(|d| d.to_rfc3339()),

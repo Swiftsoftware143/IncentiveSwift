@@ -991,29 +991,38 @@ pub async fn check_plan_loyalty(
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    // Get tenant's plan_tier
-    let plan_tier: Option<String> =
-        sqlx::query_scalar("SELECT plan_tier FROM tenants WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten();
-
-    let tier = plan_tier.unwrap_or_else(|| "free".to_string());
-
-    // Check if plan has loyalty_enabled
-    let limit: Option<i32> = sqlx::query_scalar(
-        "SELECT limit_value FROM feature_limits WHERE plan_tier = $1 AND feature_key = 'loyalty_enabled'"
+    // The account's plan tier. `tenants` (the platform tenant: id/name/slug) never had a
+    // `plan_tier` column — the tier an account is on is accounts.plan_tier_id -> plan_tiers,
+    // which is exactly how features.rs resolves it (plain-statement drift, kanban t_cf7469bb).
+    let tier_row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT p.id, p.slug FROM accounts a
+           JOIN plan_tiers p ON p.id = a.plan_tier_id
+          WHERE a.id = $1",
     )
-    .bind(&tier)
+    .bind(account_id)
     .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    .await?;
 
-    let enabled = match limit {
-        Some(-1) => true,
-        Some(l) if l > 0 => true,
-        _ => false,
+    let (tier_id, tier) = match &tier_row {
+        Some((id, slug)) => (Some(*id), slug.clone()),
+        None => (None, "free".to_string()),
+    };
+
+    // Entitlements live in `tier_features` — features.rs is the single source of truth and the
+    // `feature_limits` table this used to read does not exist. Same convention as
+    // features::enforce_feature_limit(): a feature with no row for the tier is simply not
+    // configured, which allows it; only an explicit `enabled = false` turns loyalty off.
+    let enabled = match tier_id {
+        None => true,
+        Some(id) => sqlx::query_scalar::<_, bool>(
+            "SELECT tf.enabled FROM tier_features tf
+               JOIN features f ON f.id = tf.feature_id
+              WHERE tf.tier_id = $1 AND f.key = 'module_loyalty_program'",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(true),
     };
 
     Ok(Json(json!({
@@ -1058,14 +1067,52 @@ pub async fn set_secret_code(
     .ok_or_else(|| AppError::NotFound("Program not found".to_string()))?;
     let _ = existing;
 
-    sqlx::query(
-        r#"UPDATE loyalty_programs SET secret_code = $1, secret_code_points = $2 WHERE id = $3"#,
-    )
-    .bind(&body.secret_code)
-    .bind(body.secret_code_points.unwrap_or(25))
-    .bind(program_id)
-    .execute(&state.db)
-    .await?;
+    // `loyalty_programs` has no secret_code / secret_code_points columns. Codes live in
+    // `loyalty_secret_codes` (program_id, code, points_reward, is_active) — the table
+    // secret_codes_handler.rs serves and the redemption path reads — so this writes there
+    // (plain-statement drift, kanban t_cf7469bb). Setting a code retires the program's previous
+    // live code, so "the secret code" stays singular; clearing deactivates without inserting.
+    let code = body
+        .secret_code
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_uppercase();
+
+    if code.is_empty() {
+        sqlx::query(
+            "UPDATE loyalty_secret_codes SET is_active = false
+              WHERE program_id = $1 AND is_active = true",
+        )
+        .bind(program_id)
+        .execute(&state.db)
+        .await?;
+    } else {
+        // Retire any OTHER live code first, then upsert this one: (program_id, code) is unique, so
+        // re-setting the same code has to reactivate the existing row instead of inserting it.
+        sqlx::query(
+            "UPDATE loyalty_secret_codes SET is_active = false
+              WHERE program_id = $1 AND is_active = true AND UPPER(code) <> UPPER($2)",
+        )
+        .bind(program_id)
+        .bind(&code)
+        .execute(&state.db)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO loyalty_secret_codes (id, program_id, code, points_reward, is_active, created_by)
+             VALUES ($1, $2, $3, $4, true, $5)
+             ON CONFLICT (program_id, code) DO UPDATE
+                SET points_reward = EXCLUDED.points_reward, is_active = true",
+        )
+        .bind(Uuid::new_v4())
+        .bind(program_id)
+        .bind(&code)
+        .bind(body.secret_code_points.unwrap_or(25))
+        .bind(Uuid::parse_str(&user.account_id).ok())
+        .execute(&state.db)
+        .await?;
+    }
 
     Ok(Json(json!({
         "status": "ok",

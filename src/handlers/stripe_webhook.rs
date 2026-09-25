@@ -66,7 +66,9 @@ async fn handle_checkout_completed(s: &AppState, payload: &Value) -> Result<(), 
 
     // Log the credit allocation
     sqlx::query(
-        "INSERT INTO credit_transactions (account_id, amount, transaction_type, description, balance_after, created_at)
+        // credit_transactions records the kind of movement in `action`; there is no
+        // `transaction_type` column (plain-statement drift, kanban t_cf7469bb).
+        "INSERT INTO credit_transactions (account_id, amount, action, description, balance_after, created_at)
          VALUES ($1::uuid, $2, 'subscription_renewal', $3, $2, NOW())"
     )
     .bind(account_id)

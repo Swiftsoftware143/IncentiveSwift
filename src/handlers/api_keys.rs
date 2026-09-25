@@ -61,7 +61,12 @@ pub struct VerifyApiKeyInput {
 /// Generate a random API key.
 /// Format: is_key_<random_alphanumeric>
 /// Returns (full_key, prefix, key_hash)
-fn generate_api_key() -> Result<(String, String, String), AppError> {
+/// Generate an issued API key as `(full_key, prefix, bcrypt_hash)`.
+///
+/// `pub(crate)` so every producer of an `api_keys` row uses one shape — the integration-key
+/// handler in loyalty_badges.rs had its own literal and produced keys that could never
+/// authenticate (kanban t_cf7469bb).
+pub(crate) fn generate_api_key() -> Result<(String, String, String), AppError> {
     use rand::Rng;
 
     let rng = rand::thread_rng();

@@ -21,11 +21,18 @@ pub struct PlanTier {
 }
 
 /// Get a plan tier by ID.
+///
+/// Reads `plan_tiers` — the tier table the rest of the app uses (`features.rs` resolves
+/// `plan_tiers.max_campaigns` / `max_entries_per_month` and `tier_features` off the same rows).
+/// `plans` is the marketing/checkout table (`plans.payment_provider`, `plans.price_yearly`) and
+/// never had these three columns, so this statement 500'd on every call (plain-statement column
+/// drift, kanban t_cf7469bb).
 pub async fn get_plan_tier(pool: &PgPool, tier_id: &Uuid) -> Result<PlanTier, AppError> {
     let row = sqlx::query(
-        r#"SELECT id, name, slug, price_monthly, price_annual, is_active,
+        r#"-- plan_tiers carries the tier shape this struct describes; `plans` does not.
+           SELECT id, name, slug, price_monthly, price_annual, is_active,
                   sort_order, max_campaigns, max_entries_per_month, created_at
-           FROM plans WHERE id = $1"#,
+           FROM plan_tiers WHERE id = $1"#,
     )
     .bind(tier_id)
     .fetch_optional(pool)
