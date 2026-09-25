@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::Row;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// An API key record as returned by queries.
@@ -161,6 +161,36 @@ pub async fn list_api_keys(
     Ok(Json(json!({ "api_keys": keys })))
 }
 
+/// Resolve the accounts row that owns rows written on behalf of `account_id`.
+///
+/// `accounts.tenant_id` is a legacy free-form uuid with NO foreign key. Of the 56 accounts live on
+/// 2026-09-25, 53 set it to the account's own id, but 3 point at a uuid that is not an accounts row
+/// at all (two dangle, one is the single row in `tenants`). `api_keys.tenant_id` does carry
+/// `FOREIGN KEY (tenant_id) REFERENCES accounts(id) ON DELETE CASCADE`, so binding the raw
+/// `COALESCE(tenant_id, id)` made `POST /api/v1/api-keys` return 500 for exactly those 3 accounts
+/// (Zaarhub@gmail.com, Swiftimpactsolutions@gmail.com, swiftsoftware143@yahoo.com) while the other
+/// 53 kept working (kanban t_47dcc978).
+///
+/// The fix keeps that foreign key honest instead of dropping it: use `accounts.tenant_id` only
+/// when it really names an accounts row (the pre-existing multi-account tenant shape), otherwise
+/// fall back to the account's own id — which is what the other 53 rows already look like. No
+/// customer row is rewritten, and a bad reference can no longer 500 a shipped screen.
+pub(crate) async fn resolve_owner_account_id(
+    db: &PgPool,
+    account_id: Uuid,
+) -> Result<Uuid, AppError> {
+    let resolved: Option<Uuid> = sqlx::query_scalar(
+        r#"SELECT COALESCE((SELECT owner.id FROM accounts owner WHERE owner.id = a.tenant_id), a.id)
+           FROM accounts a
+           WHERE a.id = $1"#,
+    )
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+
+    resolved.ok_or_else(|| AppError::NotFound("Account not found".to_string()))
+}
+
 /// POST /api/v1/api-keys
 pub async fn create_api_key(
     State(state): State<AppState>,
@@ -170,12 +200,10 @@ pub async fn create_api_key(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    // Get the account's tenant_id
-    let tenant_id: Uuid =
-        sqlx::query_scalar("SELECT COALESCE(tenant_id, id) FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await?;
+    // The account that owns the key. `api_keys.tenant_id` carries a real foreign key to
+    // `accounts(id)`, so the bound value must name an accounts row —
+    // see `resolve_owner_account_id` for why the raw `COALESCE(tenant_id, id)` is not enough.
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     let id = Uuid::new_v4();
     let (full_key, prefix, key_hash) = generate_api_key()?;
@@ -201,6 +229,9 @@ pub async fn create_api_key(
     Ok(Json(json!({
         "api_key": {
             "id": id,
+            // The accounts row the key is owned by, so the binding is measurable from outside
+            // without reading the table by hand (kanban t_47dcc978).
+            "tenant_id": tenant_id,
             "name": name,
             "prefix": prefix,
             "permissions": permissions,
