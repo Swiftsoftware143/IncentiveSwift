@@ -371,8 +371,22 @@ pub async fn get_purchase_pin(
     })))
 }
 
-/// GET /api/v1/admin/campaigns
+/// GET /api/v1/admin/allcampaigns
 /// List ALL campaigns across every account (admin only).
+///
+/// Nullability (kanban t_518a02dc): `campaigns.account_id`, `campaigns.status` and
+/// `campaigns.created_at` are all NULLABLE in the schema, and a NULL in ANY of those
+/// three tuple positions used to fail the whole decode (`?` propagates) — so ONE row
+/// with a NULL lost the ENTIRE admin list, not one row. Arms, decided per column:
+///   * `account_id` — NULLABLE, NO default ⇒ `Option<Uuid>`: the SQL NULL is data
+///     (a seeded campaign need not carry an account) and renders as JSON `null`.
+///   * `status` — NULLABLE with DEFAULT `'active'` ⇒ `COALESCE(c.status, 'active')`,
+///     the DB's own answer for an unset column; the Rust type stays `String` and the
+///     JSON of every non-NULL row is byte-identical.
+///   * `created_at` — NULLABLE with DEFAULT `now()`; a `now()` DEFAULT is an
+///     insertion-time fact, not a value for an unset column (family call, t_d5da34d0)
+///     ⇒ `Option<String>`, rendered as JSON `null`; a synthetic timestamp would put a
+///     fabricated date in front of an admin.
 pub async fn admin_list_all_campaigns(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -381,9 +395,21 @@ pub async fn admin_list_all_campaigns(
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
 
-    let rows = sqlx::query_as::<_, (Uuid, Uuid, String, String, String, String, String, String)>(
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Option<Uuid>,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ),
+    >(
         r#"SELECT c.id, c.account_id, COALESCE(pc.name, a.name, 'Unknown') as owner_name,
-               c.name, c.slug, c.type, c.status, c.created_at::text
+               c.name, c.slug, c.type, COALESCE(c.status, 'active') as status, c.created_at::text
          FROM campaigns c
          LEFT JOIN accounts a ON a.id = c.account_id
          LEFT JOIN portfolio_companies pc ON pc.id = c.account_id
@@ -397,9 +423,15 @@ pub async fn admin_list_all_campaigns(
         .iter()
         .map(
             |(id, account_id, owner_name, name, slug, ctype, status, created_at)| {
+                if created_at.is_none() {
+                    tracing::warn!(
+                        campaign_id = %id,
+                        "admin campaign list: campaigns.created_at is NULL; rendering created_at as null"
+                    );
+                }
                 json!({
                     "id": id.to_string(),
-                    "account_id": account_id.to_string(),
+                    "account_id": account_id.map(|a| a.to_string()),
                     "owner_name": owner_name,
                     "name": name,
                     "slug": slug,
