@@ -49,20 +49,52 @@ pub async fn plan_status(
 ) -> Result<Json<PlanStatusResponse>, AppError> {
     let account_id = auth.account_id;
 
-    let row = sqlx::query_as::<_, (Option<String>, String, i32, i32, Option<chrono::NaiveDate>)>(
+    // Every column in this tuple is NULLABLE in `accounts` (loyalty_plan_status DEFAULT
+    // 'inactive', zc_pool_remaining / zc_pool_total DEFAULT 0). Decode them all as `Option`
+    // so one NULL cannot fail the whole tuple: the error propagated as a 500 for that
+    // account and took the REAL pool values down with it.
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<String>,
+            Option<i32>,
+            Option<i32>,
+            Option<chrono::NaiveDate>,
+        ),
+    >(
         "SELECT loyalty_plan, loyalty_plan_status, zc_pool_remaining, zc_pool_total, pool_reset_date FROM accounts WHERE id = $1::uuid"
     )
     .bind(&account_id)
     .fetch_optional(&s.db)
     .await?
-    .unwrap_or((None, "inactive".to_string(), 0, 0, None));
+    .unwrap_or((None, None, None, None, None));
+
+    // A NULL status means "no plan state recorded"; the column DEFAULT is 'inactive', so
+    // report that deliberately — and make the NULL observable — instead of inventing it
+    // silently or 500-ing the whole read.
+    let status = row.1.unwrap_or_else(|| {
+        tracing::warn!(
+            account_id = %account_id,
+            "loyalty plan status is NULL in accounts — reporting 'inactive' (column DEFAULT)"
+        );
+        "inactive".to_string()
+    });
+    if row.2.is_none() || row.3.is_none() {
+        tracing::warn!(
+            account_id = %account_id,
+            zc_pool_remaining = ?row.2,
+            zc_pool_total = ?row.3,
+            "zc pool columns are NULL in accounts (DEFAULT 0) — reporting 0"
+        );
+    }
 
     Ok(Json(PlanStatusResponse {
-        enrolled: row.0.is_some() && row.1 == "active",
+        enrolled: row.0.is_some() && status == "active",
         plan: row.0,
-        status: row.1,
-        zc_pool_remaining: row.2,
-        zc_pool_total: row.3,
+        status,
+        zc_pool_remaining: row.2.unwrap_or(0),
+        zc_pool_total: row.3.unwrap_or(0),
         pool_reset_date: row.4.map(|d| d.format("%Y-%m-%d").to_string()),
     }))
 }

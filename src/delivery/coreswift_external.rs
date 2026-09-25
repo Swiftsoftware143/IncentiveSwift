@@ -155,11 +155,16 @@ async fn do_push(
         }
     };
 
+    // `contacts.first_name` / `last_name` are NULLABLE (a contact captured by email or
+    // phone alone has no name). Every tuple element is decoded as `Option`: a NULL is data,
+    // not a decode failure. With a non-Option element the WHOLE tuple becomes undecodable,
+    // so the CoreSwift push was abandoned for 89 live contacts while the log blamed
+    // "contact not found" — a lie, since the row existed and was never fetched.
     let contact = sqlx::query_as::<
         _,
         (
-            String,
-            String,
+            Option<String>,
+            Option<String>,
             Option<String>,
             Option<String>,
             Option<String>,
@@ -170,6 +175,9 @@ async fn do_push(
     .bind(contact_id)
     .fetch_optional(&state.db)
     .await
+    .map_err(|e| {
+        tracing::warn!("CoreSwift external push: contact lookup failed for {contact_id}: {e}");
+    })
     .ok()
     .flatten();
 
@@ -182,8 +190,24 @@ async fn do_push(
     };
 
     let mut body = Map::new();
-    body.insert("first_name".into(), json!(first_name));
-    body.insert("last_name".into(), json!(last_name));
+    // Send only the name parts we actually hold. CoreSwift accepts a contact with no name
+    // when an email or phone is present (its own contract) and preserves an existing name on
+    // update (COALESCE(NULLIF($,''), name)); inventing an empty string here would be the
+    // silent-default defect this fix removes.
+    match (&first_name, &last_name) {
+        (None, None) => tracing::warn!(
+            "CoreSwift external push: contact {contact_id} has no first or last name (NULLABLE contacts columns) — pushing identity-less ({context_label})"
+        ),
+        _ => tracing::debug!(
+            "CoreSwift external push: contact {contact_id} names first={first_name:?} last={last_name:?} ({context_label})"
+        ),
+    }
+    if let Some(f) = &first_name {
+        body.insert("first_name".into(), json!(f));
+    }
+    if let Some(l) = &last_name {
+        body.insert("last_name".into(), json!(l));
+    }
     if let Some(e) = email {
         body.insert("email".into(), json!(e));
     }
