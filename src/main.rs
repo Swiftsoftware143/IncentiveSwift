@@ -75,8 +75,14 @@ async fn main() -> anyhow::Result<()> {
     let config = config::AppConfig::from_env()?;
     let config = Arc::new(config);
 
-    // Build shared state
+    // Build shared state (this also applies the migrations)
     let state = state::AppState::new(&config).await?;
+
+    // At-rest guard, boot halves, for the payment_providers secret columns. The migration file
+    // arms both CHECK constraints NOT VALID and is ledger-tracked, so it runs exactly once — this
+    // call is what re-arms a constraint that went missing, seals any plaintext row that appears
+    // afterwards, and validates the guard. Runs after the migrations, before the first request.
+    billing::providers::seal_payment_provider_secrets(&state.db).await;
 
     // Start background email ticker (flushes scheduled follow-ups/reminders)
     email_queue::spawn_email_ticker(state.clone());

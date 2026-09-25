@@ -126,6 +126,21 @@ pub fn is_encrypted(stored: &str) -> bool {
     stored.starts_with(ENC_PREFIX)
 }
 
+/// Mask a credential for a read path: first 3 and last 3 characters, `***` when the value is
+/// too short to mask. This is the ONE mask every credential surface in the app answers with, and
+/// it is always computed from the DECRYPTED value (a mask derived from ciphertext is noise).
+///
+/// Char-based slicing on purpose: a byte-slice `&key[..3]` panics on a multi-byte credential.
+pub fn mask(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 6 {
+        return "***".to_string();
+    }
+    let first: String = chars[..3].iter().collect();
+    let last: String = chars[chars.len() - 3..].iter().collect();
+    format!("{}...{}", first, last)
+}
+
 /// Encrypt a provider credential for storage. Fail-closed: without a master key this errors
 /// instead of returning the plaintext.
 pub async fn encrypt_for_storage(db: &PgPool, plaintext: &str) -> Result<String, CryptoError> {

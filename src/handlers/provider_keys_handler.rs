@@ -18,15 +18,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-/// Mask a key showing only first 3 and last 3 characters.
-fn mask_key(key: &str) -> String {
-    if key.len() <= 6 {
-        return "***".to_string();
-    }
-    let first = &key[..3];
-    let last = &key[key.len() - 3..];
-    format!("{}...{}", first, last)
-}
+use crate::security::provider_key_crypto::mask;
 
 /// GET /api/v1/provider-keys
 pub async fn list_provider_keys(
@@ -65,7 +57,7 @@ pub async fn list_provider_keys(
             "id": row.get::<Uuid, _>("id"),
             "account_id": row.get::<Uuid, _>("account_id"),
             "provider": row.get::<String, _>("provider"),
-            "api_key_masked": mask_key(&plain),
+            "api_key_masked": mask(&plain),
             "base_url": row.get::<Option<String>, _>("base_url"),
             "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
             "is_active": row.get::<bool, _>("is_active"),
@@ -158,7 +150,7 @@ pub async fn upsert_provider_key(
         "id": row.get::<Uuid, _>("id"),
         "account_id": row.get::<Uuid, _>("account_id"),
         "provider": row.get::<String, _>("provider"),
-        "api_key_masked": mask_key(&mask_source),
+        "api_key_masked": mask(&mask_source),
         "base_url": row.get::<Option<String>, _>("base_url"),
         "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
         "is_active": row.get::<bool, _>("is_active"),
