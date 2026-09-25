@@ -35,7 +35,26 @@ breaks production by itself, but it does mislead the next person (or lane) who p
 2026-09-23: a 440,466-byte retired **admin** SPA at the path of the app's entry page. The live
 app root is 7,856 bytes. Publishing that file to the app root would have replaced the app with
 an admin console. It is archived (git history has it either way) rather than deleted so the
-distinction stays visible.
+distinction stays visible. It is also **broken**: its inline script does not parse
+(`ui-js-check.py`: syntax error at its line 1845, an unterminated string in a `+'</td>'`
+concat), so it is not a file to restore — the admin surface served today is
+`www-admin/index.html` (135,151 B) at `admin.incentiveswift.com`, and no file of that 440 KB
+hash is served anywhere under `/opt/swift/nginx`.
+
+## The marketing root (`www/`) is a different surface — decided 2026-09-23
+
+`www/index.html` is served at `incentiveswift.com/`; this directory's `index.html` is the app
+entry at `app.incentiveswift.com/`. They were a two-variant pair: repo `9ada94d6f022` (200L)
+carried a published `#pricing` section (Starter/Pro/Enterprise, `✓ Webhooks & Zapier`,
+`✓ White-label`) plus a longer JSON-LD block; live `460cdd01f934` (299L) carried the cookie
+banner, the `/terms.html` `/privacy.html` `/refunds.html` footer links and `openRegister()`
+CTAs, and deliberately has **no pricing page** (its copy says "Upgrades and pricing are
+managed inside your account"). Neither was a superset of the other, so this was a content
+decision, not a copy: **the live variant is authoritative** — it is the newer product intent
+(self-serve signup modal, legal pages, consent banner) and the retired pricing block
+contradicted it — so `www/index.html` now holds the live variant byte-for-byte, the pricing
+lists are intentionally gone, and no page links `#pricing` any more. Marketing files publish
+through the fleet gate (`/opt/swift/fleet/marketing-www-parity.py`), never by hand-`cp`.
 
 ## Keeping it honest
 
