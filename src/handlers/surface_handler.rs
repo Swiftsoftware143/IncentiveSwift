@@ -961,27 +961,59 @@ pub async fn check_plan_domains(
 
     let plan_slug: String = plan.get("slug");
 
-    // Check if the plan_tier's feature_limits allow domains
-    let domain_limit: Option<i32> = sqlx::query_scalar(
-        "SELECT limit_value FROM feature_limits WHERE plan_tier = $1 AND feature_key = 'custom_domains'"
+    // Entitlements live in `tier_features` joined to `features` — the `feature_limits` table this
+    // used to read does not exist in the live schema (`features.rs` documents its removal), so the
+    // route 500'd on every call with `42P01 relation "feature_limits" does not exist`. Same shape
+    // as `loyalty.rs::check_plan_loyalty` (fixed in t_cf7469bb) and `features::enforce_feature_limit`:
+    // the tier is `plan_tiers`, and `plans.slug` is the join key (`plans` is the marketing/checkout
+    // table; plan_tiers.slug == plans.slug for every plan row).
+    //
+    // Key: `custom_domains` — the key this statement already named, registered in `features` as the
+    // surface domain gate. `surface_custom_domains` is a surface-flavoured duplicate with no reader
+    // anywhere in the code, and `branding_custom_domain` is a branding entitlement, so neither is
+    // the one being asked about here.
+    //
+    // Two conventions meet here and they agree: the GATE direction comes from
+    // `access::feature_gate::has_feature_access` ("Missing row = false — feature not assigned to
+    // that tier") and from `migrations-manual/register_feature_keys.sql` ("Assign nothing to free —
+    // surface features require upgrade", which assigns `custom_domains` to enterprise only); the
+    // NUMERIC direction comes from `features.rs`: limit_value NULL or -1 = no cap, 0 = not
+    // available, positive = the cap. An explicit `enabled = false` overrides either.
+    let row: Option<(Option<bool>, Option<i32>)> = sqlx::query_as(
+        "SELECT tf.enabled, tf.limit_value
+           FROM plan_tiers pt
+           JOIN tier_features tf ON tf.tier_id = pt.id
+           JOIN features f ON f.id = tf.feature_id
+          WHERE pt.slug = $1 AND f.key = 'custom_domains'",
     )
     .bind(&plan_slug)
     .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    .await?;
 
-    let (allowed, limit) = match domain_limit {
-        Some(-1) => (true, -1_i64), // unlimited
-        Some(l) if l > 0 => (true, l as i64),
-        Some(_) => (false, 0_i64),
+    let feature_configured = row.is_some();
+    let (allowed, limit) = match row {
+        // Assigned to the tier, explicitly switched off — the disable wins over any cap.
+        Some((Some(false), _)) => (false, 0_i64),
+        // Assigned and enabled: the numeric cap refines it.
+        // (`limit_value` is INT4, so it decodes as i32 — decoding it as i64 is a
+        // `mismatched types; Rust type Option<i64> (as SQL type INT8) is not compatible with SQL
+        // type INT4` 500, measured on this route.)
+        Some((_, Some(l))) if l > 0 => (true, l as i64),
+        // Assigned and enabled with no cap configured.
+        Some((_, None)) | Some((_, Some(-1))) => (true, -1_i64),
+        // Assigned, enabled, cap of 0 or less than -1: not available on this tier.
+        Some((_, Some(_))) => (false, 0_i64),
+        // No row for this tier: the feature is not assigned to it (upgrade required).
         None => (false, 0_i64),
     };
 
     Ok(Json(json!({
         "plan_id": plan_id,
         "plan_slug": plan_slug,
+        "plan_tier": plan_slug,
         "custom_domains_allowed": allowed,
         "custom_domain_limit": limit,
+        "feature_configured": feature_configured,
         "message": if allowed {
             if limit == -1 {
                 "Unlimited custom domains".to_string()

@@ -30,7 +30,12 @@ pub async fn enforce_feature_limit(
     };
 
     // Canonical per-feature numeric limit from tier_features.
-    let tf_val: Option<i64> = sqlx::query_scalar(
+    // `limit_value` is INT4, so it decodes as `i32`: asking sqlx for an `Option<i64>` here is a
+    // `mismatched types; Rust type Option<i64> (as SQL type INT8) is not compatible with SQL type
+    // INT4` error the moment a tier actually carries a numeric limit (measured on
+    // `GET /api/v1/admin/plans/:id/domains`, kanban t_e2cecfcb — it reads the same column).
+    // No caller invokes this function today, which is why the drift had never surfaced.
+    let tf_val: Option<i32> = sqlx::query_scalar(
         "SELECT tf.limit_value FROM tier_features tf
          JOIN features f ON f.id = tf.feature_id
          WHERE tf.tier_id = $1 AND f.key = $2",
@@ -42,11 +47,11 @@ pub async fn enforce_feature_limit(
     .flatten();
 
     if let Some(val) = tf_val {
-        return check_limit(db, account_id, feature_key, label, val).await;
+        return check_limit(db, account_id, feature_key, label, val as i64).await;
     }
 
-    // Tier base columns for the two built-in numeric limits.
-    let base_val: Option<i64> = match feature_key {
+    // Tier base columns for the two built-in numeric limits (INT4 as well).
+    let base_val: Option<i32> = match feature_key {
         "max_campaigns" | "campaigns" => {
             sqlx::query_scalar("SELECT max_campaigns FROM plan_tiers WHERE id = $1")
                 .bind(tier_id)
@@ -66,7 +71,7 @@ pub async fn enforce_feature_limit(
 
     match base_val {
         None | Some(-1) => Ok(()),
-        Some(v) => check_limit(db, account_id, feature_key, label, v).await,
+        Some(v) => check_limit(db, account_id, feature_key, label, v as i64).await,
     }
 }
 
