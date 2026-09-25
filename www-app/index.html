@@ -1,6 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<!-- SESSION HANDOFF — kanban t_c7ba0473. MUST stay FIRST in <head>, before the AUTH GUARD below.
+     This app had two session models and nothing joined them: /login writes localStorage
+     'ws_fs_token', while this shell's boot path and /dashboard read sessionStorage
+     'is_token'/'is_user'. So a signed-in user was handed to /app and shown THIS login form with
+     their token sitting unused in localStorage. The marketing signup pages hand the session over
+     as a URL fragment (#token=<jwt>) and nothing read that either.
+     This block is the ONE place that adopts a handed-over token and makes the two models agree:
+       #token=<jwt>                 -> mirror it into localStorage, strip the fragment, verify it
+       localStorage['ws_fs_token']  -> verify it with GET /api/v1/auth/me, publish to sessionStorage
+     On 200 the user continues into /dashboard with a real session; on failure the unusable token is
+     dropped and this page's own sign-in form is shown. It is a NO-OP on every public customer
+     surface, which are separate documents served by their own nginx locations. -->
+<script>
+!function(){
+  var p = window.location.pathname;
+  if (/^\/(play|loyalty-checkin)\//.test(p)) return;
+  if (p === '/tablet-demo.html' || p === '/login' || p === '/login.html') return;
+  if (p.indexOf('/api/') === 0 || p.indexOf('/ref/') === 0) return;
+
+  var TK = 'is_token', UK = 'is_user', DASH = '/dashboard', STORE = 'ws_fs_token';
+  function haveSession() { try { return !!sessionStorage.getItem(TK); } catch (e) { return true; } }
+
+  // Read '#token=<jwt>' and strip it. The fragment is never sent to the server, but do not leave a
+  // credential sitting in the address bar or in the history entry either (history.replaceState).
+  function tokenFromHash() {
+    var hm = /[#&](?:token|access_token)=([^&]+)/.exec(window.location.hash || '');
+    if (!hm) return null;
+    try { history.replaceState(null, '', p + window.location.search); } catch (e) {}
+    try { return decodeURIComponent(hm[1]); } catch (e) { return hm[1]; }
+  }
+
+  function adopt(t) {
+    var busy = document.createElement('style');
+    busy.id = 'is-handoff-busy';
+    busy.textContent = 'html{visibility:hidden}';
+    (document.head || document.documentElement).appendChild(busy);
+    var settle = setTimeout(function () { var b = document.getElementById('is-handoff-busy'); if (b && b.parentNode) b.parentNode.removeChild(b); }, 10000);
+
+    fetch('/api/v1/auth/me', { headers: { 'Authorization': 'Bearer ' + t }, cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        clearTimeout(settle);
+        try {
+          sessionStorage.setItem(TK, t);
+          sessionStorage.setItem(UK, JSON.stringify((d && d.user) || d || {}));
+        } catch (e) {}
+        window.location.replace(DASH);
+      })
+      .catch(function () {
+        clearTimeout(settle);
+        // The handed-over token is not usable: drop it and let the sign-in form below take over.
+        try { localStorage.removeItem(STORE); } catch (e) {}
+        var b = document.getElementById('is-handoff-busy'); if (b && b.parentNode) b.parentNode.removeChild(b);
+      });
+  }
+
+  function start() {
+    if (haveSession()) return;
+    var t = tokenFromHash();
+    if (t) { try { localStorage.setItem(STORE, t); } catch (e) {} }
+    else { try { t = localStorage.getItem(STORE) || localStorage.getItem('token') || localStorage.getItem('access_token'); } catch (e) {} }
+    if (!t) return;
+    adopt(t);
+  }
+
+  start();
+  // A handoff link opened while this document is already showing (same-document fragment change)
+  // does not reload the page, so the block above would never run again. Honour it.
+  window.addEventListener('hashchange', function () {
+    if (haveSession()) return;
+    var t = tokenFromHash();
+    if (!t) return;
+    try { localStorage.setItem(STORE, t); } catch (e) {}
+    adopt(t);
+  });
+}();
+</script>
+
 <!-- AUTH GUARD — canonical login redirect -->
 <script>
 !function(){

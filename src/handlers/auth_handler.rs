@@ -429,16 +429,28 @@ pub async fn me(
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
 
     let row = sqlx::query(
-        r#"SELECT a.name, a.email, a.role, a.plan_tier_id,
-                  p.name as plan_name,
-                  p.slug as plan_slug,
-                  COALESCE(p.features::text, '{}')::jsonb as features,
-                  p.max_campaigns,
-                  p.max_entries_per_month,
-                  p.price_monthly,
-                  p.price_annual
+        r#"-- The tier shape lives in `plan_tiers`: accounts.plan_tier_id has an FK to plan_tiers(id), and
+           -- features.rs / access::feature_gate resolve max_campaigns, max_entries_per_month and the
+           -- enabled feature keys off that same table + tier_features. `plans` is the marketing/checkout
+           -- table and never had max_campaigns / max_entries_per_month / an enabled-key JSONB, so this
+           -- statement 500'd on EVERY call for EVERY account (plain-statement column drift, kanban
+           -- t_c7ba0473; same class as t_cf7469bb, which missed this one because it is a JOIN).
+           -- GET /api/v1/auth/me and PUT /api/v1/auth/profile share this statement verbatim.
+           SELECT a.name, a.email, a.role, a.plan_tier_id,
+                  t.name as plan_name,
+                  t.slug as plan_slug,
+                  COALESCE((
+                      SELECT jsonb_object_agg(f.key, COALESCE(tf.limit_value, 0))
+                      FROM tier_features tf
+                      JOIN features f ON f.id = tf.feature_id
+                      WHERE tf.tier_id = t.id AND tf.enabled
+                  ), '{}'::jsonb) as features,
+                  t.max_campaigns,
+                  t.max_entries_per_month,
+                  t.price_monthly,
+                  t.price_annual
            FROM accounts a
-           LEFT JOIN plans p ON a.plan_tier_id = p.id
+           LEFT JOIN plan_tiers t ON a.plan_tier_id = t.id
            WHERE a.id = $1"#,
     )
     .bind(account_uuid)
@@ -611,16 +623,28 @@ pub async fn update_profile(
 
     // Return full profile (same shape as /me for consistency)
     let row = sqlx::query(
-        r#"SELECT a.name, a.email, a.role, a.plan_tier_id,
-                  p.name as plan_name,
-                  p.slug as plan_slug,
-                  COALESCE(p.features::text, '{}')::jsonb as features,
-                  p.max_campaigns,
-                  p.max_entries_per_month,
-                  p.price_monthly,
-                  p.price_annual
+        r#"-- The tier shape lives in `plan_tiers`: accounts.plan_tier_id has an FK to plan_tiers(id), and
+           -- features.rs / access::feature_gate resolve max_campaigns, max_entries_per_month and the
+           -- enabled feature keys off that same table + tier_features. `plans` is the marketing/checkout
+           -- table and never had max_campaigns / max_entries_per_month / an enabled-key JSONB, so this
+           -- statement 500'd on EVERY call for EVERY account (plain-statement column drift, kanban
+           -- t_c7ba0473; same class as t_cf7469bb, which missed this one because it is a JOIN).
+           -- GET /api/v1/auth/me and PUT /api/v1/auth/profile share this statement verbatim.
+           SELECT a.name, a.email, a.role, a.plan_tier_id,
+                  t.name as plan_name,
+                  t.slug as plan_slug,
+                  COALESCE((
+                      SELECT jsonb_object_agg(f.key, COALESCE(tf.limit_value, 0))
+                      FROM tier_features tf
+                      JOIN features f ON f.id = tf.feature_id
+                      WHERE tf.tier_id = t.id AND tf.enabled
+                  ), '{}'::jsonb) as features,
+                  t.max_campaigns,
+                  t.max_entries_per_month,
+                  t.price_monthly,
+                  t.price_annual
            FROM accounts a
-           LEFT JOIN plans p ON a.plan_tier_id = p.id
+           LEFT JOIN plan_tiers t ON a.plan_tier_id = t.id
            WHERE a.id = $1"#,
     )
     .bind(account_uuid)
