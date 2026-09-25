@@ -45,7 +45,8 @@ pub async fn handle_tag_provision(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = state.config.internal_sync_key.as_str();
-    if key != expected {
+    // An empty configured key must never authenticate a caller (kanban t_de6f2986).
+    if expected.is_empty() || key != expected {
         return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
 

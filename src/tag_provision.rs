@@ -14,7 +14,10 @@ pub async fn tag_provision(
     let key = headers.get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != state.config.internal_sync_key {
+    // An empty configured key must never authenticate a caller (kanban t_de6f2986).
+    // NOTE: this module is not declared in main.rs, so it is not compiled; the guard
+    // is carried so the class audit reads N of N rather than N-1.
+    if state.config.internal_sync_key.is_empty() || key != state.config.internal_sync_key {
         return Err(AppError::Unauthorized(axum::http::StatusCode::UNAUTHORIZED, "Invalid internal key".into()));
     }
 

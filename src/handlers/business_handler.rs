@@ -81,14 +81,17 @@ pub async fn register_business(
     headers: HeaderMap,
     Json(req): Json<RegisterBusinessRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let internal_key = std::env::var("INTERNAL_SYNC_KEY")
-        .unwrap_or_else(|_| "internal-sync-key-placeholder".to_string());
+    // One source of truth for the shared credential, and an EMPTY configured key must
+    // never authenticate a caller (kanban t_de6f2986). This used to read the env var
+    // directly and fall back to the fixed literal "internal-sync-key-placeholder", i.e.
+    // a public credential on any host where INTERNAL_SYNC_KEY was unset.
+    let internal_key = s.config.internal_sync_key.as_str();
     let provided_key = headers
         .get("X-Internal-Key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if provided_key != internal_key {
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+    if internal_key.is_empty() || provided_key != internal_key {
+        return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
     if req.name.is_empty() || req.email.is_empty() {
         return Err(AppError::BadRequest("Name and email are required".into()));
@@ -235,7 +238,13 @@ pub async fn get_business_stats(
     Path(business_id): Path<Uuid>,
     Query(query): Query<BusinessStatsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
-    verify_business_auth(&headers, &s.db, business_id).await?;
+    verify_business_auth(
+        &headers,
+        &s.db,
+        business_id,
+        s.config.internal_sync_key.as_str(),
+    )
+    .await?;
 
     // Get account info
     let biz: (Uuid, String, Option<String>, Option<Value>) = sqlx::query_as(
@@ -616,13 +625,16 @@ async fn verify_business_auth(
     headers: &HeaderMap,
     db: &sqlx::PgPool,
     business_id: Uuid,
+    internal_key: &str,
 ) -> Result<(), AppError> {
-    let internal_key = std::env::var("INTERNAL_SYNC_KEY")
-        .unwrap_or_else(|_| "internal-sync-key-placeholder".to_string());
-
-    if let Some(key) = headers.get("X-Internal-Key").and_then(|v| v.to_str().ok()) {
-        if key == internal_key {
-            return Ok(());
+    // An EMPTY configured key never authenticates a caller (kanban t_de6f2986): the
+    // caller passes the configured value in, so there is one source of truth and no
+    // "internal-sync-key-placeholder" fallback to guess.
+    if !internal_key.is_empty() {
+        if let Some(key) = headers.get("X-Internal-Key").and_then(|v| v.to_str().ok()) {
+            if key == internal_key {
+                return Ok(());
+            }
         }
     }
 

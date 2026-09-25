@@ -17,8 +17,10 @@ pub async fn portfolio_sync_internal(
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != state.config.internal_sync_key {
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+    // An empty configured key must never authenticate a caller (kanban t_de6f2986).
+    // Unauthorized (401) rather than Forbidden (403): one status for the whole class.
+    if state.config.internal_sync_key.is_empty() || key != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
 
     let action = body
