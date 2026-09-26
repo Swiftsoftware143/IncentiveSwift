@@ -481,6 +481,8 @@ const Campaigns = () => {
   const show = (item) => {
     st.editItem = item || null;
     st.theme = null;
+    st.campaignFormSeeded = false;   // the form draft seeds ON OPEN, never per render
+
     if (item && item.id) {
       API.get('/admin/campaigns/' + item.id + '/surface')
         .then(d => { st.theme = d.theme || THEME_DEFAULTS; renderApp(); })
@@ -637,30 +639,41 @@ const Campaigns = () => {
       <div class="modal-content" style="max-width:760px"><h3 class="text-lg font-bold mb-4">${st.editItem && st.editItem.id ? 'Edit' : 'Add'} Campaign</h3>
         ${(() => {
           const isEdit = !!(st.editItem && st.editItem.id);
-          let name = st.editItem?.name || '';
-          let type = st.editItem?.type || 'spin_wheel';
-          let tagNamespace = st.editItem?.tag_namespace || '';
-          let config = st.editItem?.config ? JSON.stringify(st.editItem.config, null, 2) : JSON.stringify(MECHANIC_DEFAULT_CONFIG[type] || {}, null, 2);
-          const setType = (t) => { type = t; if (!isEdit) { config = JSON.stringify(MECHANIC_DEFAULT_CONFIG[t] || {}, null, 2); } renderApp(); };
+          // The draft lives in the SHARED state object, seeded ON OPEN — never in per-render
+          // locals. `viewState(name, defaults)` returns the shared OBJECT (`S.views[name]`), and
+          // the Mechanic Type select's own onChange calls renderApp(), so locals were
+          // re-initialised on that re-render: the picker snapped back to 'spin_wheel' and the
+          // typed Name was erased before Save could read either. Measured in real Chromium
+          // 2026-09-26 (kanban t_f4aefe45): the editor could only ever create spin_wheel
+          // campaigns. Same fix shape as the Tags modal (kanban t_286aead1).
+          const cf = viewState('campaign_form', { name: '', type: 'spin_wheel', tag_namespace: '', config: '' });
+          if (!st.campaignFormSeeded) {
+            cf.name = st.editItem?.name || '';
+            cf.type = st.editItem?.type || 'spin_wheel';
+            cf.tag_namespace = st.editItem?.tag_namespace || '';
+            cf.config = st.editItem?.config ? JSON.stringify(st.editItem.config, null, 2) : JSON.stringify(MECHANIC_DEFAULT_CONFIG[cf.type] || {}, null, 2);
+            st.campaignFormSeeded = true;
+          }
+          const setType = (t) => { cf.type = t; if (!isEdit) { cf.config = JSON.stringify(MECHANIC_DEFAULT_CONFIG[t] || {}, null, 2); } renderApp(); };
           const doSave = () => {
             let parsed = {};
-            try { parsed = config && config.trim() ? JSON.parse(config) : {}; } catch(err) { alert('Config JSON is invalid: ' + err.message); return; }
-            const payload = isEdit ? { name, config: parsed } : { name, type, tag_namespace: tagNamespace || (name || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '_'), config: parsed };
+            try { parsed = cf.config && cf.config.trim() ? JSON.parse(cf.config) : {}; } catch(err) { alert('Config JSON is invalid: ' + err.message); return; }
+            const payload = isEdit ? { name: cf.name, config: parsed } : { name: cf.name, type: cf.type, tag_namespace: cf.tag_namespace || (cf.name || 'campaign').toLowerCase().replace(/[^a-z0-9]+/g, '_'), config: parsed };
             save(payload);
           };
           // ── Long-form qualifier: sections (ordering-only overlay) ──────────────
           // Sections group existing question keys. They must NEVER wipe rules/outcomes,
           // so every mutation re-parses the live JSON and merges via islfMergeSections.
           let parsedCfg = {};
-          try { parsedCfg = config && config.trim() ? JSON.parse(config) : {}; } catch(e) { parsedCfg = {}; }
-          const lfOn = type === 'long_form_qualifier';
+          try { parsedCfg = cf.config && cf.config.trim() ? JSON.parse(cf.config) : {}; } catch(e) { parsedCfg = {}; }
+          const lfOn = cf.type === 'long_form_qualifier';
           const ruleKeys = (lfOn && Array.isArray(parsedCfg.rules) ? parsedCfg.rules : [])
             .map(r => r && r.question).filter(k => typeof k === 'string' && k.length);
           const sections = (lfOn && Array.isArray(parsedCfg.sections)) ? parsedCfg.sections : [];
           const commitSections = (next) => {
             let base = parsedCfg;
-            try { base = config && config.trim() ? JSON.parse(config) : parsedCfg; } catch(e) { base = parsedCfg; }
-            config = JSON.stringify(islfMergeSections(base, next), null, 2);   // merge, never overwrite
+            try { base = cf.config && cf.config.trim() ? JSON.parse(cf.config) : parsedCfg; } catch(e) { base = parsedCfg; }
+            cf.config = JSON.stringify(islfMergeSections(base, next), null, 2);   // merge, never overwrite
             renderApp();
           };
           const addSection = () => commitSections([...sections, { title: 'Section ' + (sections.length + 1), questions: [] }]);
@@ -682,16 +695,16 @@ const Campaigns = () => {
           const radiusPx = parseInt(theme.border_radius, 10) || 12;
           const colorField = (key, label) => html`<div><label class="text-xs font-medium block mb-1 text-gray-500">${label}</label><input type="color" value=${theme[key] || ''} onInput=${e => setTheme(key, e.target.value)} class="input" style="height:36px;padding:3px;width:100%;cursor:pointer" /></div>`;
           return html`<div class="space-y-3">
-            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => { name = e.target.value; }} /></div>
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${cf.name} onInput=${e => { cf.name = e.target.value; }} /></div>
             <div class="grid grid-cols-2 gap-3">
               <div><label class="text-sm font-medium block mb-1">Mechanic Type</label>
-                <select class="input" value=${type} onChange=${e => setType(e.target.value)} disabled=${isEdit}>
+                <select class="input" value=${cf.type} onChange=${e => setType(e.target.value)} disabled=${isEdit}>
                   ${MECHANICS.map(m => html`<option value=${m.id}>${m.label}</option>`)}
                 </select>
               </div>
-              <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${tagNamespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { tagNamespace = e.target.value; }} /></div>
+              <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${cf.tag_namespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { cf.tag_namespace = e.target.value; }} /></div>
             </div>
-            <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${config} onInput=${e => { config = e.target.value; }}></textarea></div>
+            <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${cf.config} onInput=${e => { cf.config = e.target.value; }}></textarea></div>
             ${lfOn && html`<div class="border-t border-gray-100 pt-3 mt-3">
               <div class="flex items-center justify-between mb-2">
                 <div class="text-sm font-semibold">🧩 Sections <span class="text-xs text-gray-400">(presentation order only — scoring, outcomes, tags, redirects and the webhook are unchanged)</span></div>
