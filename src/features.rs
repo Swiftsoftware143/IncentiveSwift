@@ -284,10 +284,37 @@ async fn count_usage(db: &PgPool, account_id: Uuid, feature_key: &str) -> Result
             Ok(count)
         }
         "max_leads" | "leads" => {
-            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM leads WHERE account_id = $1")
-                .bind(account_id)
-                .fetch_one(db)
-                .await?;
+            // MOVED — not added, not dropped, not repointed at `tenant_id` (kanban t_04553fa6; the
+            // card asked for one of `add account_id` / `read tenant_id` / `drop the key`).
+            //
+            // Why not the stub table: `leads` was created as a phantom stub by
+            // `migrations/019_fix_phantom_tables.sql` (id, tenant_id, name, email, phone, status,
+            // created_at) — no `account_id`, no FK, and measured this hour: ZERO rows and ZERO
+            // writers. `grep -rn "FROM leads\|INTO leads\|UPDATE leads\|DELETE FROM leads" src/
+            // migrations/` finds this statement and nothing else, so no fixture a user could create
+            // can ever make `WHERE account_id = $1` true; and `leads.tenant_id` is not an account id
+            // (`tenants` is a real, separate table with 1 row, `accounts` has 56), so reading
+            // `tenant_id` instead would answer 0 for ever — the same silent zero, only with a quieter
+            // error, which is exactly what this card exists to end. Adding an `account_id` + a writer
+            // would invent a second lead store that duplicates `entries`.
+            //
+            // Why this statement: this app's lead IS an entry of a campaign it owns — that is its
+            // lead capture (a giveaway/quiz entry carries name, email, phone). The app says so in
+            // three live places, and this arm now shares one definition with all of them:
+            //   * `GET /api/v1/leads` -> `dashboard_handler::list_leads`, documented "list all entries
+            //     as leads" — the route the admin console's own Leads view renders
+            //     (www-admin/index.html:1086-1108);
+            //   * `business_handler`'s `total_leads`, twice: "Total leads = entries from campaigns
+            //     owned by this account" (`SELECT COUNT(*) FROM entries e JOIN campaigns c ON
+            //     c.id = e.campaign_id WHERE c.account_id = $1`) — the identical statement.
+            // `plans.max_leads` is real and per plan (live: Free 5, Pro 100, Enterprise -1 = unlimited),
+            // so this arm answers a real usage figure against a real allowance.
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM entries e JOIN campaigns c ON c.id = e.campaign_id WHERE c.account_id = $1",
+            )
+            .bind(account_id)
+            .fetch_one(db)
+            .await?;
             Ok(count)
         }
         "max_tags" | "tags" => {
@@ -405,11 +432,103 @@ mod usage_arm_tests {
         };
 
         match enforce_feature_limit(&pool, &acct.to_string(), "max_campaigns", "Campaigns").await {
-            // "no limit configured for this tier" — the function's own allow path.
+            // "no limit configured for that tier" — the function's own allow path.
             Ok(()) => println!("plan-limit path: allowed (no limit configured for that tier)"),
             // "limit reached (n/n)" / "not available on your plan" — check_limit's two arms.
             Err(AppError::UpgradeRequired(msg)) => println!("plan-limit path verdict: {msg}"),
             other => panic!("the plan-limit path must reach its own verdict, got {other:?}"),
+        }
+    }
+
+    /// Read-only: whichever account the live schema says already owns >= 1 entry — this app's lead.
+    /// Discovered with a SELECT; the test creates nothing.
+    async fn account_with_leads(pool: &PgPool) -> Option<Uuid> {
+        sqlx::query_scalar(
+            "SELECT c.account_id FROM entries e JOIN campaigns c ON c.id = e.campaign_id
+             GROUP BY c.account_id HAVING COUNT(*) >= 1 ORDER BY COUNT(*) DESC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .expect("pick a lead-owning account")
+    }
+
+    /// Read-only: an account that owns no entry at all — the negative control.
+    async fn account_without_leads(pool: &PgPool) -> Option<Uuid> {
+        sqlx::query_scalar(
+            "SELECT a.id FROM accounts a
+             WHERE NOT EXISTS (SELECT 1 FROM entries e JOIN campaigns c ON c.id = e.campaign_id
+                               WHERE c.account_id = a.id) LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .expect("pick a lead-free account")
+    }
+
+    /// The arm this card is about (kanban t_04553fa6).
+    ///
+    /// RED before the fix, printed by this test:
+    /// `count_usage(max_leads) must answer with a count, got Database("error returned from database:
+    /// column \"account_id\" does not exist")` — the arm counted a column of the phantom stub table
+    /// `leads`, which has no `account_id`, **0 rows and 0 writers in the whole crate**. That is why
+    /// `GET /api/v1/me/usage` answered a silent `"leads": 0` for every account while logging one
+    /// `could not count max_leads` error per call: no fixture a user could ever create would have made
+    /// the statement true.
+    ///
+    /// GREEN after: the arm answers the number the app's own lead definition gives — an entry of a
+    /// campaign this account owns — so it agrees with `GET /api/v1/leads` (`list_leads`) and with
+    /// `business_handler`'s `total_leads`, which run the identical statement.
+    #[tokio::test]
+    async fn leads_arm_counts_the_apps_leads() {
+        let Some(pool) = pool_or_skip().await else {
+            return;
+        };
+        let Some(acct) = account_with_leads(&pool).await else {
+            eprintln!("SKIP: no entry row in the database to count");
+            return;
+        };
+
+        let usage = match count_usage(&pool, acct, "max_leads").await {
+            Ok(n) => n,
+            Err(e) => panic!("count_usage(max_leads) must answer with a count, got {e:?}"),
+        };
+
+        // Cross-check with a DIFFERENT phrasing of the same predicate, so the test cannot pass by
+        // sharing a mistake with the arm.
+        let cross_check: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM entries WHERE campaign_id IN (SELECT id FROM campaigns WHERE account_id = $1)",
+        )
+        .bind(acct)
+        .fetch_one(&pool)
+        .await
+        .expect("cross-check count");
+        assert_eq!(
+            usage, cross_check,
+            "the arm must count this account's entries, arm={usage} cross-check={cross_check}"
+        );
+        assert!(
+            usage >= 1,
+            "the account owns >= 1 entry, arm counted {usage}"
+        );
+
+        // Falsification of the old home: the stub table still holds nothing, so a non-zero answer
+        // cannot have come from it.
+        let stub_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM leads")
+            .fetch_one(&pool)
+            .await
+            .expect("count the stub table");
+        assert_eq!(stub_rows, 0, "the `leads` stub is expected to stay empty");
+        println!("leads arm counted {usage} (stub table `leads` still holds {stub_rows})");
+
+        // Negative control: an account with no entries answers 0 WITHOUT an error — 0 is now a
+        // measured fact, not a swallowed failure.
+        if let Some(empty) = account_without_leads(&pool).await {
+            match count_usage(&pool, empty, "max_leads").await {
+                Ok(0) => {
+                    println!("control: account {empty} owns no entry and the arm answered Ok(0)")
+                }
+                Ok(n) => panic!("control account owns no entry but the arm counted {n}"),
+                Err(e) => panic!("control account must answer Ok(0), got {e:?}"),
+            }
         }
     }
 }
