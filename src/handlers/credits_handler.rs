@@ -1,4 +1,7 @@
-//! Credit system handler — balance, deduction, top-up, history
+//! Credit system handler — balance, history, listing, admin adjust
+//!
+//! The Stripe credit-pack top-up that used to live here was deleted (kanban t_24b17131): it was
+//! never routed and could never have run. See the note above `admin_adjust_credits`.
 
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -7,6 +10,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -189,6 +193,76 @@ pub async fn get_history(
     }
 }
 
+/// GET /api/v1/admin/credits — every account's credit state (admin).
+///
+/// The SERVED admin guide has documented this read since the guide was written ("View all tenant
+/// credits (admin)") and no route was ever mounted for it (kanban t_24b17131), so an operator could
+/// only ever read one balance at a time, by signing in AS that account. It is a straight read of
+/// `accounts` — the table `admin_adjust_credits` writes and the console's Credits tab reads for the
+/// caller's own balance — so it cannot be a stub: `credits_balance`, `credits_lifetime_used` and
+/// `credit_rate` are NOT NULL, the two ZC pool columns are COALESCEd, and the plan label comes
+/// through the FK `accounts.plan_tier_id` (`plan_tiers.name`), never the `plans` marketing table —
+/// see `features::credit_limit` for why a `plans`-shaped read of an account's plan is inert.
+///
+/// Authorization is `security::auth::admin_guard`, which runs above routing for every
+/// `/api/v1/admin/*` path — the same guard the sibling `GET /api/v1/admin/tenants` read relies on.
+pub async fn admin_list_credits(
+    State(state): State<AppState>,
+    _auth: AuthenticatedUser,
+) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT a.id, a.name, a.email, COALESCE(pt.name, 'No Plan') AS plan_name,
+                a.credits_balance, a.credits_lifetime_used,
+                COALESCE(a.zc_pool_remaining, 0) AS zc_pool_remaining,
+                COALESCE(a.zc_pool_total, 0) AS zc_pool_total,
+                a.credit_rate
+           FROM accounts a
+           LEFT JOIN plan_tiers pt ON pt.id = a.plan_tier_id
+          ORDER BY a.credits_balance DESC, a.created_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            let credits: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|row| {
+                    serde_json::json!({
+                        "id": row.get::<Uuid, _>("id").to_string(),
+                        "name": row.get::<Option<String>, _>("name").unwrap_or_default(),
+                        "email": row.get::<String, _>("email"),
+                        "plan_name": row.get::<String, _>("plan_name"),
+                        "credits_balance": row.get::<i32, _>("credits_balance"),
+                        "credits_lifetime_used": row.get::<i32, _>("credits_lifetime_used"),
+                        "zc_pool_remaining": row.get::<i32, _>("zc_pool_remaining"),
+                        "zc_pool_total": row.get::<i32, _>("zc_pool_total"),
+                        "credit_rate": row.get::<i32, _>("credit_rate"),
+                    })
+                })
+                .collect();
+
+            let total_credits: i64 = rows
+                .iter()
+                .map(|row| i64::from(row.get::<i32, _>("credits_balance")))
+                .sum();
+            let accounts_with_credits = rows
+                .iter()
+                .filter(|row| row.get::<i32, _>("credits_balance") > 0)
+                .count();
+
+            Json(serde_json::json!({
+                "success": true,
+                "total_accounts": rows.len(),
+                "accounts_with_credits": accounts_with_credits,
+                "total_credits": total_credits,
+                "credits": credits,
+            }))
+        }
+        Err(e) => Json(serde_json::json!({"success": false, "error": e.to_string()})),
+    }
+}
+
 /// Deduct credits for a specific action.
 ///
 /// NOTE (2026-09-25, kanban t_329b61b2): this function has no caller anywhere in the crate — the
@@ -283,188 +357,26 @@ pub async fn check_credits(
     Ok((balance >= DEFAULT_ACTION_COST, balance, DEFAULT_ACTION_COST))
 }
 
-// --- Credit top-up via Stripe ---
-
-/// POST /api/v1/credits/topup — create a Stripe checkout session for credit top-up
-pub async fn create_topup_checkout(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let amount = body.get("amount").and_then(|v| v.as_i64()).unwrap_or(0);
-    let credits = body.get("credits").and_then(|v| v.as_i64()).unwrap_or(0);
-
-    if amount <= 0 || credits <= 0 {
-        return Json(serde_json::json!({
-            "success": false, "error": "Invalid amount or credits"
-        }));
-    }
-
-    // Get Stripe key
-    let stripe_key = sqlx::query_scalar::<_, String>(
-        "SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND (account_id IS NULL OR scope = 'account') AND is_active = true LIMIT 1"
-    )
-    .fetch_optional(&state.db)
-    .await;
-
-    // provider_keys.api_key is ciphertext at rest: decrypt before the key is used as a
-    // credential. A row that cannot be decrypted is reported exactly like "not configured",
-    // never handed to Stripe as garbage.
-    let stripe_key = match stripe_key {
-        Ok(Some(stored)) => {
-            crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored.trim())
-                .await
-                .ok()
-                .filter(|k| !k.is_empty())
-        }
-        Ok(None) => None,
-        Err(e) => {
-            return Json(serde_json::json!({"success": false, "error": e.to_string()}));
-        }
-    };
-
-    match stripe_key {
-        Some(key) => {
-            let account_id = auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil());
-            let success_url = format!(
-                "https://app.incentiveswift.com/admin/credits?checkout=success&credits={}",
-                credits
-            );
-            let cancel_url =
-                "https://app.incentiveswift.com/admin/credits?checkout=cancel".to_string();
-
-            match create_stripe_session(
-                &key,
-                amount,
-                &success_url,
-                &cancel_url,
-                account_id,
-                credits as i32,
-            )
-            .await
-            {
-                Some(session_url) => {
-                    // Store pending checkout
-                    let stripe_session_id =
-                        session_url.split('/').next_back().unwrap_or("").to_string();
-                    sqlx::query(
-                        "INSERT INTO stripe_checkout_sessions (account_id, stripe_session_id, amount, credits, status)
-                         VALUES ($1, $2, $3, $4, 'pending')"
-                    )
-                    .bind(account_id)
-                    .bind(&stripe_session_id)
-                    .bind(amount as i32)
-                    .bind(credits as i32)
-                    .execute(&state.db)
-                    .await
-                    .ok();
-
-                    Json(serde_json::json!({
-                        "success": true,
-                        "url": session_url,
-                        "credits": credits,
-                        "amount_cents": amount,
-                    }))
-                }
-                None => Json(serde_json::json!({
-                    "success": false, "error": "Failed to create Stripe checkout session"
-                })),
-            }
-        }
-        None => Json(serde_json::json!({
-            "success": false, "error": "Stripe not configured. Ask the admin to add Stripe API key in Provider Keys."
-        })),
-    }
-}
-
-/// POST /api/v1/stripe/webhook — Stripe webhook handler (public, no auth)
-pub async fn stripe_webhook(
-    State(state): State<AppState>,
-    body: axum::body::Bytes,
-) -> Json<serde_json::Value> {
-    let pool = &state.db;
-
-    match serde_json::from_slice::<serde_json::Value>(&body) {
-        Ok(event) => {
-            let event_type = event
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-
-            if let Some(session_id) = extract_session_id(&event) {
-                let amount = event
-                    .pointer("/data/object/amount_total")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let _credits = (amount / 100) as i32 * 10;
-
-                // Update session and credit account
-                if let Ok(Some((acc_id, cr))) = sqlx::query_as::<_, (Uuid, i32)>(
-                    "UPDATE stripe_checkout_sessions SET status = 'completed', completed_at = now()
-                     WHERE stripe_session_id = $1 AND status = 'pending' RETURNING account_id, credits"
-                )
-                .bind(&session_id)
-                .fetch_optional(pool)
-                .await
-                {
-                    let _ = add_credits_internal(pool, acc_id, cr, "top_up", Some("stripe"), Some(&session_id),
-                        &Some(format!("Stripe top-up: ${}", amount as f64 / 100.0))).await;
-                }
-            }
-
-            Json(serde_json::json!({"success": true, "event_type": event_type}))
-        }
-        Err(e) => Json(serde_json::json!({"success": false, "error": e.to_string()})),
-    }
-}
-
-fn extract_session_id(event: &serde_json::Value) -> Option<String> {
-    event
-        .pointer("/data/object/id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-async fn create_stripe_session(
-    api_key: &str,
-    amount_cents: i64,
-    success_url: &str,
-    cancel_url: &str,
-    account_id: Uuid,
-    _credits: i32,
-) -> Option<String> {
-    let client = reqwest::Client::new();
-    let params = [
-        ("mode", "payment"),
-        ("payment_method_types[]", "card"),
-        ("line_items[0][price_data][currency]", "usd"),
-        (
-            "line_items[0][price_data][unit_amount]",
-            &amount_cents.to_string(),
-        ),
-        (
-            "line_items[0][price_data][product_data][name]",
-            &format!("{} Credits", _credits),
-        ),
-        ("line_items[0][quantity]", "1"),
-        ("success_url", success_url),
-        ("cancel_url", cancel_url),
-    ];
-
-    let resp = client
-        .post("https://api.stripe.com/v1/checkout/sessions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .form(&params)
-        .send()
-        .await
-        .ok()?;
-
-    let json: serde_json::Value = resp.json().await.ok()?;
-    json.get("url")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
+// --- Credit PACKS / top-up: deleted (kanban t_24b17131) ---------------------------------------
+//
+// `create_topup_checkout` + `create_stripe_session` + this module's duplicate Stripe receiver were
+// never routed (`grep -c topup src/main.rs` = 0) and could never have worked: no `stripe` row has
+// ever existed in `provider_keys`, so the handler could only ever answer "Stripe not configured",
+// and its success_url pointed at https://app.incentiveswift.com/admin/credits — a path this app
+// does not serve (the app vhost's `try_files … /index.html` answers it with the login shell, 11840 B).
+// `stripe_checkout_sessions` has never held a row written by it and `credit_transactions` has never
+// held a single `top_up` row.
+//
+// Credits here are a PLAN ALLOWANCE (`features::credit_limit` over `tier_features`) plus the loyalty
+// ZC pool that the live `POST /api/v1/loyalty/webhook/stripe` funds — nothing sells credits, and no
+// served page promises to (checked: no top-up / "buy credits" text in any served root or repo front
+// end). The live payments path is the loyalty plan subscription checkout
+// (`handlers::loyalty_plans::subscribe`), which owns that webhook (`handlers::stripe_webhook`), and
+// `stripe_checkout_sessions` is ITS table — so the table and its two live readers stay.
+//
+// NOT this card's, deliberately left: `sms_inbound_webhook` at the bottom of this file is a
+// duplicate of the routed `handlers::sms_handler::channel_inbound_webhook` (same path, same table);
+// carded separately rather than swept into a read-surface change.
 /// POST /api/v1/admin/credits/adjust — admin adjusts a user's credits
 pub async fn admin_adjust_credits(
     State(state): State<AppState>,

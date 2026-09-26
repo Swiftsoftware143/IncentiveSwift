@@ -83,15 +83,15 @@ The sync fires asynchronously. FunnelSwift must be reachable at `FUNNELSWIFT_URL
 **Requires:** `FUNNELSWIFT_URL` environment variable.
 
 ### Credit System
-Tenant credits for platform-level actions — fully wired and production-ready:
+Account-level credits, earned and adjusted by the API; nothing deducts them today:
 - **Balance** — current available credits + plan limits (monthly allowance, overdraft)
 - **History** — paginated transaction log with type, amount, description
-- **Top-up** — buy credits via Stripe checkout (creates session, webhook confirms)
+- **All tenants** — every account's balance, lifetime used, ZC pool and credit rate (admin)
 - **Admin adjust** — manual credit adjustment (admin only)
-- **Deduct** — programmatic deduction (internal helper for cross-module use)
-- **SMS inbound** — webhook-based credit action triggers
+- **Deduct** — programmatic deduction helper; no caller in the crate (see `deduct_credits`)
+- **SMS inbound** — not a credit path: `/api/v1/channels/sms/inbound` is `sms_handler`'s chat-funnel receiver
 
-Credits are tracked at the account level with `credits_balance` and `credits_lifetime_used` columns. Plan tiers define `credits_monthly` and `credits_overdraft` via the `features` JSONB field.
+Credits are tracked at the account level with `credits_balance` and `credits_lifetime_used` columns. Plan tiers carry `credits_monthly` and `credits_overdraft` as `tier_features` rows on the account's own tier (no limit assigned = 0 = none included). There is **no credit top-up / purchase flow**: credits are not sold, and the live payments path is the loyalty plan subscription (`POST /api/v1/loyalty/plans/subscribe` + `POST /api/v1/loyalty/webhook/stripe`).
 
 ### CORS Configuration
 IncentiveSwift uses predicate-based CORS — allowed origins are loaded at startup from the `ALLOWED_ORIGINS` environment variable (comma-separated list). Requests from non-matching origins are rejected. Default allowed origins include:
@@ -254,8 +254,8 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 |---|---|---|---|
 | `/api/v1/credits/balance` | GET | User | Current balance + plan limits (credits_monthly, credits_overdraft) |
 | `/api/v1/credits/history` | GET | User | Paginated transaction history (type, amount, description) |
-| `/api/v1/credits/topup` | POST | User | Create Stripe checkout to buy credits |
-| `/api/v1/webhooks/sms/` | POST | None | SMS-based credit action triggers |
+| `/api/v1/admin/credits` | GET | Admin | Every account's balance, lifetime used, ZC pool and credit rate |
+| `/api/v1/channels/sms/inbound` | POST | None | SMS inbound webhook (chat funnel routing) |
 | `/api/v1/admin/credits/adjust` | POST | Admin | Manually adjust any user's credits (amount, reason) |
 
 ### Campaign Management
@@ -312,6 +312,7 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/admin/tiers/:tier_id/features` | GET | List features for a tier (tier_features) |
 | `/api/v1/admin/tiers/:tier_id/features/:feature_key` | PUT | Enable/disable a feature for a tier (canonical tier_features CRUD) |
 | `/api/v1/admin/credits/adjust` | POST | Adjust user credits |
+| `/api/v1/admin/credits` | GET | View all tenant credits |
 
 ### Admin Impersonation
 

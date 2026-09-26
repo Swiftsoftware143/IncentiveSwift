@@ -248,22 +248,17 @@ POST /api/v1/portfolio-companies      — Create company</pre>
   <h2 class="sec-title"><span class="sec-num">7</span> Credits &amp; Billing</h2>
   <div class="card">
     <h3>Plan-Based Credit System</h3>
-    <p>IncentiveSwift uses a credit system for advanced features. Credits are allocated per plan and consumed by:</p>
-    <ul>
-      <li><strong>OpenClaw AI agent actions</strong> — Per-task credit consumption</li>
-      <li><strong>Premium campaign types</strong> — Advanced campaign mechanics</li>
-      <li><strong>Integration dispatches</strong> — Per-integration-fire credit</li>
-    </ul>
+    <p>Credits are held per account (<code>accounts.credits_balance</code>). A plan tier can grant a monthly allowance and an overdraft entitlement (<code>tier_features</code> &rarr; <code>credits_monthly</code> / <code>credits_overdraft</code>, assignable per plan in Plans &amp; billing); with no limit assigned, the allowance reads <strong>0 (none included)</strong>. Credits are <strong>earned</strong>, not burned: purchase verification credits the account at that tenant's own credit rate ($1 = 10 credits by default), and the loyalty win and offer flows move them. No platform action deducts credits today.</p>
   </div>
   <div class="card">
     <h3>Admin Credit Management</h3>
-    <p>Admins can view credit usage per tenant and adjust plan allocations. Credit balances are visible in the admin panel and in each tenant's Settings → Billing tab. Overages can be configured to block, warn, or auto-bill.</p>
+    <p>Admins can view every account's credit state in one place — the Operator Console's <em>Credits (all accounts)</em> panel lists each account with its plan, balance, lifetime used, ZC pool and credit rate. Use <em>Adjust credits</em> to change one account's balance, and the credits-rate call under Loyalty Program Management to change what that tenant earns per dollar. There is no overage policy to configure: an exhausted allowance is neither blocked, warned nor billed.</p>
   </div>
   <div class="card">
     <h3>Free Tier vs Paid</h3>
-    <p>The free tier provides access to basic campaign types and IQS surveys with limited features. Paid plans unlock premium campaign types, integrations, webhook security, analytics export, and increased credit allocations.</p>
-    <pre>GET /api/v1/billing/credits — View current credit balance
-GET /api/v1/admin/credits   — View all tenant credits (admin)</pre>
+    <p>The free tier provides access to basic campaign types and IQS surveys with limited features. Paid plans unlock premium campaign types, integrations, webhook security and analytics export.</p>
+    <pre>GET  /api/v1/credits/balance  — View current credit balance
+GET  /api/v1/admin/credits    — View all tenant credits (admin)</pre>
   </div>
 </section>
 

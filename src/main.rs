@@ -766,6 +766,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/tenants/:tenant_id/purchase-pin",
             get(crate::handlers::admin_handler::get_purchase_pin),
         )
+        // The credits READ surface. The served admin guide has documented GET /api/v1/admin/credits
+        // since the guide was written ("View all tenant credits (admin)") and no route was ever
+        // mounted, so an operator had to sign in AS an account to see its balance (kanban
+        // t_24b17131). The console's "18 · Credits (all accounts)" panel is its caller.
+        .route(
+            "/api/v1/admin/credits",
+            get(handlers::credits_handler::admin_list_credits),
+        )
         // Operator control for the credits ledger. The handler existed but no route
         // was ever mounted, so the admin console could not reach it (kanban t_0fc42946).
         // Wired here AND given a caller: the "Adjust credits" action on the served admin
