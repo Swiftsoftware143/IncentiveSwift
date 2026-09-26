@@ -1,9 +1,10 @@
 use serde_json::json;
 
 /// The product's own identity — what the `{{app_name}}` merge field carries.
-const APP_NAME: &str = "IncentiveSwift";
-/// Public app origin — what the `{{login_url}}` merge field carries.
-const APP_URL: &str = "https://app.incentiveswift.com";
+pub(crate) const APP_NAME: &str = "IncentiveSwift";
+/// Public app origin — what the `{{login_url}}` merge field carries, and the base of the
+/// public campaign link the lifecycle sender binds as `{{share_link}}`/`{{referral_link}}`.
+pub(crate) const APP_URL: &str = "https://app.incentiveswift.com";
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
 ///

@@ -1276,7 +1276,13 @@ const EmailTemplates = () => {
       hide(); load();
     } catch(e) { alert('Error: ' + e.message); }
   };
-  const MERGE_FIELDS = ['{{name}}', '{{email}}', '{{password}}', '{{login_url}}', '{{reset_url}}', '{{app_name}}', '{{support_email}}'];
+  // System-mail merge fields (kanban t_375c8c40): ONLY names a sender actually binds.
+  // `{{reset_url}}` and `{{support_email}}` were advertised here but bound by NOBODY, so
+  // inserting one shipped the braces to the recipient; `{{token}}` is what
+  // `email::send_reset_email` really binds. The full, code-checked list — including the
+  // campaign fields the lifecycle sender carries — is served by
+  // GET /api/v1/email-templates/merge-fields (`merge_field_list`).
+  const MERGE_FIELDS = ['{{name}}', '{{email}}', '{{password}}', '{{login_url}}', '{{token}}', '{{app_name}}', '{{app_url}}', '{{plan_name}}'];
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Email Templates</h2><p class="text-sm text-gray-500">System emails: welcome, password reset, notifications</p></div>

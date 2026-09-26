@@ -18,28 +18,66 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 // Merge-field master list (single source of truth)
 // ---------------------------------------------------------------------------
-
+//
+// ONE rule, enforced against the code (kanban t_375c8c40): a name is advertised only if
+// some sender actually BINDS it, and every bound name is advertised. The list used to
+// advertise 16 names of which `prize_value`, `voucher_code`, `points_awarded`, `tier_name`,
+// `unsubscribe_link`, `campaign_url`, `expiry_date`, `score` and `company_name` were bound
+// by NOBODY — a tenant who used one got the braces verbatim (plus the
+// `template placeholders were NOT substituted` warn) — while the names the lifecycle sender
+// really does carry (`ticket_number`, `user_score`, `share_link`, `reward_code`) were not
+// advertised at all.
+//
+// Bound by the lifecycle sender (`lifecycle_emails::entry_email_vars`, both stages):
+//   first_name, last_name, email, campaign_name, campaign_type, ticket_number,
+//   user_score (only when the caller supplied a score), prize_name, reward_code,
+//   share_link, referral_link.
+// Bound by the winner path (`handlers::entries` step 8): + phone, entry_id.
+// Bound by the account mails (`email`/`handlers::auth_handler`): name, password,
+//   app_name, login_url, plan_name, token, app_url.
 fn merge_field_list() -> Vec<(&'static str, &'static str)> {
     vec![
         ("first_name", "Contact first name"),
         ("last_name", "Contact last name"),
         ("email", "Contact email address"),
+        ("phone", "Contact phone number"),
+        ("name", "Account holder name (account mails)"),
         ("campaign_name", "Campaign display name"),
         (
             "campaign_type",
             "Campaign mechanic type (e.g. quiz, raffle)",
         ),
-        ("prize_name", "Name of the prize/reward won"),
-        ("prize_value", "Monetary/value of the prize"),
-        ("voucher_code", "Issued voucher / PIN code"),
-        ("points_awarded", "Loyalty points credited"),
-        ("tier_name", "Loyalty tier assigned"),
-        ("referral_link", "Personal referral link"),
-        ("unsubscribe_link", "Email unsubscribe link"),
-        ("campaign_url", "Direct link to the campaign entry"),
-        ("expiry_date", "Offer/prize expiry date"),
-        ("score", "Score/result value (quiz/calculator)"),
-        ("company_name", "Merchant/brand name (from tenant settings)"),
+        ("entry_id", "The entry's id (UUID)"),
+        (
+            "ticket_number",
+            "The entry's own ticket reference (entries.id, first 8 chars, uppercased)",
+        ),
+        (
+            "user_score",
+            "Score the entry was submitted with (quiz/calculator)",
+        ),
+        (
+            "prize_name",
+            "Name of the prize/reward the contact won in this campaign",
+        ),
+        (
+            "reward_code",
+            "The won reward's redemption code (campaign_wins / the entry's answers)",
+        ),
+        (
+            "share_link",
+            "Campaign share link (the campaign's public play URL)",
+        ),
+        (
+            "referral_link",
+            "Campaign referral link (same public play URL)",
+        ),
+        ("app_name", "Product name"),
+        ("login_url", "App login URL"),
+        ("app_url", "App origin"),
+        ("plan_name", "Plan name (purchase mails)"),
+        ("password", "Minted password (welcome_credentials only)"),
+        ("token", "Password-reset token (password_reset only)"),
     ]
 }
 

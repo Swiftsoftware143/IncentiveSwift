@@ -170,21 +170,35 @@ pub async fn create_entry(
             .await;
             if !already {
                 let state_clone = state.clone();
-                let acct = campaign.account_id;
+                let campaign_clone = campaign.clone();
+                let answers_clone = body.answers.clone();
+                let score = body.score;
                 let em = email.trim().to_string();
-                let ctype = campaign.r#type.clone();
-                let cname = campaign.name.clone();
                 let fname = body.contact.first_name.clone();
                 let lname = body.contact.last_name.clone();
+                let cid = contact_id;
                 tokio::spawn(async move {
-                    crate::lifecycle_emails::trigger_entry_lifecycle(
+                    // Both stages (immediate + the 24h row queued below) render from THIS
+                    // var set, built from what the platform can actually answer for the
+                    // entry — kanban t_375c8c40.
+                    let vars = crate::lifecycle_emails::entry_email_vars(
                         &state_clone,
-                        acct,
-                        &em,
-                        &ctype,
-                        &cname,
+                        &campaign_clone,
+                        cid,
+                        entry_id,
+                        score,
+                        answers_clone.as_ref(),
                         fname.as_deref(),
                         lname.as_deref(),
+                        &em,
+                    )
+                    .await;
+                    crate::lifecycle_emails::trigger_entry_lifecycle(
+                        &state_clone,
+                        campaign_clone.account_id,
+                        &em,
+                        &campaign_clone.r#type,
+                        &vars,
                     )
                     .await;
                 });
