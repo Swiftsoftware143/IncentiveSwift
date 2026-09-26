@@ -366,6 +366,13 @@ emitted unconditionally and pointed at a URL that answered 404. Both options in 
 (`embed_code`, `widget_snippet`) now carry ABSOLUTE urls, because they are pasted onto the
 customer's own site.
 
+A TENANT reaches both producers from its own detail views, not only from the operator console
+(kanban t_bf1978d6): the console's **Campaigns** view — which a `company_admin` session does see; only
+the *Operator Console* tab is admin-gated — has an **Embed** button on every campaign row (Direct
+Link / Iframe Embed / Widget Script, with create + stop-serving controls), and the tenant IQS funnel
+builder at `app.<domain>/iqs.html` has the **🔌 Widget** button in a funnel's Campaign Gate block,
+which mints the snippet for the campaign that funnel gates.
+
 ## Webhook Events
 
 IncentiveSwift fires webhooks for real-time event notifications. Configure via campaign `delivery_config.entry_webhook_url` or Marketing Boost per-campaign webhooks.

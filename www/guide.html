@@ -421,7 +421,7 @@
       <p>Wins are recorded with a unique redemption code in the format <code>REDEEM-XXXXXXXX</code>. Users see their code on the post-win screen and can copy or save it. For manual delivery prizes, the system records the win and you handle fulfillment from the campaign detail view.</p>
 
       <h2 id="embedding">🔌 Embedding Campaigns</h2>
-      <p>Campaigns can be played directly on IncentiveSwift or embedded on your own website. From the campaign detail view, click the Embed button to get options:</p>
+      <p>Campaigns can be played directly on IncentiveSwift or embedded on your own website. From the campaign detail view — <strong>Campaigns</strong> in your admin console — click the <strong>Embed</strong> button to get options:</p>
       <ul>
         <li><strong>Direct Link</strong> — Share the campaign URL directly. e.g. <code>https://incentiveswift.com/play/YOUR-SLUG</code></li>
         <li><strong>Iframe Embed</strong> — Copy an iframe snippet to embed the campaign within your site's content</li>
@@ -594,9 +594,9 @@
       <h3>Setting Up the Widget</h3>
       <ol class="step-list">
         <li><strong>Open an IQS Funnel</strong><p>From the IQS section, open the funnel you want to use as a widget.</p></li>
-        <li><strong>Click Widget Button</strong><p>Click the <strong>Widget</strong> button (🔌) in the funnel detail view.</p></li>
-        <li><strong>Configure Display</strong><p>Choose display mode: <strong>Trigger Button</strong> (small floating CTA button) or <strong>Auto</strong> (appears automatically on page load).</p></li>
+        <li><strong>Click Widget Button</strong><p>Click the <strong>Widget</strong> button (🔌) in the funnel detail view. The popup is served per campaign, so the funnel has to be attached to a campaign first (Campaign Gate in the builder) — if it is not, the button says so instead of handing you a snippet that 404s.</p></li>
         <li><strong>Copy Embed Code</strong><p>Copy the generated code snippet and paste it just before <code>&lt;/body&gt;</code> on your website.</p></li>
+        <li><strong>Visitor trigger</strong><p>Visitors get a small floating button carrying your campaign's call-to-action; clicking it opens the survey in an overlay on your page. The trigger is always visitor-initiated — there is no auto-display mode — and the overlay is dismissed with its <code>✕</code> or a click outside it.</p></li>
       </ol>
 
       <h3>Widget Features</h3>

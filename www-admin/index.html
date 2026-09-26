@@ -386,7 +386,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, embedItem: null, embed: null, embedErr: '', embedCopied: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -407,6 +407,49 @@ const Campaigns = () => {
   };
   const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/campaigns/' + id); load(); };
 
+  // ── Embed producer (kanban t_bf1978d6) ─────────────────────────────────────────────────
+  // The served public guide §Embedding Campaigns promises this on the campaign detail view:
+  // "click the Embed button to get options: Direct Link / Iframe Embed / Widget Script".
+  // Until this panel existed the only producer UI on the box was the admin-GATED Operator
+  // Console panel 19, so no TENANT could reach the Widget Script option the marketing pages
+  // sell.  Both calls are tenant-scoped on the server: GET /api/v1/embed/campaign/:slug and
+  // POST|DELETE /api/v1/campaigns/:slug/widget-snippet (owned_campaign -> 404 for a foreign
+  // campaign, never 403).  Every value shown is ABSOLUTE, because these strings are pasted
+  // onto the customer's own site where a relative /play/... would resolve to their domain.
+  const legacyCopy = (text) => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  };
+  const copyText = (label, text) => {
+    const done = () => { st.embedCopied = label; renderApp(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => { legacyCopy(text); done(); });
+    } else { legacyCopy(text); done(); }
+  };
+  const openEmbed = async (item) => {
+    st.embedItem = item; st.embed = null; st.embedErr = ''; st.embedCopied = ''; renderApp();
+    try { st.embed = await API.get('/embed/campaign/' + item.slug); } catch (e) { st.embedErr = e.message; }
+    renderApp();
+  };
+  const closeEmbed = () => { st.embedItem = null; st.embed = null; st.embedErr = ''; st.embedCopied = ''; renderApp(); };
+  const createWidget = async () => {
+    try {
+      const d = await API.post('/campaigns/' + st.embedItem.slug + '/widget-snippet', {});
+      st.embed = Object.assign({}, st.embed, { widget_snippet: d.embed_code, widget_snippet_hash: d.snippet_hash, widget_snippet_available: true });
+      st.embedCopied = ''; renderApp();
+    } catch (e) { st.embedErr = e.message; renderApp(); }
+  };
+  const disableWidget = async () => {
+    try {
+      await API.del('/campaigns/' + st.embedItem.slug + '/widget-snippet');
+      st.embed = Object.assign({}, st.embed, { widget_snippet: null, widget_snippet_hash: null, widget_snippet_available: false });
+      st.embedCopied = ''; renderApp();
+    } catch (e) { st.embedErr = e.message; renderApp(); }
+  };
+
   const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
 
   return html`<div>
@@ -417,7 +460,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span></td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
       </tbody></table>
@@ -536,6 +579,37 @@ const Campaigns = () => {
             </div>
           </div>`;
         })()}
+      </div>
+    </div>`}
+    ${st.embedItem && html`<div class="modal" id="embedModal" onClick=${e => e.target === e.currentTarget && (closeEmbed())}>
+      <div class="modal-content" style="max-width:720px">
+        <h3 class="text-lg font-bold mb-1">Embed — ${st.embedItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">Paste these on your own website. The player is served from the app host, so every value below is absolute.</p>
+        ${st.embedErr && html`<div class="text-red-500 text-sm mb-3">${st.embedErr}</div>`}
+        ${!st.embed && !st.embedErr && html`<div class="text-gray-400 text-sm">Loading embed options…</div>`}
+        ${st.embed && html`<div class="space-y-4">
+          <div>
+            <div class="flex items-center justify-between mb-1"><label class="text-sm font-semibold">Direct Link</label>
+              <button class="btn btn-sm btn-outline" id="embedCopyDirect" onClick=${() => copyText('direct', st.embed.play_url)}>Copy</button></div>
+            <textarea class="input" id="embedDirect" readonly rows="1" style="font-family:monospace;font-size:11px">${st.embed.play_url}</textarea>
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-1"><label class="text-sm font-semibold">Iframe Embed</label>
+              <button class="btn btn-sm btn-outline" id="embedCopyIframe" onClick=${() => copyText('iframe', st.embed.embed_code)}>Copy</button></div>
+            <textarea class="input" id="embedIframe" readonly rows="6" style="font-family:monospace;font-size:11px">${st.embed.embed_code}</textarea>
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-1"><label class="text-sm font-semibold">Widget Script</label>
+              ${st.embed.widget_snippet_available
+                ? html`<button class="btn btn-sm btn-red" id="embedDisableWidget" onClick=${disableWidget}>Stop serving</button>`
+                : html`<button class="btn btn-sm btn-green" id="embedCreateWidget" onClick=${createWidget}>Create widget snippet</button>`}</div>
+            ${st.embed.widget_snippet_available
+              ? html`<textarea class="input" id="embedWidget" readonly rows="2" style="font-family:monospace;font-size:11px">${st.embed.widget_snippet}</textarea>`
+              : html`<div class="text-xs text-gray-500" id="embedWidgetNone">No widget snippet yet for this campaign — create one to get the popup overlay script tag.</div>`}
+          </div>
+          ${st.embedCopied && html`<div class="text-xs text-green-600" id="embedCopied">✓ Copied the ${st.embedCopied === 'direct' ? 'direct link' : st.embedCopied === 'iframe' ? 'iframe embed' : 'widget script'}</div>`}
+        </div>`}
+        <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="embedClose" onClick=${closeEmbed}>Close</button></div>
       </div>
     </div>`}
   </div>`;

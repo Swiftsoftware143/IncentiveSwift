@@ -115,6 +115,11 @@ let currentFunnel = null;
 let questions = [];
 let rules = [];
 let campaigns = [];
+// kanban t_bf1978d6: the popup widget a survey runs in is the CAMPAIGN widget
+// (widget_snippets.campaign_id; GET /api/v1/widget/<hash> overlays <origin>/play/<slug>).
+// This funnel detail view is the surface the served guide §Popup Widget's "Widget button (🔌)"
+// names, so it is the honest producer for it.
+let widgetInfo = null;
 let csConnected = false;
 let csLists = [];
 let csListId = '';
@@ -211,6 +216,61 @@ async function loadCampaigns() {
   catch (e) { campaigns = []; }
 }
 
+// ---------- popup widget producer (kanban t_bf1978d6) ----------
+// The served public guide §Popup Widget: "open the funnel you want to use as a widget. Click the
+// Widget button (🔌) … Copy Embed Code."  The shipped runtime is the CAMPAIGN widget, so the
+// button works on the campaigns this survey gates and says so when there are none.
+function widgetGated() {
+  if (!currentFunnel) return [];
+  return (campaigns || []).filter(cp => cp && cp.iqs_funnel_id === currentFunnel.id);
+}
+function widgetBoxHtml() {
+  if (!widgetInfo) return '';
+  if (widgetInfo.error) return `<p class="muted">${esc(widgetInfo.error)}</p>`;
+  const stop = widgetInfo.is_active ? `<button class="btn red sm" id="widgetStop" onclick="widgetStop()">Stop serving</button>` : '';
+  return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:10px">
+    <div style="font-weight:600;font-size:13px">Popup widget — ${esc(widgetInfo.name || widgetInfo.slug)}</div>
+    <p class="muted" style="margin:6px 0">Paste this just before the closing &lt;/body&gt; tag on your website. The overlay plays ${esc(widgetInfo.play_url || '')}, so this survey gates the entry.</p>
+    <textarea class="input" id="widgetCode" readonly rows="2" style="font-family:monospace;font-size:11px">${esc(widgetInfo.embed_code || '')}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+      <button class="btn sm" id="widgetCopy" onclick="widgetCopy()">Copy</button>
+      ${stop}
+      <span class="muted" id="widgetCopied"></span>
+    </div>
+  </div>`;
+}
+async function showWidget() {
+  const gated = widgetGated();
+  if (!gated.length) {
+    widgetInfo = { error: 'Attach this survey to a campaign first (Campaign Gate above). The popup widget is served per campaign: its overlay plays that campaign page with this survey gating entry.' };
+    renderEditor();
+    return;
+  }
+  const cp = gated[0];
+  try {
+    const d = await api('/campaigns/' + cp.slug + '/widget-snippet', 'POST');
+    widgetInfo = { slug: cp.slug, name: cp.name || cp.title || cp.slug, embed_code: d.embed_code, play_url: d.play_url, is_active: true };
+    if (gated.length > 1) widgetInfo.name += ` (first of ${gated.length} gated campaigns)`;
+    renderEditor();
+  } catch (e) { widgetInfo = { error: e.message }; renderEditor(); }
+}
+function widgetCopy() {
+  const ta = document.getElementById('widgetCode');
+  if (!ta) return;
+  const done = () => { const s = document.getElementById('widgetCopied'); if (s) s.textContent = '✓ Copied'; };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ta.value).then(done).catch(() => { ta.select(); try { document.execCommand('copy'); } catch (e) {} done(); });
+  } else { ta.select(); try { document.execCommand('copy'); } catch (e) {} done(); }
+}
+async function widgetStop() {
+  if (!widgetInfo || !widgetInfo.slug) return;
+  try {
+    await api('/campaigns/' + widgetInfo.slug + '/widget-snippet', 'DELETE');
+    widgetInfo = Object.assign({}, widgetInfo, { is_active: false });
+    renderEditor();
+  } catch (e) { widgetInfo = { error: e.message }; renderEditor(); }
+}
+
 function cfg() { return currentFunnel.config && typeof currentFunnel.config === 'object' ? currentFunnel.config : JSON.parse(currentFunnel.config || '{}'); }
 function theme() { return currentFunnel.theme && typeof currentFunnel.theme === 'object' ? currentFunnel.theme : (currentFunnel.theme ? JSON.parse(currentFunnel.theme) : {}); }
 
@@ -259,6 +319,8 @@ function renderEditor() {
       <button class="btn gray sm" style="margin-top:8px" onclick="refreshCsLists()" ${csConnected?'':'disabled'}>↻ Refresh lists</button>
     </div>
   </div>
+  <div id="widgetBox">${widgetBoxHtml()}</div>
+  <button class="btn sm" id="widgetBtn" onclick="showWidget()">🔌 Widget — get embed code</button>
 
   <div style="border-top:1px solid #e2e8f0;margin:16px 0"></div>
   <h3>❓ Questions</h3>
