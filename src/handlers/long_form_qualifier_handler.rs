@@ -232,12 +232,23 @@ pub async fn long_form_qualifier(
                 "contact_id": contact_id,
                 "campaign": campaign.slug,
             });
+            // `config.outcome_webhook` is tenant-supplied, so it passes the platform's
+            // outbound-webhook gate (private/reserved refused, the matching integration target's
+            // allowlist + daily cap applied) and the send follows no redirects (kanban t_52b93eb7).
+            let pool = state.db.clone();
+            let owner = campaign.account_id;
             tokio::spawn(async move {
-                let _ = reqwest::Client::new()
-                    .post(&hook)
-                    .json(&payload)
-                    .send()
-                    .await;
+                if !crate::security::webhook_security::outbound_webhook_allowed(
+                    &pool, &owner, &hook,
+                )
+                .await
+                {
+                    return;
+                }
+                let Some(client) = crate::security::webhook_security::delivery_client() else {
+                    return;
+                };
+                let _ = client.post(&hook).json(&payload).send().await;
             });
         }
     }

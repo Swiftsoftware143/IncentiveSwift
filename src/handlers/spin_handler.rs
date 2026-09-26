@@ -507,6 +507,7 @@ pub async fn spin(
                     result.was_pity,
                     result.streak,
                     result.total_spins,
+                    &campaign.account_id,
                 )
                 .await;
             } else {

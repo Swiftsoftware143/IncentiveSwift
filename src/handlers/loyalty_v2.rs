@@ -761,8 +761,8 @@ pub async fn redeem_reward(
     Json(req): Json<RedeemRewardRequest>,
 ) -> Result<Json<Value>, AppError> {
     // Get the campaign and reward tier
-    let campaign = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<Value>, Option<String>)>(
-        "SELECT c.id, c.name, c.config->>'entry_webhook_url', c.config->'output_actions', c.delivery_method
+    let campaign = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<Value>, Option<String>, Uuid)>(
+        "SELECT c.id, c.name, c.config->>'entry_webhook_url', c.config->'output_actions', c.delivery_method, c.account_id
          FROM campaigns c WHERE c.slug = $1 LIMIT 1"
     )
     .bind(&req.campaign_slug)
@@ -839,9 +839,18 @@ pub async fn redeem_reward(
     .execute(&s.db)
     .await?;
 
-    // Fire webhook to tenant (legacy entry_webhook_url config)
+    // Fire webhook to tenant (legacy entry_webhook_url config). The destination is tenant config,
+    // so it passes the platform's outbound-webhook gate first, and the send is the shared
+    // no-redirect client (kanban t_52b93eb7).
     let webhook_url = campaign.2.clone().unwrap_or_default();
-    if !webhook_url.is_empty() {
+    if !webhook_url.is_empty()
+        && crate::security::webhook_security::outbound_webhook_allowed(
+            &s.db,
+            &campaign.5,
+            &webhook_url,
+        )
+        .await
+    {
         let payload = json!({
             "event": "reward_redeemed",
             "campaign": campaign.1,
@@ -851,8 +860,8 @@ pub async fn redeem_reward(
             "contact_id": req.contact_id,
             "timestamp": chrono::Utc::now().to_rfc3339()
         });
-        let client = reqwest::Client::new();
-        let _ = client
+        let _ = s
+            .http_client
             .post(&webhook_url)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(5))

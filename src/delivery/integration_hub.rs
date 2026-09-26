@@ -24,7 +24,6 @@
 //! }
 //! ```
 
-use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -205,6 +204,11 @@ pub struct IntegrationTargetRow {
     pub api_key: Option<String>,
     pub events: Vec<String>,
     pub is_active: bool,
+    /// The allowlist + daily cap that `security::webhook_security` enforces for THIS row. They live
+    /// on the row the admin console's integration form writes, so the gate's config and the
+    /// destination arrive together (kanban t_52b93eb7).
+    pub allowed_domains: Vec<String>,
+    pub daily_limit: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +461,8 @@ async fn deliver_to_integration_target(
 
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
-                  api_key, events, is_active
+                  api_key, events, is_active, COALESCE(allowed_domains, '{}') AS allowed_domains,
+                  daily_limit
            FROM integration_targets WHERE id = $1"#,
     )
     .bind(target_id)
@@ -473,6 +478,34 @@ async fn deliver_to_integration_target(
             success: false,
             status_code: None,
             error: Some("Target is inactive".to_string()),
+        });
+    }
+
+    // The outbound-webhook gate: `webhook_url` is the value the admin console's integration form
+    // writes, and this same row carries the allowlist + daily cap the gate enforces. Refusal is
+    // never silent and never degrades to an ungated send (kanban t_52b93eb7).
+    if let Err(e) = crate::security::webhook_security::check_webhook_security(
+        pool,
+        &target.id,
+        &target.webhook_url,
+        &target.allowed_domains,
+        target.daily_limit,
+    )
+    .await
+    {
+        let msg = format!("Blocked by security policy: {}", e);
+        tracing::warn!(
+            "Integration target {} ({}) not delivered: {}",
+            target_id_str,
+            target.webhook_url,
+            msg
+        );
+        return Ok(WebhookResult {
+            target_id: target_id_str.to_string(),
+            target_name: target.name,
+            success: false,
+            status_code: None,
+            error: Some(msg),
         });
     }
 
@@ -551,8 +584,17 @@ async fn deliver_to_integration_target(
         None
     };
 
-    // Send webhook
-    let client = HttpClient::new();
+    // Send webhook — the shared no-redirect client, so a 30x from an allowed host cannot become a
+    // free hop to a private address (`AppState::http_client` carries the same policy).
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Ok(WebhookResult {
+            target_id: target_id_str.to_string(),
+            target_name: target.name,
+            success: false,
+            status_code: None,
+            error: Some("outbound webhook client unavailable — delivery skipped".to_string()),
+        });
+    };
     let mut request = client
         .post(&target.webhook_url)
         .header("Content-Type", "application/json")
@@ -658,7 +700,8 @@ async fn fire_autoresponder(pool: &PgPool, ctx: &DeliveryContext) -> Result<(), 
     // once a config asked for it. Measured live 2026-09-26 (card t_d2c56fcb).
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
-                  api_key, events, is_active
+                  api_key, events, is_active, COALESCE(allowed_domains, '{}') AS allowed_domains,
+                  daily_limit
            FROM integration_targets
            WHERE account_id = $1
              AND (events @> ARRAY['autoresponder']::text[] OR provider IN ('activecampaign', 'convertkit', 'mailchimp', 'gohighlevel', 'hubspot'))
@@ -671,6 +714,18 @@ async fn fire_autoresponder(pool: &PgPool, ctx: &DeliveryContext) -> Result<(), 
     .await
     .map_err(|e| format!("DB error finding autoresponder: {}", e))?
     .ok_or_else(|| "No autoresponder integration configured for this account".to_string())?;
+
+    // The outbound-webhook gate, same arms as the hub's webhook delivery: this target's URL is
+    // tenant-supplied and its allowlist/daily cap ride on the same row (kanban t_52b93eb7).
+    crate::security::webhook_security::check_webhook_security(
+        pool,
+        &target.id,
+        &target.webhook_url,
+        &target.allowed_domains,
+        target.daily_limit,
+    )
+    .await
+    .map_err(|e| format!("Autoresponder blocked by security policy: {}", e))?;
 
     let payload = json!({
         "event": "campaign_outcome",
@@ -693,7 +748,10 @@ async fn fire_autoresponder(pool: &PgPool, ctx: &DeliveryContext) -> Result<(), 
         "trigger": if ctx.outcome.won { "prize_won" } else { "prize_lost" },
     });
 
-    let client = HttpClient::new();
+    // Send webhook — no redirects, so a 30x cannot hop past the gate.
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Err("outbound webhook client unavailable — autoresponder skipped".to_string());
+    };
     let mut request = client
         .post(&target.webhook_url)
         .header("Content-Type", "application/json")

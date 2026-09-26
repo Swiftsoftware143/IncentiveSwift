@@ -229,14 +229,14 @@ POST /api/v1/portfolio-companies      — Create company</pre>
     <h3>Admin Controls</h3>
     <p>Webhook security settings are configurable per integration target:</p>
     <ul>
-      <li><strong>Allowed Domains</strong> — Restrict webhook dispatch to approved domains only. Enter comma-separated domains in the integration form.</li>
-      <li><strong>Daily Limit</strong> — Set max webhook calls per day per integration target. Prevents runaway dispatch loops.</li>
-      <li><strong>Delivery Log</strong> — Admins can view the delivery log showing every webhook attempt, status, and error message.</li>
+      <li><strong>Allowed Domains</strong> — Restrict webhook dispatch to approved domains only. Enter comma-separated domains in the integration form. An empty list allows any public domain; private, loopback and link-local addresses are refused for every target.</li>
+      <li><strong>Daily Limit</strong> — Set max webhook dispatches per day per integration target. Prevents runaway dispatch loops. The window is the UTC day, so the count resets at midnight UTC.</li>
+      <li><strong>Delivery Log</strong> — Admins can view the delivery log showing each dispatch attempt to an integration target, its status and its error message. A dispatch refused by a security check is never sent, so it appears in the platform log rather than the delivery log.</li>
     </ul>
   </div>
   <div class="card">
     <h3>Enforcement</h3>
-    <p>When a webhook is dispatched, the system checks the target domain against the allowlist. If not allowed, the dispatch is blocked and logged. If the daily limit is reached, further dispatches are blocked until the reset (24h from first dispatch).</p>
+    <p>When a webhook is dispatched, the destination host is resolved and refused if it points at a private, loopback or link-local address, then the target's domain is checked against its allowlist. If it is not allowed, the dispatch is refused before the request is made and the reason is logged. If the daily limit is reached, further dispatches are refused until midnight UTC. Redirects are not followed. The production delivery paths apply the same checks as the Test Webhook panel.</p>
   </div>
   <div class="card">
     <h3>Monitoring</h3>

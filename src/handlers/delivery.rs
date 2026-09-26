@@ -35,7 +35,7 @@ pub async fn resend(
                   e.tags_applied, e.created_at,
                   c.first_name, c.last_name, c.email, c.phone, c.business_name,
                   cam.name, cam.type, cam.tag_namespace, cam.delivery_method,
-                  cam.delivery_config
+                  cam.delivery_config, cam.account_id
            FROM entries e
            JOIN contacts c ON c.id = e.contact_id
            JOIN campaigns cam ON cam.id = e.campaign_id
@@ -66,6 +66,7 @@ pub async fn resend(
     let tag_namespace: String = row.get("tag_namespace");
     let delivery_method: String = row.get("delivery_method");
     let delivery_config: serde_json::Value = row.get("delivery_config");
+    let campaign_account_id: Uuid = row.get("account_id");
 
     // CRITICAL: Get Q&A from normalized join (questions table), not from raw JSONB
     let normalized_qa = questions_answers::get_questions_with_answers(&state.db, &entry_id).await?;
@@ -108,6 +109,7 @@ pub async fn resend(
         &payload,
         &state.db,
         &entry_id,
+        &campaign_account_id,
     )
     .await?;
 

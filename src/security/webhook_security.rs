@@ -129,6 +129,95 @@ pub async fn check_daily_limit(
     Ok(true)
 }
 
+/// The gate for a TENANT-supplied outbound webhook destination that has no `integration_targets`
+/// row of its own (a campaign's `config.entry_webhook_url`, an `output_actions` webhook, a reward
+/// webhook, a campaign `delivery_config` webhook).
+///
+/// The destination is looked up in `integration_targets`: a matching active row brings its own
+/// allowlist and daily cap along, so those deliveries get the full three-arm gate. With no
+/// matching row the private/reserved-IP refusal still applies (an empty allowlist permits every
+/// *public* destination, which is the module's own documented semantics). This is the same
+/// resolution the test-webhook route uses (`handlers::entries::test_entry_webhook`), given a name
+/// so every production delivery site can call one function instead of re-deriving it.
+pub async fn gate_outbound_webhook(
+    pool: &PgPool,
+    account_id: &uuid::Uuid,
+    webhook_url: &str,
+) -> Result<(), AppError> {
+    let target: Option<(uuid::Uuid, Vec<String>, i32)> = sqlx::query_as(
+        "SELECT id, COALESCE(allowed_domains, '{}'), daily_limit FROM integration_targets \
+         WHERE account_id = $1 AND webhook_url = $2 AND is_active = true LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(webhook_url)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("Security check error: {}", e)))?;
+
+    match target {
+        Some((target_id, allowed_domains, daily_limit)) => {
+            check_webhook_security(pool, &target_id, webhook_url, &allowed_domains, daily_limit)
+                .await
+        }
+        None => validate_webhook_url(webhook_url, &[]).await.map_err(|msg| {
+            AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
+        }),
+    }
+}
+
+/// `gate_outbound_webhook` for a BEST-EFFORT delivery path, where the entry must not fail because
+/// its destination was refused. Returns `true` when the destination may be contacted and `false`
+/// when the gate refused it — the caller must then NOT send. The refusal is logged with its
+/// reason, so a blocked delivery is never silent.
+pub async fn outbound_webhook_allowed(
+    pool: &PgPool,
+    account_id: &uuid::Uuid,
+    webhook_url: &str,
+) -> bool {
+    match gate_outbound_webhook(pool, account_id, webhook_url).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                "Outbound webhook to '{}' refused by the security gate: {}",
+                webhook_url,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// A shared client for outbound webhook delivery that follows NO redirects.
+///
+/// `reqwest::Client::new()` follows up to 10 redirects, so a destination that passed the gate could
+/// answer `302 Location: http://169.254.169.254/…` and be a free hop past it. `AppState::http_client`
+/// carries the same policy — prefer it wherever a state handle is in scope; this exists for the
+/// delivery module, which is handed only a pool.
+///
+/// Returns `None` when the client cannot be built at all (TLS backend failure). Callers must then
+/// SKIP the delivery rather than fall back to a redirect-following default: a gate that degrades to
+/// an ungated send is not a gate.
+pub fn delivery_client() -> Option<reqwest::Client> {
+    static DELIVERY_CLIENT: std::sync::OnceLock<Option<reqwest::Client>> =
+        std::sync::OnceLock::new();
+    DELIVERY_CLIENT
+        .get_or_init(|| {
+            match reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
+                .user_agent("IncentiveSwift/0.1.0")
+                .build()
+            {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::error!("outbound-webhook client could not be built ({e}); webhook delivery stays disabled");
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
 /// Run both security checks before delivering a webhook.
 /// Returns Ok(()) if all checks pass, AppError with descriptive message otherwise.
 pub async fn check_webhook_security(

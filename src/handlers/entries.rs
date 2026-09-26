@@ -370,6 +370,7 @@ pub async fn create_entry(
         &payload,
         &state.db,
         &entry_id,
+        &campaign.account_id,
     )
     .await?;
 
@@ -394,6 +395,7 @@ pub(crate) async fn dispatch_integrations(
     payload: &DeliveryPayload,
     db: &sqlx::PgPool,
     entry_id: &Uuid,
+    account_id: &Uuid,
 ) -> Result<(), AppError> {
     // LEGACY: also do any direct integrations specified in the campaign config
     // These are kept for backwards compat with existing campaigns
@@ -439,7 +441,8 @@ pub(crate) async fn dispatch_integrations(
                 "webhook" => {
                     let url = int_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     if !url.is_empty() {
-                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                        webhook::push_to_webhook(client, url, payload, db, entry_id, account_id)
+                            .await?;
                     }
                 }
                 "hubspot" => {
@@ -473,7 +476,8 @@ pub(crate) async fn dispatch_integrations(
                 "n8n" => {
                     let url = int_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
                     if !url.is_empty() {
-                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                        webhook::push_to_webhook(client, url, payload, db, entry_id, account_id)
+                            .await?;
                     }
                 }
                 _ => {
@@ -523,7 +527,8 @@ pub(crate) async fn dispatch_integrations(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     if !url.is_empty() {
-                        webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                        webhook::push_to_webhook(client, url, payload, db, entry_id, account_id)
+                            .await?;
                     }
                 }
             }
@@ -534,7 +539,7 @@ pub(crate) async fn dispatch_integrations(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !url.is_empty() {
-                webhook::push_to_webhook(client, url, payload, db, entry_id).await?;
+                webhook::push_to_webhook(client, url, payload, db, entry_id, account_id).await?;
             }
         }
     }
@@ -685,35 +690,11 @@ pub async fn test_entry_webhook(
         })?;
 
     // The platform's outbound-webhook gate: every delivery must pass it, and this route was the
-    // one place that skipped it. A matching integration target also brings its own allowlist and
-    // daily cap along.
-    let target: Option<(Uuid, Vec<String>, i32)> = sqlx::query_as(
-        "SELECT id, COALESCE(allowed_domains, '{}'), daily_limit FROM integration_targets \
-         WHERE account_id = $1 AND webhook_url = $2 AND is_active = true LIMIT 1",
-    )
-    .bind(account_id)
-    .bind(webhook_url)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
-
-    match target {
-        Some((target_id, allowed_domains, daily_limit)) => {
-            crate::security::webhook_security::check_webhook_security(
-                &state.db,
-                &target_id,
-                webhook_url,
-                &allowed_domains,
-                daily_limit,
-            )
-            .await?
-        }
-        None => crate::security::webhook_security::validate_webhook_url(webhook_url, &[])
-            .await
-            .map_err(|msg| {
-                AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
-            })?,
-    }
+    // one place that skipped it (kanban t_016c839c). A matching integration target also brings its
+    // own allowlist and daily cap along — the shared helper does exactly that resolution, so the
+    // production delivery paths and this route cannot drift apart (kanban t_52b93eb7).
+    crate::security::webhook_security::gate_outbound_webhook(&state.db, &account_id, webhook_url)
+        .await?;
 
     let contact = body.get("contact").cloned().unwrap_or_else(
         || json!({"first_name":"Test","last_name":"User","email":"test@example.com"}),

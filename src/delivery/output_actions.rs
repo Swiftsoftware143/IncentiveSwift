@@ -15,6 +15,8 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::security::webhook_security::outbound_webhook_allowed;
+
 /// Fire all output actions configured on a campaign for this entry.
 /// Runs in background — does not block the entry response.
 #[allow(clippy::too_many_arguments)]
@@ -57,7 +59,9 @@ pub async fn execute_output_actions(
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if !webhook_url.is_empty() {
+        if !webhook_url.is_empty()
+            && outbound_webhook_allowed(&state.db, account_id, webhook_url).await
+        {
             let payload = build_entry_payload(
                 campaign_name,
                 campaign_slug,
@@ -135,7 +139,7 @@ pub async fn execute_output_actions(
                     .get("url")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if !url.is_empty() {
+                if !url.is_empty() && outbound_webhook_allowed(&state.db, account_id, url).await {
                     let method = action_config
                         .get("method")
                         .and_then(|v| v.as_str())
@@ -218,7 +222,9 @@ pub async fn execute_output_actions(
                     .get("webhook_url")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if !webhook_url.is_empty() {
+                if !webhook_url.is_empty()
+                    && outbound_webhook_allowed(&state.db, account_id, webhook_url).await
+                {
                     let mut req = state.http_client.post(webhook_url).json(&payload);
                     if let Some(api_key) = action_config
                         .get("n8n_api_key")

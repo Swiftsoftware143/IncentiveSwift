@@ -412,15 +412,16 @@ pub async fn fire_marketing_boost_with_override(
     payload: &Value,
     per_item_boost: Option<&serde_json::Value>,
 ) {
-    // Fetch campaign config fresh
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT COALESCE(config, '{}'::jsonb) FROM campaigns WHERE id = $1",
+    // Fetch campaign config fresh — the owning account comes along so a legacy Marketing Boost
+    // webhook destination can pass the platform's outbound-webhook gate (kanban t_52b93eb7).
+    let row = sqlx::query_as::<_, (serde_json::Value, Uuid)>(
+        "SELECT COALESCE(config, '{}'::jsonb), account_id FROM campaigns WHERE id = $1",
     )
     .bind(campaign_id)
     .fetch_optional(&state.db)
     .await;
 
-    let config = match row {
+    let (config, campaign_account_id) = match row {
         Ok(Some(c)) => c,
         _ => return,
     };
@@ -660,6 +661,18 @@ pub async fn fire_marketing_boost_with_override(
             return;
         }
 
+        // Outbound-webhook gate: this destination comes from the campaign's own config, so it is
+        // tenant-supplied. A refused destination is never contacted (kanban t_52b93eb7).
+        if !crate::security::webhook_security::outbound_webhook_allowed(
+            &state.db,
+            &campaign_account_id,
+            &webhook_url,
+        )
+        .await
+        {
+            return;
+        }
+
         // Build the full webhook payload
         let auth_header_name = boost
             .get("auth_header_name")
@@ -776,6 +789,9 @@ pub async fn fire_campaign_integrations(
     was_pity: bool,
     streak: i32,
     total_spins: i32,
+    // The owning account, so each target's destination can go through the platform's
+    // outbound-webhook gate (`security::webhook_security`) before it is contacted.
+    account_id: &Uuid,
 ) {
     // Look up all enabled campaign integrations matching this event
     let integrations = sqlx::query_as::<_, CampaignIntegrationWithTarget>(
@@ -835,6 +851,14 @@ pub async fn fire_campaign_integrations(
         let url = &integration.webhook_url;
         let integration_name = &integration.name;
 
+        // Outbound-webhook gate: these are the account's own integration targets, so the
+        // destination is tenant-supplied. A refused target is never contacted (kanban t_52b93eb7).
+        if !crate::security::webhook_security::outbound_webhook_allowed(&state.db, account_id, url)
+            .await
+        {
+            continue;
+        }
+
         tracing::info!(
             "Firing integration '{}' ({}) for campaign {} event {}",
             integration_name,
@@ -872,6 +896,7 @@ pub async fn fire_campaign_integrations(
             &delivery_payload,
             &state.db,
             entry_id,
+            account_id,
         )
         .await
         {

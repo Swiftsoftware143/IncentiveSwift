@@ -698,12 +698,12 @@
       <p>Webhook integrations let you send data to any external service when events happen in IncentiveSwift.</p>
 
       <h3>Webhook Security</h3>
-      <p>All webhook targets are protected by a security layer:</p>
+      <p>Every outbound webhook passes a security check before it is sent:</p>
       <ul>
-        <li><strong>Domain Allowlist</strong> — Only webhooks to approved domains are sent. Configure allowed domains per integration target.</li>
-        <li><strong>Daily Limit</strong> — Set a maximum number of webhook calls per day to prevent abuse.</li>
-        <li><strong>Delivery Log</strong> — Every webhook call is logged with status (sent, failed, blocked) and timestamp.</li>
-        <li><strong>Rate Monitoring</strong> — The daily reset happens automatically. Exceeded limits block further dispatches until reset.</li>
+        <li><strong>Internal-network refusal</strong> — the destination host is resolved first, and a webhook pointing at a private, loopback or link-local address (127.0.0.1, 10.x.x.x, 192.168.x.x, 172.16–31.x.x, 169.254.x.x) is refused and never sent. Redirects are not followed, so an approved host cannot bounce a delivery to one of those addresses.</li>
+        <li><strong>Domain Allowlist</strong> — configure approved domains per integration target and only those domains (and their subdomains) are sent to. Leave the list empty and any public domain is allowed; internal addresses stay refused either way.</li>
+        <li><strong>Daily Limit</strong> — set a maximum number of dispatches per day per integration target. The count runs on the UTC day and resets at midnight UTC; once it is reached, further dispatches to that target are refused.</li>
+        <li><strong>Delivery Log</strong> — each dispatch to an integration target is recorded with its status (sent or failed) and response code. A dispatch refused by a security check is never sent, and the reason is written to the platform log and returned by the Test Webhook panel.</li>
       </ul>
 
       <h2 id="analytics">📈 Analytics</h2>
@@ -767,7 +767,7 @@
       </div>
       <div class="faq-item">
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">How do I reset the daily webhook limit?</button>
-        <div class="faq-a">The daily limit resets automatically based on the configured interval (default 24 hours from first dispatch). To manually reset, edit the integration target and adjust the daily_limit field.</div>
+        <div class="faq-a">The daily limit runs on the UTC day, so it resets automatically at midnight UTC. To change the maximum, edit the integration target and adjust its daily limit field.</div>
       </div>
       <div class="faq-item">
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Can I export my campaign analytics to Excel?</button>

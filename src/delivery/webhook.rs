@@ -6,16 +6,25 @@ use uuid::Uuid;
 
 /// Push payload to a webhook URL with retry (3 attempts, exponential backoff).
 /// Logs each delivery attempt to delivery_log.
+///
+/// The destination is a tenant-config value (`campaigns.delivery_config` / campaign `config`), so
+/// it goes through the platform's outbound-webhook gate first: a refused destination is never
+/// contacted, and the refusal is logged instead of being silently swallowed (kanban t_52b93eb7).
 pub async fn push_to_webhook(
     client: &reqwest::Client,
     url: &str,
     payload: &DeliveryPayload,
     pool: &sqlx::PgPool,
     entry_id: &Uuid,
+    account_id: &Uuid,
 ) -> Result<(), AppError> {
     let entry_id_str = entry_id.to_string();
     let payload_json = serde_json::to_value(payload)
         .map_err(|e| AppError::Internal(format!("Failed to serialize payload: {}", e)))?;
+
+    if !crate::security::webhook_security::outbound_webhook_allowed(pool, account_id, url).await {
+        return Ok(());
+    }
 
     let retry_delays = [1u64, 2, 4];
     let mut last_error = None;
