@@ -37,6 +37,15 @@
 -- Supporting index for the guard's count (and for any member-scoped check-in query). It is
 -- deliberately NOT unique -- see reason 1 above. The expression is IMMUTABLE, which is the one
 -- thing the original statement got wrong.
+--
+-- FRESH-BUILD NOTE (kanban t_ab9a342a, 2026-09-26): `00001_full_schema.sql` now creates this
+-- index in its NON-unique form too, so `IF NOT EXISTS` below is a no-op on a from-zero build AND
+-- on live, and the two agree (`pg_get_indexdef` on both sides). Before that edit a database built
+-- from zero got the UNIQUE form from 00001 (its original statement failed on live while the old
+-- error-swallowing runner recorded the filename anyway) and this file created the non-unique one
+-- only where that statement had failed. If you ever need to change this index's shape, change it
+-- in `00001_full_schema.sql` -- both files are already recorded in `_migrations`, so a change to
+-- either reaches fresh builds only.
 CREATE INDEX IF NOT EXISTS loyalty_checkins_daily_cap
     ON public.loyalty_checkins (member_id, (timezone('UTC', checked_in_at)::date));
 

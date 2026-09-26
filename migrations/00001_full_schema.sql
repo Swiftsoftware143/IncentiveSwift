@@ -190,13 +190,38 @@ create table public.loyalty_checkins (
     checked_in_at timestamptz default now()
 );
 
--- Enforce daily cap at DB level (common case: 1/day)
+-- Support the daily check-in cap's count query (member-scoped, per UTC day).
+--
+-- DELIBERATELY **NOT UNIQUE** (kanban t_ab9a342a). This statement used to read
+-- `create unique index ...`; uniqueness is not what the product wants and not what the live
+-- database carries:
+--   * the cap is CONFIGURABLE per program (`loyalty_programs.max_checkins_per_day`, default 1)
+--     and the one ACTIVE program in production runs at 5, so a unique index answers the 2nd
+--     legitimate check-in of the day with 23505 instead of the endpoint's own HTTP 200
+--     `{"status":"daily_cap_reached"}` (src/handlers/loyalty.rs) — a 500, not a guard;
+--   * entry-gated check-ins (`entry_id IS NOT NULL`) bypass the cap BY DESIGN
+--     (src/mechanics/loyalty_checkin.rs::process_checkin_from_entry) and can land on one member
+--     several times in one UTC day;
+--   * the enforcement layer is the BEFORE INSERT trigger created by
+--     20260921_loyalty_checkins_daily_cap.sql, which reads the member's own program cap and
+--     refuses in the app's own vocabulary. An index cannot express "cap N".
+-- So this creates the NON-unique index: the exact shape the live database has.
+-- (Before this edit a from-zero build got the UNIQUE form instead, because the original
+-- statement failed on LIVE — see the IMMUTABLE note below — while the old error-swallowing
+-- runner recorded the filename anyway; 20260921's `CREATE INDEX IF NOT EXISTS` then created
+-- the non-unique one on live, and only there. is-baseline-fromzero.sh compares
+-- `tablename || indexname`, so it could not see the difference.)
+--
 -- The UTC-normalised expression is load-bearing: `checked_in_at::date` resolves
 -- through the session TimeZone, so PostgreSQL refuses it in an index expression
 -- ("functions in index expression must be marked IMMUTABLE") and the whole file
 -- aborts — no later migration could run on a database built from zero because of
--- this one line. The definition below is the one the live database carries.
-create unique index loyalty_checkins_daily_cap
+-- this one line.
+--
+-- This file is already recorded in `_migrations` on every database that exists (live:
+-- 2026-08-20) and the runner keys on the FILENAME with no checksum, so it is SKIPPED there:
+-- this edit reaches fresh builds only and writes nothing to production.
+create index loyalty_checkins_daily_cap
     on public.loyalty_checkins (member_id, (timezone('UTC', checked_in_at)::date));
 
 create table public.loyalty_reward_tiers (
