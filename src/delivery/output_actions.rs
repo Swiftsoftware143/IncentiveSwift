@@ -292,6 +292,9 @@ fn build_entry_payload<'a>(
 }
 
 /// Simple template rendering: replace {{key}} with values from payload
+///
+/// Double braces ONLY (the advertised vocabulary, `GET /api/v1/email-templates/merge-fields`);
+/// a leftover placeholder is logged by name instead of going out as copy — kanban t_e43521d2.
 fn render_template(template: &str, payload: &Value) -> String {
     let mut result = template.to_string();
 
@@ -303,6 +306,7 @@ fn render_template(template: &str, payload: &Value) -> String {
         result = result.replace(&placeholder, val);
     }
 
+    crate::template_render::warn_unsubstituted(&result, "campaign output action template");
     result
 }
 

@@ -158,6 +158,9 @@ pub async fn test_smtp_config(
 }
 
 /// Render {{key}} placeholders from a vars object.
+///
+/// Double braces ONLY — the vocabulary both admin surfaces advertise. A leftover is logged by
+/// name (`template_render::warn_unsubstituted`) rather than silently mailed: kanban t_e43521d2.
 pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
     let mut result = template.to_string();
     if let Some(obj) = vars.as_object() {
@@ -170,6 +173,7 @@ pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
             result = result.replace(&placeholder, &replacement);
         }
     }
+    crate::template_render::warn_unsubstituted(&result, "email template (sender)");
     result
 }
 

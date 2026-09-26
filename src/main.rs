@@ -32,6 +32,7 @@ pub mod mechanics;
 pub mod security;
 mod smtp;
 mod state;
+mod template_render;
 mod theme;
 
 use axum::{

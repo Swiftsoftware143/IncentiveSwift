@@ -30,4 +30,5 @@ pub mod mechanics;
 pub mod security;
 mod smtp;
 pub mod state;
+mod template_render;
 pub mod theme;

@@ -1,6 +1,17 @@
 use serde_json::json;
 
+/// The product's own identity — what the `{{app_name}}` merge field carries.
+const APP_NAME: &str = "IncentiveSwift";
+/// Public app origin — what the `{{login_url}}` merge field carries.
+const APP_URL: &str = "https://app.incentiveswift.com";
+
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
+///
+/// The vocabulary is double braces ONLY, which is what both sides of the admin surface
+/// advertise (`GET /api/v1/email-templates/merge-fields` and the served console's merge-field
+/// buttons). Anything left over is logged by name — kanban t_e43521d2: the shipped `welcome`
+/// row spoke single braces, so `Welcome to {app_name}!` was mailed out verbatim and nothing
+/// said so.
 fn render_template(template: &str, vars: &serde_json::Value) -> String {
     let mut result = template.to_string();
     if let Some(obj) = vars.as_object() {
@@ -10,6 +21,7 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
             result = result.replace(&placeholder, replacement);
         }
     }
+    crate::template_render::warn_unsubstituted(&result, "email template");
     result
 }
 
@@ -79,7 +91,9 @@ pub async fn send_template_email(
 
 fn get_default_subject(template_type: &str, app_name: &str) -> String {
     match template_type {
-        "welcome" => format!("Welcome to {}!", app_name),
+        // `welcome_credentials` is the checkout/onboarding flavour of the same mail (see
+        // `send_welcome_email`), so it shares the subject.
+        "welcome" | "welcome_credentials" => format!("Welcome to {}!", app_name),
         "purchase_confirmed" => "Payment Received — Thank You!".to_string(),
         "password_reset" => "Password Reset Request".to_string(),
         _ => format!("{} Notification", app_name),
@@ -104,7 +118,10 @@ async fn send_inline(
         .unwrap_or("a plan");
 
     match template_type {
-        "welcome" => {
+        // The inline safety net. `welcome_credentials` shares the body because it is the same
+        // mail for the flow that MINTS the password; it is reached only when the DB row for
+        // that type is absent (see `send_welcome_email`).
+        "welcome" | "welcome_credentials" => {
             let body = format!(
                 "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
                 app_name, name, email, password, app_url, app_name
@@ -139,13 +156,31 @@ pub async fn send_welcome_email(
     name: &str,
     password: &str,
 ) -> Result<(), String> {
+    // The CREDENTIALS flavour of the welcome mail, and the reason it has its own
+    // `template_type` (kanban t_e43521d2).
+    //
+    // The shared `welcome` row is selected by the SELF-SIGNUP producer
+    // (`handlers::auth_handler::register`), where the account holder typed their own password
+    // seconds earlier — so that row cannot honestly carry a `Password: {{password}}` line:
+    // there is no password for the sender to bind, and mailing the one the user just chose is
+    // exactly what the fleet's other credential mails avoid (WorkflowSwift
+    // `checkout_handler.rs`, missedcallrespondr `checkout_handler.rs` and FunnelSwift
+    // `admin_handler.rs` all bind a GENERATED password, never a user-chosen one).
+    //
+    // This producer is the Stripe/checkout onboarding: it MINTS the password
+    // (`generate_temp_password()` in `billing::webhooks`), so it is the one flow that owes the
+    // recipient the credential. `welcome_credentials` is seeded with that row by
+    // `migrations/20260926_email_template_brace_vocabulary.sql`, which copies the original
+    // `welcome` text — password line included — so no content was rewritten or lost, only
+    // relocated to the template_type that can bind all of it.
     let vars = json!({
         "name": name,
         "email": to,
         "password": password,
-        "app_url": "https://app.incentiveswift.com",
+        "app_name": APP_NAME,
+        "login_url": APP_URL,
     });
-    send_template_email(pool, to, "welcome", &vars).await
+    send_template_email(pool, to, "welcome_credentials", &vars).await
 }
 
 pub async fn send_purchase_confirmed_email(
