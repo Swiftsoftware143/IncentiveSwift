@@ -306,7 +306,7 @@ pub async fn update_reward_status(
 pub async fn get_reward_tier(pool: &PgPool, tier_id: &Uuid) -> Result<RewardTier, AppError> {
     let tier = sqlx::query_as::<_, RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
-                  reward_tag, sort_order
+                  reward_tag, sort_order, marketing_boost
            FROM loyalty_reward_tiers WHERE id = $1"#,
     )
     .bind(tier_id)
