@@ -71,8 +71,8 @@ pub async fn create_entry(
     let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
 
     // Play-time gate for the calculator mechanic. Calculator has no dedicated
-    // handler — it plays through this generic entry-capture endpoint and evaluates
-    // its formula client-side — so gate on the campaign owner's tier here.
+    // handler — it plays through this generic entry-capture endpoint, which derives its score
+    // from the campaign's own formula (step 4) — so gate on the campaign owner's tier here.
     if campaign.r#type == "calculator" {
         crate::access::feature_gate::enforce_mechanic_feature(
             &state,
@@ -91,8 +91,38 @@ pub async fn create_entry(
     )
     .await?;
 
-    // 4. Determine outcome and tags
-    let (mut outcome, mut tags) = determine_outcome(&campaign, body.score);
+    // 4. The entry's score, then its outcome + tags.
+    //
+    // The caller's own number wins when it sends one. A `calculator` campaign also derives its
+    // score from ITS formula over the answers the customer posted — the same "explicit override,
+    // else derive from answers" idiom `score_reveal_handler` already uses — because the served
+    // calculator page posts the customer's inputs, not a score. The formula is the tenant's own
+    // `campaigns.config.formula`; nothing is invented, so a campaign whose formula is empty (or
+    // whose inputs do not satisfy it) leaves the score unset: `entries.score` stays NULL, the
+    // placeholder survives, and `template_render::warn_unsubstituted` names it LOUDLY instead of
+    // the mail carrying a number nobody computed (kanban t_0e99038b).
+    let formula = campaign
+        .config
+        .get("formula")
+        .and_then(|f| f.as_str())
+        .unwrap_or("");
+    let mut score = body.score;
+    if score.is_none() && campaign.r#type == "calculator" {
+        score = body
+            .answers
+            .as_ref()
+            .and_then(|a| crate::mechanics::calculator::score_from_answers(formula, a));
+        if score.is_none() {
+            tracing::warn!(
+                "calculator campaign {} produced no score (formula {:?}) — this entry's mail keeps \
+                 its {{user_score}} placeholder and the unsubstituted-placeholder warn will name \
+                 it. Configure the campaign's formula to give the result a value.",
+                campaign.slug,
+                formula
+            );
+        }
+    }
+    let (mut outcome, mut tags) = determine_outcome(&campaign, score);
 
     // 5. Apply pity timer — may override outcome to force a win
     let (pity_triggered, pity_outcome, pity_tags) = crate::mechanics::pity_timer::apply_pity_timer(
@@ -123,7 +153,7 @@ pub async fn create_entry(
         contact_id,
         campaign_id: campaign.id,
         answers: answers_json,
-        score: body.score,
+        score,
         outcome: Some(outcome.clone()),
         tags_applied: Some(tags_applied.clone()),
         utm_source: body.utm_source.clone(),
@@ -172,7 +202,6 @@ pub async fn create_entry(
                 let state_clone = state.clone();
                 let campaign_clone = campaign.clone();
                 let answers_clone = body.answers.clone();
-                let score = body.score;
                 let em = email.trim().to_string();
                 let fname = body.contact.first_name.clone();
                 let lname = body.contact.last_name.clone();
@@ -306,7 +335,6 @@ pub async fn create_entry(
         let account_id = campaign.account_id;
         let outcome = outcome.clone();
         let tags = oa_tags.clone();
-        let score = body.score;
         let answers = oa_answers.clone();
         let utm_source = oa_utm_source.clone();
         let utm_medium = oa_utm_medium.clone();
@@ -372,7 +400,7 @@ pub async fn create_entry(
         },
         outcome.clone(),
         tags_applied,
-        body.score,
+        score,
         qa_pairs,
         entry_id.to_string(),
     );
@@ -389,11 +417,17 @@ pub async fn create_entry(
     .await?;
 
     // 11. Return result
+    //
+    // `score` is included (additively) because it is the RESULT of a formula-driven mechanic: the
+    // served calculator page renders it as "your result", and it is the same number the lifecycle
+    // mail carries, so the customer and the mail can never disagree (kanban t_0e99038b). It is
+    // `null` when the campaign produced none.
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,
         "outcome": payload.outcome,
         "tags_applied": payload.tags_applied,
+        "score": score,
     })))
 }
 

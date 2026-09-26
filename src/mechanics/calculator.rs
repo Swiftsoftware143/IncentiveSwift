@@ -6,6 +6,7 @@
 //! NEVER use eval(), a scripting engine, or std::process::Command here.
 //! This is the highest-risk surface in the application.
 
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Allowed characters in a safe formula.
@@ -207,9 +208,99 @@ pub fn evaluate(formula: &str, vars: &HashMap<String, f64>) -> Result<f64, Strin
     Ok(result)
 }
 
+/// The entry's score for a **calculator** campaign: the campaign's OWN formula evaluated over the
+/// numeric answers the customer posted, rounded to the integer `entries.score` holds.
+///
+/// WHY THIS LIVES HERE (kanban t_0e99038b). `handlers::entries` documented the calculator score as
+/// "evaluated client-side", but no served surface ever posted one: `www-app/play.html` — the only
+/// customer-facing entry page — sent `contact + utm_*` only, so `entries.score` was NULL for 26 of
+/// 26 live entries and the `calc_summary` mail went out reading `Result: {{user_score}}`. The two
+/// datums the mechanic needs already ship in the product: the formula is the tenant's own
+/// `campaigns.config.formula` (the console's own `calculator: { formula: '' }` default), and the
+/// values are the customer's inputs. Neither is invented here.
+///
+/// Returns `None` — never a made-up number — when there is nothing honest to answer: no formula,
+/// no numeric answer, or a formula that does not evaluate (including a formula naming a variable
+/// the caller did not supply). The caller then leaves the score unset, so the placeholder survives
+/// and `template_render::warn_unsubstituted` names it loudly.
+pub fn score_from_answers(formula: &str, answers: &Value) -> Option<i32> {
+    if formula.trim().is_empty() {
+        return None;
+    }
+    let mut vars: HashMap<String, f64> = HashMap::new();
+    for (key, value) in answers.as_object()? {
+        let n = match value {
+            Value::Number(n) => n.as_f64(),
+            Value::String(s) => s.trim().parse::<f64>().ok(),
+            Value::Bool(_) | Value::Null | Value::Array(_) | Value::Object(_) => None,
+        };
+        if let Some(n) = n.filter(|n| n.is_finite()) {
+            vars.insert(key.clone(), n);
+        }
+    }
+    if vars.is_empty() {
+        return None;
+    }
+    let out = evaluate(formula, &vars).ok()?;
+    if !out.is_finite() {
+        return None;
+    }
+    let rounded = out.round();
+    if rounded < i32::MIN as f64 || rounded > i32::MAX as f64 {
+        return None;
+    }
+    Some(rounded as i32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    /// The defect this closes (kanban t_0e99038b): a served calculator entry used to reach the
+    /// sender with no score, so a score-shaped mail template shipped its braces to the customer.
+    #[test]
+    fn formula_over_posted_answers_is_the_score() {
+        let answers = json!({"leads": 50, "rate": 0.25});
+        assert_eq!(
+            score_from_answers("{leads} * {rate} + 10", &answers),
+            Some(23)
+        );
+        // a customer who types into an <input type="number"> sends a string just as often
+        let strings = json!({"leads": "50", "rate": "0.25"});
+        assert_eq!(
+            score_from_answers("{leads} * {rate} + 10", &strings),
+            Some(23)
+        );
+    }
+
+    /// Nothing honest to answer => None, so the caller leaves the score unset and the mail stays
+    /// LOUD instead of mailing a number nobody computed.
+    #[test]
+    fn nothing_to_answer_is_none_not_zero() {
+        // the console's own unconfigured default
+        assert_eq!(score_from_answers("", &json!({"leads": 5})), None);
+        // no answers at all
+        assert_eq!(score_from_answers("{leads} * 2", &json!({})), None);
+        // a variable the customer did not supply cannot be substituted
+        assert_eq!(
+            score_from_answers("{leads} * {rate}", &json!({"leads": 5})),
+            None
+        );
+        // non-numeric answers are not numbers
+        assert_eq!(
+            score_from_answers("{answer} * 2", &json!({"answer": "a lot"})),
+            None
+        );
+        // a formula that does not evaluate
+        assert_eq!(score_from_answers("{leads} *", &json!({"leads": 5})), None);
+        assert_eq!(
+            score_from_answers("{leads} / 0", &json!({"leads": 5})),
+            None
+        );
+        // out of the i32 range `entries.score` holds
+        assert_eq!(score_from_answers("99999999 * 99999999", &json!({})), None);
+    }
 
     #[test]
     fn test_simple_addition() {

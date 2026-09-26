@@ -99,6 +99,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
   var el = function (id) { return document.getElementById(id); };
   var campaign = null;
   var theme = {};
+  // The campaign's own `config` (GET /api/v1/play/<slug> returns it). A calculator campaign's
+  // `formula` is what its inputs are derived from, below.
+  var config = {};
+  var calcInputs = [];
 
   function show(text, banner) {
     el('loading').style.display = 'none';
@@ -126,6 +130,50 @@ button:disabled{opacity:.6;cursor:not-allowed}
       calculator: 'Get my result', scratch_card: 'Scratch & win', score_reveal: 'Reveal my score',
       mystery: 'Reveal the mystery prize', countdown: 'Claim my reward', poll: 'Cast my vote',
       chat: 'Start', long_form_qualifier: 'Start' })[type] || 'Enter';
+  }
+
+  // ---- Calculator inputs ----------------------------------------------------------------
+  // A calculator campaign's result is its OWN formula (the tenant's `config.formula`, e.g.
+  // "{monthly_revenue} * 0.1 + 500") evaluated over the numbers the customer types: every
+  // `{variable}` in the formula is one input. The page sends those values as `answers` and the
+  // SERVER evaluates the formula (POST /api/v1/entries -> the entry's score, kanban t_0e99038b),
+  // so there is exactly one evaluator and the number the customer sees is the number the
+  // lifecycle mail carries. A campaign with no formula renders no inputs — the page never
+  // invents a result.
+  function formulaVars(type) {
+    if (type !== 'calculator' || typeof config.formula !== 'string') { return []; }
+    var seen = {}, out = [], re = /\{([a-z0-9_]+)\}/g, m;
+    while ((m = re.exec(config.formula)) !== null) {
+      if (!seen[m[1]]) { seen[m[1]] = true; out.push(m[1]); }
+    }
+    return out;
+  }
+
+  function varLabel(name) {
+    var s = name.replace(/_/g, ' ');
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function renderCalculatorInputs() {
+    calcInputs = formulaVars(campaign.type);
+    if (!calcInputs.length) { return; }
+    var btn = el('btn');
+    calcInputs.forEach(function (name, i) {
+      var id = 'calcVar' + i;
+      var lab = document.createElement('label');
+      lab.setAttribute('for', id);
+      lab.textContent = varLabel(name);
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.step = 'any';
+      inp.id = id;
+      inp.required = true;
+      inp.autocomplete = 'off';
+      inp.setAttribute('data-calc-var', name);
+      // the identity fields stay first; the formula's inputs go directly above the button
+      btn.parentNode.insertBefore(lab, btn);
+      btn.parentNode.insertBefore(inp, btn);
+    });
   }
 
   // Source tracking. The served guide documents these as "URL parameter on the play page or
@@ -174,6 +222,12 @@ button:disabled{opacity:.6;cursor:not-allowed}
       html = '<div class="big">Thanks for playing!</div><p style="text-align:center;color:#64748b;font-size:14px;margin:0">' +
         (prize ? 'You got: ' + escapeHtml(prize) : 'Better luck next time — come back soon.') + '</p>';
     }
+    // A formula-driven mechanic's RESULT is the score the server computed from this campaign's
+    // own formula — the same number the lifecycle mail carries, shown first so it reads as the
+    // answer the visitor came for.
+    if (data && typeof data.score === 'number') {
+      html = '<div class="big">Your result: ' + escapeHtml(String(data.score)) + '</div>' + html;
+    }
     if (data && data.redemption_code) {
       html += '<div class="code">Your code: <b>' + escapeHtml(data.redemption_code) + '</b></div>';
     }
@@ -201,6 +255,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
       }
       campaign = res.data.campaign;
       applyTheme(res.data.theme);
+      config = res.data.config || {};
+      renderCalculatorInputs();
       if (res.data.company && res.data.company.name) { el('businessName').textContent = 'by ' + res.data.company.name; }
       document.title = campaign.name + ' — Play';
       el('campaignName').textContent = campaign.name;
@@ -248,9 +304,27 @@ button:disabled{opacity:.6;cursor:not-allowed}
       delete body.campaign_slug;
       body.consent_gathered = true;
     } else {
-      // POST /api/v1/entries takes {contact:{...}, campaign_slug}
+      // POST /api/v1/entries takes {contact:{...}, campaign_slug}. A calculator campaign also
+      // carries the visitor's inputs: the SERVER evaluates the campaign's own formula over them
+      // to produce the entry's score (kanban t_0e99038b), which is why this page never posts a
+      // score of its own.
       url = api + '/entries';
       body = payload();
+      if (calcInputs.length) {
+        var answers = {}, missing = false;
+        calcInputs.forEach(function (name, i) {
+          var raw = el('calcVar' + i).value;
+          var num = Number(raw);
+          if (raw === '' || raw === null || !isFinite(num)) { missing = true; return; }
+          answers[name] = num;
+        });
+        if (missing) {
+          el('error').textContent = 'Please fill in every field so we can work out your result.';
+          el('error').style.display = 'block';
+          return;
+        }
+        body.answers = answers;
+      }
     }
 
     var original = btn.textContent;
