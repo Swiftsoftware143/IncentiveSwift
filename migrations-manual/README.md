@@ -46,9 +46,11 @@ catalog: `features` (30), `available_providers` (15), `email_templates` (58). Ev
    `POST /api/v1/admin/plans/:id/features` (batch upsert; `enabled:true` adds, `false` removes) or
    the Plans/Tiers screens. `limit_value` convention (`features.rs`): `NULL` or `-1` = no cap,
    `0` = not available, positive = the cap.
-   Reference (production, 2026-09-26): `enterprise` holds `all_mechanics` + 12 `mechanic_*` keys
-   (13 rows), `pro` holds 12 `mechanic_*` keys, and **no tier holds a surface gate** — the
-   `custom_domains` gate therefore currently reads "not assigned" on every plan.
+   Reference (production, 2026-09-26 14:40 UTC): `enterprise` holds 16 rows (`all_mechanics` + 13
+   `mechanic_*` keys + `max_leads` + `max_tags`), `pro` holds 15 (13 `mechanic_*` + the two limit
+   rows), `free` holds 5 (`max_leads`, `max_tags`, `mechanic_spin_wheel`, `mechanic_raffle`,
+   `mechanic_quiz`), and **no tier holds a surface gate** — the `custom_domains` gate therefore
+   currently reads "not assigned" on every plan.
    `pro` gained `mechanic_spin_wheel` on 2026-09-26 through this screen (kanban t_2ee007da), because
    the served kiosk page (`app.incentiveswift.com/tablet-demo.html`, whose submit leg is
    `POST /campaigns/:slug/spin` on a `pro`-owned campaign) and the public guide, which opens with
@@ -59,6 +61,19 @@ catalog: `features` (30), `available_providers` (15), `email_templates` (58). Ev
    `all_mechanics` catch-all, so one row of that file's authored intent remains unseated: seating it
    would auto-grant every FUTURE mechanic to `pro` and is a pricing decision, so it is left to the
    operator.
+   `free` gained `mechanic_spin_wheel`, `mechanic_raffle` and `mechanic_quiz` on 2026-09-26 through
+   the same screen (kanban t_cd35d1ff), because a brand-new free account could create **no campaign
+   at all**: `plan_tiers.free` itself carries `max_campaigns = 1` and `max_entries_per_month = 100`
+   (both editable on this screen), and the served copy says the tier has campaigns —
+   `www/signup.html` (title *Create Free Account*, badge *Free Plan*) lists *"Spin-to-Win, Raffles,
+   Quizzes & more"* and every OTHER bullet on that page (loyalty builder, API keys, CSV analytics,
+   embeddable widgets) measurably worked on a freshly registered free account, while
+   `www/admin-guide.html` says *"the free tier provides access to basic campaign types … Paid plans
+   unlock premium campaign types"* and `www/guide.html`'s Quick Start step 1 tells the reader to
+   create a campaign (*"start with Spin the Wheel"*). The three keys are exactly the ones the free
+   signup page names; the other ten `mechanic_*` keys stay premium, and `all_mechanics` stays
+   unseated on `free` too (it would auto-grant every future mechanic and erase the paid tiers'
+   differentiator). The served promises were already true — the entitlement data was not.
 3. **Payment/provider credentials.** Add each account's provider keys in the Integrations Center
    (`available_providers` is only the *catalog* of what may be configured; `provider_keys` holds
    the actual per-account rows). Nothing in this repo carries a real credential.
