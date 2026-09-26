@@ -125,7 +125,7 @@ Hex colors are validated/normalized (`#rgb` expanded to `#rrggbb`); invalid valu
 
 | Surface | Endpoint | Renders |
 |---|---|---|
-| Widget JS | `GET /api/v1/widget/:hash` | Injects a `<style>` block with `--is-primary:...` vars + `theme` object |
+| Widget JS | `GET /api/v1/widget/:hash` | Serves the embeddable runtime (JavaScript): a `<style>` block with `--is-primary:...` vars plus the themed trigger button + campaign overlay; `?format=json` returns the snippet JSON |
 | Widget config | `GET /api/v1/widget/:hash/config` | Returns resolved `theme` object + raw `surface_config.theme` |
 | Embed views | `GET /api/v1/embed/campaign/:slug`, `GET /api/v1/embed/:id` | Injects theme CSS vars into the embed HTML `<style data-incentiveswift-theme>` |
 | Admin save path | `PUT /api/v1/campaigns/:slug` (body `theme`) | `update_campaign` → `merge_campaign_theme` deep-merges into `surface_config.theme` |
@@ -354,9 +354,17 @@ Admins can impersonate any portfolio company to manage their campaigns directly.
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/play/:id` | GET | Public campaign play view |
-| `/api/v1/widget/:hash` | GET | Embeddable widget JS |
+| `/api/v1/widget/:hash` | GET | Embeddable widget runtime (JavaScript; `?format=json` for JSON) |
+| `/api/v1/campaigns/:slug/widget-snippet` | POST | Mint/return the campaign's embed snippet; the response carries the copy-paste `<script>` tag |
+| `/api/v1/campaigns/:slug/widget-snippet` | DELETE | Stop serving the campaign's embed |
 | `/api/v1/embed/campaign/all` | GET | Embed campaign list |
 | `/api/v1/embed/:id` | GET | Embed view |
+
+The **Widget Script** option returned by `GET /api/v1/embed/campaign/:slug` is emitted only when
+the campaign has an active snippet (mint one with the POST above); before kanban t_e3a33d15 it was
+emitted unconditionally and pointed at a URL that answered 404. Both options in that payload
+(`embed_code`, `widget_snippet`) now carry ABSOLUTE urls, because they are pasted onto the
+customer's own site.
 
 ## Webhook Events
 

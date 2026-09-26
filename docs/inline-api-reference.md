@@ -190,10 +190,10 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| GET | `/widget/:hash` | None | `surface_handler::get_widget_js` | Embeddable widget JS |
+| GET | `/widget/:hash` | None | `surface_handler::get_widget_js` | Embeddable widget runtime (JavaScript; `?format=json` returns the snippet JSON) |
 | GET | `/widget/:hash/config` | None | `surface_handler::get_widget_config` | Widget config |
-| GET | `/tablet/:id` | None | `surface_handler::get_tablet_view` | Tablet view |
-| POST | `/tablet/:id/interact` | None | `surface_handler::tablet_interaction` | Tablet interaction |
+| POST | `/campaigns/:slug/widget-snippet` | Bearer | `surface_handler::create_widget_snippet` | Create/return the campaign's embed snippet (the producer for `widget_snippets`) |
+| DELETE | `/campaigns/:slug/widget-snippet` | Bearer | `surface_handler::disable_widget_snippet` | Stop serving the campaign's embed |
 | GET | `/play/:id` | None | `surface_handler::get_play_view` | Campaign play view |
 | GET | `/play/:id/dashboard` | None | `surface_handler::get_loyalty_dashboard` | Loyalty dashboard |
 | GET | `/embed/campaign/all` | None | `surface_handler::get_embed_campaign_list` | Embed campaign list |

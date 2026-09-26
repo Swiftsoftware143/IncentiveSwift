@@ -128,6 +128,21 @@ button:disabled{opacity:.6;cursor:not-allowed}
       chat: 'Start', long_form_qualifier: 'Start' })[type] || 'Enter';
   }
 
+  // Source tracking. The served guide documents these as "URL parameter on the play page or
+  // embed" (utm_source/utm_medium/utm_campaign/page_url); the widget overlay hands the HOST
+  // page's values in on this URL, a shared link carries its own, and a plain visit falls back
+  // to this page's own href/referrer -- which is exactly what it sent before.
+  var tracked = (function () {
+    var p = new URLSearchParams(window.location.search);
+    return {
+      utm_source: p.get('utm_source') || null,
+      utm_medium: p.get('utm_medium') || null,
+      utm_campaign: p.get('utm_campaign') || null,
+      page_url: p.get('page_url') || window.location.href,
+      referrer_url: p.get('referrer_url') || document.referrer || null
+    };
+  })();
+
   function payload() {
     return {
       contact: {
@@ -136,8 +151,11 @@ button:disabled{opacity:.6;cursor:not-allowed}
         email: el('email').value || null
       },
       campaign_slug: campaign.slug,
-      page_url: window.location.href,
-      referrer_url: document.referrer || null
+      utm_source: tracked.utm_source,
+      utm_medium: tracked.utm_medium,
+      utm_campaign: tracked.utm_campaign,
+      page_url: tracked.page_url,
+      referrer_url: tracked.referrer_url
     };
   }
 
@@ -217,8 +235,11 @@ button:disabled{opacity:.6;cursor:not-allowed}
         email: el('email').value || null,
         first_name: el('firstName').value || null,
         last_name: el('lastName').value || null,
-        page_url: window.location.href,
-        referrer_url: document.referrer || null
+        utm_source: tracked.utm_source,
+        utm_medium: tracked.utm_medium,
+        utm_campaign: tracked.utm_campaign,
+        page_url: tracked.page_url,
+        referrer_url: tracked.referrer_url
       };
     } else if (campaign.type === 'raffle') {
       // POST /api/v1/raffles/<slug>/enter takes {contact:{...}, consent_gathered:true}

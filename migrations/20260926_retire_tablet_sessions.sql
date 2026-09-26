@@ -1,0 +1,28 @@
+-- t_e3a33d15 — retire the tablet session surface.
+--
+-- DECISION (arm b, RETIRE), from the writer census in /opt/swift/audits/t_e3a33d15/10-census.txt:
+--
+--   * `tablet_sessions` has NO writer anywhere: 0 INSERTs in src/, migrations/, /opt/swift or
+--     /root; no trigger on the table (pg_trigger = 0 rows); the only non-superuser login role
+--     on this database (`n8n_market_intel`) has NO table privilege at all
+--     (`has_table_privilege('n8n_market_intel','tablet_sessions','INSERT')` = false), so no
+--     external kiosk/embed service can be inserting either.  Its whole lifetime is 5 inserts /
+--     3 updates / 5 deletes in pg_stat_user_tables, all from direct SQL by proof runs — the
+--     7 lifetime edge requests to /api/v1/tablet/* in the nginx logs are our own headless
+--     Chromium admin-panel probes hitting a synthetic id (all 404).
+--   * So GET /api/v1/tablet/:id and POST /api/v1/tablet/:id/interact could only ever answer
+--     404: no code path can create a session row, therefore no session id a client could know
+--     exists.  Their only caller was an auto-generated admin OPS console panel whose two
+--     tablet actions could never succeed.
+--   * The kiosk capture flow that the table was named for is IMPLEMENTED AND SERVED elsewhere:
+--     `www-app/incentiveswift/tablet-demo.html` (live 200 at app.incentiveswift.com) drives
+--     GET /api/v1/play/<slug> + POST /api/v1/campaigns/<slug>/spin, and the capture lands in
+--     `entries` (proved live: utm_source/page_url/utm_medium written).  No served document
+--     promises tablet sessions — not the marketing guide, not the admin guide.
+--
+-- The routes, the handlers and the `TabletSession` struct are deleted in the same commit
+-- (src/main.rs, src/handlers/surface_handler.rs) and the admin console panel entry is gone
+-- from www-admin/index.html.  Dropping the table is what makes the retired state
+-- unreachable rather than merely unrouted; nothing references it (no FK points at it, and
+-- after the code change `grep -rn tablet_sessions src/` = 0 hits).
+DROP TABLE IF EXISTS tablet_sessions;

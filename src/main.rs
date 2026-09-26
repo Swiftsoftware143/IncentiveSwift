@@ -884,13 +884,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/widget/:hash/config",
             get(handlers::surface_handler::get_widget_config),
         )
+        // Widget embed snippets: the producer for `widget_snippets`. Before this pair
+        // existed nothing on the box could insert that row, so GET /api/v1/widget/:hash
+        // could only ever serve hand-made rows and the embed route handed customers a
+        // script URL that 404s (kanban t_e3a33d15).
         .route(
-            "/api/v1/tablet/:id",
-            get(handlers::surface_handler::get_tablet_view),
-        )
-        .route(
-            "/api/v1/tablet/:id/interact",
-            post(handlers::surface_handler::tablet_interaction),
+            "/api/v1/campaigns/:slug/widget-snippet",
+            post(handlers::surface_handler::create_widget_snippet)
+                .delete(handlers::surface_handler::disable_widget_snippet),
         )
         .route(
             "/api/v1/dashboard/stats",

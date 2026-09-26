@@ -1,4 +1,4 @@
-//! Surface handlers — widget, tablet, play, embed views, and domain management.
+//! Surface handlers — widget embed snippets, play, embed views, and domain management.
 
 use crate::error::AppError;
 use crate::handlers::api_keys::resolve_owner_account_id;
@@ -6,6 +6,8 @@ use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
+    http::{header, HeaderMap},
+    response::{IntoResponse, Response},
     Json,
 };
 
@@ -28,18 +30,6 @@ pub struct WidgetSnippet {
     pub campaign_id: Uuid,
     pub snippet_hash: String,
     pub is_active: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// A tablet session record.
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct TabletSession {
-    pub id: Uuid,
-    pub campaign_id: Uuid,
-    pub tenant_id: Uuid,
-    pub device_id: Option<String>,
-    pub interaction_count: i32,
-    pub last_interaction_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -93,29 +83,148 @@ pub struct UpdateSurfaceConfigInput {
     pub surface_config: Value,
 }
 
-/// Public widget — JS snippet with source tracking
-const WIDGET_JS_TEMPLATE: &str = r#"(function() {
-    var s = document.createElement('script');
-    s.src = 'WIDGET_URL';
-    s.async = true;
-    s.setAttribute('data-campaign-hash', 'HASH');
-    // Auto-capture page context for source tracking
-    var params = new URLSearchParams(window.location.search);
-    s.setAttribute('data-utm-source', params.get('utm_source') || '');
-    s.setAttribute('data-utm-medium', params.get('utm_medium') || '');
-    s.setAttribute('data-utm-campaign', params.get('utm_campaign') || '');
-    s.setAttribute('data-referrer-url', document.referrer || '');
-    s.setAttribute('data-page-url', window.location.href);
-    document.head.appendChild(s);
+/// The embeddable popup widget runtime served by `GET /api/v1/widget/{hash}`.
+///
+/// Served as `text/javascript` because that is what the embed code the app hands a
+/// customer points at (`<script src=".../api/v1/widget/{hash}" async>`).  It used to be
+/// answered as JSON from a route the app's own embed options told customers to load as a
+/// script, and `X-Content-Type-Options: nosniff` makes a browser refuse a JSON body for a
+/// `<script src>` — i.e. the widget could never render anywhere (kanban t_e3a33d15).
+///
+/// Placeholders are substituted with `.replace()` rather than `format!` so the JS braces
+/// stay readable: __HASH__, __SLUG__, __ORIGIN__, __LABEL__, __TITLE__, __CSS__.
+const WIDGET_RUNTIME_JS: &str = r#"(function () {
+  var HASH = __HASH__, SLUG = __SLUG__, ORIGIN = __ORIGIN__, LABEL = __LABEL__, TITLE = __TITLE__;
+  var CSS = __CSS__;
+  function boot() {
+    if (window.__incentiveswiftWidget) { return; }
+    window.__incentiveswiftWidget = true;
+    if (!document.body) { return; }
+
+    var style = document.createElement('style');
+    style.setAttribute('data-incentiveswift-theme', HASH);
+    style.appendChild(document.createTextNode(CSS));
+    document.head.appendChild(style);
+
+    // Source tracking: the HOST page's own UTM parameters, its referrer and its URL are
+    // handed to the play page inside the overlay, which forwards them onto the entry.
+    var host = window.location.search || '';
+    function playUrl() {
+      var q = [];
+      var params = new URLSearchParams(host);
+      ['utm_source', 'utm_medium', 'utm_campaign'].forEach(function (k) {
+        var v = params.get(k);
+        if (v) { q.push(k + '=' + encodeURIComponent(v)); }
+      });
+      q.push('page_url=' + encodeURIComponent(window.location.href));
+      if (document.referrer) { q.push('referrer_url=' + encodeURIComponent(document.referrer)); }
+      return ORIGIN + '/play/' + encodeURIComponent(SLUG) + '?' + q.join('&');
+    }
+
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.id = 'incentiveswift-widget-trigger';
+    trigger.setAttribute('data-incentiveswift-widget', HASH);
+    trigger.setAttribute('aria-label', TITLE);
+    trigger.textContent = LABEL;
+    trigger.setAttribute('style', 'position:fixed;right:20px;bottom:20px;z-index:2147483000;cursor:pointer;' +
+      'padding:14px 20px;border:0;font:600 15px/1.2 var(--is-font,Inter,system-ui,sans-serif);' +
+      'background:var(--is-primary,#2563eb);color:var(--is-btn-text,#ffffff);' +
+      'border-radius:var(--is-radius,12px);box-shadow:0 10px 30px rgba(15,21,48,.28)');
+
+    var overlay = null;
+    function build() {
+      overlay = document.createElement('div');
+      overlay.id = 'incentiveswift-widget-overlay';
+      overlay.setAttribute('data-is-theme', HASH);
+      overlay.setAttribute('style', 'position:fixed;inset:0;z-index:2147483001;display:flex;' +
+        'align-items:center;justify-content:center;padding:16px;background:rgba(15,21,48,.72)');
+      var frame = document.createElement('iframe');
+      frame.setAttribute('data-incentiveswift-widget-frame', HASH);
+      frame.setAttribute('title', TITLE);
+      frame.setAttribute('allow', 'geolocation');
+      frame.src = playUrl();
+      frame.setAttribute('style', 'width:min(560px,100%);height:min(760px,92vh);border:0;' +
+        'border-radius:var(--is-radius,12px);background:var(--is-bg,#ffffff)');
+      var close = document.createElement('button');
+      close.type = 'button';
+      close.setAttribute('data-incentiveswift-widget-close', HASH);
+      close.setAttribute('aria-label', 'Close');
+      close.textContent = '✕';
+      close.setAttribute('style', 'position:absolute;top:14px;right:18px;cursor:pointer;border:0;' +
+        'width:36px;height:36px;border-radius:50%;font-size:16px;' +
+        'background:var(--is-primary,#2563eb);color:var(--is-btn-text,#ffffff)');
+      close.addEventListener('click', function () { overlay.style.display = 'none'; });
+      overlay.addEventListener('click', function (e) { if (e.target === overlay) { overlay.style.display = 'none'; } });
+      overlay.appendChild(frame);
+      overlay.appendChild(close);
+      document.body.appendChild(overlay);
+    }
+    trigger.addEventListener('click', function () {
+      if (!overlay) { build(); } else { overlay.style.display = 'flex'; }
+    });
+    document.body.appendChild(trigger);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
 "#;
 
+/// Optional query for the widget route: `?format=json` keeps the pre-existing JSON payload.
+#[derive(Deserialize)]
+pub struct WidgetJsQuery {
+    pub format: Option<String>,
+}
+
+/// The origin a customer's embed must name: the CUSTOMER-FACING app host, never the operator
+/// console's own host.  Two properties matter and both were measured on this deployment:
+///
+///   * the url must be ABSOLUTE — the tag is pasted onto someone else's site, where a relative
+///     `/api/v1/...` (or `/play/...`) would resolve to the customer's own domain;
+///   * it must be the APP host, not this request's host.  The console serves the same API on
+///     admin.<domain>, and an embed minted from there inherited `admin.<domain>` — where
+///     `/play/<slug>` is not served, so the widget's overlay 404s (found by
+///     /opt/swift/audits/t_e3a33d15/proof-console-panel.cjs, kanban t_e3a33d15).
+///
+/// Loopback keeps `http` and its own host so a local probe stays honest about what it measured;
+/// anything else is `https`, because TLS terminates upstream (Cloudflare -> nginx) and the
+/// origin only ever sees plain http.
+fn public_origin(headers: &HeaderMap) -> String {
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(header::HOST))
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "app.incentiveswift.com".to_string());
+    let loopback = host.starts_with("127.0.0.1")
+        || host.starts_with("localhost")
+        || host.starts_with("[::1]")
+        || host.starts_with("0.0.0.0");
+    if loopback {
+        return format!("http://{}", host);
+    }
+    // admin.<domain> is the operator console; the embed belongs to app.<domain>.
+    let app_host = match host.split_once('.') {
+        Some(("admin", rest)) => format!("app.{}", rest),
+        _ => host,
+    };
+    format!("https://{}", app_host)
+}
+
 /// GET /api/v1/widget/{hash}
-/// Returns a JavaScript snippet for embedding the widget.
+/// Serves the embeddable widget runtime as JavaScript — what an embed can execute.
+/// `?format=json` returns the same snippet as JSON, the payload this route served before.
 pub async fn get_widget_js(
     State(state): State<AppState>,
     Path(hash): Path<String>,
-) -> Result<Json<Value>, AppError> {
+    Query(query): Query<WidgetJsQuery>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let snippet = sqlx::query_as::<_, WidgetSnippet>(
         r#"SELECT id, campaign_id, snippet_hash, is_active, created_at
            FROM widget_snippets WHERE snippet_hash = $1 AND is_active = true"#,
@@ -125,37 +234,173 @@ pub async fn get_widget_js(
     .await?
     .ok_or_else(|| AppError::NotFound("Widget snippet not found".to_string()))?;
 
-    // Resolve the campaign's theme so the widget runtime can brand itself live.
-    let surface_config: Value = sqlx::query_scalar::<_, Value>(
-        "SELECT COALESCE(surface_config, '{}'::jsonb) FROM campaigns WHERE id = $1",
+    // Resolve the campaign's theme (and label) so the runtime brands itself live.
+    let campaign = sqlx::query(
+        r#"SELECT name, slug, config, COALESCE(surface_config, '{}'::jsonb) AS surface_config
+           FROM campaigns WHERE id = $1"#,
     )
     .bind(snippet.campaign_id)
     .fetch_optional(&state.db)
     .await?
-    .unwrap_or_else(|| json!({}));
+    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+    let slug: String = campaign.get("slug");
+    let name: String = campaign.get("name");
+    let config: Value = campaign.get("config");
+    let surface_config: Value = campaign.get("surface_config");
     let theme = crate::theme::resolve_theme(&surface_config);
-    let css = crate::theme::theme_css(&theme);
-    let css_literal = crate::theme::js_string_literal(&css);
+    let label = config
+        .get("cta_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Enter now")
+        .to_string();
+    let runtime = widget_runtime_js(&hash, &slug, &name, &label, &theme, &headers);
 
-    let widget_url = format!("/api/v1/widget/{}/config", hash);
-    let theme_js = format!(
-        "(function(){{\n  try {{\n    var st = document.createElement('style');\n    st.setAttribute('data-incentiveswift-theme', '{}');\n    st.textContent = '{}';\n    document.head.appendChild(st);\n  }} catch(e) {{}}\n}})();",
-        hash, css_literal
-    );
-    let js = format!(
-        "{}\n{}",
-        theme_js,
-        WIDGET_JS_TEMPLATE
-            .replace("WIDGET_URL", &widget_url)
-            .replace("HASH", &hash)
+    if query.format.as_deref() == Some("json") {
+        return Ok(Json(json!({
+            "hash": hash,
+            "campaign_id": snippet.campaign_id,
+            "campaign_slug": slug,
+            "javascript": runtime,
+            "theme": theme,
+            "status": "active",
+        }))
+        .into_response());
+    }
+
+    Ok((
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        runtime,
+    )
+        .into_response())
+}
+
+/// Render the widget runtime for one campaign, with every dynamic value JSON-escaped.
+fn widget_runtime_js(
+    hash: &str,
+    slug: &str,
+    name: &str,
+    label: &str,
+    theme: &Value,
+    headers: &HeaderMap,
+) -> String {
+    let js_str = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+    let css = crate::theme::js_string_literal(&crate::theme::theme_css(theme));
+    WIDGET_RUNTIME_JS
+        .replace("__HASH__", &js_str(hash))
+        .replace("__SLUG__", &js_str(slug))
+        .replace("__ORIGIN__", &js_str(&public_origin(headers)))
+        .replace("__LABEL__", &js_str(label))
+        .replace("__TITLE__", &js_str(name))
+        .replace("__CSS__", &format!("'{}'", css))
+}
+
+/// Resolve a campaign the caller's own account owns, or 404 — never leak another tenant's
+/// campaign by answering 403.
+async fn owned_campaign(
+    state: &AppState,
+    slug: &str,
+    user: &AuthenticatedUser,
+) -> Result<(Uuid, Uuid), AppError> {
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID value".to_string()))?;
+    let row = sqlx::query("SELECT id, account_id FROM campaigns WHERE slug = $1")
+        .bind(slug)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+    let campaign_id: Uuid = row.get("id");
+    let owner: Uuid = row.get("account_id");
+    if owner != account_id {
+        return Err(AppError::NotFound("Campaign not found".to_string()));
+    }
+    Ok((campaign_id, account_id))
+}
+
+/// POST /api/v1/campaigns/{slug}/widget-snippet
+///
+/// The producer for `widget_snippets`: mints (or re-uses) the campaign's active embed
+/// snippet and returns the copy-paste tag.  Before this route existed nothing in the app,
+/// the migrations or anywhere on the box could insert a `widget_snippets` row, so
+/// `GET /api/v1/widget/{hash}` could only ever serve hand-made rows and
+/// `GET /api/v1/embed/campaign/{slug}` handed customers a "Widget Script" URL that 404s.
+pub async fn create_widget_snippet(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+) -> Result<Json<Value>, AppError> {
+    let (campaign_id, _account_id) = owned_campaign(&state, &slug, &user).await?;
+
+    let existing: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT snippet_hash FROM widget_snippets WHERE campaign_id = $1 AND is_active = true \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(campaign_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let snippet_hash = match existing {
+        Some(hash) => hash,
+        None => {
+            // The campaign slug IS the hash: it is UNIQUE on campaigns, it is what the
+            // app's own embed option and the retired admin SPA already assumed
+            // (`/api/v1/widget/<slug>`), and it keeps the snippet URL recognisable.
+            let hash = slug.clone();
+            let id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO widget_snippets (id, campaign_id, snippet_hash, is_active) \
+                 VALUES ($1, $2, $3, true) \
+                 ON CONFLICT (snippet_hash) DO UPDATE SET is_active = true, campaign_id = EXCLUDED.campaign_id",
+            )
+            .bind(id)
+            .bind(campaign_id)
+            .bind(&hash)
+            .execute(&state.db)
+            .await?;
+            hash
+        }
+    };
+
+    let campaign = sqlx::query("SELECT name, status FROM campaigns WHERE id = $1")
+        .bind(campaign_id)
+        .fetch_one(&state.db)
+        .await?;
+    let name: String = campaign.get("name");
+    let status: String = campaign.get("status");
+
+    let origin = public_origin(&headers);
+    let embed_code = format!(
+        "<script src=\"{origin}/api/v1/widget/{snippet_hash}\" async data-campaign-hash=\"{snippet_hash}\"></script>"
     );
 
     Ok(Json(json!({
-        "hash": hash,
-        "campaign_id": snippet.campaign_id,
-        "javascript": js,
-        "theme": theme,
-        "status": "active",
+        "campaign": { "id": campaign_id, "slug": slug, "name": name, "status": status },
+        "snippet_hash": snippet_hash,
+        "is_active": true,
+        "widget_url": format!("{origin}/api/v1/widget/{snippet_hash}"),
+        "config_url": format!("{origin}/api/v1/widget/{snippet_hash}/config"),
+        "play_url": format!("{origin}/play/{slug}"),
+        "embed_code": embed_code,
+    })))
+}
+
+/// DELETE /api/v1/campaigns/{slug}/widget-snippet
+/// Stops serving the campaign's embed (the row is deactivated so the trail survives).
+pub async fn disable_widget_snippet(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let (campaign_id, _account_id) = owned_campaign(&state, &slug, &user).await?;
+    let result = sqlx::query(
+        "UPDATE widget_snippets SET is_active = false WHERE campaign_id = $1 AND is_active = true",
+    )
+    .bind(campaign_id)
+    .execute(&state.db)
+    .await?;
+    Ok(Json(json!({
+        "campaign_slug": slug,
+        "deactivated": result.rows_affected(),
     })))
 }
 
@@ -204,92 +449,6 @@ pub async fn get_widget_config(
         "surface_config": surface_config,
         "theme": theme,
         "outcome_tags": outcome_tags,
-    })))
-}
-
-/// GET /api/v1/tablet/{id}
-pub async fn get_tablet_view(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    let session_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid tablet session ID".to_string()))?;
-
-    let session = sqlx::query_as::<_, TabletSession>(
-        r#"SELECT id, campaign_id, tenant_id, device_id, interaction_count,
-                  last_interaction_at, created_at
-           FROM tablet_sessions WHERE id = $1"#,
-    )
-    .bind(session_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Tablet session not found".to_string()))?;
-
-    // Get campaign info for the tablet view
-    let campaign = sqlx::query(
-        r#"SELECT name, slug, type, config, surface_config
-           FROM campaigns WHERE id = $1"#,
-    )
-    .bind(session.campaign_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
-
-    let campaign_name: String = campaign.get("name");
-    let campaign_slug: String = campaign.get("slug");
-    let campaign_type: String = campaign.get("type");
-    let campaign_config: Value = campaign.get("config");
-    let surface_config: Value = campaign.get("surface_config");
-    let theme = crate::theme::resolve_theme(&surface_config);
-    let theme_css_vars = crate::theme::theme_to_css_vars(&theme);
-
-    Ok(Json(json!({
-        "session": session,
-        "campaign": {
-            "name": campaign_name,
-            "slug": campaign_slug,
-            "type": campaign_type,
-        },
-        "config": campaign_config,
-        "surface_config": surface_config,
-        "theme": theme,
-        "theme_css_vars": theme_css_vars,
-    })))
-}
-
-/// POST /api/v1/tablet/{id}/interact
-pub async fn tablet_interaction(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    let session_id = Uuid::parse_str(&id)
-        .map_err(|_| AppError::BadRequest("Invalid tablet session ID".to_string()))?;
-
-    let result = sqlx::query(
-        r#"UPDATE tablet_sessions
-           SET interaction_count = interaction_count + 1, last_interaction_at = now()
-           WHERE id = $1"#,
-    )
-    .bind(session_id)
-    .execute(&state.db)
-    .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Tablet session not found".to_string()));
-    }
-
-    let session = sqlx::query_as::<_, TabletSession>(
-        r#"SELECT id, campaign_id, tenant_id, device_id, interaction_count,
-                  last_interaction_at, created_at
-           FROM tablet_sessions WHERE id = $1"#,
-    )
-    .bind(session_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(json!({
-        "status": "recorded",
-        "session": session,
     })))
 }
 
@@ -627,6 +786,7 @@ pub async fn get_embed_campaign_list(
 pub async fn get_campaign_embed(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     let campaign = sqlx::query(
         r#"SELECT id, name, slug, type, config, surface_config, created_at
@@ -646,7 +806,27 @@ pub async fn get_campaign_embed(
     let theme = crate::theme::resolve_theme(&surface_config);
     let theme_css = crate::theme::theme_css(&theme);
 
-    let play_url = format!("/play/{}", slug_str);
+    // Absolute URLs: this payload is pasted onto the CUSTOMER's site, where a relative
+    // `/play/...` would resolve to the customer's own domain.
+    let origin = public_origin(&headers);
+    let play_url = format!("{origin}/play/{slug_str}");
+    let play_url_full = play_url.clone();
+
+    // The "Widget Script" option is offered only when the campaign really has an active
+    // snippet (mint one with POST /api/v1/campaigns/{slug}/widget-snippet). It used to be
+    // emitted unconditionally, so every customer who copied it got a 404 script URL
+    // (measured, kanban t_e3a33d15).
+    let snippet_hash: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT snippet_hash FROM widget_snippets WHERE campaign_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(cid)
+    .fetch_optional(&state.db)
+    .await?;
+    let widget_snippet = snippet_hash.as_ref().map(|h| {
+        format!(
+            r#"<script src="{origin}/api/v1/widget/{h}" async data-campaign-hash="{h}"></script>"#
+        )
+    });
     let embed_code = format!(
         r##"<!-- IncentiveSwift Campaign: {} -->
 <style data-incentiveswift-theme="{}">{}</style>
@@ -670,7 +850,7 @@ pub async fn get_campaign_embed(
         esc_html(&name),
         slug_str,
         theme_css,
-        "",
+        origin,
         slug_str,
         slug_str
     );
@@ -686,12 +866,11 @@ pub async fn get_campaign_embed(
         "surface_config": surface_config,
         "theme": theme,
         "play_url": play_url,
-        "play_url_full": format!("/play/{}", slug_str),
+        "play_url_full": play_url_full,
         "embed_code": embed_code,
-        "widget_snippet": format!(
-            "<script src=\"/api/v1/widget/{}\" async data-campaign-hash=\"{}\"></script>",
-            slug_str, slug_str
-        )
+        "widget_snippet": widget_snippet,
+        "widget_snippet_hash": snippet_hash,
+        "widget_snippet_available": widget_snippet.is_some(),
     });
     Ok(Json(r))
 }
