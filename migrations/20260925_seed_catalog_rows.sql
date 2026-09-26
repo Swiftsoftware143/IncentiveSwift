@@ -21,7 +21,9 @@
 --   are product structure — all 6 are `https://example.com/hook` webhooks written by the
 --   integration-targets API under one test account, i.e. probe residue, not seed data).
 --   Measured live assignment used as the reference: tier_features live holds ONLY the mechanic_*
---   keys (pro 11 + enterprise 13); the surface gates are assigned to no tier, so a fresh install
+--   keys (at this file's authoring, 2026-09-25: pro 11 + enterprise 13; after kanban t_2ee007da
+--   seated mechanic_spin_wheel on `pro` through the admin console: pro 12 + enterprise 13); the
+--   surface gates are assigned to no tier, so a fresh install
 --   starts from the same place. See migrations-manual/README.md for the documented procedure.
 --
 -- PROVENANCE of every row below: `migrations-manual/`. Byte-for-byte the same (key, label,
