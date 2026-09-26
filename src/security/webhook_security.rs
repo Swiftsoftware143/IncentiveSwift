@@ -68,25 +68,35 @@ pub async fn validate_webhook_url(
         }
     }
 
-    // If the allowed_domains list is empty, all external domains are permitted
-    if allowed_domains.is_empty() {
-        return Ok(());
-    }
-
     // Check if the hostname (or any subdomain of it) matches any allowed domain
-    let host_lower = host.to_lowercase();
-    for domain in allowed_domains {
-        let domain_lower = domain.trim().to_lowercase();
-        // Exact match or subdomain match (e.g., "hooks.example.com" matches "example.com")
-        if host_lower == domain_lower || host_lower.ends_with(&format!(".{}", domain_lower)) {
-            return Ok(());
-        }
+    if !host_matches_allowlist(host, allowed_domains) {
+        return Err(format!(
+            "Webhook URL domain '{}' is not in the allowed domains list: {:?}",
+            host, allowed_domains
+        ));
     }
 
-    Err(format!(
-        "Webhook URL domain '{}' is not in the allowed domains list: {:?}",
-        host, allowed_domains
-    ))
+    Ok(())
+}
+
+/// Does `host` pass the allowlist? An EMPTY allowlist permits every host (the caller has already
+/// been through the private/reserved-IP gate above). Otherwise it is an exact match or a subdomain
+/// of an allowed domain, case-insensitively: `hooks.example.com` matches `example.com`.
+///
+/// Split out of `validate_webhook_url` so the allowlist rule can be proven without a network: the
+/// URL gate resolves the host FIRST and fails closed on an unresolvable one, which makes any
+/// hostname-based assertion a DNS-dependent test (kanban t_016c839c — the module's original tests
+/// asserted `api.good.com`/`hooks.example.com` were allowed, and neither name resolves).
+pub fn host_matches_allowlist(host: &str, allowed_domains: &[String]) -> bool {
+    if allowed_domains.is_empty() {
+        return true;
+    }
+    let host_lower = host.to_lowercase();
+    allowed_domains.iter().any(|domain| {
+        let domain_lower = domain.trim().to_lowercase();
+        !domain_lower.is_empty()
+            && (host_lower == domain_lower || host_lower.ends_with(&format!(".{}", domain_lower)))
+    })
 }
 
 /// Check whether a given integration target has exceeded its daily webhook limit.
@@ -154,73 +164,108 @@ pub async fn check_webhook_security(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_validate_webhook_url_empty_allowlist() {
-        assert!(validate_webhook_url("https://example.com/hook", &[])
-            .await
-            .is_ok());
-        assert!(validate_webhook_url("http://evil.net/callback", &[])
-            .await
-            .is_ok());
+    // ---- the allowlist rule, exercised as the pure predicate (no DNS, no network) -----------
+    #[test]
+    fn empty_allowlist_allows_every_external_host() {
+        assert!(host_matches_allowlist("example.com", &[]));
+        assert!(host_matches_allowlist("evil.net", &[]));
+        assert!(host_matches_allowlist("8.8.8.8", &[]));
     }
 
-    #[tokio::test]
-    async fn test_validate_webhook_url_exact_match() {
+    #[test]
+    fn allowlist_exact_match() {
         let domains = vec!["example.com".to_string(), "api.good.com".to_string()];
-        assert!(validate_webhook_url("https://example.com/hook", &domains)
-            .await
-            .is_ok());
-        assert!(
-            validate_webhook_url("https://api.good.com/v1/callback", &domains)
-                .await
-                .is_ok()
-        );
+        assert!(host_matches_allowlist("example.com", &domains));
+        assert!(host_matches_allowlist("api.good.com", &domains));
     }
 
-    #[tokio::test]
-    async fn test_validate_webhook_url_subdomain_match() {
+    #[test]
+    fn allowlist_subdomain_match() {
         let domains = vec!["example.com".to_string()];
-        assert!(
-            validate_webhook_url("https://hooks.example.com/path", &domains)
-                .await
-                .is_ok()
-        );
-        assert!(
-            validate_webhook_url("https://sub.hooks.example.com/path", &domains)
-                .await
-                .is_ok()
-        );
+        assert!(host_matches_allowlist("hooks.example.com", &domains));
+        assert!(host_matches_allowlist("sub.hooks.example.com", &domains));
     }
 
-    #[tokio::test]
-    async fn test_validate_webhook_url_rejected() {
+    #[test]
+    fn allowlist_rejects_lookalikes() {
         let domains = vec!["example.com".to_string()];
-        assert!(validate_webhook_url("https://evil.com/hook", &domains)
-            .await
-            .is_err());
-        assert!(
-            validate_webhook_url("https://example.evil.com/hook", &domains)
-                .await
-                .is_err()
-        );
+        assert!(!host_matches_allowlist("evil.com", &domains));
+        assert!(!host_matches_allowlist("example.evil.com", &domains));
+        assert!(!host_matches_allowlist("notexample.com", &domains));
+        // an empty allowlist ENTRY must not become a match-everything wildcard
+        assert!(!host_matches_allowlist("evil.com", &["".to_string()]));
     }
 
-    #[tokio::test]
-    async fn test_validate_webhook_url_case_insensitive() {
+    #[test]
+    fn allowlist_is_case_insensitive() {
         let domains = vec!["EXAMPLE.COM".to_string()];
-        assert!(validate_webhook_url("https://example.com/hook", &domains)
-            .await
-            .is_ok());
-        assert!(validate_webhook_url("https://Example.COM/Hook", &domains)
-            .await
-            .is_ok());
+        assert!(host_matches_allowlist("Example.COM", &domains));
+        assert!(host_matches_allowlist("hooks.Example.com", &domains));
+    }
+
+    // ---- the URL gate: literal IPs keep these legs network-free ------------------------------
+    #[tokio::test]
+    async fn refuses_private_and_link_local_addresses() {
+        for url in [
+            "http://127.0.0.1:8083/api/v1/health",
+            "http://127.0.0.2/x",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.5/x",
+            "http://172.16.0.9/x",
+            "http://192.168.1.10/x",
+        ] {
+            let err = validate_webhook_url(url, &[])
+                .await
+                .unwrap_err_or_panic(url);
+            assert!(err.contains("private/reserved"), "{url} -> {err}");
+        }
     }
 
     #[tokio::test]
-    async fn test_validate_webhook_url_invalid_url() {
-        let domains = vec!["example.com".to_string()];
-        assert!(validate_webhook_url("not-a-url", &domains).await.is_err());
-        assert!(validate_webhook_url("", &domains).await.is_err());
+    async fn allows_a_public_address_and_applies_the_allowlist_to_it() {
+        // A literal IP is a public destination when it is not in a reserved range…
+        assert!(validate_webhook_url("https://8.8.8.8/hook", &[])
+            .await
+            .is_ok());
+        // …and the allowlist still has to name it.
+        assert!(
+            validate_webhook_url("https://8.8.8.8/hook", &["8.8.8.8".to_string()])
+                .await
+                .is_ok()
+        );
+        let err = validate_webhook_url("https://8.8.8.8/hook", &["example.com".to_string()])
+            .await
+            .unwrap_err_or_panic("8.8.8.8 vs example.com");
+        assert!(err.contains("allowed domains"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn fails_closed_on_an_unresolvable_host() {
+        // A destination we cannot resolve is not a delivery: the gate refuses instead of trying.
+        let err = validate_webhook_url("https://does-not-resolve.invalid/hook", &[])
+            .await
+            .unwrap_err_or_panic("unresolvable host");
+        assert!(err.contains("DNS resolution failed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn refuses_a_malformed_url() {
+        assert!(validate_webhook_url("not-a-url", &[]).await.is_err());
+        assert!(validate_webhook_url("", &[]).await.is_err());
+    }
+
+    /// `Result::expect_err` needs `T: Debug`; this keeps the failure message the URL.
+    trait UnwrapErrOrPanic<T, E> {
+        fn unwrap_err_or_panic(self, what: &str) -> E;
+    }
+
+    impl<T: std::fmt::Debug, E> UnwrapErrOrPanic<T, E> for Result<T, E> {
+        fn unwrap_err_or_panic(self, what: &str) -> E {
+            match self {
+                Err(e) => e,
+                Ok(v) => panic!("expected Err for {what}, got Ok({v:?})"),
+            }
+        }
     }
 
     #[test]
