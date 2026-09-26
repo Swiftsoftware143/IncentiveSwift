@@ -130,17 +130,32 @@ pub async fn approve_reward(
     // Get tier info for tag
     let tier = loyalty::get_reward_tier(&state.db, &reward.tier_id).await?;
 
-    // Get member to find contact_id
-    let member = loyalty::get_member(&state.db, &reward.member_id).await?;
+    // Get member to find contact_id.
+    //
+    // `reward.member_id` is NULLABLE by design (loyalty_rewards_earned.member_id — a redemption can
+    // be recorded for a contact that never enrolled, see db::loyalty::RewardEarned and kanban
+    // t_d6e55678), so this is a real branch and not a missing check: with no member row there is no
+    // contact to tag. Before, the whole get_reward decode failed for such a row, so this route
+    // answered 500; now the reward is approved with the tag skipped and the answer says so.
+    let member = match reward.member_id {
+        Some(member_id) => Some(loyalty::get_member(&state.db, &member_id).await?),
+        None => None,
+    };
 
     // Apply reward tag to contact
-    loyalty::apply_reward_tag(&state.db, &member.contact_id, &tier.reward_tag).await?;
+    if let Some(member) = &member {
+        loyalty::apply_reward_tag(&state.db, &member.contact_id, &tier.reward_tag).await?;
+    }
 
     Ok(Json(json!({
         "status": "approved",
         "reward_id": id,
         "reward_tag": tier.reward_tag,
-        "message": "Reward approved and tag applied"
+        "message": if member.is_some() {
+            "Reward approved and tag applied".to_string()
+        } else {
+            "Reward approved; the redemption has no loyalty member, so no tag was applied".to_string()
+        }
     })))
 }
 
