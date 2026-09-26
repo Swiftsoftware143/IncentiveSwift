@@ -74,6 +74,11 @@ pub struct PrizeDrawResult {
     pub total_spins: i32,
     pub remaining_daily_spins: i64,
     pub remaining_campaign_spins: i64,
+    /// The entry this draw recorded (`record_win` / `record_loss`). Every caller
+    /// that logs or forwards the outcome must use THIS id: `delivery_log.entry_id`
+    /// is a NOT NULL FK to `entries(id)`. `None` only for `get_spin_status`, which
+    /// draws nothing and therefore creates no entry.
+    pub entry_id: Option<Uuid>,
 }
 
 /// Inventory row for a prize in a campaign.
@@ -714,7 +719,9 @@ pub async fn apply_prize_draw(
     let (new_streak, new_total_spins) = update_streaks(pool, campaign_id, contact_id, won).await?;
 
     // --- Record entry (always) ---
-    if won {
+    // The entry id is KEPT, not dropped: it is the only honest owner of every
+    // delivery_log row and outbound integration payload this draw produces.
+    let entry_id = if won {
         record_win(
             pool,
             campaign_id,
@@ -730,7 +737,7 @@ pub async fn apply_prize_draw(
             user_agent,
             ip_address,
         )
-        .await?;
+        .await?
     } else {
         record_loss(
             pool,
@@ -746,8 +753,8 @@ pub async fn apply_prize_draw(
             user_agent,
             ip_address,
         )
-        .await?;
-    }
+        .await?
+    };
 
     // --- Record daily spin ---
     record_daily_spin(pool, campaign_id, contact_id).await?;
@@ -795,6 +802,7 @@ pub async fn apply_prize_draw(
         total_spins: new_total_spins,
         remaining_daily_spins: remaining_daily,
         remaining_campaign_spins: remaining_campaign,
+        entry_id: Some(entry_id),
     })
 }
 
@@ -851,5 +859,7 @@ pub async fn get_spin_status(
         total_spins,
         remaining_daily_spins: remaining_daily,
         remaining_campaign_spins: remaining_campaign,
+        // status only: no draw, so no entry was created
+        entry_id: None,
     })
 }

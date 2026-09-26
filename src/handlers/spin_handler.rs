@@ -488,21 +488,33 @@ pub async fn spin(
         let campaign_id_for_mb = campaign.id;
         let campaign_name_for_mb = campaign.name.clone();
         let mb_override = prize_marketing_boost.clone();
+        // The entry this win just recorded (prize_draw::apply_prize_draw). It is the
+        // only correct owner of the delivery_log row and of the entry_id the
+        // integration payload carries — the hub used to invent one.
+        let win_entry_id = result.entry_id;
         tokio::spawn(async move {
-            campaign_integrations::fire_campaign_integrations(
-                &state,
-                &campaign.slug,
-                &campaign.name,
-                &campaign.r#type,
-                &campaign.id,
-                "on_win",
-                contact_info,
-                prize_info,
-                result.was_pity,
-                result.streak,
-                result.total_spins,
-            )
-            .await;
+            if let Some(entry_id) = win_entry_id {
+                campaign_integrations::fire_campaign_integrations(
+                    &state,
+                    &campaign.slug,
+                    &campaign.name,
+                    &campaign.r#type,
+                    &campaign.id,
+                    &entry_id,
+                    "on_win",
+                    contact_info,
+                    prize_info,
+                    result.was_pity,
+                    result.streak,
+                    result.total_spins,
+                )
+                .await;
+            } else {
+                tracing::error!(
+                    "spin win for campaign {} recorded no entry id; campaign integrations not fired                      (a delivery_log row may not name an entry that does not exist)",
+                    campaign.slug
+                );
+            }
 
             // Also fire Marketing Boost direct API send if configured
             // Per-prize marketing_boost takes priority over campaign-level config

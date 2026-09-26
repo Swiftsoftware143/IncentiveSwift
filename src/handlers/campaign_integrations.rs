@@ -765,6 +765,11 @@ pub async fn fire_campaign_integrations(
     campaign_name: &str,
     campaign_type: &str,
     campaign_id: &Uuid,
+    // The entry this outcome belongs to. `delivery_log.entry_id` is a NOT NULL FK
+    // to `entries(id)` and the payload carries it to the integration, so both used
+    // to be given a fresh `Uuid::new_v4()` — a delivery reported to the third party
+    // under an entry id that exists nowhere, and an audit row that never landed.
+    entry_id: &Uuid,
     event_type: &str,
     contact: ContactInfo,
     prize: PrizeInfo,
@@ -857,17 +862,16 @@ pub async fn fire_campaign_integrations(
             vec!["Prize_Winner".to_string()],
             None,
             vec![],
-            Uuid::new_v4().to_string(),
+            entry_id.to_string(),
         );
 
         // Use the existing webhook delivery system with retries
-        let entry_id = Uuid::new_v4();
         if let Err(e) = crate::delivery::webhook::push_to_webhook(
             client,
             url,
             &delivery_payload,
             &state.db,
-            &entry_id,
+            entry_id,
         )
         .await
         {

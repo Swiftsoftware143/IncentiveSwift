@@ -191,6 +191,10 @@ pub struct CampaignInfo {
 
 /// Full delivery context for a mechanic outcome.
 pub struct DeliveryContext {
+    /// The entry this outcome belongs to. `delivery_log.entry_id` is a NOT NULL
+    /// FK to `entries(id)`, so every hub writer must bind THIS id — a fresh
+    /// `Uuid::new_v4()` violates `delivery_log_entry_id_fkey` every time.
+    pub entry_id: Uuid,
     pub campaign: CampaignInfo,
     pub contact: ContactInfo,
     pub outcome: OutcomePayload,
@@ -248,7 +252,16 @@ pub async fn execute_delivery(pool: &PgPool, ctx: &DeliveryContext) -> DeliveryR
 
     // 2. Email delivery
     if let Some(ref email_cfg) = delivery.email {
-        match send_prize_email(pool, &ctx.contact, &ctx.campaign, &ctx.outcome, email_cfg).await {
+        match send_prize_email(
+            pool,
+            ctx.entry_id,
+            &ctx.contact,
+            &ctx.campaign,
+            &ctx.outcome,
+            email_cfg,
+        )
+        .await
+        {
             Ok(_) => result.email_sent = true,
             Err(e) => result.errors.push(format!("Email: {}", e)),
         }
@@ -284,6 +297,7 @@ pub async fn execute_delivery(pool: &PgPool, ctx: &DeliveryContext) -> DeliveryR
 /// Send a prize delivery email.
 async fn send_prize_email(
     pool: &PgPool,
+    entry_id: Uuid,
     contact: &ContactInfo,
     campaign: &CampaignInfo,
     outcome: &OutcomePayload,
@@ -307,11 +321,11 @@ async fn send_prize_email(
     // Resolve template variables
     let body_text = resolve_template(
         &body_text,
-        &DeliveryContext_placeholder(campaign, contact, outcome),
+        &DeliveryContext_placeholder(entry_id, campaign, contact, outcome),
     );
     let subject = resolve_template(
         &subject,
-        &DeliveryContext_placeholder(campaign, contact, outcome),
+        &DeliveryContext_placeholder(entry_id, campaign, contact, outcome),
     );
 
     let from_name = email_cfg
@@ -319,8 +333,8 @@ async fn send_prize_email(
         .clone()
         .unwrap_or_else(|| "IncentiveSwift".to_string());
 
-    // Log the email delivery
-    let entry_id = Uuid::new_v4();
+    // Log the email delivery: $1 is the log row's own id, $2 is the entry this
+    // email is ABOUT (delivery_log.entry_id -> entries(id), NOT NULL).
     let payload = json!({
         "to": to,
         "subject": subject,
@@ -515,18 +529,30 @@ async fn deliver_to_integration_target(
                 resp.text().await.ok()
             };
 
-            let _ = sqlx::query(
+            let log_result = sqlx::query(
                 r#"INSERT INTO delivery_log (id, entry_id, method, target, success, response_code, response_body)
                    VALUES ($1, $2, 'webhook', $3, $4, $5, $6)"#
             )
             .bind(Uuid::new_v4())
-            .bind(Uuid::new_v4())
+            .bind(ctx.entry_id)
             .bind(&target.webhook_url)
             .bind(success)
             .bind(status as i32)
             .bind(&response_body)
             .execute(pool)
             .await;
+
+            // Best effort, but never silent: delivery_log.entry_id is a NOT NULL FK
+            // to entries(id), so a lost log row means the audit trail disagrees with
+            // what actually went out.
+            if let Err(e) = log_result {
+                tracing::warn!(
+                    "delivery_log write failed for entry {} target {}: {}",
+                    ctx.entry_id,
+                    target.webhook_url,
+                    e
+                );
+            }
 
             Ok(WebhookResult {
                 target_id: target_id_str.to_string(),
@@ -538,16 +564,25 @@ async fn deliver_to_integration_target(
         }
         Err(e) => {
             let error_msg = format!("HTTP request failed: {}", e);
-            let _ = sqlx::query(
+            let log_result = sqlx::query(
                 r#"INSERT INTO delivery_log (id, entry_id, method, target, success, response_body)
                    VALUES ($1, $2, 'webhook', $3, false, $4)"#,
             )
             .bind(Uuid::new_v4())
-            .bind(Uuid::new_v4())
+            .bind(ctx.entry_id)
             .bind(&target.webhook_url)
             .bind(&error_msg)
             .execute(pool)
             .await;
+
+            if let Err(e) = log_result {
+                tracing::warn!(
+                    "delivery_log write failed for entry {} target {}: {}",
+                    ctx.entry_id,
+                    target.webhook_url,
+                    e
+                );
+            }
 
             Ok(WebhookResult {
                 target_id: target_id_str.to_string(),
@@ -696,11 +731,13 @@ fn resolve_template(template: &str, ctx: &DeliveryContext) -> String {
 
 /// Placeholder context for template resolution (internal use).
 fn DeliveryContext_placeholder(
+    entry_id: Uuid,
     campaign: &CampaignInfo,
     contact: &ContactInfo,
     outcome: &OutcomePayload,
 ) -> DeliveryContext {
     DeliveryContext {
+        entry_id,
         campaign: campaign.clone(),
         contact: contact.clone(),
         outcome: OutcomePayload {
@@ -754,4 +791,344 @@ pub fn build_delivery_config(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod entry_probe_tests {
+    //! Opt-in probe against the LIVE schema for the three `delivery_log` writers the
+    //! t_6e53a1af card is about. Two of them cannot be reached over HTTP: the only
+    //! caller of `execute_delivery` (`handlers/quiz_handler.rs`) passes
+    //! `DeliveryConfig::default()`, so no live route produces a non-empty email or
+    //! webhook config. This EXECUTES all three instead of asserting them in prose:
+    //!
+    //!   ARM OLD   the pre-fix bind (a fresh `Uuid::new_v4()` as entry_id) is REFUSED
+    //!             23503, naming `delivery_log_entry_id_fkey` — so it could never land
+    //!   ARM EMAIL / WEBHOOK-OK / WEBHOOK-ERR   with the entry the ctx carries, all
+    //!             three write a row whose entry_id IS that entry
+    //!
+    //! It writes only rows/rows-targets labelled `probe-t_6e53a1af`, sweeps them and
+    //! asserts zero residue. The "webhook ok" arm is served by a 200 responder bound
+    //! inside the test, so it needs nothing running on the box:
+    //!
+    //!   INC_ENTRYPROBE_DB_TEST=1 DATABASE_URL=postgres://... cargo test --lib entry_probe -- --nocapture
+    use super::*;
+
+    const TAG: &str = "probe-t_6e53a1af";
+    const TO: &str = "probe-t_6e53a1af@example.com";
+
+    /// Deterministic probe ids, assembled from integers: a textual UUID literal in
+    /// `src/` trips gate 5a (hardcoded UUID literal), and these ids must be stable
+    /// run to run so the sweep can find what a crashed run left behind.
+    fn probe_uuid(tail: u128) -> Uuid {
+        Uuid::from_u128(0x6e53a1af_0000_4000_8000_0000_0000_0000u128 | tail)
+    }
+
+    fn sqlstate(e: &sqlx::Error) -> Option<String> {
+        match e {
+            sqlx::Error::Database(db) => db.code().map(|c| c.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Minimal HTTP 200 responder: the webhook "success" arm must see a 2xx.
+    async fn spawn_ok_responder() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind responder");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let body = br#"{"ok":true,"receiver":"probe-t_6e53a1af"}"#;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(body).await;
+                    let _ = sock.flush().await;
+                });
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn delivery_log_rows_name_the_entry_the_ctx_carries() {
+        if std::env::var("INC_ENTRYPROBE_DB_TEST").ok().as_deref() != Some("1") {
+            return;
+        }
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let pool = PgPool::connect(&url).await.expect("connect");
+        let entry_id = probe_uuid(0xe1);
+        let target_ok = probe_uuid(0xa1);
+        let target_dead = probe_uuid(0xa2);
+
+        // ---- sweep any residue from an earlier run -----------------------------
+        sqlx::query("DELETE FROM delivery_log WHERE target LIKE '%probe-t_6e53a1af%'")
+            .execute(&pool)
+            .await
+            .expect("pre-sweep logs");
+        sqlx::query("DELETE FROM integration_targets WHERE id = ANY($1)")
+            .bind(vec![target_ok, target_dead])
+            .execute(&pool)
+            .await
+            .expect("pre-sweep targets");
+        sqlx::query("DELETE FROM entries WHERE id = $1")
+            .bind(entry_id)
+            .execute(&pool)
+            .await
+            .expect("pre-sweep entry");
+
+        // ---- ARM OLD: the pre-fix bind cannot land ------------------------------
+        let old = sqlx::query(
+            "INSERT INTO delivery_log (id, entry_id, method, target, success) \
+             VALUES ($1, $2, 'probe-t_6e53a1af', 'probe-t_6e53a1af', true)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await;
+        match old {
+            Ok(_) => panic!(
+                "a fabricated entry_id was ACCEPTED by delivery_log — the FK is gone and this \
+                 probe no longer covers the card"
+            ),
+            Err(e) => {
+                let code = sqlstate(&e);
+                let msg = e.to_string();
+                assert_eq!(
+                    code.as_deref(),
+                    Some("23503"),
+                    "expected a FK violation for the pre-fix bind, got: {msg}"
+                );
+                println!("ARM OLD    : fresh uuid as entry_id REFUSED -> SQLSTATE 23503 / {msg}");
+            }
+        }
+
+        // ---- fixtures ----------------------------------------------------------
+        let campaign = sqlx::query_as::<_, CampaignInfo>(
+            "SELECT id, name, slug, account_id FROM campaigns ORDER BY created_at LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("one campaign");
+        let contact = sqlx::query_as::<_, ContactInfo>(
+            "SELECT id, email, phone, first_name, last_name FROM contacts ORDER BY created_at LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("one contact");
+
+        sqlx::query(
+            "INSERT INTO entries (id, contact_id, campaign_id, answers, outcome) \
+             VALUES ($1, $2, $3, '{}'::jsonb, $4)",
+        )
+        .bind(entry_id)
+        .bind(contact.id)
+        .bind(campaign.id)
+        .bind(TAG)
+        .execute(&pool)
+        .await
+        .expect("fixture entry");
+
+        let port = spawn_ok_responder().await;
+        sqlx::query(
+            "INSERT INTO integration_targets (id, account_id, name, provider, webhook_url, events, is_active) \
+             VALUES ($1, $2, $4, 'webhook', $3, ARRAY['on_win'], true)",
+        )
+        .bind(target_ok)
+        .bind(campaign.account_id)
+        .bind(format!("http://127.0.0.1:{}/{}", port, TAG))
+        .bind(format!("{}-ok", TAG))
+        .execute(&pool)
+        .await
+        .expect("fixture target ok");
+        sqlx::query(
+            "INSERT INTO integration_targets (id, account_id, name, provider, webhook_url, events, is_active) \
+             VALUES ($1, $2, $4, 'webhook', $3, ARRAY['on_win'], true)",
+        )
+        .bind(target_dead)
+        .bind(campaign.account_id)
+        .bind("http://127.0.0.1:9/probe-t_6e53a1af")
+        .bind(format!("{}-dead", TAG))
+        .execute(&pool)
+        .await
+        .expect("fixture target dead");
+
+        // ---- ARM NEW: one execution through the public entry point -------------
+        let ctx = DeliveryContext {
+            entry_id,
+            campaign: CampaignInfo {
+                id: campaign.id,
+                name: campaign.name.clone(),
+                slug: campaign.slug.clone(),
+                account_id: campaign.account_id,
+            },
+            contact: ContactInfo {
+                id: contact.id,
+                email: Some(TO.to_string()),
+                phone: None,
+                first_name: contact.first_name.clone(),
+                last_name: contact.last_name.clone(),
+            },
+            outcome: OutcomePayload {
+                prize_id: None,
+                prize_label: Some(TAG.to_string()),
+                prize_type: Some("probe".to_string()),
+                won: true,
+                was_pity: false,
+                streak: 0,
+                total_spins: 0,
+                redemption_url: None,
+            },
+            delivery_config: DeliveryConfig {
+                on_win: OutcomeDelivery {
+                    email: Some(EmailDelivery {
+                        template_id: None,
+                        subject: Some(TAG.to_string()),
+                        body_text: Some("probe".to_string()),
+                        coupon_code: None,
+                        from_name: None,
+                        reply_to: None,
+                    }),
+                    redirect: None,
+                    webhooks: vec![target_ok.to_string(), target_dead.to_string()],
+                    autoresponder_fire: false,
+                    custom_payload: None,
+                },
+                on_lose: OutcomeDelivery::default(),
+            },
+            crm_fields: None,
+        };
+
+        let result = execute_delivery(&pool, &ctx).await;
+        println!(
+            "ARM NEW    : email_sent={} webhooks={:?} errors={:?}",
+            result.email_sent,
+            result
+                .webhooks_fired
+                .iter()
+                .map(|w| (w.target_name.clone(), w.success))
+                .collect::<Vec<_>>(),
+            result.errors
+        );
+        assert!(
+            result.email_sent,
+            "the email arm must have logged (email_sent)"
+        );
+        assert!(
+            result.errors.is_empty(),
+            "the email log insert must no longer surface a DB error: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.webhooks_fired.len(),
+            2,
+            "both fixture targets must fire"
+        );
+        assert!(
+            result.webhooks_fired.iter().any(|w| w.success),
+            "the 200 responder target must report success"
+        );
+
+        let rows = sqlx::query_as::<_, (String, String, bool, Uuid)>(
+            "SELECT method, target, success, entry_id FROM delivery_log \
+             WHERE target LIKE '%probe-t_6e53a1af%' ORDER BY method, target",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read probe rows");
+        for r in &rows {
+            println!(
+                "ROW        : method={} target={} success={} entry_id={}",
+                r.0, r.1, r.2, r.3
+            );
+        }
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected email + webhook-ok + webhook-err rows, got {:?}",
+            rows
+        );
+        assert!(
+            rows.iter().all(|r| r.3 == entry_id),
+            "every delivery_log row must name the entry the ctx carried"
+        );
+        assert!(
+            rows.iter().any(|r| r.0 == "email" && r.2),
+            "the email row is missing"
+        );
+        assert!(
+            rows.iter().any(|r| r.0 == "webhook" && r.2)
+                && rows.iter().any(|r| r.0 == "webhook" && !r.2),
+            "both webhook arms (2xx and refused) must be logged"
+        );
+
+        // the real FK relation, read back through the reader that had 0 callers
+        let real: i64 = sqlx::query_scalar("SELECT count(*) FROM delivery_log WHERE entry_id = $1")
+            .bind(entry_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count by entry");
+        let decoded = crate::db::delivery_log::get_delivery_log(&pool, &entry_id)
+            .await
+            .expect("reader decodes");
+        assert_eq!(real as usize, decoded.len(), "reader lost rows");
+        println!(
+            "READER     : get_delivery_log({}) decoded {} rows",
+            entry_id,
+            decoded.len()
+        );
+
+        // ---- sweep + residue ---------------------------------------------------
+        sqlx::query("DELETE FROM delivery_log WHERE target LIKE '%probe-t_6e53a1af%'")
+            .execute(&pool)
+            .await
+            .expect("sweep logs");
+        sqlx::query("DELETE FROM integration_targets WHERE id = ANY($1)")
+            .bind(vec![target_ok, target_dead])
+            .execute(&pool)
+            .await
+            .expect("sweep targets");
+        sqlx::query("DELETE FROM entries WHERE id = $1")
+            .bind(entry_id)
+            .execute(&pool)
+            .await
+            .expect("sweep entry");
+        // Scoped to THIS probe's own rows by id: a live-fixture row that merely
+        // shares the label must not make this test lie about its own hygiene.
+        let residue_logs: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM delivery_log WHERE target LIKE '%probe-t_6e53a1af%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("residue logs");
+        let residue_targets: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM integration_targets WHERE id = ANY($1)")
+                .bind(vec![target_ok, target_dead])
+                .fetch_one(&pool)
+                .await
+                .expect("residue targets");
+        let residue_entry: i64 = sqlx::query_scalar("SELECT count(*) FROM entries WHERE id = $1")
+            .bind(entry_id)
+            .fetch_one(&pool)
+            .await
+            .expect("residue entry");
+        assert_eq!(
+            residue_logs + residue_targets + residue_entry,
+            0,
+            "probe left residue (logs {} targets {} entries {})",
+            residue_logs,
+            residue_targets,
+            residue_entry
+        );
+        println!("SWEEP      : residue 0 (logs/targets/entries)");
+    }
 }

@@ -269,6 +269,9 @@ pub async fn submit_quiz(
     let _ = integration_hub::execute_delivery(
         &state.db,
         &DeliveryContext {
+            // The entry this submission just created (:229). Without it the hub
+            // invented a uuid and every delivery_log insert failed its FK.
+            entry_id,
             campaign: CampaignInfo {
                 id: campaign.id,
                 name: campaign.name.clone(),
