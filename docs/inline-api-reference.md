@@ -22,7 +22,7 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | PUT | `/campaigns/:slug` | JWT | `campaigns::update_campaign` | Update campaign (body may include `theme` → deep-merged into `surface_config.theme`) |
 | DELETE | `/campaigns/:slug` | JWT | `campaigns::delete_campaign_by_id` | Delete campaign |
 | GET | `/campaigns/subdomain/:t_slug` | None | `campaigns::get_campaigns_by_subdomain` | Campaigns by tenant subdomain |
-| POST | `/campaigns/test-webhook` | None | `entries::test_entry_webhook` | Test entry webhook |
+| POST | `/campaigns/test-webhook` | JWT/API Key | `entries::test_entry_webhook` | Fire a sample `entry.created` payload at the caller's OWN campaign webhook — body `{"campaign_id": "<uuid>"}`; the URL comes from that campaign's `config.entry_webhook_url` (never from the caller) and must pass the outbound-webhook security gate. Returns the delivery `status` only. |
 
 ## Raffles / Sweepstakes
 

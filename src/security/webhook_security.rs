@@ -7,7 +7,11 @@
 
 use crate::error::AppError;
 use sqlx::PgPool;
-use url::Url;
+// `url` is not a direct dependency of this crate (it is reqwest's), so the type comes in through
+// reqwest's own re-export — same type, same version pivot, no manifest change (kanban t_016c839c,
+// which is also what first compiled this module: `pub mod webhook_security` had never been
+// declared, so this file was dead source until the test-webhook route became its caller).
+use reqwest::Url;
 use std::net::IpAddr;
 
 /// Check whether an IP address belongs to a private or reserved range.
@@ -17,11 +21,11 @@ pub fn is_private_ip(addr: &IpAddr) -> bool {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
             match octets[0] {
-                10 => true,                                          // 10.0.0.0/8
-                127 => true,                                         // 127.0.0.0/8 (localhost)
-                169 if octets[1] == 254 => true,                     // 169.254.0.0/16 (link-local)
-                172 if (16..=31).contains(&octets[1]) => true,       // 172.16.0.0/12
-                192 if octets[1] == 168 => true,                     // 192.168.0.0/16
+                10 => true,                                    // 10.0.0.0/8
+                127 => true,                                   // 127.0.0.0/8 (localhost)
+                169 if octets[1] == 254 => true,               // 169.254.0.0/16 (link-local)
+                172 if (16..=31).contains(&octets[1]) => true, // 172.16.0.0/12
+                192 if octets[1] == 168 => true,               // 192.168.0.0/16
                 _ => false,
             }
         }
@@ -35,20 +39,22 @@ pub fn is_private_ip(addr: &IpAddr) -> bool {
 /// Validate a webhook URL: checks domain allowlist AND resolves host to
 /// reject private/reserved IPs (SSRF prevention).
 /// Returns Ok(()) if the domain passes, Err with a descriptive message otherwise.
-pub async fn validate_webhook_url(webhook_url: &str, allowed_domains: &[String]) -> Result<(), String> {
+pub async fn validate_webhook_url(
+    webhook_url: &str,
+    allowed_domains: &[String],
+) -> Result<(), String> {
     // Parse the URL
-    let parsed = Url::parse(webhook_url).map_err(|e| {
-        format!("Invalid webhook URL '{}': {}", webhook_url, e)
-    })?;
+    let parsed = Url::parse(webhook_url)
+        .map_err(|e| format!("Invalid webhook URL '{}': {}", webhook_url, e))?;
 
-    let host = parsed.host_str().ok_or_else(|| {
-        format!("Webhook URL '{}' has no host component", webhook_url)
-    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("Webhook URL '{}' has no host component", webhook_url))?;
 
     // Resolve hostname to IP addresses and check against private blocklist (SSRF prevention)
-    let addrs = tokio::net::lookup_host((host, 0)).await.map_err(|e| {
-        format!("DNS resolution failed for '{}': {}", host, e)
-    })?;
+    let addrs = tokio::net::lookup_host((host, 0))
+        .await
+        .map_err(|e| format!("DNS resolution failed for '{}': {}", host, e))?;
 
     for addr in addrs {
         if is_private_ip(&addr.ip()) {
@@ -123,11 +129,15 @@ pub async fn check_webhook_security(
     daily_limit: i32,
 ) -> Result<(), AppError> {
     // 1. Domain allowlist + private IP blocklist check
-    validate_webhook_url(webhook_url, allowed_domains).await
-        .map_err(|msg| AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg)))?;
+    validate_webhook_url(webhook_url, allowed_domains)
+        .await
+        .map_err(|msg| {
+            AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
+        })?;
 
     // 2. Daily limit check
-    let within_limit = check_daily_limit(pool, target_id, daily_limit).await
+    let within_limit = check_daily_limit(pool, target_id, daily_limit)
+        .await
         .map_err(|msg| AppError::Internal(format!("Security check error: {}", msg)))?;
 
     if !within_limit {
@@ -146,36 +156,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_webhook_url_empty_allowlist() {
-        assert!(validate_webhook_url("https://example.com/hook", &[]).await.is_ok());
-        assert!(validate_webhook_url("http://evil.net/callback", &[]).await.is_ok());
+        assert!(validate_webhook_url("https://example.com/hook", &[])
+            .await
+            .is_ok());
+        assert!(validate_webhook_url("http://evil.net/callback", &[])
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
     async fn test_validate_webhook_url_exact_match() {
         let domains = vec!["example.com".to_string(), "api.good.com".to_string()];
-        assert!(validate_webhook_url("https://example.com/hook", &domains).await.is_ok());
-        assert!(validate_webhook_url("https://api.good.com/v1/callback", &domains).await.is_ok());
+        assert!(validate_webhook_url("https://example.com/hook", &domains)
+            .await
+            .is_ok());
+        assert!(
+            validate_webhook_url("https://api.good.com/v1/callback", &domains)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn test_validate_webhook_url_subdomain_match() {
         let domains = vec!["example.com".to_string()];
-        assert!(validate_webhook_url("https://hooks.example.com/path", &domains).await.is_ok());
-        assert!(validate_webhook_url("https://sub.hooks.example.com/path", &domains).await.is_ok());
+        assert!(
+            validate_webhook_url("https://hooks.example.com/path", &domains)
+                .await
+                .is_ok()
+        );
+        assert!(
+            validate_webhook_url("https://sub.hooks.example.com/path", &domains)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn test_validate_webhook_url_rejected() {
         let domains = vec!["example.com".to_string()];
-        assert!(validate_webhook_url("https://evil.com/hook", &domains).await.is_err());
-        assert!(validate_webhook_url("https://example.evil.com/hook", &domains).await.is_err());
+        assert!(validate_webhook_url("https://evil.com/hook", &domains)
+            .await
+            .is_err());
+        assert!(
+            validate_webhook_url("https://example.evil.com/hook", &domains)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn test_validate_webhook_url_case_insensitive() {
         let domains = vec!["EXAMPLE.COM".to_string()];
-        assert!(validate_webhook_url("https://example.com/hook", &domains).await.is_ok());
-        assert!(validate_webhook_url("https://Example.COM/Hook", &domains).await.is_ok());
+        assert!(validate_webhook_url("https://example.com/hook", &domains)
+            .await
+            .is_ok());
+        assert!(validate_webhook_url("https://Example.COM/Hook", &domains)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -212,6 +250,8 @@ mod tests {
         // ::1 (IPv6 localhost)
         assert!(is_private_ip(&"::1".parse::<IpAddr>().unwrap()));
         // Public IPv6 should NOT be private
-        assert!(!is_private_ip(&"2001:4860:4860::8888".parse::<IpAddr>().unwrap()));
+        assert!(!is_private_ip(
+            &"2001:4860:4860::8888".parse::<IpAddr>().unwrap()
+        ));
     }
 }

@@ -3,6 +3,7 @@
 use crate::db::{campaigns, contacts, entries};
 use crate::delivery::{payload::ContactPayload, payload::DeliveryPayload, webhook};
 use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{extract::State, http::HeaderMap, Json};
 use serde::Deserialize;
@@ -623,31 +624,112 @@ fn extract_qa_from_jsonb(
     pairs
 }
 
-/// POST /api/v1/campaigns/test-webhook — Send a test webhook POST to a URL
-pub async fn test_entry_webhook(Json(body): Json<Value>) -> Result<Json<Value>, AppError> {
-    let webhook_url = body
-        .get("webhook_url")
+/// POST /api/v1/campaigns/test-webhook — fire a sample entry payload at the CALLER'S OWN campaign
+/// webhook and report the delivery status.
+///
+/// SECURITY (kanban t_016c839c). This route used to be ANONYMOUS, POSTed to a CALLER-SUPPLIED URL
+/// and returned up to 500 bytes of the target's response body — an outbound-request + read
+/// primitive any unauthenticated caller could aim at 169.254.169.254, `127.0.0.1:8083` itself, the
+/// docker network, n8n or the postgres port. It now:
+///   * requires `AuthenticatedUser` (anon is 401),
+///   * takes only a `campaign_id` and sends to that campaign's OWN `config.entry_webhook_url` —
+///     the same field `delivery::entry_webhook::fire_entry_webhook` reads in production — resolved
+///     from a campaign the caller's account owns (another tenant's campaign answers 404),
+///   * passes the platform's outbound-webhook gate (`security::webhook_security`), which refuses
+///     loopback/link-local/private addresses after DNS resolution and enforces the matching
+///     integration target's domain allowlist and daily cap,
+///   * follows no redirects (a validated host that 302s to 169.254.169.254 is not a delivery),
+///   * returns the STATUS only, never the target's body.
+pub async fn test_entry_webhook(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Authenticated account is not a uuid".to_string()))?;
+
+    let campaign_id = body
+        .get("campaign_id")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("webhook_url is required".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("campaign_id is required".to_string()))?;
+    let campaign_id = Uuid::parse_str(campaign_id)
+        .map_err(|_| AppError::BadRequest("campaign_id must be a uuid".to_string()))?;
+
+    // Tenant scope: the caller may only test a campaign its own account owns, so another tenant's
+    // campaign id is a 404 (never a delivery) and the destination can never be attacker-chosen.
+    let campaign: Option<(String, String, Value)> = sqlx::query_as(
+        "SELECT name, slug, COALESCE(config, '{}'::jsonb) FROM campaigns \
+         WHERE id = $1 AND account_id = $2",
+    )
+    .bind(campaign_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    let Some((name, slug, config)) = campaign else {
+        return Err(AppError::NotFound("Campaign not found".to_string()));
+    };
+
+    let webhook_url = config
+        .get("entry_webhook_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "This campaign has no entry_webhook_url in its config — set one in the campaign \
+                 editor before testing"
+                    .to_string(),
+            )
+        })?;
+
+    // The platform's outbound-webhook gate: every delivery must pass it, and this route was the
+    // one place that skipped it. A matching integration target also brings its own allowlist and
+    // daily cap along.
+    let target: Option<(Uuid, Vec<String>, i32)> = sqlx::query_as(
+        "SELECT id, COALESCE(allowed_domains, '{}'), daily_limit FROM integration_targets \
+         WHERE account_id = $1 AND webhook_url = $2 AND is_active = true LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(webhook_url)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    match target {
+        Some((target_id, allowed_domains, daily_limit)) => {
+            crate::security::webhook_security::check_webhook_security(
+                &state.db,
+                &target_id,
+                webhook_url,
+                &allowed_domains,
+                daily_limit,
+            )
+            .await?
+        }
+        None => crate::security::webhook_security::validate_webhook_url(webhook_url, &[])
+            .await
+            .map_err(|msg| {
+                AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
+            })?,
+    }
 
     let contact = body.get("contact").cloned().unwrap_or_else(
         || json!({"first_name":"Test","last_name":"User","email":"test@example.com"}),
     );
 
-    // Sample ids for the test event. The payload below is a synthetic EXAMPLE this route POSTs to
-    // the caller's own webhook URL — no row is ever looked up or written with these ids — so they
-    // are built at run time instead of being hand-copied into the source (gate rule 5a, class 5:
-    // a UUID in source names a row that was looked up by hand; the nil UUID names none).
+    // No entry exists for a test, so `entry_id` is the nil UUID built at run time (it names no
+    // row). The campaign block carries the REAL campaign being tested.
     let sample_id = Uuid::nil().to_string();
     let payload = json!({
         "event": "entry.created",
         "test": true,
         "entry_id": sample_id,
         "campaign": {
-            "id": sample_id,
-            "name": "Test Campaign",
-            "slug": "test-campaign",
-            "type": "spin_wheel",
+            "id": campaign_id.to_string(),
+            "name": name,
+            "slug": slug,
         },
         "contact": contact,
         "outcome": "winner",
@@ -664,34 +746,29 @@ pub async fn test_entry_webhook(Json(body): Json<Value>) -> Result<Json<Value>, 
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
 
-    let client = reqwest::Client::new();
-    let result = client
-        .post(webhook_url)
-        .json(&payload)
+    // Redirects are NOT followed: the gate validated this host, and a 30x would otherwise be a
+    // free hop to an address the gate exists to refuse.
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .header("User-Agent", "IncentiveSwift-EntryWebhook/1.0")
-        .send()
-        .await;
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("IncentiveSwift-EntryWebhook/1.0")
+        .build()
+        .map_err(|e| AppError::Internal(format!("http client: {}", e)))?;
+
+    let result = client.post(webhook_url).json(&payload).send().await;
 
     match result {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let body_text = resp
-                .text()
-                .await
-                .unwrap_or_default()
-                .chars()
-                .take(500)
-                .collect::<String>();
+            // The status only. The target's body is NOT echoed back to the caller.
             Ok(Json(json!({
                 "success": (200..300).contains(&status),
                 "status": status,
-                "response": body_text,
             })))
         }
         Err(e) => Ok(Json(json!({
             "success": false,
-            "error": e.to_string(),
+            "error": e.to_string().chars().take(200).collect::<String>(),
         }))),
     }
 }
