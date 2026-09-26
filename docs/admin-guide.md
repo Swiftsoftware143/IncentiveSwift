@@ -271,7 +271,6 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 ### Referral / Viral Engine
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/campaigns/:slug/referral-codes` | POST | Generate referral code |
 | `/api/v1/campaigns/:slug/referral-stats` | GET | Referral stats + list |
 | `/api/v1/campaigns/:slug/earn-channels` | GET/POST | List/create earn channels |
 | `/api/v1/campaigns/:slug/earn-channels/:id` | PATCH/DELETE | Update/delete channel |

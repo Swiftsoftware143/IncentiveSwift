@@ -167,12 +167,16 @@ POST /api/v1/loyalty/redeem-reward     — Points for reward
 
 **Referral Engine:**
 ```
-POST /api/v1/campaigns/:slug/referral-codes     — Generate code
 GET  /api/v1/campaigns/:slug/referral-stats      — Stats
 GET  /api/v1/campaigns/:slug/leaderboard         — Leaderboard
 POST /api/v1/campaigns/:slug/earn-channels       — Earn channels
 GET  /api/v1/earn/:channel_code                  — Public click-through
 ```
+(The per-campaign `POST /api/v1/campaigns/:slug/referral-codes` was retired 2026-09-26, kanban
+t_9d983e50: it took no contact and no authenticated user, so it bound NULL into
+`campaign_referrals.referrer_contact_id` (NOT NULL) and answered 500 for every caller, and no
+served surface called it. The served referral contract is the account-level pair
+`GET|POST /api/v1/loyalty/referrals[/create]`, documented in www/guide.html → "Referral System".)
 
 **Legacy (initial build):**
 ```

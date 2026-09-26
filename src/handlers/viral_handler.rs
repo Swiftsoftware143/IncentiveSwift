@@ -3,7 +3,6 @@
 //! Phase 1:
 //!   GET /earn/{channel_code} ??? click-through earn (honor-system points) PUBLIC
 //!   GET /c/{campaign_slug}?ref={code} ??? campaign share link with referral PUBLIC
-//!   POST /api/v1/campaigns/{slug}/referral-codes ??? generate referral code (ADMIN)
 //!   GET /api/v1/campaigns/{slug}/referral-stats ??? admin referral stats
 //!   GET /api/v1/campaigns/{slug}/earn-channels ??? list earn channels
 //!   POST /api/v1/campaigns/{slug}/earn-channels ??? create earn channel
@@ -392,35 +391,25 @@ pub async fn campaign_share_link(
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/campaigns/{slug}/referral-codes
-// Admin: create a referral code for a specific contact
+// RETIRED (kanban t_9d983e50): POST /api/v1/campaigns/{slug}/referral-codes
+//
+// `create_referral_code` lived here until 2026-09-26. It was retired, not fixed:
+//
+//   * the route took no `contact_id` and no `AuthenticatedUser`, so the only value it could
+//     bind into `campaign_referrals.referrer_contact_id` was NULL — and that column is NOT NULL
+//     with no default, so every call was a guaranteed 500 (live-reproduced, with the app's own
+//     `null value in column "referrer_contact_id" ... violates not-null constraint` log line);
+//   * no served surface ever called it: 0 hits for `/referral-codes` across www/, www-app/,
+//     www-admin/ and the nginx served root (/opt/swift/nginx/www/incentiveswift);
+//   * the referral contract the served product actually documents is the account/loyalty pair
+//     (www/guide.html "Referral System" -> GET|POST /api/v1/loyalty/referrals[/create], plus
+//     `referral_code` on POST /api/v1/auth/register) — all of which exist and are wired.
+//
+// Making it honest would have meant inventing a referrer identity (accounts.id vs contacts.id),
+// an auth requirement and a UI caller for a route no served page promises; the attribution end
+// (`GET /c/{slug}?ref=` click counting and `handle_referral_credit` via `?ref=` on the earn
+// link) is a separate decision, carded on its own.
 // ---------------------------------------------------------------------------
-
-pub async fn create_referral_code(
-    State(state): State<AppState>,
-    Path(slug): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    // This function causes axum Handler trait resolution to fail when body references
-    // anything from db::viral module. Hypothesis: circular dependency or trait inference.
-    // Using raw SQL directly as workaround.
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
-    let code = format!("REF{:08x}", uuid::Uuid::new_v4().as_u128() % 0xFFFFFFFF);
-    let id = uuid::Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO campaign_referrals (id, campaign_id, referrer_contact_id, referral_code, source, converted, click_count, points_earned) VALUES ($1, $2, $3, $4, $5, false, 0, 0)"
-    )
-    .bind(id)
-    .bind(campaign.id)
-    .bind(None::<uuid::Uuid>)
-    .bind(&code)
-    .bind("admin")
-    .execute(&state.db)
-    .await?;
-    Ok(Json(json!({
-        "referral_code": code,
-        "share_link": format!("/c/{}?ref={}", campaign.slug, code),
-    })))
-}
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/campaigns/{slug}/referral-stats

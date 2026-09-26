@@ -235,7 +235,6 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/campaigns/:slug/referral-codes` | JWT | `viral_handler::create_referral_code` | Generate referral code |
 | GET | `/campaigns/:slug/referral-stats` | JWT | `viral_handler::get_referral_stats` | Referral stats |
 | GET | `/campaigns/:slug/earn-channels` | JWT | `viral_handler::list_earn_channels` | List earn channels |
 | POST | `/campaigns/:slug/earn-channels` | JWT | `viral_handler::create_earn_channel` | Create earn channel |

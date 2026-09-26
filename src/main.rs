@@ -558,10 +558,12 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::secret_codes_handler::toggle_secret_code),
         )
         // Viral campaign engine -- Admin routes
-        .route(
-            "/api/v1/campaigns/:slug/referral-codes",
-            post(handlers::viral_handler::create_referral_code),
-        )
+        // POST /api/v1/campaigns/:slug/referral-codes (viral_handler::create_referral_code) was
+        // RETIRED here (kanban t_9d983e50): it took no contact and no authenticated user, bound
+        // NULL into campaign_referrals.referrer_contact_id (NOT NULL, no default) and therefore
+        // answered 500 for every caller (live-reproduced), while no served surface ever called it.
+        // The served referral contract is the account/loyalty pair
+        // (GET|POST /api/v1/loyalty/referrals[/create]); see HANDOFF.md.
         .route(
             "/api/v1/campaigns/:slug/referral-stats",
             get(handlers::viral_handler::get_referral_stats),
