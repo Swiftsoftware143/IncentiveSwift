@@ -14,6 +14,7 @@
 //! Keep the module structure identical to main.rs so tests can reference everything.
 
 pub mod access;
+pub mod body_deadline;
 pub mod config;
 pub mod db;
 pub mod delivery;

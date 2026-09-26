@@ -20,6 +20,7 @@ mod lifecycle_emails;
 
 pub mod access;
 pub mod billing;
+mod body_deadline;
 mod config;
 mod db;
 pub mod delivery;
@@ -40,9 +41,8 @@ use axum::{
     Router,
 };
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::signal;
-use tower_http::{cors::CorsLayer, timeout::TimeoutLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
 /// Build a CORS origin predicate from allowed origins list.
@@ -86,6 +86,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Start background email ticker (flushes scheduled follow-ups/reminders)
     email_queue::spawn_email_ticker(state.clone());
+
+    // Request-body read deadline (kanban t_af70c0ca). Printed here so the number an operator sees
+    // at boot is the number the middleware enforces — both come from this one config field.
+    tracing::info!(
+        "Request body-read deadline: {}s on every route that reads a body, 408 above that (BODY_READ_DEADLINE_SECS overrides, clamped 5..=300)",
+        config.body_read_deadline_secs
+    );
 
     // Build router
     let app = Router::new()
@@ -1170,13 +1177,34 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/iqs/upload",
             post(handlers::iqs_handler::upload_file),
         )
+        // Request-body read deadline (kanban t_af70c0ca). Mounted as the FIRST `.layer()` of this
+        // chain, i.e. INNERMOST — in axum the first `.layer()` applied is the one closest to the
+        // handlers — so `admin_guard` and the security headers stay OUTSIDE it: an unauthenticated
+        // /api/v1/admin/* request answers 401 at once instead of ever waiting for a body, and a
+        // declared body is never buffered before the credential is checked.
+        //
+        // Its own scope is method + declared body (see `body_deadline::declares_a_body`), so the
+        // ~700 GET-only routes on this one flat router are handed to their handlers untouched;
+        // that the scope is complete is measured, not asserted: every handler registered with
+        // `get(...)` takes no body extractor.
+        //
+        // This REPLACES the accidental whole-request `.layer(TimeoutLayer::new(Duration::from_secs(30)))`
+        // that used to sit below: that answered 408 for any request still in flight at 30 s,
+        // including one whose body had arrived instantly and whose handler was legitimately still
+        // working (measured live: a row-lock-held POST /api/v1/loyalty/checkin was 408'd and its
+        // work dropped at t+30.0 s; on this binary the same request finishes). The resource bound
+        // is the same 30 s — only a body that has STOPPED arriving is affected now — and every
+        // outbound HTTP call in this app already carries its own client timeout (10-20 s).
+        .layer(middleware::from_fn_with_state(
+            body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs),
+            body_deadline::body_read_deadline_middleware,
+        ))
         // SECURITY: /api/v1/admin/* must never answer anonymous callers.
         .layer(middleware::from_fn_with_state(
             state.clone(),
             security::auth::admin_guard,
         ))
         .layer(middleware::from_fn(security::headers::add_security_headers))
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()

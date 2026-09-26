@@ -14,6 +14,10 @@ pub struct AppConfig {
     pub coreswift_url: String,
     pub funnelswift_url: String,
     pub allowed_origins: Vec<String>,
+    /// How long the body of a request that carries one may take to arrive before it is answered
+    /// `408` (kanban t_af70c0ca). `BODY_READ_DEADLINE_SECS` beats the default, clamped to
+    /// `5..=300` so neither a typo nor a fat finger can shed real traffic.
+    pub body_read_deadline_secs: u64,
 }
 
 impl AppConfig {
@@ -58,6 +62,20 @@ impl AppConfig {
                 .unwrap_or_else(|_| "20".to_string())
                 .parse()
                 .map_err(|e| ConfigError::InvalidValue(format!("DB_MAX_CONNECTIONS: {}", e)))?,
+
+            // Request-body read deadline (kanban t_af70c0ca). Default 30 s — the same resource
+            // bound the accidental whole-request `TimeoutLayer` used to provide — and clamped so a
+            // misconfigured value cannot either shed real traffic (below 5 s) or stop being a bound
+            // (above 300 s). The value this returns is the value `main.rs` prints at boot and the
+            // value the middleware enforces, so they can never disagree.
+            body_read_deadline_secs: std::env::var("BODY_READ_DEADLINE_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(crate::body_deadline::DEFAULT_BODY_READ_DEADLINE_SECS)
+                .clamp(
+                    crate::body_deadline::MIN_BODY_READ_DEADLINE_SECS,
+                    crate::body_deadline::MAX_BODY_READ_DEADLINE_SECS,
+                ),
         })
     }
 }
