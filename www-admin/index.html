@@ -72,7 +72,10 @@ const API = (() => {
     get token(){ return token; },
     get user(){ return user; },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('is_token', t); sessionStorage.setItem('is_user', JSON.stringify(u)); },
-    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user'); }
+    // kanban t_8a6160c9 — when this console runs on the customer app host (app.incentiveswift.com/admin/,
+    // an nginx alias of this same file) it adopts localStorage 'ws_fs_token' — see the block at the end
+    // of this file — so signing out has to retire that key as well, or the next load silently re-adopts it.
+    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user'); try { localStorage.removeItem('ws_fs_token'); } catch (e) {} }
   };
 })();
 
@@ -2298,7 +2301,45 @@ const App = () => {
 };
 
 const renderApp = () => render(html`<${App} />`, document.getElementById('app'));
+
+/* ── kanban t_8a6160c9 — one console, two origins ───────────────────────────────────────────────
+   This file is ALSO served on the customer app host now (app.incentiveswift.com/admin/, an nginx
+   `alias` of this very file — one file on disk, so no second copy can drift), because the tenant
+   console used to live only on admin.incentiveswift.com: a different origin, whose localStorage and
+   sessionStorage the session handed over by the marketing signup cannot reach, so every customer
+   was asked to log in a second time.
+
+   On that origin the app's session lives in localStorage 'ws_fs_token' (written by app
+   /login.html and by the shell's own hand-off block, t_c7ba0473) while this console keeps ITS
+   session in sessionStorage 'is_token'/'is_user'. The auth guard at the top of this file already
+   REQUIRES 'ws_fs_token' on any non-root path, so a tenant arriving at /admin/ in a fresh tab was
+   shown this console's login form with a perfectly good token sitting unused beside it.
+
+   So: adopt that token ONCE, behind a real GET /api/v1/auth/me, and drop it when it does not
+   verify — a stale credential can never fake a session. On admin.incentiveswift.com nothing writes
+   'ws_fs_token', so this block is a no-op there. Hide the shell while it runs so the tenant does not
+   see a login form flash (same trick as the app shell's hand-off). */
+const wsStoredToken = () => { try { return localStorage.getItem('ws_fs_token'); } catch (e) { return null; } };
+const wsAdopting = !API.token && !!wsStoredToken();
+if (wsAdopting) { try { document.documentElement.style.visibility = 'hidden'; } catch (e) {} }
 renderApp();
+if (wsAdopting) (async () => {
+  const show = () => { try { document.documentElement.style.visibility = ''; } catch (e) {} };
+  const settle = setTimeout(show, 10000);
+  try {
+    const r = await fetch(window.location.origin + '/api/v1/auth/me', { headers: { 'Authorization': 'Bearer ' + wsStoredToken() }, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    clearTimeout(settle); show();
+    API.setAuth(wsStoredToken(), (d && d.user) || d || {});
+    S.view = 'dashboard';
+    renderApp();
+  } catch (e) {
+    clearTimeout(settle);
+    try { localStorage.removeItem('ws_fs_token'); } catch (x) {}
+    show();
+  }
+})();
 </script>
 </body>
 </html>

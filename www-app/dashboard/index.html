@@ -25,8 +25,16 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Dashboard</h2>
     <p style="color:#64748b;font-size:14px">Welcome to IncentiveSwift. Your user portal is active.</p>
-    <div style="display:flex;gap:10px;margin-top:16px">
-      <button class="btn" onclick="location.href='/iqs.html'">🎯 IQS — Qualifying Surveys</button>
+    <p style="color:#64748b;font-size:14px;margin:8px 0 0">Your admin console manages your campaigns, loyalty programs, leads, tags, API keys and settings.</p>
+    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+      <!-- kanban t_8a6160c9 — the customer app had NO route to campaign management: the console was
+           only reachable on admin.incentiveswift.com, a different origin this session cannot reach
+           (localStorage/sessionStorage are per-origin, so a customer handed here by the marketing
+           signup was asked to log in a second time). The console is now also served on THIS origin
+           at /admin/ (an nginx alias of the very file the admin host serves — one file, no copy to
+           drift), so the session the hand-off established carries straight through. -->
+      <button class="btn" onclick="location.href='/admin/'">⚙️ Admin Console — Campaigns, Loyalty, Leads</button>
+      <button class="btn" style="background:#7c3aed" onclick="location.href='/iqs.html'">🎯 IQS — Qualifying Surveys</button>
       <button class="btn" style="background:#64748b" onclick="location.href='/integrations.html'">🔌 Integrations</button>
     </div>
     <div id="userInfo" style="margin-top:16px;padding:16px;background:#f1f5f9;border-radius:8px;font-size:13px;color:#475569"></div>
