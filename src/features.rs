@@ -17,6 +17,9 @@ pub async fn enforce_feature_limit(
     feature_key: &str,
     label: &str,
 ) -> Result<(), AppError> {
+    // `accounts.id` is `uuid` — see `account_uuid`.
+    let account_id = account_uuid(account_id)?;
+
     // Resolve the account's plan tier.
     let tier_id: Option<Uuid> =
         sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
@@ -77,7 +80,7 @@ pub async fn enforce_feature_limit(
 
 async fn check_limit(
     db: &PgPool,
-    account_id: &str,
+    account_id: Uuid,
     feature_key: &str,
     label: &str,
     val: i64,
@@ -208,12 +211,42 @@ pub async fn plan_tier_name(db: &PgPool, account_id: Uuid) -> Result<Option<Stri
     Ok(name)
 }
 
+/// The account id arrives as a string (the JWT `sub`), but every column this module compares it
+/// with is `uuid` (`accounts.id`, `campaigns.account_id`, `tags.account_id`). Binding the `&str`
+/// makes sqlx send the parameter as **TEXT**, and Postgres then refuses the comparison outright
+/// instead of coercing it — `operator does not exist: uuid = text` (measured: `PREPARE p(text) AS
+/// SELECT COUNT(*) FROM campaigns WHERE account_id = $1`). So parse once at each string boundary
+/// and bind a real `Uuid`, exactly as `access::feature_gate::account_tier_id` and
+/// `handlers::support_tickets::tenant_scope` already do.
+fn account_uuid(account_id: &str) -> Result<Uuid, AppError> {
+    Uuid::parse_str(account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID format".to_string()))
+}
+
+/// One usage number for the `me/usage` payload, with a failing arm made OBSERVABLE.
+///
+/// The payload shape is a published contract (`campaigns`/`leads`/`tags` are always present), so
+/// the `0` fallback stays — but it used to be `unwrap_or(0)` on the error itself, and the
+/// statements this endpoint runs were failing 100% of the time with nothing in the container log
+/// to find them by. A failing arm is now logged.
+async fn usage_or_zero(db: &PgPool, account_id: Uuid, feature_key: &str) -> i64 {
+    match count_usage(db, account_id, feature_key).await {
+        Ok(count) => count,
+        Err(e) => {
+            tracing::error!("me/usage: could not count {feature_key} for {account_id}: {e}");
+            0
+        }
+    }
+}
+
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
-    let campaigns = count_usage(db, account_id, "max_campaigns")
-        .await
-        .unwrap_or(0);
-    let leads = count_usage(db, account_id, "max_leads").await.unwrap_or(0);
-    let tags = count_usage(db, account_id, "max_tags").await.unwrap_or(0);
+    let Ok(account_id) = account_uuid(account_id) else {
+        tracing::error!("me/usage: the authenticated account id is not a uuid");
+        return serde_json::json!({ "campaigns": 0, "leads": 0, "tags": 0 });
+    };
+    let campaigns = usage_or_zero(db, account_id, "max_campaigns").await;
+    let leads = usage_or_zero(db, account_id, "max_leads").await;
+    let tags = usage_or_zero(db, account_id, "max_tags").await;
     serde_json::json!({
         "campaigns": campaigns,
         "leads": leads,
@@ -221,15 +254,21 @@ pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value 
     })
 }
 
-async fn count_usage(db: &PgPool, account_id: &str, feature_key: &str) -> Result<i64, AppError> {
+async fn count_usage(db: &PgPool, account_id: Uuid, feature_key: &str) -> Result<i64, AppError> {
     match feature_key {
         "max_campaigns" | "campaigns" => {
-            let count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM campaigns WHERE account_id = $1 AND deleted_at IS NULL",
-            )
-            .bind(account_id)
-            .fetch_one(db)
-            .await?;
+            // No `deleted_at` conjunct: `campaigns` has never had a soft-delete column. Measured —
+            // this database's `information_schema.columns` holds ZERO columns named `deleted_at`
+            // in ANY table, no migration ever adds one to `campaigns`, and this app retires a
+            // campaign with a real `DELETE FROM campaigns` (src/db/campaigns.rs:278, and the admin
+            // console's own delete button at www-admin/index.html:408). The conjunct was sister-app
+            // bleed and it was the only place in the app that believed a campaign could be
+            // soft-deleted; leaving it out changes nothing for a hard-deleted row, which is gone.
+            let count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM campaigns WHERE account_id = $1")
+                    .bind(account_id)
+                    .fetch_one(db)
+                    .await?;
             Ok(count)
         }
         "max_entries" | "entries" => {
@@ -259,5 +298,118 @@ async fn count_usage(db: &PgPool, account_id: &str, feature_key: &str) -> Result
             Ok(count)
         }
         _ => Ok(0),
+    }
+}
+
+#[cfg(test)]
+mod usage_arm_tests {
+    //! RED/GREEN guard for `count_usage` and the plan-limit path built on it (kanban t_d23d413f).
+    //!
+    //! These arms run plain `sqlx::query_scalar` strings, so the compiler never sees the column
+    //! names or the bind types they use — and every one of them was broken against the live
+    //! schema. Two measured causes, both fixed in this module's commit:
+    //!
+    //! 1. `account_id` arrives as a string (the JWT `sub`) and was bound raw. sqlx sends a `&str`
+    //!    as TEXT, so Postgres refused the comparison outright: `operator does not exist:
+    //!    uuid = text` — the error the RED run of this test printed (`Database("error returned from
+    //!    database: operator does not exist: uuid = text")`), which is what `count_usage` really
+    //!    returned to both of its callers.
+    //! 2. the `max_campaigns` arm additionally filtered on `campaigns.deleted_at`, a column this
+    //!    schema has never had — measured, `information_schema.columns` holds zero columns named
+    //!    `deleted_at` in ANY table of this database, and psql reports `column "deleted_at" does not
+    //!    exist` for the same statement once the bind is typed correctly.
+    //!
+    //! `get_usage_json` swallowed either one into `unwrap_or(0)`, so `GET /api/v1/me/usage` answered
+    //! `{"campaigns":0,"leads":0,"tags":0}` for every account, with nothing in the container log.
+    //!
+    //! DB-backed by construction — the defect only exists against a real schema — so the tests are
+    //! OPT-IN and read-only: they run only when `INC_ARM_DB_TEST=1` **and** `DATABASE_URL` are both
+    //! set, and they create nothing and delete nothing, so a plain `cargo test` can never touch
+    //! whatever database `DATABASE_URL` happens to point at.
+    //!
+    //! Run them with:
+    //!   INC_ARM_DB_TEST=1 \
+    //!   DATABASE_URL="$(grep '^DATABASE_URL=' /etc/swift/env/incentiveswift.env | cut -d= -f2-)" \
+    //!     cargo test --lib usage_arm_tests -- --nocapture
+    use super::*;
+
+    async fn pool_or_skip() -> Option<PgPool> {
+        if std::env::var("INC_ARM_DB_TEST").as_deref() != Ok("1") {
+            return None; // opt-in: a plain `cargo test` never opens a database
+        }
+        let url = std::env::var("DATABASE_URL").ok()?; // opt-in: no schema, nothing to prove
+        Some(
+            PgPool::connect(&url)
+                .await
+                .expect("connect to DATABASE_URL"),
+        )
+    }
+
+    /// Read-only: whichever account the live schema says already owns a campaign.
+    async fn account_with_campaigns(pool: &PgPool) -> Option<Uuid> {
+        sqlx::query_scalar(
+            "SELECT account_id FROM campaigns GROUP BY account_id HAVING COUNT(*) >= 1 LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .expect("pick a campaign-owning account")
+    }
+
+    #[tokio::test]
+    async fn max_campaigns_arm_counts_instead_of_erroring() {
+        let Some(pool) = pool_or_skip().await else {
+            return;
+        };
+        let Some(acct) = account_with_campaigns(&pool).await else {
+            eprintln!("SKIP: no campaign row in the database to count");
+            return;
+        };
+
+        // RED before the fix: `Database("error returned from database: operator does not exist:
+        // uuid = text")`.
+        let usage = match count_usage(&pool, acct, "max_campaigns").await {
+            Ok(n) => n,
+            Err(e) => panic!("count_usage(max_campaigns) must answer with a count, got {e:?}"),
+        };
+        assert!(
+            usage >= 1,
+            "that account owns >= 1 campaign, so the arm must count >= 1, counted {usage}"
+        );
+        println!("max_campaigns arm counted {usage}");
+
+        // ...and the same statement with the cap set to the measured usage must produce the arm's
+        // OWN verdict, not a 500-shaped database error.
+        match check_limit(&pool, acct, "max_campaigns", "Campaigns", usage).await {
+            Err(AppError::UpgradeRequired(msg)) => {
+                println!("arm verdict: {msg}");
+                assert!(
+                    msg.contains(&format!("({usage}/{usage})")),
+                    "the arm must report the usage it measured, got: {msg}"
+                );
+            }
+            other => panic!("check_limit must answer with its own verdict, got {other:?}"),
+        }
+    }
+
+    /// The whole plan-limit path the card names: `enforce_feature_limit` -> `check_limit` ->
+    /// `count_usage`, driven end to end against the live schema. Before the fix EVERY step of it
+    /// answered a database error.
+    #[tokio::test]
+    async fn plan_limit_path_reaches_its_own_verdict() {
+        let Some(pool) = pool_or_skip().await else {
+            return;
+        };
+        let Some(acct) = account_with_campaigns(&pool).await else {
+            eprintln!("SKIP: no campaign row in the database to count");
+            return;
+        };
+
+        match enforce_feature_limit(&pool, &acct.to_string(), "max_campaigns", "Campaigns").await {
+            // "no limit configured for this tier" — the function's own allow path.
+            Ok(()) => println!("plan-limit path: allowed (no limit configured for that tier)"),
+            // "limit reached (n/n)" / "not available on your plan" — check_limit's two arms.
+            Err(AppError::UpgradeRequired(msg)) => println!("plan-limit path verdict: {msg}"),
+            other => panic!("the plan-limit path must reach its own verdict, got {other:?}"),
+        }
     }
 }
