@@ -420,7 +420,7 @@ async fn update_points_balance(
              lifetime_points = COALESCE(lifetime_points, 0) + $1,
              last_checkin_at = now()
          WHERE id = $2::uuid
-         RETURNING COALESCE(points_balance, 0)",
+         RETURNING COALESCE(points_balance, 0) AS points_balance",
     )
     .bind(points)
     .bind(member_id)
