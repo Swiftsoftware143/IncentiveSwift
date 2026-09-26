@@ -125,7 +125,7 @@ IncentiveSwift has a database-backed email template system (`email_templates` ta
 
 ### Security Requirements
 - **All headers via Tower middleware** (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
-- **Rate limiting** via `governor`: 20 req/min/IP public, 100 req/min authenticated
+- **Request-rate limiting lives in nginx, not in this app** (kanban t_636d4979): `limit_req_zone $http_cf_connecting_ip zone=api:10m rate=20r/s` (nginx.conf) applied as `limit_req zone=api burst=40 nodelay; limit_req_status 429;` on every `/api/` location of this vhost — per VISITOR, keyed on the Cloudflare-supplied `CF-Connecting-IP`. The app cannot key on a visitor itself (nginx hands it `X-Real-IP=$remote_addr`, the Cloudflare edge, and `axum::serve` never populates `ConnectInfo<SocketAddr>`), so there is no in-process `governor` limiter; the unused `src/security/rate_limit.rs` was deleted. The one in-app budget is the public redeem path: 12 failed code lookups per network origin per 300 s (`src/handlers/campaign_secret_codes.rs`).
 - **API keys** hashed with bcrypt — NEVER compare via direct hash equality
 - **Formula evaluation** in calculator mechanic: restricted arithmetic parser only — NEVER eval/exec/scripting engine
 - **Raffle compliance**: official_rules_url required, consent_gathered must be explicit `true`, random_seed stored permanently
@@ -189,7 +189,7 @@ GET  /api/v1/contacts                  — Light CRM list
 - axum = "0.7", tokio = "1" (full), tower = "0.4", tower-http = "0.5" (cors, trace, timeout)
 - serde = "1" (derive), serde_json = "1", sqlx = "0.7" (runtime-tokio-rustls, postgres, uuid, chrono, json)
 - uuid = "1" (v4, serde), chrono = "0.4" (serde), reqwest = "0.12" (json, rustls-tls)
-- bcrypt = "0.15", rand = "0.8", governor = "0.6"
+- bcrypt = "0.15", rand = "0.8"
 - tracing = "0.1", tracing-subscriber = "0.3" (env-filter), dotenvy = "0.15", thiserror = "1"
 
 ---

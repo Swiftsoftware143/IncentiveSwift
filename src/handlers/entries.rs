@@ -33,7 +33,8 @@ pub struct ContactBody {
     pub business_name: Option<String>,
 }
 
-/// POST /api/v1/entries — create entry (public, rate-limited).
+/// POST /api/v1/entries — create entry (public). Bounded by the campaign's daily entry cap
+/// (`check_daily_limit` below) and, at the edge, by nginx's per-visitor `limit_req` on `/api/`.
 /// Flow: upsert contact -> find campaign -> check daily limit -> apply pity timer -> create entry -> build payload -> trigger delivery -> return.
 /// Extract user agent and IP from request headers.
 fn extract_source_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {

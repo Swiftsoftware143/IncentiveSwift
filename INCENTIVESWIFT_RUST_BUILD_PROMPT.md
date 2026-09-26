@@ -59,6 +59,15 @@ Only the API layer changes from Next.js API routes to a Rust service.
 - Public routes: 20 req/min/IP
 - Authenticated routes: 100 req/min
 
+**AS BUILT (kanban t_636d4979, 2026-09-26)** — this spec was never implemented in-app and
+cannot be: an in-process limiter has no visitor to key on here (nginx sends
+`X-Real-IP=$remote_addr`, the Cloudflare edge, and `axum::serve` never populates
+`ConnectInfo<SocketAddr>`), so it would be one shared bucket. The unused
+`src/security/rate_limit.rs` was deleted and request-rate limiting now lives in nginx:
+`limit_req zone=api burst=40 nodelay; limit_req_status 429;` on this app's `/api/` locations,
+keyed on Cloudflare's `CF-Connecting-IP` (per VISITOR, 20 r/s) — proved live. The only
+in-app budget is the public redeem path (12 failed code lookups per network origin / 300 s).
+
 ### Raffle Compliance
 - official_rules_url required for any raffle campaign creation
 - consent_gathered must be explicit true in entry body
