@@ -190,7 +190,7 @@ pub async fn check_threshold_crossed(
     // Find tiers where points_required <= new_balance AND no existing reward for this member+tier
     let tier = sqlx::query_as::<_, RewardTier>(
         r#"SELECT t.id, t.program_id, t.name, t.points_required, t.requires_approval,
-                  t.reward_tag, t.sort_order
+                  t.reward_tag, t.sort_order, t.marketing_boost
            FROM loyalty_reward_tiers t
            WHERE t.program_id = $1
              AND t.points_required <= $2

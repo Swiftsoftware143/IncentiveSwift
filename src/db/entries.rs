@@ -134,6 +134,8 @@ pub async fn get_entries_for_contact(
     let rows = sqlx::query_as::<_, EntryWithCampaign>(
         r#"SELECT e.id, e.contact_id, e.campaign_id, e.answers,
                   e.score, e.outcome, e.tags_applied,
+                  e.utm_source, e.utm_medium, e.utm_campaign,
+                  e.referrer_url, e.page_url, e.user_agent, e.ip_address,
                   e.delivered, e.delivered_at, e.delivery_attempts, e.created_at,
                   c.name as campaign_name, c.slug as campaign_slug,
                   c.type as campaign_type, c.tag_namespace
