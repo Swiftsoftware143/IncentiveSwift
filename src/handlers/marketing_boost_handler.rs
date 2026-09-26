@@ -10,6 +10,17 @@
 //!   GET  /api/v1/marketing-boost/destinations
 //!   PUT  /api/v1/campaigns/:slug/marketing-boost   (in campaign_integrations.rs)
 //!   GET  /api/v1/campaigns/:slug/marketing-boost   (in campaign_integrations.rs)
+//!
+//! NOTE (kanban t_0fc42946): a second, older sender lived in this module —
+//! `send_marketing_boost_incentive(state, campaign_id, campaign_name, first/last name, email,
+//! phone, countrycode)`. It had ZERO callers (`grep -rn` across `src/` returned only its own
+//! definition) and was a strict SUBSET of
+//! `campaign_integrations::fire_marketing_boost_with_override`, which is what the win/redeem
+//! flows actually call (handlers/loyalty_v2.rs:274/887/1759, handlers/spin_handler.rs:517).
+//! The live path also carries the per-prize `per_item_boost` override, `trigger_events`
+//! filtering, stored `provider_keys` credential resolution and legacy webhook mode. The dead
+//! duplicate was DELETED rather than wired: two senders for one incentive is how the config a
+//! prize actually carries stops being the config that fires.
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -86,181 +97,5 @@ async fn get_marketing_boost_credentials_from_db(
         None => Err(AppError::Internal(
             "No campaign with Marketing Boost configuration found".to_string(),
         )),
-    }
-}
-
-/// Send a Marketing Boost incentive based on campaign config.
-/// Called from win/redeem flows in loyalty_v2 and spin_handler.
-/// This is fire-and-forget — errors are logged but not returned to the caller.
-pub async fn send_marketing_boost_incentive(
-    state: &AppState,
-    campaign_id: &uuid::Uuid,
-    campaign_name: &str,
-    first_name: &str,
-    last_name: &str,
-    email: &str,
-    phone: Option<String>,
-    countrycode: Option<String>,
-) {
-    // Fetch campaign config
-    let row = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT COALESCE(config, '{}'::jsonb) FROM campaigns WHERE id = $1",
-    )
-    .bind(campaign_id)
-    .fetch_optional(&state.db)
-    .await;
-
-    let config = match row {
-        Ok(Some(c)) => c,
-        _ => {
-            tracing::debug!(
-                "Marketing Boost: no campaign config found for {}",
-                campaign_id
-            );
-            return;
-        }
-    };
-
-    let boost = match config.get("marketing_boost") {
-        Some(Value::Object(m)) => m.clone(),
-        _ => {
-            tracing::debug!(
-                "Marketing Boost: no marketing_boost config on campaign {}",
-                campaign_id
-            );
-            return;
-        }
-    };
-
-    // Check if enabled
-    if boost.get("enabled").and_then(|v| v.as_bool()) != Some(true) {
-        tracing::debug!("Marketing Boost: disabled on campaign {}", campaign_id);
-        return;
-    }
-
-    // Extract config fields
-    let api_key = match boost.get("api_key").and_then(|v| v.as_str()) {
-        Some(k) => k.to_string(),
-        None => {
-            tracing::warn!(
-                "Marketing Boost: missing api_key on campaign {}",
-                campaign_id
-            );
-            return;
-        }
-    };
-
-    let sender = boost
-        .get("sender")
-        .and_then(|v| v.as_str())
-        .unwrap_or("3822-4706")
-        .to_string();
-
-    let business = boost
-        .get("business")
-        .and_then(|v| v.as_str())
-        .unwrap_or("6111")
-        .to_string();
-
-    let incentive_type = match boost.get("incentive_type").and_then(|v| v.as_str()) {
-        Some(t) => t.to_string(),
-        None => {
-            tracing::warn!(
-                "Marketing Boost: missing incentive_type on campaign {}",
-                campaign_id
-            );
-            return;
-        }
-    };
-
-    let amount = boost
-        .get("amount")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
-    let destination = boost
-        .get("destination")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
-
-    tracing::info!(
-        "Marketing Boost: sending {} incentive for campaign {} (contact: {})",
-        incentive_type,
-        campaign_name,
-        email
-    );
-
-    let client = &state.http_client;
-
-    let result = match incentive_type.as_str() {
-        "dining_voucher" => {
-            let amt = amount.unwrap_or(50);
-            crate::delivery::direct_api::marketing_boost::send_dining_voucher(
-                client,
-                &api_key,
-                &sender,
-                &business,
-                first_name,
-                last_name,
-                email,
-                amt,
-                campaign_name,
-            )
-            .await
-        }
-        "hotel_savings_card" => {
-            let amt = amount.unwrap_or(200);
-            crate::delivery::direct_api::marketing_boost::send_hotel_savings_card(
-                client,
-                &api_key,
-                &sender,
-                &business,
-                first_name,
-                last_name,
-                email,
-                amt,
-                campaign_name,
-            )
-            .await
-        }
-        "vacation_incentive" => {
-            let dest = destination.unwrap_or(41);
-            crate::delivery::direct_api::marketing_boost::send_vacation_incentive(
-                client,
-                &api_key,
-                &sender,
-                &business,
-                first_name,
-                last_name,
-                email,
-                phone,
-                countrycode,
-                dest,
-                campaign_name,
-            )
-            .await
-        }
-        other => {
-            tracing::warn!("Marketing Boost: unknown incentive_type: {}", other);
-            return;
-        }
-    };
-
-    match result {
-        Ok(resp) => {
-            tracing::info!(
-                "Marketing Boost {} incentive sent successfully for {}: {:?}",
-                incentive_type,
-                email,
-                resp
-            );
-        }
-        Err(e) => {
-            tracing::warn!(
-                "Marketing Boost {} incentive failed for {}: {}",
-                incentive_type,
-                email,
-                e
-            );
-        }
     }
 }

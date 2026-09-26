@@ -766,6 +766,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/tenants/:tenant_id/purchase-pin",
             get(crate::handlers::admin_handler::get_purchase_pin),
         )
+        // Operator control for the credits ledger. The handler existed but no route
+        // was ever mounted, so the admin console could not reach it (kanban t_0fc42946).
+        // Wired here AND given a caller: the "Adjust credits" action on the served admin
+        // console's Tenants panel (www-admin/index.html, OPS_PANELS).
+        .route(
+            "/api/v1/admin/credits/adjust",
+            post(handlers::credits_handler::admin_adjust_credits),
+        )
         // Phase 1: Business account management
         .route(
             "/api/v1/admin/businesses",

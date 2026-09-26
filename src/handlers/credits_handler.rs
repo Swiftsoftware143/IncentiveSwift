@@ -493,6 +493,24 @@ pub async fn admin_adjust_credits(
 
             match (target_id, amount) {
                 (Some(tid), amt) if amt != 0 => {
+                    // First-caller defect found while wiring this route (kanban t_0fc42946):
+                    // add_credits_internal() reads the balance with fetch_optional and falls back
+                    // to 0, so an id that does not exist silently no-ops the UPDATE and then dies
+                    // on credit_transactions_account_id_fkey, handing the operator a raw Postgres
+                    // error instead of "account not found". Check the target first.
+                    let exists = sqlx::query_scalar::<_, bool>(
+                        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1)",
+                    )
+                    .bind(tid)
+                    .fetch_one(&state.db)
+                    .await
+                    .unwrap_or(false);
+                    if !exists {
+                        return Json(serde_json::json!({
+                            "success": false,
+                            "error": "Account not found",
+                        }));
+                    }
                     let result = add_credits_internal(
                         &state.db,
                         tid,

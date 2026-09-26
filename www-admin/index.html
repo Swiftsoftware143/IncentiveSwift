@@ -1698,6 +1698,20 @@ const OPS_PANELS = [
 "fields": [
 "tenant_id"
 ]
+},
+{
+"label": "Adjust credits",
+"method": "POST",
+"path": "/admin/credits/adjust",
+"fields": [
+"account_id",
+"amount",
+"reason"
+],
+"numeric": [
+"amount"
+],
+"hint": "account_id = the id of a row listed above; amount may be negative; reason is stored on the credit_transactions row"
 }
 ]
 },
