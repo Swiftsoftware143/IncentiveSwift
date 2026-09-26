@@ -416,18 +416,18 @@ async fn update_points_balance(
 ) -> Result<i32, AppError> {
     let row = sqlx::query(
         "UPDATE loyalty_members
-         SET points_balance = points_balance + $1,
-             lifetime_points = lifetime_points + $1,
+         SET points_balance = COALESCE(points_balance, 0) + $1,
+             lifetime_points = COALESCE(lifetime_points, 0) + $1,
              last_checkin_at = now()
          WHERE id = $2::uuid
-         RETURNING points_balance",
+         RETURNING COALESCE(points_balance, 0)",
     )
     .bind(points)
     .bind(member_id)
     .fetch_one(&state.db)
     .await?;
 
-    Ok(row.get("points_balance"))
+    Ok(row.try_get::<i32, _>("points_balance")?)
 }
 
 async fn check_threshold_crossed(

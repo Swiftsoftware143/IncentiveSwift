@@ -667,9 +667,9 @@ pub async fn online_visit(
     // 5. Award the multiplied points to balance
     sqlx::query(
         r#"UPDATE loyalty_members
-           SET points_balance = points_balance + $1,
-               lifetime_points = lifetime_points + $1,
-               current_streak = current_streak + 1,
+           SET points_balance = COALESCE(points_balance, 0) + $1,
+               lifetime_points = COALESCE(lifetime_points, 0) + $1,
+               current_streak = COALESCE(current_streak, 0) + 1,
                -- reset streak if last activity was more than 1 day ago
                last_activity_date = now()
            WHERE id = $2"#,
@@ -805,8 +805,8 @@ pub async fn online_share(
     // 4. Award the multiplied points
     sqlx::query(
         r#"UPDATE loyalty_members
-           SET points_balance = points_balance + $1,
-               lifetime_points = lifetime_points + $1
+           SET points_balance = COALESCE(points_balance, 0) + $1,
+               lifetime_points = COALESCE(lifetime_points, 0) + $1
            WHERE id = $2"#,
     )
     .bind(award.awarded)

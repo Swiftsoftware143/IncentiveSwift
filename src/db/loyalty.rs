@@ -77,8 +77,8 @@ pub async fn record_checkin(
     // Update points balance and lifetime points
     sqlx::query(
         r#"UPDATE loyalty_members
-           SET points_balance = points_balance + $1,
-               lifetime_points = lifetime_points + $1,
+           SET points_balance = COALESCE(points_balance, 0) + $1,
+               lifetime_points = COALESCE(lifetime_points, 0) + $1,
                last_checkin_at = now()
            WHERE id = $2"#,
     )

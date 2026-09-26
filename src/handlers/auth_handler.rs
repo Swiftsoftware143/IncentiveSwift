@@ -205,8 +205,8 @@ pub async fn register(
                 // Award points to referrer
                 sqlx::query(
                     r#"UPDATE loyalty_members
-                       SET points_balance = points_balance + $1,
-                           lifetime_points = lifetime_points + $1
+                       SET points_balance = COALESCE(points_balance, 0) + $1,
+                           lifetime_points = COALESCE(lifetime_points, 0) + $1
                        WHERE id = $2"#,
                 )
                 .bind(bonus)

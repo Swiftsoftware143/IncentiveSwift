@@ -599,7 +599,7 @@ pub async fn loyalty_analytics(
 
     // Top members
     let top_rows = sqlx::query(
-        "SELECT m.id, m.points_balance, m.lifetime_points, ct.first_name, ct.last_name, ct.email
+        "SELECT m.id, COALESCE(m.points_balance, 0) AS points_balance, COALESCE(m.lifetime_points, 0) AS lifetime_points, ct.first_name, ct.last_name, ct.email
          FROM loyalty_members m
          JOIN loyalty_programs p ON p.id = m.program_id
          JOIN campaigns c ON c.id = p.campaign_id
