@@ -32,27 +32,62 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Every campaign type this sender fires for, and the two `email_templates` rows it fires
+/// (`entry` immediately, `followup` 24h later). Stage 2 (result) is the winner path in
+/// `handlers::entries` step 8, which resolves `{campaign_type}_winner` and falls back to the
+/// literal `winner`.
+///
+/// THE RULE THIS TABLE ENFORCES (kanban t_1adeb952): a key here MUST be a member of
+/// `db::campaigns::VALID_MECHANIC_TYPES`, because that is the only vocabulary a campaign can
+/// carry — `POST /api/v1/campaigns` refuses anything else (`db::campaigns::create_campaign` ->
+/// `validate_mechanic_type`) and the served console's MECHANICS list is those same 15 strings.
+/// The shipped map keyed five arms on strings no campaign can ever hold — `survey`, `iqs`,
+/// `secret_codes`, `tier` and `scratch` — so the ten rows behind them could not be selected by
+/// anything (measured: `/opt/swift/audits/t_1adeb952/20-census.txt`).
+///
+///   * `scratch` was the one drifted key whose mechanic EXISTS under another name
+///     (`scratch_card`), so the arm is corrected here: a scratch-card campaign now fires
+///     `scratch_confirm_prize` / `second_chance_replay` instead of falling to the default arm.
+///   * the other four arms are DELETED, and the rows they named are retired by
+///     `20260927_retire_unreachable_email_templates.sql` — the map no longer claims a producer
+///     for a mechanic the product cannot create.
+///
+/// `every_arm_keys_a_creatable_mechanic` keeps the next drift from landing.
+const LIFECYCLE_MAP: &[(&str, &str, &str)] = &[
+    ("quiz", "entry_ack", "challenge_share"),
+    ("poll", "vote_confirm", "next_topic"),
+    ("spin_wheel", "win_voucher", "post_redemption_thanks"),
+    ("raffle", "entry_ticket", "bonus_entry_prompt"),
+    ("calculator", "calc_summary", "re_run_prompt"),
+    ("b2b_loyalty", "welcome_listing", "loyalty_digest"),
+    ("mystery", "mystery_secured", "urgent_expiry_notice"),
+    ("countdown", "registration_lockin", "post_deadline_followup"),
+    ("score_reveal", "processing_notice", "improvement_roadmap"),
+    (
+        "scratch_card",
+        "scratch_confirm_prize",
+        "second_chance_replay",
+    ),
+    (
+        "long_form_qualifier",
+        "application_received",
+        "review_complete_decision",
+    ),
+];
+
+/// What a creatable campaign type with no arm of its own fires — `personality`, `chat`,
+/// `leaderboard` and `loyalty` reach the sender through this pair.
+const DEFAULT_LIFECYCLE: (&str, &str) = ("entry_confirmation", "challenge_share");
+
 /// Map a campaign type → (entry_template, followup_template).
 /// Stage 2 (result) is handled inline in create_entry (winner/result path).
 pub fn lifecycle_templates(campaign_type: &str) -> (&'static str, &'static str) {
-    match campaign_type {
-        "quiz" => ("entry_ack", "challenge_share"),
-        "poll" => ("vote_confirm", "next_topic"),
-        "spin_wheel" => ("win_voucher", "post_redemption_thanks"),
-        "raffle" => ("entry_ticket", "bonus_entry_prompt"),
-        "survey" => ("submission_thanks", "impact_report"),
-        "calculator" => ("calc_summary", "re_run_prompt"),
-        "b2b_loyalty" => ("welcome_listing", "loyalty_digest"),
-        "iqs" => ("submission_receipt", "nurture_followup"),
-        "mystery" => ("mystery_secured", "urgent_expiry_notice"),
-        "countdown" => ("registration_lockin", "post_deadline_followup"),
-        "score_reveal" => ("processing_notice", "improvement_roadmap"),
-        "scratch" => ("scratch_confirm_prize", "second_chance_replay"),
-        "secret_codes" => ("code_accepted_reward", "next_code_hint"),
-        "tier" => ("tier_status_assign", "tier_upgrade_progress"),
-        "long_form_qualifier" => ("application_received", "review_complete_decision"),
-        _ => ("entry_confirmation", "challenge_share"),
+    for (key, entry, followup) in LIFECYCLE_MAP {
+        if *key == campaign_type {
+            return (entry, followup);
+        }
     }
+    DEFAULT_LIFECYCLE
 }
 
 /// The entry's ticket reference: the first 8 hex characters of the entry id, uppercased.
@@ -256,4 +291,41 @@ pub async fn already_emailed(
     .await
     .unwrap_or(0);
     count > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defect this table was flattened for (kanban t_1adeb952): an arm keyed on a string no
+    /// campaign can carry never matches, so the rows it names are unreachable forever while the
+    /// map still claims a producer exists. Four such arms shipped (`survey`, `iqs`,
+    /// `secret_codes`, `tier`) and one more was a typo (`scratch` for `scratch_card`).
+    #[test]
+    fn every_arm_keys_a_creatable_mechanic() {
+        for (key, entry, followup) in LIFECYCLE_MAP {
+            assert!(
+                crate::db::campaigns::validate_mechanic_type(key),
+                "lifecycle arm '{key}' is not in VALID_MECHANIC_TYPES, so no campaign can ever \
+                 carry it and its rows ({entry}/{followup}) can never be selected"
+            );
+        }
+    }
+
+    /// The one drifted key whose mechanic exists: a scratch-card campaign must fire ITS rows,
+    /// not fall through to the default pair.
+    #[test]
+    fn scratch_card_fires_its_own_rows() {
+        assert_eq!(
+            lifecycle_templates("scratch_card"),
+            ("scratch_confirm_prize", "second_chance_replay")
+        );
+    }
+
+    /// A creatable mechanic with no arm of its own still gets a mail (the default pair).
+    #[test]
+    fn an_armless_creatable_mechanic_gets_the_default_pair() {
+        assert_eq!(lifecycle_templates("personality"), DEFAULT_LIFECYCLE);
+        assert_eq!(lifecycle_templates("loyalty"), DEFAULT_LIFECYCLE);
+    }
 }
