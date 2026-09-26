@@ -17,7 +17,22 @@
 --   (adjacent, uncarded, same file+class: struct CustomDomain at :751 list_domains and :794
 --    register_domain over custom_domains.is_active/created_at/updated_at)
 --
+-- RETIRED (kanban t_ec33d19b). The two tablet_sessions columns are NOT constrained here any more.
+-- tablet_sessions itself is retired: it is created by 20260627004_tablet_sessions.sql, DROPPED by
+-- 20260926_retire_tablet_sessions.sql (t_e3a33d15 — no code path could ever create a session, and
+-- the two /api/v1/tablet routes that read these columns were deleted with it), and that retire
+-- file sorts BEFORE this one ('r' < 's'). So on a brand-new database the sequence is create ->
+-- drop -> ALTER A MISSING TABLE: this file failed the whole batch with
+-- `relation "tablet_sessions" does not exist` on boot 1 of an empty database, and — because the
+-- file is all-or-nothing — the FIVE surviving constraints never landed either. Live is unaffected
+-- either way: its ledger row for this file predates the drop (and the table is now absent there,
+-- `to_regclass('public.tablet_sessions')` is NULL), so the statements are unreachable in every
+-- database that exists. REMOVED rather than guarded: a guard can be defeated by a future rename,
+-- removal cannot, and there is no table left for them to apply to.
+--
 -- ARM (decided per column from the writer census, not by taste): SET NOT NULL for all nine.
+-- [t_ec33d19b: SEVEN, not nine — the two tablet_sessions columns are gone. See the RETIRED note
+--  above.]
 -- Both arms already ship in this app — COALESCE(col, <DEFAULT>) AS col (t_2dc041e9,
 -- loyalty_members.points_balance/lifetime_points) and SET NOT NULL with a writer census
 -- (t_8a896955, loyalty_members.program_id/contact_id/member_since). The tiebreaker is whether any
@@ -82,10 +97,6 @@ BEGIN
                count(*) FILTER (WHERE is_active IS NULL) AS n FROM widget_snippets
         UNION ALL SELECT 'widget_snippets.created_at',
                count(*) FILTER (WHERE created_at IS NULL) FROM widget_snippets
-        UNION ALL SELECT 'tablet_sessions.interaction_count',
-               count(*) FILTER (WHERE interaction_count IS NULL) FROM tablet_sessions
-        UNION ALL SELECT 'tablet_sessions.created_at',
-               count(*) FILTER (WHERE created_at IS NULL) FROM tablet_sessions
         UNION ALL SELECT 'loyalty_reward_tiers.requires_approval',
                count(*) FILTER (WHERE requires_approval IS NULL) FROM loyalty_reward_tiers
         UNION ALL SELECT 'loyalty_reward_tiers.sort_order',
@@ -106,8 +117,6 @@ END $$;
 
 ALTER TABLE widget_snippets ALTER COLUMN is_active SET NOT NULL;
 ALTER TABLE widget_snippets ALTER COLUMN created_at SET NOT NULL;
-ALTER TABLE tablet_sessions ALTER COLUMN interaction_count SET NOT NULL;
-ALTER TABLE tablet_sessions ALTER COLUMN created_at SET NOT NULL;
 ALTER TABLE loyalty_reward_tiers ALTER COLUMN requires_approval SET NOT NULL;
 ALTER TABLE loyalty_reward_tiers ALTER COLUMN sort_order SET NOT NULL;
 ALTER TABLE custom_domains ALTER COLUMN is_active SET NOT NULL;
