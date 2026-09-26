@@ -106,6 +106,23 @@ async fn maybe_llm_reply(
 ) -> Option<String> {
     let (provider, api_key, base_url) = resolve_llm_key(state, account_id).await?;
 
+    // The endpoint is tenant-settable (`provider_keys.base_url`), so it is gated before the
+    // tenant's credential is sent anywhere (kanban t_f3c75b2a). A refusal falls back to the
+    // scripted reply and is logged with its reason; an empty value keeps the literal default
+    // endpoint below.
+    if let Err(reason) =
+        crate::security::webhook_security::gate_provider_endpoint(&state.db, &provider, &base_url)
+            .await
+    {
+        tracing::warn!(
+            "Chat LLM endpoint '{}' for provider '{}' refused by the provider-endpoint gate: {}",
+            base_url,
+            provider,
+            reason
+        );
+        return None;
+    }
+
     let (url, model) = match provider.as_str() {
         "deepseek" => (
             if base_url.is_empty() {

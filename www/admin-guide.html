@@ -219,7 +219,7 @@ POST /api/v1/portfolio-companies      — Create company</pre>
   </div>
   <div class="card">
     <h3>Managing Keys</h3>
-    <p>Navigate to <strong>Integrations → Provider Keys</strong>. Keys are encrypted at rest and masked in the UI. You can add, update, or delete keys. Key changes take effect immediately for subsequent integration dispatches.</p>
+    <p>Navigate to <strong>Integrations → Provider Keys</strong>. Keys are encrypted at rest and masked in the UI. You can add, update, or delete keys. Key changes take effect immediately for subsequent integration dispatches. A stored endpoint must be a <strong>public destination</strong>: a base URL that resolves to a private, loopback or link-local address is refused when it is saved and is never contacted by a dispatch. The platform's own CoreSwift bridge is the one exception — it is the preset endpoint those accounts already use.</p>
   </div>
 </section>
 

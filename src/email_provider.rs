@@ -157,14 +157,60 @@ pub async fn resolve(pool: &PgPool, tenant_id: Option<Uuid>) -> Option<EmailConf
     None
 }
 
+/// Gate the DESTINATIONS inside a candidate email-config JSON at WRITE time, so an endpoint that
+/// would be refused at send time is refused where it is entered instead of being quietly stored
+/// (kanban t_f3c75b2a). The two writers of these rows — the admin email-settings route and the
+/// tenant `PUT /api/v1/settings` route — both call this. Secrets in the body are not touched.
+pub async fn gate_config_json(
+    pool: &PgPool,
+    cfg: &Value,
+    default_provider: &str,
+) -> Result<(), String> {
+    let c = EmailConfig::from_json(cfg, default_provider);
+    if !c.api_url.is_empty() {
+        crate::security::webhook_security::gate_provider_endpoint(pool, &c.provider, &c.api_url)
+            .await?;
+    }
+    if c.provider == "smtp" && !c.smtp_host.is_empty() {
+        crate::security::webhook_security::gate_provider_endpoint_host(pool, "smtp", &c.smtp_host)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Deliver a message through the configured provider.
+///
+/// The destination is admin- or TENANT-settable (`admin_settings.email`, or a tenant's own
+/// `tenant_settings.email_config` via `PUT /api/v1/settings`), so it passes the provider-endpoint
+/// gate before the first request is made (kanban t_f3c75b2a): a private/reserved destination is
+/// refused — the only exception is the platform's own preset endpoint for that provider.
 pub async fn deliver(
+    pool: &PgPool,
     cfg: &EmailConfig,
     to: &str,
     subject: &str,
     text: &str,
     html: Option<&str>,
 ) -> Result<(), String> {
+    if !cfg.api_url.is_empty() {
+        crate::security::webhook_security::gate_provider_endpoint(
+            pool,
+            &cfg.provider,
+            &cfg.api_url,
+        )
+        .await
+        .map_err(|reason| format!("Email endpoint refused by security policy: {}", reason))?;
+    }
+    if cfg.provider == "smtp" && !cfg.smtp_host.is_empty() {
+        crate::security::webhook_security::gate_provider_endpoint_host(
+            pool,
+            "smtp",
+            &cfg.smtp_host,
+        )
+        .await
+        .map_err(|reason| format!("Email host refused by security policy: {}", reason))?;
+    }
+
     match cfg.provider.as_str() {
         "smtp" => {
             let sc = crate::smtp::SmtpConfig {
@@ -215,7 +261,12 @@ async fn send_mailgun(
         params.push(("html", h.to_string()));
     }
 
-    let resp = reqwest::Client::new()
+    // Never `reqwest::Client::new()`: it follows up to 10 redirects, so a public endpoint that
+    // answers `302 Location: http://127.0.0.1:…` would be a free hop past the gate above.
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Err("outbound email client unavailable — send skipped".to_string());
+    };
+    let resp = client
         .post(&url)
         .basic_auth("api", Some(&cfg.api_key))
         .form(&params)
@@ -258,7 +309,12 @@ async fn send_sendgrid(
         "content": content,
     });
 
-    let resp = reqwest::Client::new()
+    // Never `reqwest::Client::new()`: it follows up to 10 redirects, so a public endpoint that
+    // answers `302 Location: http://127.0.0.1:…` would be a free hop past the gate above.
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Err("outbound email client unavailable — send skipped".to_string());
+    };
+    let resp = client
         .post(&url)
         .bearer_auth(&cfg.api_key)
         .json(&payload)
@@ -299,7 +355,12 @@ async fn send_sendiio(
         "html": html.unwrap_or(""),
     });
 
-    let resp = reqwest::Client::new()
+    // Never `reqwest::Client::new()`: it follows up to 10 redirects, so a public endpoint that
+    // answers `302 Location: http://127.0.0.1:…` would be a free hop past the gate above.
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Err("outbound email client unavailable — send skipped".to_string());
+    };
+    let resp = client
         .post(&url)
         .bearer_auth(&cfg.api_key)
         .json(&payload)

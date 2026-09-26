@@ -745,7 +745,7 @@
       </ul>
 
       <h3>Integration Provider Keys</h3>
-      <p>Manage API keys for third-party services used by the Integration Hub. Keys are encrypted at rest and never exposed in logs.</p>
+      <p>Manage API keys for third-party services used by the Integration Hub. Keys are encrypted at rest and never exposed in logs. Provider endpoints must be public destinations: a base URL that resolves to a private, loopback or link-local address is refused when it is saved and never contacted by a dispatch. The platform's own CoreSwift bridge is the one exception — it is the preset endpoint those accounts already use.</p>
 
       <h2 id="faq">❓ Frequently Asked Questions</h2>
 

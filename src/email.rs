@@ -229,7 +229,7 @@ async fn send_email_request(
         Some(html_body)
     };
 
-    crate::email_provider::deliver(&cfg, to, subject, text_body, html)
+    crate::email_provider::deliver(pool, &cfg, to, subject, text_body, html)
         .await
         .map_err(|e| {
             tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");

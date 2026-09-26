@@ -31,18 +31,35 @@ async fn preset_base_url(state: &AppState) -> Option<String> {
     .flatten()
 }
 
+/// Why a CoreSwift connection could not be handed to a caller.
+#[derive(Debug)]
+pub enum ConnError {
+    /// No active row with a usable credential.
+    NotConnected,
+    /// The endpoint the row resolves to is not the platform preset for `coreswift` and is
+    /// internal — refused by `security::webhook_security::gate_provider_endpoint`
+    /// (kanban t_f3c75b2a). The reason is the gate's own message.
+    Refused(String),
+}
+
 /// Resolve the account's CoreSwift connection (personal API key + base URL) from
-/// provider_keys. Returns None if not connected.
+/// provider_keys. `Err(ConnError::NotConnected)` when not connected, `Err(ConnError::Refused)`
+/// when the resolved endpoint is refused by the provider-endpoint gate.
 ///
 /// Base URL resolution order (standard §Hub contract):
 ///   1. `provider_keys.base_url` (tenant override)
 ///   2. `integration_provider_presets.base_url` where key='coreswift'
 ///   3. app config fallback
 ///   4. constant default `https://coreswiftcrm.com`
-pub async fn get_coreswift_connection(
+///
+/// STEP 5, and the reason this is the only resolution site: the endpoint is caller-settable (the
+/// tenant's own `POST /api/v1/provider-keys` writes it), so it passes the provider-endpoint gate
+/// before it is ever contacted. The platform preset value itself (the first-party CoreSwift
+/// bridge) is admitted by the gate's carve-out.
+pub async fn resolve_coreswift_connection(
     state: &AppState,
     account_id: &Uuid,
-) -> Option<(String, String)> {
+) -> Result<(String, String), ConnError> {
     let row = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT api_key, base_url FROM provider_keys
          WHERE account_id = $1 AND provider = 'coreswift' AND is_active = true",
@@ -50,15 +67,17 @@ pub async fn get_coreswift_connection(
     .bind(account_id)
     .fetch_optional(&state.db)
     .await
-    .ok()??;
+    .ok()
+    .flatten()
+    .ok_or(ConnError::NotConnected)?;
 
     // Stored as ciphertext at rest: unwind before the key is used as a credential.
     let api_key =
         crate::security::provider_key_crypto::decrypt_from_storage(&state.db, row.0.trim())
             .await
-            .ok()?;
+            .map_err(|_| ConnError::NotConnected)?;
     if api_key.trim().is_empty() {
-        return None;
+        return Err(ConnError::NotConnected);
     }
 
     let tenant_override = row.1.filter(|u| !u.trim().is_empty());
@@ -79,7 +98,30 @@ pub async fn get_coreswift_connection(
     .trim_end_matches('/')
     .to_string();
 
-    Some((api_key, base_url))
+    if let Err(reason) =
+        crate::security::webhook_security::gate_provider_endpoint(&state.db, "coreswift", &base_url)
+            .await
+    {
+        tracing::warn!(
+            "CoreSwift endpoint '{}' refused by the provider-endpoint gate: {}",
+            base_url,
+            reason
+        );
+        return Err(ConnError::Refused(reason));
+    }
+
+    Ok((api_key, base_url))
+}
+
+/// The delivery path's view of the resolution above: `None` when the account is not connected
+/// OR the endpoint was refused. A refusal is logged with its reason inside
+/// `resolve_coreswift_connection`, so a blocked push is never silent. Route handlers that must
+/// surface WHICH of the two happened use `resolve_coreswift_connection` directly.
+pub async fn get_coreswift_connection(
+    state: &AppState,
+    account_id: &Uuid,
+) -> Option<(String, String)> {
+    resolve_coreswift_connection(state, account_id).await.ok()
 }
 
 /// THE shared inbound helper — every capture path and the manual push endpoint

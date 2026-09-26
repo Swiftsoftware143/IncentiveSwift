@@ -101,6 +101,18 @@ pub async fn update_email_settings(
         }
     }
 
+    // The endpoint in this body is used as the FULL request URL for mailgun/sendgrid/sendiio (and
+    // the smtp_host as the socket target), by any authenticated caller of this route — gate it at
+    // the source as well as at send time (kanban t_f3c75b2a).
+    email_provider::gate_config_json(&state.db, &body, "smtp")
+        .await
+        .map_err(|reason| {
+            AppError::BadRequest(format!(
+                "Email endpoint refused by security policy: {}",
+                reason
+            ))
+        })?;
+
     sqlx::query(
         "INSERT INTO admin_settings (key, value, description, updated_at)
          VALUES ('email', $1::jsonb, 'Global system email provider (admin-editable)', NOW())
@@ -133,6 +145,7 @@ pub async fn test_email_settings(
     };
 
     match email_provider::deliver(
+        &state.db,
         &cfg,
         &to,
         "IncentiveSwift System Email Test",

@@ -147,7 +147,7 @@ pub async fn check_milestones(
         let result = match m.action_type.as_str() {
             "award_coupon" => fire_award_coupon(&state.db, campaign_id, contact_id, m).await,
             "bonus_entry" => fire_bonus_entry(&state.db, campaign_id, contact_id, m).await,
-            "fire_webhook" => fire_webhook_action(campaign_id, contact_id, m).await,
+            "fire_webhook" => fire_webhook_action(&state.db, campaign_id, contact_id, m).await,
             _ => Ok(None),
         };
 
@@ -250,7 +250,13 @@ async fn fire_bonus_entry(
 }
 
 /// Fire a webhook (fire-and-forget)
+///
+/// The URL is TENANT/ADMIN-settable (`campaign_milestones.action_config.url`), so it passes the
+/// platform's outbound-webhook gate first — this was the one production webhook site the
+/// outbound-webhook sweep missed (kanban t_52b93eb7 / t_f3c75b2a) — and it uses the shared client
+/// that follows no redirects.
 async fn fire_webhook_action(
+    pool: &sqlx::PgPool,
     campaign_id: &Uuid,
     contact_id: &Uuid,
     milestone: &CampaignMilestone,
@@ -275,11 +281,29 @@ async fn fire_webhook_action(
         "config": milestone.action_config,
     });
 
+    let account_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT account_id FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+    let Some(account_id) = account_id else {
+        return Ok(None);
+    };
+
+    if !crate::security::webhook_security::outbound_webhook_allowed(pool, &account_id, url).await {
+        return Ok(Some(json!({ "webhook_target": url, "refused": true })));
+    }
+
+    let Some(client) = crate::security::webhook_security::delivery_client() else {
+        return Ok(None);
+    };
+
     // Fire and forget ??? spawn a task
-    let client = reqwest::Client::new();
     let _ = client.post(url).json(&body).send().await;
 
-    Ok(Some(json!({"webhook_target": url})))
+    Ok(Some(json!({ "webhook_target": url })))
 }
 
 // ===== Admin CRUD for milestones (used by handlers) =====

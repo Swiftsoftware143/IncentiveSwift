@@ -107,6 +107,13 @@ pub async fn send_email(
             .to_string()
     })?;
 
+    // The host is TENANT-SETTABLE (`tenant_settings` keys `smtp_*`, written by
+    // `PUT /api/v1/settings`), so it is gated before any socket is opened (kanban t_f3c75b2a):
+    // a private/reserved host is refused unless it is the platform's own preset for `smtp`.
+    crate::security::webhook_security::gate_provider_endpoint_host(pool, "smtp", &config.host)
+        .await
+        .map_err(|reason| format!("SMTP host refused by security policy: {}", reason))?;
+
     // Build the email
     let from_name = config
         .from_name

@@ -187,12 +187,13 @@ pub async fn outbound_webhook_allowed(
     }
 }
 
-/// A shared client for outbound webhook delivery that follows NO redirects.
+/// A shared client for outbound delivery (webhooks AND provider endpoints) that follows NO
+/// redirects.
 ///
-/// `reqwest::Client::new()` follows up to 10 redirects, so a destination that passed the gate could
-/// answer `302 Location: http://169.254.169.254/…` and be a free hop past it. `AppState::http_client`
-/// carries the same policy — prefer it wherever a state handle is in scope; this exists for the
-/// delivery module, which is handed only a pool.
+/// `reqwest::Client::new()` follows up to 10 redirects, so a destination that passed the gate
+/// could answer `302 Location: http://169.254.169.254/…` and be a free hop past it.
+/// `AppState::http_client` carries the same policy — prefer it wherever a state handle is in
+/// scope; this exists for the delivery modules, which are handed only a pool.
 ///
 /// Returns `None` when the client cannot be built at all (TLS backend failure). Callers must then
 /// SKIP the delivery rather than fall back to a redirect-following default: a gate that degrades to
@@ -216,6 +217,132 @@ pub fn delivery_client() -> Option<reqwest::Client> {
             }
         })
         .clone()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Provider-ENDPOINT gate (a BYOK `base_url` / `api_url`, not a webhook) — kanban t_f3c75b2a
+// ---------------------------------------------------------------------------------------------
+
+/// The platform's OWN base URL for a provider (`integration_provider_presets`), when one is set.
+/// This is the carve-out key for the gate below: the one destination a tenant may still reach
+/// even when it is loopback/private, because it is the platform's own first-party bridge.
+pub async fn provider_preset_base_url(pool: &PgPool, provider: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT base_url FROM integration_provider_presets \
+         WHERE key = $1 AND base_url IS NOT NULL AND base_url <> ''",
+    )
+    .bind(provider)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Is `url` the platform's own preset endpoint for the provider? Same scheme, same host
+/// (case-insensitively), same port, and a path at or below the preset's own path. Pure, so the
+/// carve-out rule is testable without a DB or a network.
+pub fn is_platform_preset_url(url: &str, preset: &str) -> bool {
+    let (Ok(u), Ok(p)) = (Url::parse(url.trim()), Url::parse(preset.trim())) else {
+        return false;
+    };
+    if u.scheme() != p.scheme() {
+        return false;
+    }
+    let host_eq = match (u.host_str(), p.host_str()) {
+        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    };
+    if !host_eq || u.port_or_known_default() != p.port_or_known_default() {
+        return false;
+    }
+    let up = u.path().trim_end_matches('/');
+    let pp = p.path().trim_end_matches('/');
+    up == pp || up.starts_with(&format!("{}/", pp))
+}
+
+/// Host-only flavour of the carve-out, for a transport whose destination is a bare host:port
+/// (SMTP): a `smtp://127.0.0.1:25` preset admits the host `127.0.0.1`. Pure.
+pub fn host_is_platform_preset(host: &str, preset: &str) -> bool {
+    let Ok(p) = Url::parse(preset.trim()) else {
+        return false;
+    };
+    match p.host_str() {
+        Some(h) => h.eq_ignore_ascii_case(host.trim()),
+        None => false,
+    }
+}
+
+/// The gate for a TENANT- or ADMIN-settable provider ENDPOINT: `provider_keys.base_url`
+/// (written by `POST /api/v1/provider-keys`), the LLM `base_url` in `chat_handler`, and
+/// `email_provider`'s `api_url` (writable by a tenant through `PUT /api/v1/settings`).
+///
+/// This is NOT the webhook gate: the destination is a BYOK endpoint, and the platform's own
+/// endpoint for a provider may legitimately be loopback — `integration_provider_presets` carries
+/// `coreswift -> http://127.0.0.1:8084` (the first-party CoreSwift bridge) and every live
+/// `provider_keys` row for it carries exactly that value. A blanket private-IP refusal would turn
+/// the live lead pipeline off for every account, so the arms are:
+///
+///   1. the platform preset for this provider                  -> ALLOW (the carve-out),
+///   2. anything else that resolves to a private/reserved IP   -> REFUSE,
+///   3. an empty value                                         -> ALLOW (nothing to contact; the
+///      caller's own literal default applies).
+pub async fn gate_provider_endpoint(
+    pool: &PgPool,
+    provider: &str,
+    base_url: &str,
+) -> Result<(), String> {
+    let url = base_url.trim();
+    if url.is_empty() {
+        return Ok(());
+    }
+    if let Some(preset) = provider_preset_base_url(pool, provider).await {
+        if is_platform_preset_url(url, &preset) {
+            return Ok(());
+        }
+    }
+    validate_webhook_url(url, &[]).await.map_err(|msg| {
+        format!(
+            "Provider endpoint '{}' for provider '{}' refused: {}",
+            url, provider, msg
+        )
+    })
+}
+
+/// `gate_provider_endpoint` for a transport whose destination is a bare host (SMTP): the same
+/// carve-out (the provider's preset host) plus the same private/reserved refusal, resolved the
+/// same way.
+pub async fn gate_provider_endpoint_host(
+    pool: &PgPool,
+    provider: &str,
+    host: &str,
+) -> Result<(), String> {
+    let h = host.trim();
+    if h.is_empty() {
+        return Ok(());
+    }
+    if let Some(preset) = provider_preset_base_url(pool, provider).await {
+        if host_is_platform_preset(h, &preset) {
+            return Ok(());
+        }
+    }
+    let addrs = tokio::net::lookup_host((h, 0))
+        .await
+        .map_err(|e| format!("DNS resolution failed for '{}': {}", h, e))?;
+    for addr in addrs {
+        if is_private_ip(&addr.ip()) {
+            return Err(format!(
+                concat!(
+                    "Provider host '{}' for provider '{}' resolves to a private/reserved IP ",
+                    "address ({}). Outbound connections to internal infrastructure are blocked ",
+                    "for security."
+                ),
+                h,
+                provider,
+                addr.ip()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Run both security checks before delivering a webhook.
@@ -355,6 +482,60 @@ mod tests {
                 Ok(v) => panic!("expected Err for {what}, got Ok({v:?})"),
             }
         }
+    }
+
+    // ---- the provider-endpoint carve-out, on the LIVE preset value (kanban t_f3c75b2a) --------
+    #[test]
+    fn platform_preset_admits_exactly_the_preset_origin() {
+        // `integration_provider_presets` -> coreswift = this value, and 5/5 live
+        // `provider_keys` rows for coreswift carry exactly it. It must stay admitted.
+        let preset = "http://127.0.0.1:8084";
+        assert!(is_platform_preset_url("http://127.0.0.1:8084", preset));
+        assert!(is_platform_preset_url("http://127.0.0.1:8084/", preset));
+        assert!(is_platform_preset_url(
+            "http://127.0.0.1:8084/api/external/contacts",
+            preset
+        ));
+        // the first-party bridge is loopback, so the carve-out has to survive case-insensitivity
+        assert!(is_platform_preset_url(
+            "HTTP://127.0.0.1:8084/api/external/lists",
+            preset
+        ));
+
+        // …and NOTHING else that is internal is the preset: another loopback port, another
+        // loopback host, a lookalike name, another scheme.
+        assert!(!is_platform_preset_url("http://127.0.0.1:18084/x", preset));
+        assert!(!is_platform_preset_url("http://127.0.0.2:8084/x", preset));
+        assert!(!is_platform_preset_url(
+            "http://127.0.0.1.evil.com:8084/x",
+            preset
+        ));
+        assert!(!is_platform_preset_url("https://127.0.0.1:8084/x", preset));
+        // 80 is the http default: an explicit :8084 is a different port
+        assert!(!is_platform_preset_url("http://127.0.0.1:80/x", preset));
+
+        // a preset with its own path admits what hangs below it, not what sits above it
+        assert!(is_platform_preset_url(
+            "http://127.0.0.1:8084/v1/x",
+            "http://127.0.0.1:8084/v1"
+        ));
+        assert!(!is_platform_preset_url(
+            "http://127.0.0.1:8084/v2/x",
+            "http://127.0.0.1:8084/v1"
+        ));
+        // malformed / unroutable input is never "the preset"
+        assert!(!is_platform_preset_url("not-a-url", preset));
+        assert!(!is_platform_preset_url("http://127.0.0.1:8084", ""));
+    }
+
+    #[test]
+    fn preset_host_matches_a_bare_transport_host() {
+        let preset = "smtp://127.0.0.1:25";
+        assert!(host_is_platform_preset("127.0.0.1", preset));
+        assert!(host_is_platform_preset(" 127.0.0.1 ", preset));
+        assert!(!host_is_platform_preset("127.0.0.2", preset));
+        assert!(!host_is_platform_preset("127.0.0.1", ""));
+        assert!(!host_is_platform_preset("127.0.0.1", "not-a-url"));
     }
 
     #[test]

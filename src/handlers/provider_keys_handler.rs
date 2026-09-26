@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::delivery::coreswift_external::ConnError;
 use crate::security::provider_key_crypto::mask;
 
 /// GET /api/v1/provider-keys
@@ -101,6 +102,26 @@ pub async fn upsert_provider_key(
     let plaintext = body.api_key.as_deref().unwrap_or("").trim().to_string();
     let stored_api_key =
         crate::security::provider_key_crypto::encrypt_for_storage(&state.db, &plaintext).await?;
+
+    // The destination is TENANT-SETTABLE, so it is gated at the source as well as at every use:
+    // refuse an internal endpoint here (the platform's own preset for the provider is admitted),
+    // instead of storing a destination that would only be refused later. Kanban t_f3c75b2a.
+    if let Some(base_url) = body
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        crate::security::webhook_security::gate_provider_endpoint(
+            &state.db,
+            &body.provider,
+            base_url,
+        )
+        .await
+        .map_err(|reason| {
+            AppError::BadRequest(format!("base_url refused by security policy: {}", reason))
+        })?;
+    }
 
     // Upsert using EXCLUDED pattern
     let row = sqlx::query(
@@ -236,34 +257,20 @@ pub async fn get_coreswift_conn(
     state: &AppState,
     account_id: &Uuid,
 ) -> Result<(String, String), AppError> {
-    let row = sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT api_key, base_url FROM provider_keys
-         WHERE account_id = $1 AND provider = 'coreswift' AND is_active = true",
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| AppError::Database(format!("DB error: {e}")))?
-    .ok_or_else(|| AppError::NotFound("CoreSwift is not connected".to_string()))?;
-
-    // Stored as ciphertext at rest: unwind before the value is used as a credential.
-    let api_key =
-        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, row.0.trim()).await?;
-    let base_url = row
-        .1
-        .filter(|u| !u.is_empty())
-        .or_else(|| {
-            let d = state.config.coreswift_url.trim().to_string();
-            if d.is_empty() {
-                None
-            } else {
-                Some(d)
-            }
-        })
-        .map(|u| u.trim_end_matches('/').to_string())
-        .ok_or_else(|| AppError::NotFound("CoreSwift base URL not configured".to_string()))?;
-
-    Ok((api_key, base_url))
+    // ONE resolution site for this column: `coreswift_external::resolve_coreswift_connection`
+    // (row -> platform preset -> config -> default) plus the provider-endpoint gate, so the
+    // routes below cannot drift from the delivery path (kanban t_f3c75b2a).
+    match crate::delivery::coreswift_external::resolve_coreswift_connection(state, account_id).await
+    {
+        Ok(conn) => Ok(conn),
+        Err(ConnError::NotConnected) => {
+            Err(AppError::NotFound("CoreSwift is not connected".to_string()))
+        }
+        Err(ConnError::Refused(reason)) => Err(AppError::Forbidden(format!(
+            "CoreSwift endpoint refused by security policy: {}",
+            reason
+        ))),
+    }
 }
 
 /// GET /api/v1/integrations/coreswift/lists
@@ -375,13 +382,15 @@ pub async fn coreswift_push(
         .ok_or_else(|| AppError::NotFound("No captured contacts yet".to_string()))?,
     };
 
-    if crate::delivery::coreswift_external::get_coreswift_connection(&state, &account_id)
-        .await
-        .is_none()
-    {
-        return Err(AppError::BadRequest(
-            "CoreSwift is not connected — store your CoreSwift key first".to_string(),
-        ));
+    // The endpoint is tenant-settable, so the refusal is surfaced as itself (403 + the gate's
+    // reason) rather than as "not connected" (kanban t_f3c75b2a).
+    if let Err(e) = get_coreswift_conn(&state, &account_id).await {
+        return match e {
+            AppError::Forbidden(msg) => Err(AppError::Forbidden(msg)),
+            _ => Err(AppError::BadRequest(
+                "CoreSwift is not connected — store your CoreSwift key first".to_string(),
+            )),
+        };
     }
 
     let pushed = crate::delivery::coreswift_external::push_lead_to_coreswift(
@@ -422,6 +431,7 @@ pub async fn test_provider_key(
 
     if provider == "coreswift" {
         return match get_coreswift_conn(&state, &account_id).await {
+            Err(AppError::Forbidden(msg)) => Err(AppError::Forbidden(msg)),
             Err(_) => Ok(Json(json!({
                 "provider": provider,
                 "ok": false,

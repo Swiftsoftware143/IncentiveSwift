@@ -63,6 +63,33 @@ pub async fn update_settings(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     for entry in req.settings {
+        // These keys are the TENANT-side writers of the mail endpoints `email_provider` and
+        // `delivery::sender` contact, so they are gate-checked where they are stored — a private
+        // destination is refused here instead of reaching the socket later (kanban t_f3c75b2a).
+        if entry.key == "smtp_host" {
+            crate::security::webhook_security::gate_provider_endpoint_host(
+                &state.db,
+                "smtp",
+                entry.value.as_str().unwrap_or(""),
+            )
+            .await
+            .map_err(|reason| {
+                AppError::BadRequest(format!("smtp_host refused by security policy: {}", reason))
+            })?;
+        } else if matches!(
+            entry.key.as_str(),
+            "email_config" | "mailgun_config" | "smtp_config"
+        ) {
+            crate::email_provider::gate_config_json(&state.db, &entry.value, "smtp")
+                .await
+                .map_err(|reason| {
+                    AppError::BadRequest(format!(
+                        "{} refused by security policy: {}",
+                        entry.key, reason
+                    ))
+                })?;
+        }
+
         sqlx::query(
             r#"INSERT INTO tenant_settings (tenant_id, key, value)
                VALUES ($1, $2, $3::jsonb)
