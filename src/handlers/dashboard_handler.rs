@@ -138,34 +138,6 @@ pub async fn list_leads(
     Ok(Json(json!({"leads": leads})))
 }
 
-/// GET /api/v1/tags - list all tags for tenant
-pub async fn list_tags(
-    State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&user.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
-    let rows = sqlx::query(
-        r#"SELECT t.id, t.name, t.color, tg.name as group_name FROM tags t
-           LEFT JOIN tag_groups tg ON tg.id = t.group_id
-           WHERE t.account_id = $1 ORDER BY tg.name, t.name"#,
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
-    let mut tags: Vec<Value> = Vec::new();
-    for row in &rows {
-        use sqlx::Row;
-        tags.push(json!({
-            "id": row.get::<Uuid,_>("id"),
-            "name": row.get::<String,_>("name"),
-            "color": row.get::<Option<String>,_>("color"),
-            "group": row.get::<Option<String>,_>("group_name"),
-        }));
-    }
-    Ok(Json(json!({"tags": tags})))
-}
-
 /// GET /api/v1/plans (public - no auth required)
 pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(

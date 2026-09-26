@@ -313,6 +313,24 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | PUT | `/contacts/:id` | JWT | `contacts::update_contact` | Update contact |
 | DELETE | `/contacts/:id` | JWT | `contacts::delete_contact` | Delete contact |
 
+## Tags
+
+The tenant's own tag library (`tags`, grouped by `tag_groups`). Every verb is scoped to the caller's
+account (`account_id` from the JWT); an id belonging to another account answers `404 Tag not found`.
+`POST /tags` is idempotent on `(account_id, lower(name))` — re-submitting an existing name returns
+that tag with `created:false`, so the `max_tags` allowance is consumed only when a row is really
+created. The allowance is `tier_features.limit_value` for `features.key = 'max_tags'` on the account's
+own `plan_tiers` row; at the cap, `POST` answers `402 Tags limit reached (used/cap). Upgrade to
+increase your limit.` `color` must be `#rrggbb` (or empty for the default); `group` is the group's
+NAME and is find-or-created for the account, `""` clears it on `PUT`.
+
+| Method | Path | Auth | Handler | Description |
+|--------|------|------|---------|-------------|
+| GET | `/tags` | JWT | `tags_handler::list_tags` | List the account's tags |
+| POST | `/tags` | JWT | `tags_handler::create_tag` | Create a tag (idempotent on name; plan-gated) |
+| PUT | `/tags/:id` | JWT | `tags_handler::update_tag` | Rename / recolour / regroup a tag |
+| DELETE | `/tags/:id` | JWT | `tags_handler::delete_tag` | Delete a tag |
+
 ## Portfolio Companies & Integration Targets
 
 | Method | Path | Auth | Handler | Description |

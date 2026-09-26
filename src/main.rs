@@ -651,8 +651,21 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::contacts::update_contact)
                 .delete(handlers::contacts::delete_contact),
         )
-        // Tags list
-        .route("/api/v1/tags", get(handlers::dashboard_handler::list_tags))
+        // Tags — the tenant's own tag library. The served Operator Console has shipped a `Tags`
+        // screen with create/edit/delete all along (`www-admin/index.html` nav id `tags`, view
+        // `Tags` + `TagModal`), which POSTs/PUTs/DELETEs these paths, but only the GET existed here
+        // (POST answered 405, PUT/DELETE 404) and `tags` had no writer anywhere in the crate — so
+        // the screen could only ever render its 85 backfilled rows. The write verbs below are the
+        // producer that screen was always calling; creation is gated on the account's own
+        // `max_tags` allowance (kanban t_286aead1).
+        .route(
+            "/api/v1/tags",
+            get(handlers::tags_handler::list_tags).post(handlers::tags_handler::create_tag),
+        )
+        .route(
+            "/api/v1/tags/:id",
+            put(handlers::tags_handler::update_tag).delete(handlers::tags_handler::delete_tag),
+        )
         .route(
             "/api/v1/portfolio-companies",
             get(handlers::portfolio_handler::list_portfolio_companies)

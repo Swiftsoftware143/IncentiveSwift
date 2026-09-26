@@ -66,4 +66,5 @@ pub mod stripe_webhook;
 pub mod supplier_handler;
 pub mod support_tickets;
 pub mod tag_provision_handler;
+pub mod tags_handler;
 pub mod treasury_handler;

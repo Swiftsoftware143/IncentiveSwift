@@ -1098,7 +1098,7 @@ const Tags = () => {
   const st = viewState('tags', { list: [], showModal: false, editItem: null, search: '' });
   const load = async () => { try { const data = await API.get('/tags'); st.list = Array.isArray(data.tags||data) ? (data.tags||data) : []; renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
-  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const show = (item) => { st.editItem = item || {}; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
     try {
@@ -1137,7 +1137,20 @@ const Tags = () => {
 
 const TagModal = ({ st, show, hide, save }) => {
   const item = st.editItem || {};
-  const [form, setForm] = viewState('tag_form', { name: item.name || '', color: item.color || '#3B82F6', group: item.group || '' });
+  // `viewState(name, defaults)` returns the SHARED state OBJECT (`S.views[name]`), never a
+  // [state, setter] pair. The old `const [form, setForm] = viewState('tag_form', {...})` threw
+  // `TypeError: viewState is not a function or its return value is not iterable` the moment
+  // "+ Add Tag" was clicked — measured in real Chromium 2026-09-26 — so this modal had never once
+  // rendered. Read the object directly and seed it from the tag being edited ON OPEN (`show()`
+  // clears `formSeeded`), so typing survives the re-render on every keystroke and opening a second
+  // tag can never show the previous one's values (kanban t_286aead1).
+  const form = viewState('tag_form', { name: '', color: '#3B82F6', group: '' });
+  if (!st.formSeeded) {
+    form.name = item.name || '';
+    form.color = item.color || '#3B82F6';
+    form.group = item.group || '';
+    st.formSeeded = true;
+  }
   const submit = () => { save({ ...form }); };
   return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
     <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
