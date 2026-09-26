@@ -1232,9 +1232,9 @@ const ledgerTab = html`<div>
 // ---- INTEGRATION CENTER ----
 const IntegrationCenter = () => {
   const st = viewState('integration', { list: [], showModal: false, editItem: null, search: '' });
-  const load = async () => { try { const data = await API.get('/integration-targets'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  const load = async () => { try { const data = await API.get('/integration-targets'); st.list = Array.isArray(data) ? data : (data.targets || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
-  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const show = (item) => { st.editItem = item || {}; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
     try {
@@ -1258,7 +1258,7 @@ const IntegrationCenter = () => {
       ${filtered.map(item => html`<div class="card p-3 flex items-center justify-between">
         <div>
           <div class="font-medium">${item.name||'Unnamed'}</div>
-          <div class="text-xs text-gray-500">${item.software_type||'Unknown'} ${item.api_key ? '\u2022 API Key: ' + item.api_key.substring(0,8) + '...' : ''}</div>
+          <div class="text-xs text-gray-500">${item.provider||'Unknown'} ${item.api_key ? '\u2022 API Key: ' + item.api_key.substring(0,8) + '...' : ''}</div>
         </div>
         <div class="flex gap-2">
           <button class="text-blue-600 text-sm" onClick=${() => show(item)}>Edit</button>
@@ -1272,14 +1272,30 @@ const IntegrationCenter = () => {
 
 const IntegrationModal = ({ st, show, hide, save }) => {
   const item = st.editItem || {};
-  const [form, setForm] = viewState('integration_form', { name: item.name || '', software_type: item.software_type || '', api_key: item.api_key || '', webhook_url: item.webhook_url || '' });
+  // `viewState(name, defaults)` returns the SHARED state OBJECT (`S.views[name]`), never a
+  // [state, setter] pair — the old destructured call threw
+  // `TypeError: viewState is not a function or its return value is not iterable` the moment
+  // '+ Add Integration' was clicked, so this modal had never once rendered (real Chromium,
+  // kanban t_244bf427). The draft lives in the shared object and is seeded from the row ON OPEN
+  // (`show()` clears `formSeeded`), so typing survives the re-render every keystroke triggers and
+  // opening a second row can never show the first one's values. Same shape as TagModal (t_286aead1).
+  // The API's column is `provider`, not `software_type`: measured, a body carrying software_type
+  // answered 200 and stored provider='webhook', so the typed software type was silently dropped.
+  const form = viewState('integration_form', { name: '', provider: '', api_key: '', webhook_url: '' });
+  if (!st.formSeeded) {
+    form.name = item.name || '';
+    form.provider = item.provider || '';
+    form.api_key = item.api_key || '';
+    form.webhook_url = item.webhook_url || '';
+    st.formSeeded = true;
+  }
   const submit = () => { save({ ...form }); };
   return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
     <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
       <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Integration</h3>
       <div class="space-y-3">
         <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
-        <div><label class="block text-xs font-medium mb-1">Software Type</label><input class="border rounded px-3 py-2 w-full text-sm" placeholder="e.g. CoreSwift CRM, Mailgun" value=${form.software_type} onInput=${e => { form.software_type = e.target.value; renderApp(); }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Provider</label><input class="border rounded px-3 py-2 w-full text-sm" placeholder="e.g. CoreSwift CRM, Mailgun" value=${form.provider} onInput=${e => { form.provider = e.target.value; renderApp(); }} /></div>
         <div><label class="block text-xs font-medium mb-1">API Key</label><input class="border rounded px-3 py-2 w-full text-sm" type="password" value=${form.api_key} onInput=${e => { form.api_key = e.target.value; renderApp(); }} /></div>
         <div><label class="block text-xs font-medium mb-1">Webhook URL (optional)</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.webhook_url} onInput=${e => { form.webhook_url = e.target.value; renderApp(); }} /></div>
       </div>
@@ -1460,9 +1476,9 @@ const SettingsView = () => {
 // ---- EMAIL TEMPLATES (Admin Only) ----
 const EmailTemplates = () => {
   const st = viewState('emailtemplates', { list: [], showModal: false, editItem: null, mode: 'html' });
-  const load = async () => { try { const data = await API.get('/email-templates'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  const load = async () => { try { const data = await API.get('/email-templates'); st.list = Array.isArray(data) ? data : (data.items || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
-  const show = (item) => { st.editItem = item || {}; st.showModal = true; renderApp(); };
+  const show = (item) => { st.editItem = item || {}; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
     try {
@@ -1492,10 +1508,12 @@ const EmailTemplates = () => {
           <div class="font-medium text-sm">${tpl.name||'Unnamed'} <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">${tpl.template_type||'general'}</span></div>
           <div class="text-xs text-gray-500">Subject: ${tpl.subject||'—'}</div>
         </div>
-        <div class="flex gap-2">
-          <button class="text-blue-600 text-sm" onClick=${() => show(tpl)}>Edit</button>
-          <button class="text-red-600 text-sm" onClick=${() => { if(confirm('Delete?')) { API.del('/email-templates/' + tpl.id); load(); } }}>Delete</button>
-        </div>
+        ${tpl.aid
+          ? html`<div class="flex gap-2">
+              <button class="text-blue-600 text-sm" onClick=${() => show(tpl)}>Edit</button>
+              <button class="text-red-600 text-sm" onClick=${() => { if(confirm('Delete?')) { API.del('/email-templates/' + tpl.id); load(); } }}>Delete</button>
+            </div>`
+          : html`<span data-default="1" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded" title="Platform default (read-only): the API updates only a row your own account owns">Platform default</span>`}
       </div>`)}
       ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No email templates yet</div>` : null}
     </div>
@@ -1505,19 +1523,34 @@ const EmailTemplates = () => {
 
 const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
   const item = st.editItem || {};
-  const [form, setForm] = viewState('emailtpl_form', {
-    name: item.name || '', template_type: item.template_type || 'welcome', subject: item.subject || '',
-    body_html: item.body_html || '', body_text: item.body_text || '', is_active: item.is_active !== false
-  });
-  const [mode, setMode] = viewState('emailtpl_mode', { m: 'html' });
+  // BOTH of this modal's destructures hit the same mistake as the Integration and Tags modals —
+  // `viewState` returns the shared OBJECT, not a [state, setter] pair — so '+ Add Template' (and the
+  // per-row Edit beside it) had never rendered (real Chromium, kanban t_244bf427). Read the objects
+  // and seed the draft ON OPEN (`show()` clears `formSeeded`), so a keystroke's re-render cannot
+  // revert it and the HTML/Text switch keeps both bodies.
+  // Field names are the API's: `html_body` and `body` (the columns). The old body_html/body_text
+  // answered 200 and stored NULL in both columns — every character the operator typed was dropped.
+  // The old `is_active` checkbox had no column behind it at all and was removed rather than mapped
+  // to `is_default`, which means something else: a fleet-wide default visible to every account.
+  const form = viewState('emailtpl_form', { name: '', template_type: 'welcome', subject: '', html_body: '', body: '' });
+  const mode = viewState('emailtpl_mode', { m: 'html' });
+  if (!st.formSeeded) {
+    form.name = item.name || '';
+    form.template_type = item.template_type || 'welcome';
+    form.subject = item.subject || '';
+    form.html_body = item.html_body || '';
+    form.body = item.body || '';
+    mode.m = 'html';
+    st.formSeeded = true;
+  }
   const submit = () => { save({ ...form }); };
   const insertField = (field) => {
     const ta = document.getElementById('email_body_editor');
     if (ta) {
       const start = ta.selectionStart, end = ta.selectionEnd;
-      const val = mode.m === 'html' ? form.body_html : form.body_text;
+      const val = mode.m === 'html' ? form.html_body : form.body;
       const newVal = val.substring(0, start) + field + val.substring(end);
-      if (mode.m === 'html') form.body_html = newVal; else form.body_text = newVal;
+      if (mode.m === 'html') form.html_body = newVal; else form.body = newVal;
       renderApp();
     }
   };
@@ -1544,14 +1577,10 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
             <button class="text-xs px-2 py-0.5 rounded ${mode.m === 'text' ? 'bg-blue-600 text-white' : 'bg-gray-200'}" onClick=${() => { mode.m = 'text'; renderApp(); }}>Text</button>
           </div>
         </div>
-        <textarea id="email_body_editor" class="border rounded px-3 py-2 w-full text-sm font-mono" rows="8" value=${mode.m === 'html' ? form.body_html : form.body_text} onInput=${e => { if(mode.m==='html') form.body_html=e.target.value; else form.body_text=e.target.value; renderApp(); }}></textarea>
+        <textarea id="email_body_editor" class="border rounded px-3 py-2 w-full text-sm font-mono" rows="8" value=${mode.m === 'html' ? form.html_body : form.body} onInput=${e => { if(mode.m==='html') form.html_body=e.target.value; else form.body=e.target.value; renderApp(); }}></textarea>
         <div class="flex flex-wrap gap-1 mt-1">
           ${MERGE_FIELDS.map(f => html`<button class="text-xs bg-gray-100 px-2 py-0.5 rounded hover:bg-gray-200" onClick=${() => insertField(f)}>${f}</button>`)}
         </div>
-      </div>
-      <div class="flex items-center gap-2 mb-4">
-        <input type="checkbox" checked=${form.is_active} onChange=${e => { form.is_active = e.target.checked; renderApp(); }} />
-        <span class="text-sm">Active</span>
       </div>
       <div class="flex justify-end gap-2">
         <button class="px-4 py-1.5 text-sm rounded border" onClick=${hide}>Cancel</button>
