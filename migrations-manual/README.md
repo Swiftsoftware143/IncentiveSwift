@@ -46,9 +46,19 @@ catalog: `features` (30), `available_providers` (15), `email_templates` (58). Ev
    `POST /api/v1/admin/plans/:id/features` (batch upsert; `enabled:true` adds, `false` removes) or
    the Plans/Tiers screens. `limit_value` convention (`features.rs`): `NULL` or `-1` = no cap,
    `0` = not available, positive = the cap.
-   Reference (production, 2026-09-25): `enterprise` holds `all_mechanics` + 12 `mechanic_*` keys
-   (13 rows), `pro` holds 11 `mechanic_*` keys, and **no tier holds a surface gate** — the
+   Reference (production, 2026-09-26): `enterprise` holds `all_mechanics` + 12 `mechanic_*` keys
+   (13 rows), `pro` holds 12 `mechanic_*` keys, and **no tier holds a surface gate** — the
    `custom_domains` gate therefore currently reads "not assigned" on every plan.
+   `pro` gained `mechanic_spin_wheel` on 2026-09-26 through this screen (kanban t_2ee007da), because
+   the served kiosk page (`app.incentiveswift.com/tablet-demo.html`, whose submit leg is
+   `POST /campaigns/:slug/spin` on a `pro`-owned campaign) and the public guide, which opens with
+   "Spin the Wheel — the most popular campaign type", both depend on it: every live campaign is
+   type `spin_wheel` and NO account was on `enterprise` (0 accounts), so the mechanic was refused
+   for all 56 accounts. `20260818_mechanic_feature_gates.sql` authors exactly that state — every
+   `mechanic_*` key plus `all_mechanics` on **pro and enterprise**. Live `pro` still holds no
+   `all_mechanics` catch-all, so one row of that file's authored intent remains unseated: seating it
+   would auto-grant every FUTURE mechanic to `pro` and is a pricing decision, so it is left to the
+   operator.
 3. **Payment/provider credentials.** Add each account's provider keys in the Integrations Center
    (`available_providers` is only the *catalog* of what may be configured; `provider_keys` holds
    the actual per-account rows). Nothing in this repo carries a real credential.
