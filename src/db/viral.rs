@@ -269,13 +269,20 @@ pub async fn log_referral_credit(
 // Campaign-Specific Points Balance
 // ---------------------------------------------------------------------------
 
-pub async fn upsert_campaign_points(
-    pool: &PgPool,
+pub async fn upsert_campaign_points<'e, E>(
+    executor: E,
     campaign_id: &Uuid,
     contact_id: &Uuid,
     points_to_add: i32,
-) -> Result<i32, AppError> {
-    // Upsert and return new balance
+) -> Result<i32, AppError>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    // Upsert and return new balance.
+    //
+    // Takes any Postgres executor (pool or transaction) so callers that must award inside the
+    // same transaction as their own claim row can do so — `&PgPool` still works, so every
+    // pre-existing call site is unchanged.
     let row: (i32,) = sqlx::query_as(
         r#"INSERT INTO campaign_points_balance (campaign_id, contact_id, points_balance, lifetime_points)
            VALUES ($1, $2, $3, GREATEST($3, 0))
@@ -289,7 +296,7 @@ pub async fn upsert_campaign_points(
     .bind(campaign_id)
     .bind(contact_id)
     .bind(points_to_add)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(row.0)

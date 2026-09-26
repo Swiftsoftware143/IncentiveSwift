@@ -156,17 +156,37 @@ pub async fn redeem_secret_code(
         }
     };
 
-    let already = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM campaign_secret_code_redemptions
-         WHERE secret_code_id=$1 AND contact_id=$2",
+    // Claim the redemption FIRST, in the same transaction as the award.
+    //
+    // The UNIQUE (secret_code_id, contact_id) constraint is the real gate: the old
+    // COUNT-then-INSERT shape let two simultaneous submits of one code by one contact both pass
+    // the count and both award (measured t_958b9880: an 11-point code left points_balance = 22
+    // with a single redemption row), and the discarded `let _ =` on the INSERT meant the loser
+    // of that race still answered success:true without a row of its own. With the claim inside
+    // the transaction, exactly one caller can win it, and only the winner awards.
+    let mut tx = app
+        .db
+        .begin()
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
+
+    let claimed = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO campaign_secret_code_redemptions
+         (secret_code_id,contact_id,campaign_id,points_awarded)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (secret_code_id, contact_id) DO NOTHING
+         RETURNING id",
     )
     .bind(sc.id)
     .bind(body.contact_id)
-    .fetch_one(&app.db)
+    .bind(campaign_id)
+    .bind(sc.points)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
 
-    if already > 0 {
+    if claimed.is_none() {
+        // Dropping the transaction rolls the no-op INSERT back.
         return Ok(ok(json!({"success":false,"points_awarded":0,
             "message":"You have already redeemed this code"})));
     }
@@ -176,7 +196,7 @@ pub async fn redeem_secret_code(
     // points_balance-only UPDATE keeps the winner off the leaderboard. (The previous version also
     // read "COALESCE(points,0)" from a column that has never existed.)
     let cur_pts = crate::db::viral::upsert_campaign_points(
-        &app.db,
+        &mut *tx,
         &campaign_id,
         &body.contact_id,
         sc.points,
@@ -184,23 +204,17 @@ pub async fn redeem_secret_code(
     .await
     .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
 
-    let _ = sqlx::query(
-        "INSERT INTO campaign_secret_code_redemptions
-         (secret_code_id,contact_id,campaign_id,points_awarded)
-         VALUES ($1,$2,$3,$4)",
-    )
-    .bind(sc.id)
-    .bind(body.contact_id)
-    .bind(campaign_id)
-    .bind(sc.points)
-    .execute(&app.db)
-    .await;
-
-    let _ = sqlx::query("UPDATE campaign_secret_codes SET uses_count = uses_count + 1 WHERE id=$1")
+    sqlx::query("UPDATE campaign_secret_codes SET uses_count = uses_count + 1 WHERE id=$1")
         .bind(sc.id)
-        .execute(&app.db)
-        .await;
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
 
+    tx.commit()
+        .await
+        .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
+
+    // Milestones stay best-effort (a reward-side failure must not roll back a points award).
     let _ = crate::mechanics::milestone_engine::check_milestones(
         &app,
         &campaign_id,
