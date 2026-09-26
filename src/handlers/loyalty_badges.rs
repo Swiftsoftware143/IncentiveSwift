@@ -563,7 +563,7 @@ pub async fn scan_member(
                 // Check category cap
                 let category = req.business_category.as_deref().unwrap_or("Default");
                 let cap_percent: f64 = sqlx::query_scalar(
-                    "SELECT max_redeem_percent FROM category_redeem_caps WHERE category_name = $1 AND is_active = true"
+                    "SELECT COALESCE(max_redeem_percent, 20.00) FROM category_redeem_caps WHERE category_name = $1 AND is_active = true"
                 )
                 .bind(category)
                 .fetch_optional(&state.db)

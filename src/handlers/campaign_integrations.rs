@@ -413,11 +413,12 @@ pub async fn fire_marketing_boost_with_override(
     per_item_boost: Option<&serde_json::Value>,
 ) {
     // Fetch campaign config fresh
-    let row =
-        sqlx::query_scalar::<_, serde_json::Value>("SELECT config FROM campaigns WHERE id = $1")
-            .bind(campaign_id)
-            .fetch_optional(&state.db)
-            .await;
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT COALESCE(config, '{}'::jsonb) FROM campaigns WHERE id = $1",
+    )
+    .bind(campaign_id)
+    .fetch_optional(&state.db)
+    .await;
 
     let config = match row {
         Ok(Some(c)) => c,

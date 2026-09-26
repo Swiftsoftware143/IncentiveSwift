@@ -1248,7 +1248,7 @@ pub async fn purchase_verify(
 
         // Check ZC pool for business loyalty plan gating
         let zc_pool: i32 =
-            sqlx::query_scalar("SELECT zc_pool_remaining FROM accounts WHERE id = $1")
+            sqlx::query_scalar("SELECT COALESCE(zc_pool_remaining, 0) FROM accounts WHERE id = $1")
                 .bind(business_account_id)
                 .fetch_optional(&s.db)
                 .await?

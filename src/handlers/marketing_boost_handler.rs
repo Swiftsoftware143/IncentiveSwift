@@ -54,7 +54,7 @@ async fn get_marketing_boost_credentials_from_db(
     state: &AppState,
 ) -> Result<(String, String), AppError> {
     let row = sqlx::query_scalar::<_, serde_json::Value>(
-        r#"SELECT config FROM campaigns WHERE config ? 'marketing_boost' LIMIT 1"#,
+        r#"SELECT COALESCE(config, '{}'::jsonb) FROM campaigns WHERE config ? 'marketing_boost' LIMIT 1"#,
     )
     .fetch_optional(&state.db)
     .await
@@ -103,11 +103,12 @@ pub async fn send_marketing_boost_incentive(
     countrycode: Option<String>,
 ) {
     // Fetch campaign config
-    let row =
-        sqlx::query_scalar::<_, serde_json::Value>("SELECT config FROM campaigns WHERE id = $1")
-            .bind(campaign_id)
-            .fetch_optional(&state.db)
-            .await;
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT COALESCE(config, '{}'::jsonb) FROM campaigns WHERE id = $1",
+    )
+    .bind(campaign_id)
+    .fetch_optional(&state.db)
+    .await;
 
     let config = match row {
         Ok(Some(c)) => c,

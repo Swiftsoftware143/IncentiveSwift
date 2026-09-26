@@ -24,11 +24,13 @@ fn is_masked(v: &str) -> bool {
 }
 
 async fn load_row(state: &AppState) -> Option<Value> {
-    sqlx::query_scalar::<_, Value>("SELECT value FROM admin_settings WHERE key = 'email'")
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
+    sqlx::query_scalar::<_, Value>(
+        "SELECT COALESCE(value, '{}'::jsonb) FROM admin_settings WHERE key = 'email'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
 }
 
 /// GET /api/v1/admin/email-settings

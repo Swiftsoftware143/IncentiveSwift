@@ -825,11 +825,12 @@ pub async fn online_share(
     .await;
 
     // 5. Get updated balance
-    let new_balance: i32 =
-        sqlx::query_scalar(r#"SELECT points_balance FROM loyalty_members WHERE id = $1"#)
-            .bind(member.id)
-            .fetch_one(&state.db)
-            .await?;
+    let new_balance: i32 = sqlx::query_scalar(
+        r#"SELECT COALESCE(points_balance, 0) FROM loyalty_members WHERE id = $1"#,
+    )
+    .bind(member.id)
+    .fetch_one(&state.db)
+    .await?;
 
     // The denormalised tier column reflects the member's standing AFTER this award.
     let _ = loyalty_checkin::sync_member_tier(
@@ -1015,7 +1016,9 @@ pub async fn check_plan_loyalty(
     let enabled = match tier_id {
         None => true,
         Some(id) => sqlx::query_scalar::<_, bool>(
-            "SELECT tf.enabled FROM tier_features tf
+            // COALESCE to the column's own DB DEFAULT (true): 'absent' and 'NULL' both mean
+            // "not configured", which allows the feature (kanban t_310c6e66).
+            "SELECT COALESCE(tf.enabled, true) FROM tier_features tf
                JOIN features f ON f.id = tf.feature_id
               WHERE tf.tier_id = $1 AND f.key = 'module_loyalty_program'",
         )

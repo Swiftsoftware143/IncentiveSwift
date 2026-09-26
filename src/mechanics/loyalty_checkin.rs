@@ -214,11 +214,12 @@ async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, 
 
 /// The member's current points balance, used to resolve the tier they hold.
 pub async fn member_balance(state: &AppState, member_id: &str) -> Result<i64, AppError> {
-    let balance: i32 =
-        sqlx::query_scalar("SELECT points_balance FROM loyalty_members WHERE id = $1::uuid")
-            .bind(member_id)
-            .fetch_one(&state.db)
-            .await?;
+    let balance: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(points_balance, 0) FROM loyalty_members WHERE id = $1::uuid",
+    )
+    .bind(member_id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(balance as i64)
 }
 

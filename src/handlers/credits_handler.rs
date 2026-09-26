@@ -472,10 +472,12 @@ pub async fn admin_adjust_credits(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     // Verify admin role
-    let is_admin = sqlx::query_scalar::<_, String>("SELECT role FROM accounts WHERE id = $1")
-        .bind(auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil()))
-        .fetch_optional(&state.db)
-        .await;
+    let is_admin = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(role, 'user') FROM accounts WHERE id = $1",
+    )
+    .bind(auth.account_id.parse::<Uuid>().unwrap_or(Uuid::nil()))
+    .fetch_optional(&state.db)
+    .await;
 
     match is_admin {
         Ok(Some(ref role)) if role == "admin" || role == "super_admin" => {

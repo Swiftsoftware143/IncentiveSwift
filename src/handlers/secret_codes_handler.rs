@@ -311,7 +311,7 @@ pub async fn verify_secret_code(
 
     // Get member current balance
     let balance: i32 =
-        sqlx::query_scalar("SELECT points_balance FROM loyalty_members WHERE id = $1")
+        sqlx::query_scalar("SELECT COALESCE(points_balance, 0) FROM loyalty_members WHERE id = $1")
             .bind(member_id)
             .fetch_one(&state.db)
             .await?;
