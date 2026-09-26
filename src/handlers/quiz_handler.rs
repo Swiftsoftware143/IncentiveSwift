@@ -1,6 +1,6 @@
 //! Quiz/Trivia handler — question CRUD, quiz submission, scoring, CRM field mapping.
 
-use crate::db::{campaigns, questions_answers};
+use crate::db::{campaigns, contacts, questions_answers};
 use crate::error::AppError;
 use crate::state::AppState;
 use axum::{
@@ -120,6 +120,10 @@ pub struct QuizResult {
     pub persona_tag: String,
     pub entry_id: Uuid,
     pub crm_fields: Value,
+    /// The hub's post-outcome redirect, when the campaign's `delivery_config` asks for
+    /// one. The spin path returns the same field; absent when no redirect is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redirect_url: Option<String>,
 }
 
 /// POST /api/v1/quiz/{campaign_id}/submit — submit quiz answers, score, create entry
@@ -205,23 +209,23 @@ pub async fn submit_quiz(
         }
     }
 
-    // Create/upsert contact — email is required, handle conflict with ON CONFLICT
-    let contact_id = sqlx::query_scalar::<_, Uuid>(
-        r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-           ON CONFLICT (email) WHERE email IS NOT NULL AND email <> ''
-           DO UPDATE SET
-               first_name = COALESCE(NULLIF($1, ''), contacts.first_name),
-               last_name = COALESCE(NULLIF($2, ''), contacts.last_name),
-               phone = COALESCE(NULLIF($4, ''), contacts.phone)
-           RETURNING id"#,
+    // Create/upsert contact. This used to be a hand-rolled
+    // `ON CONFLICT (email) WHERE email IS NOT NULL AND email <> ''`, which matches NO
+    // index that exists: the live schema dedups on
+    // `contacts_email_idx (lower(email)) WHERE email IS NOT NULL`, so every submission
+    // died on the ON CONFLICT inference before an entry — or the integration hub — was
+    // ever reached. Use the crate's canonical upsert, the same one the play paths use.
+    let contact_id = contacts::upsert_contact(
+        &state.db,
+        &contacts::ContactInput {
+            first_name: input.contact.first_name.clone(),
+            last_name: input.contact.last_name.clone(),
+            email: Some(input.contact.email.clone()),
+            phone: input.contact.phone.clone(),
+            business_name: input.contact.company.clone(),
+            website: None,
+        },
     )
-    .bind(&input.contact.first_name)
-    .bind(&input.contact.last_name)
-    .bind(&input.contact.email)
-    .bind(&input.contact.phone)
-    .bind(&input.contact.company)
-    .fetch_one(&state.db)
     .await
     .map_err(|e| AppError::Database(format!("Contact upsert failed: {}", e)))?;
 
@@ -264,11 +268,17 @@ pub async fn submit_quiz(
         .await?;
     }
 
-    // Fire delivery integration with clean CRM payload (only crm_fields, not raw answers)
+    // Fire delivery integration with clean CRM payload (only crm_fields, not raw answers).
+    // The config is the campaign's own `delivery_config` jsonb: this call site used to hand
+    // the hub `DeliveryConfig::default()`, which is why the hub's four arms (email, webhook
+    // targets, redirect, autoresponder) could never fire from ANY route. The column speaks
+    // two vocabularies — see `DeliveryConfig::from_campaign_json`.
     use crate::delivery::integration_hub::{
         self, CampaignInfo, ContactInfo, DeliveryConfig, DeliveryContext, OutcomePayload,
     };
-    let _ = integration_hub::execute_delivery(
+    let delivery_config = DeliveryConfig::from_campaign_json(&campaign.delivery_config);
+    let delivery_config_empty = delivery_config.is_empty();
+    let delivery = integration_hub::execute_delivery(
         &state.db,
         &DeliveryContext {
             // The entry this submission just created (:229). Without it the hub
@@ -297,11 +307,25 @@ pub async fn submit_quiz(
                 total_spins: 0,
                 redemption_url: None,
             },
-            delivery_config: DeliveryConfig::default(),
+            delivery_config,
             crm_fields: Some(crm_fields.clone()),
         },
     )
     .await;
+
+    // The hub's result used to be thrown away here (`let _ =`), so a tenant whose config
+    // asks for a win email, a webhook target or the autoresponder had no way to tell that
+    // nothing ran. One line, with the numbers that decide it.
+    tracing::info!(
+        "quiz delivery for entry {}: config_empty={} email_sent={} redirect={:?} webhooks_fired={} autoresponder_fired={} errors={:?}",
+        entry_id,
+        delivery_config_empty,
+        delivery.email_sent,
+        delivery.redirect_url,
+        delivery.webhooks_fired.len(),
+        delivery.autoresponder_fired,
+        delivery.errors,
+    );
 
     let result = QuizResult {
         score,
@@ -312,6 +336,7 @@ pub async fn submit_quiz(
         persona_tag,
         entry_id,
         crm_fields,
+        redirect_url: delivery.redirect_url.clone(),
     };
 
     Ok(Json(json!(result)))

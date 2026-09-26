@@ -43,6 +43,53 @@ pub struct DeliveryConfig {
     pub on_lose: OutcomeDelivery,
 }
 
+impl DeliveryConfig {
+    /// Load a campaign's `delivery_config` jsonb into a `DeliveryConfig`.
+    ///
+    /// `campaigns.delivery_config` carries two vocabularies, and the hub reads only one of
+    /// them. The column's own writer — `build_delivery_config` below, and the tenant
+    /// console wizard it was written for — nests both outcome blocks under a `delivery`
+    /// key (`{"delivery":{"on_win":{…},"on_lose":{…}}}`), while
+    /// `handlers::entries::dispatch_integrations` reads `integrations` / `_method` /
+    /// `webhook_url` from the SAME column on the entry-capture path. Both shapes are
+    /// accepted here: the `delivery` block wins when it is present, otherwise the value
+    /// itself is read as a bare config. Anything else (NULL, `{}`, the entry-path keys)
+    /// deserializes to the empty config — which is exactly what every call site used to
+    /// hand the hub by passing `DeliveryConfig::default()`.
+    ///
+    /// A `delivery` block that is present but unusable is NOT silent: it warns and falls
+    /// back, because a tenant who configured delivery and saw nothing has to be able to
+    /// read why.
+    pub fn from_campaign_json(value: &Value) -> Self {
+        let block = value.get("delivery").unwrap_or(value);
+        match serde_json::from_value::<DeliveryConfig>(block.clone()) {
+            Ok(config) => config,
+            Err(e) => {
+                tracing::warn!(
+                    "campaign delivery_config is not a usable delivery config ({}); \
+                     falling back to an empty one",
+                    e
+                );
+                DeliveryConfig::default()
+            }
+        }
+    }
+
+    /// True when neither outcome block can fire anything — no email, no redirect, no
+    /// webhook target, no autoresponder. `execute_delivery` is then a no-op, and the
+    /// all-default `DeliveryResult` it returns means "nothing was configured", not
+    /// "delivery failed".
+    pub fn is_empty(&self) -> bool {
+        fn idle(o: &OutcomeDelivery) -> bool {
+            o.email.is_none()
+                && o.redirect.is_none()
+                && o.webhooks.is_empty()
+                && !o.autoresponder_fire
+        }
+        idle(&self.on_win) && idle(&self.on_lose)
+    }
+}
+
 /// Delivery actions for a specific outcome (win or lose).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OutcomeDelivery {
@@ -603,13 +650,18 @@ async fn deliver_to_integration_target(
 /// This checks the account's configured autoresponder integration and sends
 /// the contact + outcome data to trigger a sequence.
 async fn fire_autoresponder(pool: &PgPool, ctx: &DeliveryContext) -> Result<(), String> {
-    // Check if the campaign's account has an autoresponder integration configured
+    // Check if the campaign's account has an autoresponder integration configured.
+    // `integration_targets.events` is `text[]`, so the membership test must be an array:
+    // the literal form that stood here (`events @> '["autoresponder"]'`) is parsed by `@>`
+    // as an ARRAY literal, which `["autoresponder"]` is not — the statement died 22P02
+    // ("malformed array literal") every time it ran, so this arm matched no target even
+    // once a config asked for it. Measured live 2026-09-26 (card t_d2c56fcb).
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active
            FROM integration_targets
            WHERE account_id = $1
-             AND (events @> '["autoresponder"]' OR provider IN ('activecampaign', 'convertkit', 'mailchimp', 'gohighlevel', 'hubspot'))
+             AND (events @> ARRAY['autoresponder']::text[] OR provider IN ('activecampaign', 'convertkit', 'mailchimp', 'gohighlevel', 'hubspot'))
              AND is_active = true
            ORDER BY created_at ASC
            LIMIT 1"#
@@ -1130,5 +1182,91 @@ mod entry_probe_tests {
             residue_entry
         );
         println!("SWEEP      : residue 0 (logs/targets/entries)");
+    }
+}
+
+#[cfg(test)]
+mod delivery_config_tests {
+    //! The question this card answers (t_d2c56fcb) is a SHAPE question: the hub reads
+    //! `DeliveryConfig`, and the column is written by `build_delivery_config` (and by the
+    //! tenant console wizard it was written for). These tests assert the two agree, and
+    //! that every other state the column can be in — NULL/`{}`, the entry-capture
+    //! vocabulary, a malformed block — still resolves to an empty config rather than to
+    //! an error or to a half-built one. Pure: no DB, no network.
+    use super::*;
+
+    #[test]
+    fn the_columns_own_writer_round_trips_through_the_loader() {
+        let stored = build_delivery_config(
+            Some(EmailDelivery {
+                template_id: Some("win-email".to_string()),
+                subject: Some("you won".to_string()),
+                body_text: None,
+                coupon_code: None,
+                from_name: Some("probe".to_string()),
+                reply_to: None,
+            }),
+            Some(RedirectDelivery {
+                url: "https://example.com/won".to_string(),
+                params: None,
+                text: None,
+            }),
+            vec!["target-a".to_string()],
+            true,
+            Some(RedirectDelivery {
+                url: "https://example.com/lost".to_string(),
+                params: None,
+                text: None,
+            }),
+        );
+
+        let cfg = DeliveryConfig::from_campaign_json(&stored);
+
+        assert_eq!(
+            cfg.on_win.email.as_ref().and_then(|e| e.subject.as_deref()),
+            Some("you won")
+        );
+        assert_eq!(
+            cfg.on_win.redirect.as_ref().map(|r| r.url.as_str()),
+            Some("https://example.com/won")
+        );
+        assert_eq!(cfg.on_win.webhooks, vec!["target-a".to_string()]);
+        assert!(cfg.on_win.autoresponder_fire);
+        assert_eq!(
+            cfg.on_lose.redirect.as_ref().map(|r| r.url.as_str()),
+            Some("https://example.com/lost")
+        );
+        assert!(!cfg.is_empty());
+    }
+
+    #[test]
+    fn a_bare_config_is_read_and_every_other_state_is_empty() {
+        // A bare config (no `delivery` wrapper) is read as-is.
+        let bare = json!({"on_win": {"webhooks": ["target-b"], "autoresponder_fire": true}});
+        let cfg = DeliveryConfig::from_campaign_json(&bare);
+        assert_eq!(cfg.on_win.webhooks, vec!["target-b".to_string()]);
+        assert!(cfg.on_win.autoresponder_fire);
+        assert!(!cfg.is_empty());
+
+        // The column's OTHER vocabulary (the entry-capture path), the empty object and a
+        // null column must all resolve to the empty config — the arms stay off, nothing
+        // errors, and no half-built config reaches the hub.
+        for value in [
+            json!({}),
+            json!(null),
+            json!({"integrations": [{"type": "webhook", "config": {"url": "https://x/hook"}}]}),
+            json!({"_method": "direct_api", "api_type": "hubspot", "api_key": "k"}),
+            json!({"coreswift": {"list_id": "123"}}),
+        ] {
+            let cfg = DeliveryConfig::from_campaign_json(&value);
+            assert!(cfg.is_empty(), "{} should load as an empty config", value);
+        }
+    }
+
+    #[test]
+    fn a_malformed_delivery_block_falls_back_instead_of_failing_the_route() {
+        let broken = json!({"delivery": {"on_win": {"webhooks": "not-a-list"}}});
+        let cfg = DeliveryConfig::from_campaign_json(&broken);
+        assert!(cfg.is_empty());
     }
 }
