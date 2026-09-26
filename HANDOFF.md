@@ -151,7 +151,7 @@ GET  /api/v1/credits/balance           — Balance + plan limits
 GET  /api/v1/credits/history           — Paginated transaction log
 POST /api/v1/credits/topup             — Stripe checkout
 POST /api/v1/admin/credits/adjust      — Admin adjustment
-POST /api/v1/webhooks/sms/             — SMS credit triggers
+POST /api/v1/channels/inbound          — Telnyx SMS/WhatsApp inbound (sms_handler chat funnel)
 ```
 
 **Loyalty V2 (purchase verification & vouchers):**

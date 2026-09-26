@@ -135,7 +135,6 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | GET | `/credits/history` | JWT | `credits_handler::get_history` | Paginated transaction log |
 | POST | `/credits/topup` | JWT | `credits_handler::create_topup_checkout` | Stripe checkout to buy credits |
 | POST | `/admin/credits/adjust` | Admin | `credits_handler::admin_adjust_credits` | Manual credit adjustment |
-| POST | `/webhooks/sms/` | None | `credits_handler::sms_inbound_webhook` | SMS credit trigger |
 
 ## Auth
 
@@ -289,7 +288,7 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 |--------|------|------|---------|-------------|
 | POST | `/webhooks/stripe` | None* | `checkout_handler::stripe_webhook` | Stripe (signature-verified) |
 | POST | `/webhooks/paypal` | None* | `checkout_handler::paypal_webhook` | PayPal (signature-verified) |
-| POST | `/webhooks/sms/` | None | `credits_handler::sms_inbound_webhook` | SMS credit triggers |
+| POST | `/channels/inbound` | None | `sms_handler::channel_inbound_webhook` | Telnyx SMS/WhatsApp inbound (chat-funnel routing) |
 
 *Webhook endpoints are public but verify signatures in handler body.
 

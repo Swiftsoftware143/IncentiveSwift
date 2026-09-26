@@ -89,7 +89,7 @@ Account-level credits, earned and adjusted by the API; nothing deducts them toda
 - **All tenants** — every account's balance, lifetime used, ZC pool and credit rate (admin)
 - **Admin adjust** — manual credit adjustment (admin only)
 - **Deduct** — programmatic deduction helper; no caller in the crate (see `deduct_credits`)
-- **SMS inbound** — not a credit path: `/api/v1/channels/sms/inbound` is `sms_handler`'s chat-funnel receiver
+- **SMS inbound** — not a credit path and not a route this module owns: the live receiver is `sms_handler::channel_inbound_webhook` at `POST /api/v1/channels/inbound`. (A duplicate `credits_handler::sms_inbound_webhook` used to sit in this module claiming `POST /api/v1/channels/sms/inbound`; it was deleted — kanban t_a62db27c — and both paths it named answer 404.)
 
 Credits are tracked at the account level with `credits_balance` and `credits_lifetime_used` columns. Plan tiers carry `credits_monthly` and `credits_overdraft` as `tier_features` rows on the account's own tier (no limit assigned = 0 = none included). There is **no credit top-up / purchase flow**: credits are not sold, and the live payments path is the loyalty plan subscription (`POST /api/v1/loyalty/plans/subscribe` + `POST /api/v1/loyalty/webhook/stripe`).
 
@@ -255,7 +255,6 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/credits/balance` | GET | User | Current balance + plan limits (credits_monthly, credits_overdraft) |
 | `/api/v1/credits/history` | GET | User | Paginated transaction history (type, amount, description) |
 | `/api/v1/admin/credits` | GET | Admin | Every account's balance, lifetime used, ZC pool and credit rate |
-| `/api/v1/channels/sms/inbound` | POST | None | SMS inbound webhook (chat funnel routing) |
 | `/api/v1/admin/credits/adjust` | POST | Admin | Manually adjust any user's credits (amount, reason) |
 
 ### Campaign Management

@@ -1,7 +1,10 @@
 //! Credit system handler — balance, history, listing, admin adjust
 //!
-//! The Stripe credit-pack top-up that used to live here was deleted (kanban t_24b17131): it was
-//! never routed and could never have run. See the note above `admin_adjust_credits`.
+//! Files this module no longer owns:
+//! * the Stripe credit-pack top-up (deleted, kanban t_24b17131) — never routed, could never run.
+//! * `sms_inbound_webhook` (deleted, kanban t_a62db27c) — a duplicate of the ROUTED
+//!   `handlers::sms_handler::channel_inbound_webhook`, not a credits feature at all.
+//! See the notes above `admin_adjust_credits` and in place of the deleted receiver.
 
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -374,9 +377,6 @@ pub async fn check_credits(
 // (`handlers::loyalty_plans::subscribe`), which owns that webhook (`handlers::stripe_webhook`), and
 // `stripe_checkout_sessions` is ITS table — so the table and its two live readers stay.
 //
-// NOT this card's, deliberately left: `sms_inbound_webhook` at the bottom of this file is a
-// duplicate of the routed `handlers::sms_handler::channel_inbound_webhook` (same path, same table);
-// carded separately rather than swept into a read-surface change.
 /// POST /api/v1/admin/credits/adjust — admin adjusts a user's credits
 pub async fn admin_adjust_credits(
     State(state): State<AppState>,
@@ -501,64 +501,24 @@ pub async fn add_credits_internal(
     Ok(new_balance)
 }
 
-// --- SMS Inbound Webhook ---
-
-/// POST /api/v1/channels/sms/inbound — Telnyx SMS/WhatsApp inbound webhook (public, no auth)
-pub async fn sms_inbound_webhook(
-    State(state): State<AppState>,
-    Json(body): Json<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    let pool = &state.db;
-
-    let event_type = body
-        .pointer("/data/event_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    let message_id = body
-        .pointer("/data/payload/id")
-        .or_else(|| body.pointer("/data/id"))
-        .and_then(|v| v.as_str());
-
-    let from = body
-        .pointer("/data/payload/from/phone_number")
-        .or_else(|| body.pointer("/data/payload/from"))
-        .and_then(|v| v.as_str());
-
-    let to = body
-        .pointer("/data/payload/to/0/phone_number")
-        .or_else(|| body.pointer("/data/payload/to"))
-        .and_then(|v| v.as_str());
-
-    let text = body.pointer("/data/payload/text").and_then(|v| v.as_str());
-
-    let direction = if event_type.contains("whatsapp") {
-        "inbound_whatsapp"
-    } else {
-        "inbound"
-    };
-
-    if let (Some(from_num), Some(to_num)) = (from, to) {
-        let from_clean = from_num.trim_start_matches('+').to_string();
-        let to_clean = to_num.trim_start_matches('+').to_string();
-
-        sqlx::query(
-            "INSERT INTO inbound_messages (message_id, from_number, to_number, body, direction)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (message_id) DO NOTHING",
-        )
-        .bind(message_id)
-        .bind(&from_clean)
-        .bind(&to_clean)
-        .bind(text)
-        .bind(direction)
-        .execute(pool)
-        .await
-        .ok();
-    }
-
-    Json(serde_json::json!({
-        "success": true,
-        "event_type": event_type,
-    }))
-}
+// --- SMS inbound webhook: deleted (kanban t_a62db27c) ------------------------------------------
+//
+// `credits_handler::sms_inbound_webhook` was DELETED here. It was never a credits feature and never
+// a route: `grep -rn 'sms_inbound_webhook' src/` found only its own definition (0 callers) and no
+// `Router::route` in src/main.rs ever named it.
+//
+// It was a STRICT SUBSET of the ROUTED sibling `handlers::sms_handler::channel_inbound_webhook`
+// (`POST /api/v1/channels/inbound`, src/main.rs) — not of the path its own doc comment claimed.
+// Measured on the pre-change binary: `POST /api/v1/channels/sms/inbound` -> 404 and
+// `POST /api/v1/webhooks/sms/` -> 404, i.e. BOTH paths the dead copy named are answered by nobody.
+// The two handlers read the identical Telnyx payload pointers (`/data/event_type`,
+// `/data/payload/id`, `/data/payload/from/phone_number`, `/data/payload/to/0/phone_number`,
+// `/data/payload/text`) and both derive the SAME `direction` vocabulary
+// (`inbound_whatsapp` when event_type contains "whatsapp", else `inbound`) — so there was NO
+// vocabulary drift to reconcile; the DB agrees (`SELECT direction, count(*) FROM inbound_messages
+// GROUP BY 1` -> inbound 49). The live handler additionally routes the message into the chat funnel
+// (chat_sessions + `UPDATE inbound_messages SET campaign_slug = $1, account_id = $2, processed =
+// true`), which is the whole point of the receiver.
+//
+// Nothing served ever named either dead path (0 hits for `webhooks/sms` across all three served
+// roots) and the served admin guide never mentioned an SMS route.
