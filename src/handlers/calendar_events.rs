@@ -63,7 +63,9 @@ pub struct RangeQuery {
     pub to: Option<String>,
 }
 
-const CE_COLS: &str = "id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at";
+// Every query in this module that returns a full `calendar_events` row spells its column list out
+// as a COMPILE-TIME literal: a statement must not be assembled from a shared const at run time
+// (gate rule 5d, class 14 — kanban t_017517a9).
 
 /// GET /api/v1/calendar-events?from=&to=
 pub async fn list_events(
@@ -89,18 +91,25 @@ pub async fn list_events(
         ),
         None => None,
     };
-    let mut sql = format!("SELECT {CE_COLS} FROM calendar_events WHERE tenant_id = $1");
-    let mut next: usize = 2;
-    if from_dt.is_some() {
-        sql.push_str(&format!(" AND starts_at >= ${}", next));
-        next += 1;
-    }
-    if to_dt.is_some() {
-        sql.push_str(&format!(" AND starts_at <= ${}", next));
-    }
-    sql.push_str(" ORDER BY starts_at ASC");
+    // The statement is one of FOUR compile-time literals, never a run-time value (gate rule 5d,
+    // class 14 — the `format!`/`push_str` builder that used to sit here is kanban t_017517a9). The
+    // bind order below is the placeholder order: $1 tenant, then `from`, then `to`.
+    let sql = match (from_dt.is_some(), to_dt.is_some()) {
+        (false, false) => {
+            "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE tenant_id = $1 ORDER BY starts_at ASC"
+        }
+        (true, false) => {
+            "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE tenant_id = $1 AND starts_at >= $2 ORDER BY starts_at ASC"
+        }
+        (false, true) => {
+            "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE tenant_id = $1 AND starts_at <= $2 ORDER BY starts_at ASC"
+        }
+        (true, true) => {
+            "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE tenant_id = $1 AND starts_at >= $2 AND starts_at <= $3 ORDER BY starts_at ASC"
+        }
+    };
 
-    let mut qb = sqlx::query_as::<_, CalendarEvent>(&sql).bind(account);
+    let mut qb = sqlx::query_as::<_, CalendarEvent>(sql).bind(account);
     if let Some(from) = from_dt {
         qb = qb.bind(from);
     }
@@ -143,9 +152,9 @@ pub async fn create_event(
     .bind(account)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query_as::<_, CalendarEvent>(&format!(
-        "SELECT {CE_COLS} FROM calendar_events WHERE id = $1"
-    ))
+    let row = sqlx::query_as::<_, CalendarEvent>(
+        "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE id = $1",
+    )
     .bind(id)
     .fetch_one(&state.db)
     .await?;
@@ -196,9 +205,9 @@ pub async fn update_event(
     .bind(&body.color)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query_as::<_, CalendarEvent>(&format!(
-        "SELECT {CE_COLS} FROM calendar_events WHERE id = $1"
-    ))
+    let row = sqlx::query_as::<_, CalendarEvent>(
+        "SELECT id, tenant_id, campaign_id, contact_id, title, description, location, event_type, starts_at, ends_at, all_day, status, color, created_by, created_at, updated_at FROM calendar_events WHERE id = $1",
+    )
     .bind(id)
     .fetch_one(&state.db)
     .await?;

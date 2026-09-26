@@ -24,16 +24,25 @@ pub async fn send_template_email(
     let app_name = "IncentiveSwift";
     let app_url = "https://app.incentiveswift.com";
 
-    // Try to load template from DB
+    // Try to load template from DB.
+    //
+    // Gate rule 5a (class 5): the predicate used to be
+    // `(aid = '<all-zeros uuid>' OR is_default = true)` — a hand-copied UUID written into the query
+    // text (kanban t_017517a9). It named NO row, and that arm was dead: MEASURED on the live DB,
+    // all 58 `email_templates` rows are `aid IS NULL AND is_default = true`, so the nil-uuid arm
+    // matched 0 rows and `is_default` did all the work. The fleet-wide default is now named by the
+    // shape the data actually has (`aid IS NULL`), which also makes the arm live: a fleet-wide row
+    // that is NOT flagged default (the `is_default ASC` ordering below exists to prefer exactly
+    // that row) is now found instead of silently skipped.
     let template = sqlx::query_as::<_, EmailTemplateRow>(
         r#"-- the template's HTML body IS the is_html flag: `email_templates` has no
            -- `is_html` column (plain-statement drift, kanban t_cf7469bb), and a row only
            -- sends HTML when it carries an `html_body`.
            SELECT id, name, subject, body, html_body, is_default
            FROM email_templates
-           WHERE template_type = $1 AND (aid = '00000000-0000-0000-0000-000000000000' OR is_default = true)
+           WHERE template_type = $1 AND (aid IS NULL OR is_default = true)
            ORDER BY is_default ASC, created_at DESC
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(template_type)
     .fetch_optional(pool)

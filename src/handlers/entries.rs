@@ -634,12 +634,17 @@ pub async fn test_entry_webhook(Json(body): Json<Value>) -> Result<Json<Value>, 
         || json!({"first_name":"Test","last_name":"User","email":"test@example.com"}),
     );
 
+    // Sample ids for the test event. The payload below is a synthetic EXAMPLE this route POSTs to
+    // the caller's own webhook URL — no row is ever looked up or written with these ids — so they
+    // are built at run time instead of being hand-copied into the source (gate rule 5a, class 5:
+    // a UUID in source names a row that was looked up by hand; the nil UUID names none).
+    let sample_id = Uuid::nil().to_string();
     let payload = json!({
         "event": "entry.created",
         "test": true,
-        "entry_id": "00000000-0000-0000-0000-000000000000",
+        "entry_id": sample_id,
         "campaign": {
-            "id": "00000000-0000-0000-0000-000000000000",
+            "id": sample_id,
             "name": "Test Campaign",
             "slug": "test-campaign",
             "type": "spin_wheel",

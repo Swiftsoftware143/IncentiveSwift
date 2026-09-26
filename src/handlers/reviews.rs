@@ -46,7 +46,10 @@ pub struct UpdateReviewInput {
     pub rating: Option<i32>,
 }
 
-const REVIEW_COLS: &str = "id, tenant_id, campaign_id, contact_id, rating, title, body, reviewer_name, status, moderation_note, created_at, updated_at";
+// Column list of `reviews`, written out in every query that returns the full row: a query must not
+// be BUILT at run time (gate rule 5d, class 14). `format!("SELECT {REVIEW_COLS} FROM …")` produced
+// the same bytes, but it made the statement a run-time value — the four sites below are now
+// complete compile-time literals (kanban t_017517a9).
 
 /// GET /api/v1/reviews
 pub async fn list_reviews(
@@ -55,9 +58,9 @@ pub async fn list_reviews(
 ) -> Result<Json<Value>, AppError> {
     let account = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
-    let rows = sqlx::query_as::<_, Review>(&format!(
-        "SELECT {REVIEW_COLS} FROM reviews WHERE tenant_id = $1 ORDER BY created_at DESC"
-    ))
+    let rows = sqlx::query_as::<_, Review>(
+        "SELECT id, tenant_id, campaign_id, contact_id, rating, title, body, reviewer_name, status, moderation_note, created_at, updated_at FROM reviews WHERE tenant_id = $1 ORDER BY created_at DESC",
+    )
     .bind(account)
     .fetch_all(&state.db)
     .await?;
@@ -106,11 +109,12 @@ pub async fn create_review(
     .bind(&status)
     .execute(&state.db)
     .await?;
-    let row =
-        sqlx::query_as::<_, Review>(&format!("SELECT {REVIEW_COLS} FROM reviews WHERE id = $1"))
-            .bind(id)
-            .fetch_one(&state.db)
-            .await?;
+    let row = sqlx::query_as::<_, Review>(
+        "SELECT id, tenant_id, campaign_id, contact_id, rating, title, body, reviewer_name, status, moderation_note, created_at, updated_at FROM reviews WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({ "review": row })))
 }
 
@@ -150,11 +154,12 @@ pub async fn update_review(
     .bind(body.rating)
     .execute(&state.db)
     .await?;
-    let row =
-        sqlx::query_as::<_, Review>(&format!("SELECT {REVIEW_COLS} FROM reviews WHERE id = $1"))
-            .bind(id)
-            .fetch_one(&state.db)
-            .await?;
+    let row = sqlx::query_as::<_, Review>(
+        "SELECT id, tenant_id, campaign_id, contact_id, rating, title, body, reviewer_name, status, moderation_note, created_at, updated_at FROM reviews WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({ "review": row })))
 }
 
