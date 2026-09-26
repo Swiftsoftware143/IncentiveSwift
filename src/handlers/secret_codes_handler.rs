@@ -199,9 +199,20 @@ pub async fn verify_secret_code(
         ));
     }
 
-    // Get program by slug (resolves campaign → program)
+    // Get program by slug (resolves campaign → program).
+    //
+    // `program_slug` is a *campaign* slug, and `db::loyalty::get_program`
+    // resolves `WHERE id = $1` — a PROGRAM id — so handing it `campaign.id`
+    // could never resolve and answered 404 to every caller. `campaigns`
+    // carries the canonical forward link (`loyalty_program_id`) and
+    // `loyalty_programs.campaign_id` is the reverse pointer `create_program`
+    // can also set; the public check-in route accepts either
+    // (handlers/loyalty.rs:51-54), so this does too.
     let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, program_slug).await?;
-    let program = crate::db::loyalty::get_program(&state.db, &campaign.id).await?;
+    let program = match campaign.loyalty_program_id {
+        Some(program_id) => crate::db::loyalty::get_program(&state.db, &program_id).await?,
+        None => crate::db::loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
+    };
 
     // Look up the secret code in the loyalty_secret_codes table
     let code_record = sqlx::query_as::<_, SecretCode>(
@@ -274,7 +285,9 @@ pub async fn verify_secret_code(
     let member_id =
         crate::db::loyalty::find_or_create_member(&state.db, &program.id, &contact_id).await?;
 
-    // Check if this member already redeemed this code
+    // Check if this member already redeemed this code. The UNIQUE
+    // (code_id, member_id) constraint below is the real gate — this SELECT is
+    // only the friendly path, so a concurrent double-submit cannot slip past.
     let already_redeemed: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM loyalty_secret_code_redemptions WHERE code_id = $1 AND member_id = $2",
     )
@@ -289,37 +302,108 @@ pub async fn verify_secret_code(
         ));
     }
 
-    // Award points
+    // Award the code's points.
+    //
+    // What a redemption MEANS: the code's own `points_reward` credited to the
+    // member and recorded in the ledgers every other non-check-in award path in
+    // this app writes — `loyalty_online_actions` (handlers/loyalty.rs
+    // daily_visit/social_share, auth_handler.rs referral_signup) plus the
+    // member-facing `loyalty_activity` audit row. The `loyalty_online_actions`
+    // row is not optional: it is one of the three earn ledgers
+    // `POST /admin/treasury/expire-points` recomputes a balance from, and that
+    // sweep SETs `loyalty_members.points_balance` to the recomputed sum, so an
+    // award written to the balance alone is DELETED by the next sweep
+    // (point_expiry_handler.rs:27-41).
+    //
+    // The two inserts this replaces were placeholders that could never succeed,
+    // so they are deleted rather than fixtured:
+    //   * `db::loyalty::record_checkin` bound `Uuid::new_v4()` as
+    //     `loyalty_checkins.entry_id`, whose FK is -> entries(id): 23503 for
+    //     every caller. A secret code is not a check-in either — a
+    //     loyalty_checkins row with entry_id NULL would eat the member's daily
+    //     check-in quota and is REFUSED by loyalty_checkins_daily_cap_guard
+    //     once they sit at max_checkins_per_day.
+    //   * `db::loyalty::create_reward` passed the MEMBER id as `tier_id`, whose
+    //     FK is -> loyalty_reward_tiers(id): 23503 for every caller. A code
+    //     crosses no reward tier, so there is no honest tier_id to write, and
+    //     no other non-check-in award path grants tiers.
+    // The award and the redemption claim are one transaction: a crash mid-flow
+    // can neither double-award nor burn the code.
     let points = code_record.points_reward;
-    let entry_id = Uuid::new_v4();
-    crate::db::loyalty::record_checkin(&state.db, &member_id, points, "secret_code", &entry_id)
-        .await?;
-    crate::db::loyalty::create_reward(&state.db, &member_id, &member_id, "approved").await?; // placeholder
+    let mut tx = state.db.begin().await?;
 
-    // Record redemption
-    sqlx::query("INSERT INTO loyalty_secret_code_redemptions (code_id, member_id) VALUES ($1, $2)")
-        .bind(code_record.id)
-        .bind(member_id)
-        .execute(&state.db)
-        .await?;
+    let new_balance: i32 = sqlx::query_scalar(
+        "UPDATE loyalty_members
+            SET points_balance = COALESCE(points_balance, 0) + $1,
+                lifetime_points = COALESCE(lifetime_points, 0) + $1
+          WHERE id = $2
+          RETURNING COALESCE(points_balance, 0) AS points_balance",
+    )
+    .bind(points)
+    .bind(member_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let metadata = json!({
+        "code": code_record.code,
+        "code_id": code_record.id,
+        "points_reward": points,
+    });
+    sqlx::query(
+        r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
+           VALUES ($1, 'secret_code', $2, $3::jsonb)"#,
+    )
+    .bind(member_id)
+    .bind(points as i64)
+    .bind(metadata.to_string())
+    .execute(&mut *tx)
+    .await?;
+
+    // Claim the redemption: the unique constraint, not the SELECT above, is the
+    // idempotency gate, so two simultaneous submissions of one code by one
+    // member cannot both award.
+    match sqlx::query(
+        "INSERT INTO loyalty_secret_code_redemptions (code_id, member_id) VALUES ($1, $2)",
+    )
+    .bind(code_record.id)
+    .bind(member_id)
+    .execute(&mut *tx)
+    .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(ref d))
+            if d.constraint() == Some("loyalty_secret_code_redemptions_code_id_member_id_key") =>
+        {
+            return Err(AppError::BadRequest(
+                "You have already redeemed this code".to_string(),
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    }
 
     // Increment uses counter
     sqlx::query("UPDATE loyalty_secret_codes SET uses_so_far = uses_so_far + 1 WHERE id = $1")
         .bind(code_record.id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
 
-    // Get member current balance
-    let balance: i32 =
-        sqlx::query_scalar("SELECT COALESCE(points_balance, 0) FROM loyalty_members WHERE id = $1")
-            .bind(member_id)
-            .fetch_one(&state.db)
-            .await?;
+    tx.commit().await?;
+
+    // Member-facing audit trail, written next to the award like every other
+    // award path does (mechanics/loyalty_checkin.rs::record_activity).
+    let _ = crate::mechanics::loyalty_checkin::record_activity(
+        &state,
+        &member_id.to_string(),
+        "secret_code",
+        &format!("secret_code {} = {} points", code_record.code, points),
+        points,
+    )
+    .await;
 
     Ok(Json(json!({
         "status": "ok",
         "points_earned": points,
-        "total_points": balance,
+        "total_points": new_balance,
         "message": "Secret code redeemed! +".to_string() + &points.to_string() + " points",
         "code": code_record.code
     })))

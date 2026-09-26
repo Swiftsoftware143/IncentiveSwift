@@ -7,10 +7,11 @@
 <!--
   The page a CUSTOMER lands on after scanning the QR on a business's counter.
   It is deliberately outside the tenant SPA: the visitor has no account, so
-  there is no auth guard, no token and no login bounce. It talks to two public
+  there is no auth guard, no token and no login bounce. It talks to three public
   endpoints only:
     GET  /api/v1/loyalty/public/program/<slug>   -> what to render
     POST /api/v1/loyalty/checkin                 -> award the points
+    POST /api/v1/loyalty/secret-code/verify      -> award a secret code's points
   Served for /loyalty-checkin/* by an nginx location in
   /opt/swift/nginx/sites/incentiveswift.conf.
 -->
@@ -33,6 +34,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .ok{background:#dcfce7;color:#166534}
 .hint{font-size:12px;color:#94a3b8;text-align:center;margin:16px 0 0}
 .big{font-size:34px;font-weight:700;color:#166534;text-align:center;margin:8px 0}
+.sep{border-top:1px solid #e2e8f0;margin:22px 0 18px}
+.code-hint{font-size:12px;color:#94a3b8;margin:0 0 12px}
 </style>
 </head>
 <body>
@@ -58,6 +61,20 @@ button:disabled{opacity:.6;cursor:not-allowed}
     </form>
 
     <p class="hint">No account needed — just check in.</p>
+
+    <div class="sep"></div>
+
+    <!-- Secret code redemption. Same visitor, same contact fields: a code is
+         minted by the tenant in the admin console (panel 11, "Loyalty secret
+         codes") and posted to POST /api/v1/loyalty/secret-code/verify with the
+         CAMPAIGN slug, exactly like the check-in above. Without this box the
+         endpoint had no caller anywhere in the product. -->
+    <form id="codeForm">
+      <label for="secretCode">Have a secret code?</label>
+      <p class="code-hint">Enter the code your business gave you and it is added to the points above.</p>
+      <input id="secretCode" type="text" autocomplete="off" placeholder="e.g. FBGROUP2026">
+      <button type="submit" id="codeBtn">Redeem code</button>
+    </form>
   </div>
 </div>
 
@@ -74,6 +91,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
       el('error').textContent = text;
       el('error').style.display = 'block';
       el('checkinForm').style.display = 'none';
+      el('codeForm').style.display = 'none';
     } else {
       el('error').textContent = text;
       el('error').style.display = 'block';
@@ -141,6 +159,50 @@ button:disabled{opacity:.6;cursor:not-allowed}
             el('success').style.display = 'block';
           })
           .catch(function () { fail('Something went wrong. Please try again.'); btn.disabled = false; btn.textContent = 'Check in & earn points'; });
+      });
+
+      // Secret code redemption — same contact fields as the check-in above, so
+      // the points land on the same member row.
+      el('codeForm').addEventListener('submit', function (e) {
+        e.preventDefault();
+        var btn = el('codeBtn');
+        var code = el('secretCode').value.trim();
+        el('error').style.display = 'none';
+        el('success').style.display = 'none';
+        if (!code) { fail('Enter the code your business gave you.', false); return; }
+        if (!el('email').value.trim()) { fail('Add your email above first — it is how your points are kept.', false); return; }
+        btn.disabled = true;
+        btn.textContent = 'Redeeming…';
+
+        fetch(api + '/loyalty/secret-code/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            program_slug: d.campaign_slug,
+            secret_code: code,
+            contact: {
+              first_name: el('firstName').value || null,
+              last_name: el('lastName').value || null,
+              email: el('email').value
+            }
+          })
+        })
+          .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, data: b }; }); })
+          .then(function (out) {
+            btn.disabled = false; btn.textContent = 'Redeem code';
+            if (!out.ok) {
+              fail(out.data && (out.data.message || out.data.error) ? (out.data.message || out.data.error) : 'That code was not accepted.', false);
+              return;
+            }
+            var b = out.data;
+            var cur = d.currency_name || 'points';
+            el('secretCode').value = '';
+            el('success').innerHTML = '<div class="big">+' + (b.points_earned || 0) + ' ' + cur + '</div>' +
+              (b.message ? b.message + '<br>' : '') +
+              'You now have ' + (b.total_points != null ? b.total_points : '') + ' ' + cur + '.';
+            el('success').style.display = 'block';
+          })
+          .catch(function () { fail('Could not reach the rewards service. Please try again.', false); btn.disabled = false; btn.textContent = 'Redeem code'; });
       });
     })
     .catch(function () { fail('Could not reach the rewards service. Please try again.', true); });
