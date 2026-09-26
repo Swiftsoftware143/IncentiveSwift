@@ -275,6 +275,8 @@ pub async fn register(
     let wl_pool = state.db.clone();
     let wl_email = body.email.clone();
     let wl_name = name.clone();
+    // The account this mail is FOR — the template lookup is tenant-scoped (kanban t_0fb81177).
+    let wl_account = account_id;
     tokio::spawn(async move {
         let vars = serde_json::json!({
             "name": wl_name,
@@ -282,8 +284,14 @@ pub async fn register(
             "app_name": "IncentiveSwift",
             "login_url": "https://app.incentiveswift.com"
         });
-        if let Err(e) =
-            crate::email::send_template_email(&wl_pool, &wl_email, "welcome", &vars).await
+        if let Err(e) = crate::email::send_template_email(
+            &wl_pool,
+            Some(wl_account),
+            &wl_email,
+            "welcome",
+            &vars,
+        )
+        .await
         {
             tracing::warn!("Welcome email failed for {}: {}", wl_email, e);
         }
@@ -813,7 +821,8 @@ pub async fn forgot_password(
     );
 
     // Attempt to send the email via configured provider
-    let email_sent = crate::email::send_reset_email(&state.db, &body.email, &token).await;
+    let email_sent =
+        crate::email::send_reset_email(&state.db, account_id, &body.email, &token).await;
     if let Err(e) = email_sent {
         tracing::warn!("Failed to send password reset email: {}", e);
     }

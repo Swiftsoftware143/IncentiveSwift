@@ -177,6 +177,68 @@ pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
     result
 }
 
+/// THE selection rule for "the template of this type, for this account" — the only
+/// place in the app that decides it (kanban t_0fb81177).
+///
+/// Before this, the app had TWO answers to the same question and they disagreed:
+/// * `delivery::sender` used the predicate below;
+/// * `email::send_template_email` used `WHERE template_type = $1 AND (aid IS NULL OR
+///   is_default = true) ORDER BY is_default ASC, created_at DESC` — it took NO account
+///   argument at all, so every tenant's mail was rendered from one shared row.
+///
+/// MEASURED on the live DB (59 rows, all `aid IS NULL AND is_default = true`), by running both
+/// predicates over the real `welcome` row UNIONed with the exact shapes
+/// `POST /api/v1/email-templates` can create:
+///
+/// | row shape                              | old predicate    | new predicate (for tenant B) |
+/// |----------------------------------------|------------------|------------------------------|
+/// | `aid IS NULL, is_default = true`       | matches          | matches (fleet default)      |
+/// | `aid = T,     is_default = false`      | EXCLUDED (dead)  | matches for T only           |
+/// | `aid = T,     is_default = true`       | matches for ALL  | matches for T only           |
+///
+/// * the third row is the leak: with the account never consulted, tenant T's own
+///   `is_default = true` row is selected for EVERY tenant (measured: asked for tenant B, the
+///   old predicate answered `BBB-TENANT-A-FLAGGED-DEFAULT`), and `is_default ASC` put it
+///   ahead of the fleet default.
+/// * the second row is the same defect's other face: every template created through the
+///   console lands `aid = <the tenant>, is_default = false` (the console never sends the
+///   field), and the old predicate EXCLUDED it — so a tenant's own template was dead for
+///   its own author as well.
+///
+/// `account_id = None` (a caller with no account in hand) therefore degrades to the
+/// fleet-wide default, never to "whatever sorts first".
+///
+/// The ordering's first term is `aid IS NOT NULL AND aid = $2`, NOT `aid = $2`: for the
+/// fleet-wide row `$2 = <a real account>` makes `aid = $2` NULL, and `ORDER BY ... DESC` puts
+/// NULLs FIRST by default, so the fleet default would have outranked the account's OWN row
+/// (measured: with `(aid = $2) DESC` the pick for the very tenant that owns the row was still
+/// the fleet default). The `IS NOT NULL` guard makes the term a real boolean.
+pub async fn load_template_by_type(
+    pool: &PgPool,
+    account_id: Option<Uuid>,
+    template_type: &str,
+) -> Result<Option<SelectedTemplate>, sqlx::Error> {
+    sqlx::query_as::<_, SelectedTemplate>(
+        "SELECT subject, body, html_body FROM email_templates
+         WHERE template_type = $1 AND (aid = $2 OR (aid IS NULL AND is_default = true))
+         ORDER BY (aid IS NOT NULL AND aid = $2) DESC, is_default DESC, created_at DESC
+         LIMIT 1",
+    )
+    .bind(template_type)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The three body columns of a selected template. `html_body` being present IS the
+/// "this row is HTML" flag — `email_templates` has no `is_html` column.
+#[derive(Debug, sqlx::FromRow)]
+pub struct SelectedTemplate {
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub html_body: Option<String>,
+}
+
 /// Load an email template by type for the given account (account override first,
 /// then global default), render vars, and send via the tenant's SMTP.
 /// Returns Err if no template exists for that type OR no SMTP is configured.
@@ -187,24 +249,16 @@ pub async fn send_template_by_type(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
-    let row = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT subject, body, html_body FROM email_templates
-         WHERE template_type = $1 AND (aid = $2 OR (aid IS NULL AND is_default = true))
-         ORDER BY (aid = $2) DESC, is_default DESC, created_at DESC
-         LIMIT 1",
-    )
-    .bind(template_type)
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("DB error loading template: {e}"))?
-    .ok_or_else(|| format!("No email template found for type '{template_type}'"))?;
+    let row = load_template_by_type(pool, Some(account_id), template_type)
+        .await
+        .map_err(|e| format!("DB error loading template: {e}"))?
+        .ok_or_else(|| format!("No email template found for type '{template_type}'"))?;
 
     let subject = row
-        .0
+        .subject
         .unwrap_or_else(|| format!("IncentiveSwift: {}", template_type));
     // Prefer html_body, fall back to body
-    let body = row.2.or(row.1).unwrap_or_default();
+    let body = row.html_body.or(row.body).unwrap_or_default();
     let subject = render_template(&subject, vars);
     let body = render_template(&body, vars);
 

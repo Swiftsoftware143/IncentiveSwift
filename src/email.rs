@@ -27,8 +27,17 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
 
 /// Send a templated email using database-stored templates.
 /// Falls back to old inline methods when no template found.
+///
+/// `account_id` is the account the mail is being sent FOR (`None` = no account in hand, which
+/// degrades to the fleet-wide default). It is REQUIRED for tenant scope: this function used to
+/// take no account at all and pick its row with `(aid IS NULL OR is_default = true)
+/// ORDER BY is_default ASC, created_at DESC`, so one tenant's template became every tenant's
+/// template — kanban t_0fb81177. The selection is now `delivery::sender::load_template_by_type`,
+/// the app's single answer to "which template for this account" (see that function for the
+/// measured shapes).
 pub async fn send_template_email(
     pool: &sqlx::PgPool,
+    account_id: Option<uuid::Uuid>,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
@@ -36,31 +45,9 @@ pub async fn send_template_email(
     let app_name = "IncentiveSwift";
     let app_url = "https://app.incentiveswift.com";
 
-    // Try to load template from DB.
-    //
-    // Gate rule 5a (class 5): the predicate used to be
-    // `(aid = '<all-zeros uuid>' OR is_default = true)` — a hand-copied UUID written into the query
-    // text (kanban t_017517a9). It named NO row, and that arm was dead: MEASURED on the live DB,
-    // all 58 `email_templates` rows are `aid IS NULL AND is_default = true`, so the nil-uuid arm
-    // matched 0 rows and `is_default` did all the work. The fleet-wide default is now named by the
-    // shape the data actually has (`aid IS NULL`), which also makes the arm live: a fleet-wide row
-    // that is NOT flagged default (the `is_default ASC` ordering below exists to prefer exactly
-    // that row) is now found instead of silently skipped.
-    let template = sqlx::query_as::<_, EmailTemplateRow>(
-        r#"-- the template's HTML body IS the is_html flag: `email_templates` has no
-           -- `is_html` column (plain-statement drift, kanban t_cf7469bb), and a row only
-           -- sends HTML when it carries an `html_body`.
-           SELECT id, name, subject, body, html_body, is_default
-           FROM email_templates
-           WHERE template_type = $1 AND (aid IS NULL OR is_default = true)
-           ORDER BY is_default ASC, created_at DESC
-           LIMIT 1"#,
-    )
-    .bind(template_type)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let template = crate::delivery::sender::load_template_by_type(pool, account_id, template_type)
+        .await
+        .map_err(|e| format!("DB error loading template for '{template_type}': {e}"))?;
 
     match template {
         Some(t) => {
@@ -152,6 +139,7 @@ async fn send_inline(
 /// Keep original functions for backward compatibility — now use DB templates
 pub async fn send_welcome_email(
     pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
     to: &str,
     name: &str,
     password: &str,
@@ -180,11 +168,12 @@ pub async fn send_welcome_email(
         "app_name": APP_NAME,
         "login_url": APP_URL,
     });
-    send_template_email(pool, to, "welcome_credentials", &vars).await
+    send_template_email(pool, Some(account_id), to, "welcome_credentials", &vars).await
 }
 
 pub async fn send_purchase_confirmed_email(
     pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
     to: &str,
     name: &str,
     plan_name: &str,
@@ -194,16 +183,21 @@ pub async fn send_purchase_confirmed_email(
         "plan_name": plan_name,
         "app_url": "https://app.incentiveswift.com",
     });
-    send_template_email(pool, to, "purchase_confirmed", &vars).await
+    send_template_email(pool, Some(account_id), to, "purchase_confirmed", &vars).await
 }
 
-pub async fn send_reset_email(pool: &sqlx::PgPool, to: &str, token: &str) -> Result<(), String> {
+pub async fn send_reset_email(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    to: &str,
+    token: &str,
+) -> Result<(), String> {
     let vars = json!({
         "token": token,
         "name": "there",
         "app_url": "https://app.incentiveswift.com",
     });
-    send_template_email(pool, to, "password_reset", &vars).await
+    send_template_email(pool, Some(account_id), to, "password_reset", &vars).await
 }
 
 /// Core email sender — the provider (`smtp | mailgun | sendgrid | sendiio`) and its
@@ -240,14 +234,4 @@ async fn send_email_request(
             tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
             e
         })
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct EmailTemplateRow {
-    id: uuid::Uuid,
-    name: String,
-    subject: Option<String>,
-    body: Option<String>,
-    html_body: Option<String>,
-    is_default: Option<bool>,
 }

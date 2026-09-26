@@ -195,6 +195,7 @@ async fn deliver_credentials(
                 // Account exists with password → send purchase confirmed
                 if let Err(e) = email::send_purchase_confirmed_email(
                     &state.db,
+                    account_id, // the account this mail is FOR (tenant-scoped lookup, t_0fb81177)
                     email,
                     &existing_name,
                     plan_name,
@@ -219,9 +220,14 @@ async fn deliver_credentials(
                     .execute(&state.db)
                     .await?;
 
-                if let Err(e) =
-                    email::send_welcome_email(&state.db, email, &existing_name, &temp_password)
-                        .await
+                if let Err(e) = email::send_welcome_email(
+                    &state.db,
+                    account_id,
+                    email,
+                    &existing_name,
+                    &temp_password,
+                )
+                .await
                 {
                     tracing::warn!("Failed to send welcome email to {}: {}", email, e);
                 }
@@ -276,7 +282,8 @@ async fn deliver_credentials(
         }
 
         if let Err(e) =
-            email::send_welcome_email(&state.db, email, customer_name, &temp_password).await
+            email::send_welcome_email(&state.db, account_id, email, customer_name, &temp_password)
+                .await
         {
             tracing::warn!("Failed to send welcome email to {}: {}", email, e);
         }
