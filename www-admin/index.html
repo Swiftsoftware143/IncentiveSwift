@@ -35,6 +35,91 @@ function islfMergeSections(cfg, sections) {
   out.sections = Array.isArray(sections) ? sections : [];
   return out;
 }
+
+/* Delivery producer merge (kanban t_5d5760fb).
+   `campaigns.delivery_config` carries TWO vocabularies at once: the hub's own `delivery` block
+   (delivery/integration_hub.rs::DeliveryConfig::from_campaign_json) and the entry-capture keys a
+   different writer owns (coreswift.list_id from www-app/iqs.html, integrations[]/_method/api_type/
+   api_key/webhook_url read by handlers::entries::dispatch_integrations). The API replaces the
+   column WHOLESALE, so this panel must READ-MERGE-WRITE: every top-level key it does not own is
+   copied through untouched, and each leg's email/redirect block is merged too, so a config that
+   names only a redirect keeps its coupon_code/from_name/reply_to/template_id. Pure and DOM-free on
+   purpose, so it can be unit-tested outside the browser. */
+function isdCampaignDeliveryBlock(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return {};
+  // Mirror the hub's own resolution: the `delivery` block wins when present, else the value
+  // itself is read as a bare config. Showing a tenant anything else would let the panel promise
+  // delivery the hub will never run.
+  if (cfg.delivery && typeof cfg.delivery === 'object' && !Array.isArray(cfg.delivery)) return cfg.delivery;
+  return cfg;
+}
+function isdDeliveryDraftFromCampaign(cfg) {
+  var block = isdCampaignDeliveryBlock(cfg);
+  var draft = {};
+  ['on_win', 'on_lose'].forEach(function (leg) {
+    var o = (block[leg] && typeof block[leg] === 'object' && !Array.isArray(block[leg])) ? block[leg] : {};
+    var r = (o.redirect && typeof o.redirect === 'object') ? o.redirect : {};
+    var e = (o.email && typeof o.email === 'object') ? o.email : {};
+    draft[leg] = {
+      redirect_url: typeof r.url === 'string' ? r.url : '',
+      redirect_text: typeof r.text === 'string' ? r.text : '',
+      email_subject: typeof e.subject === 'string' ? e.subject : '',
+      email_body: typeof e.body_text === 'string' ? e.body_text : '',
+      webhooks: Array.isArray(o.webhooks) ? o.webhooks.slice() : [],
+      autoresponder: !!o.autoresponder_fire
+    };
+  });
+  return draft;
+}
+function isdDeliveryCopy(o) {
+  var out = {};
+  if (o && typeof o === 'object') {
+    for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k]; }
+  }
+  return out;
+}
+function isdMergeDelivery(prev, legs) {
+  var out = isdDeliveryCopy(prev);
+  var prevBlock = (prev && prev.delivery && typeof prev.delivery === 'object' && !Array.isArray(prev.delivery))
+    ? prev.delivery : {};
+  var next = {};
+  ['on_win', 'on_lose'].forEach(function (leg) {
+    var p = (prevBlock[leg] && typeof prevBlock[leg] === 'object' && !Array.isArray(prevBlock[leg])) ? prevBlock[leg] : {};
+    var d = (legs && legs[leg]) || {};
+    var o = isdDeliveryCopy(p);
+    var url = (d.redirect_url || '').trim();
+    if (url) {
+      var r = isdDeliveryCopy((p.redirect && typeof p.redirect === 'object') ? p.redirect : {});
+      r.url = url;
+      if ((d.redirect_text || '').trim()) r.text = d.redirect_text; else delete r.text;
+      o.redirect = r;
+    } else {
+      delete o.redirect;   // an empty box is an explicit clear, never a stale URL
+    }
+    var subject = (d.email_subject || '').trim();
+    var body = (d.email_body || '');
+    if (subject || body.trim()) {
+      var e = isdDeliveryCopy((p.email && typeof p.email === 'object') ? p.email : {});
+      if (subject) e.subject = subject; else delete e.subject;
+      e.body_text = body;
+      o.email = e;
+    } else {
+      delete o.email;
+    }
+    o.webhooks = Array.isArray(d.webhooks) ? d.webhooks.slice() : [];
+    o.autoresponder_fire = !!d.autoresponder;
+    next[leg] = o;
+  });
+  out.delivery = next;
+  return out;
+}
+function isdConfigKeys(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return '(none)';
+  var keys = [];
+  for (var k in cfg) { if (Object.prototype.hasOwnProperty.call(cfg, k)) keys.push(k); }
+  keys.sort();
+  return keys.length ? keys.join(', ') : '(none)';
+}
 </script>
 
 <script type="module">
@@ -389,7 +474,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, embedItem: null, embed: null, embedErr: '', embedCopied: '' });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -453,6 +538,86 @@ const Campaigns = () => {
     } catch (e) { st.embedErr = e.message; renderApp(); }
   };
 
+  // ── Delivery producer (kanban t_5d5760fb) ─────────────────────────────────────────────
+  // The hub reads campaigns.delivery_config, and until this panel existed the ONLY writers of
+  // that shape were the RETIRED console wizard and a hand-called PUT /api/v1/campaigns/{slug} --
+  // so no tenant could configure the post-win/post-lose redirect, email, webhook targets or the
+  // autoresponder. Every write below goes through isdMergeDelivery (read-merge-write), because
+  // the same column carries the entry-capture vocabulary (coreswift.list_id written by
+  // www-app/iqs.html, integrations[]/_method/api_type/api_key/webhook_url read by
+  // handlers::entries) and a blind PUT would break the live CoreSwift push.
+  const loadDeliveryTargets = async (accountId) => {
+    try {
+      const d = await API.get('/integration-targets');
+      const all = Array.isArray(d) ? d : (d.targets || []);
+      // Scope to THIS campaign's account. The route answers with every row in the table, and the
+      // hub's deliver_to_integration_target resolves a target id with no ownership check, so
+      // offering a foreign id would let a tenant fire a webhook at another account's URL.
+      return accountId ? all.filter(t => t.account_id === accountId) : [];
+    } catch (e) { st.deliveryErr = 'Could not load webhook targets: ' + e.message; return []; }
+  };
+  const openDelivery = async (item) => {
+    st.deliveryItem = item;
+    st.deliveryLegs = isdDeliveryDraftFromCampaign(item.delivery_config);
+    st.deliveryErr = ''; st.deliverySaved = ''; st.deliveryTargets = null;
+    renderApp();
+    st.deliveryTargets = await loadDeliveryTargets(item.account_id);
+    renderApp();
+  };
+  const closeDelivery = () => {
+    st.deliveryItem = null; st.deliveryLegs = null; st.deliveryTargets = null;
+    st.deliveryErr = ''; st.deliverySaved = ''; renderApp();
+  };
+  const toggleDeliveryTarget = (leg, id, on) => {
+    const cur = st.deliveryLegs[leg].webhooks || [];
+    st.deliveryLegs[leg].webhooks = on ? cur.filter(x => x !== id).concat([id]) : cur.filter(x => x !== id);
+    renderApp();
+  };
+  const saveDelivery = async () => {
+    st.deliveryErr = ''; st.deliverySaved = ''; renderApp();
+    const next = isdMergeDelivery(st.deliveryItem.delivery_config, st.deliveryLegs);
+    try {
+      const r = await API.put('/campaigns/' + (st.deliveryItem.slug || st.deliveryItem.id), { delivery_config: next });
+      // Read the stored column back out of the WRITE's own response, never out of the local draft:
+      // the panel may only report what the server holds. (Not GET /admin/campaigns/{id}/surface --
+      // that route answers 403 "Admin role required" for a plain tenant session, measured, which is
+      // the same gate the Theme editor's save hits.)
+      const stored = (r && r.campaign) ? r.campaign.delivery_config : null;
+      st.deliverySaved = 'Saved. delivery_config keys kept: ' + isdConfigKeys(stored);
+      if (stored) st.deliveryItem.delivery_config = stored;
+      load();
+    } catch (e) { st.deliveryErr = e.message; }
+    renderApp();
+  };
+  const deliveryTargetList = (leg) => {
+    const sel = st.deliveryLegs[leg].webhooks || [];
+    if (st.deliveryTargets === null) return html`<div class="text-xs text-gray-400">Loading webhook targets…</div>`;
+    if (st.deliveryTargets.length === 0) return html`<div class="text-xs text-gray-400" id=${'deliveryNoTargets-' + leg}>No webhook targets on this account yet. Add one in the Integration Center, then pick it here.</div>`;
+    return html`<div class="space-y-1">${st.deliveryTargets.map(t => html`<label class="flex items-center gap-2 text-xs">
+      <input type="checkbox" id=${'delivery-' + leg + '-target-' + t.id} data-deliver-target=${t.id} checked=${sel.indexOf(t.id) >= 0} onChange=${e => toggleDeliveryTarget(leg, t.id, e.target.checked)} />
+      <span>${t.name || t.id} <span class="text-gray-400">${(t.provider || 'webhook') + ' · ' + (t.webhook_url || '')}</span></span>
+    </label>`)}</div>`;
+  };
+  const deliveryLegBlock = (leg, title) => {
+    const d = st.deliveryLegs[leg];
+    return html`<div class="rounded-lg p-3 mb-3" style="border:1px solid #e2e8f0">
+      <div class="font-semibold text-sm mb-2">${title}</div>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="text-xs font-medium block mb-1 text-gray-500">Redirect URL</label>
+          <input class="input" id=${'delivery-' + leg + '-redirect_url'} placeholder="https://example.com/thanks" value=${d.redirect_url} onInput=${e => { d.redirect_url = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium block mb-1 text-gray-500">Redirect text</label>
+          <input class="input" id=${'delivery-' + leg + '-redirect_text'} placeholder="You won!" value=${d.redirect_text} onInput=${e => { d.redirect_text = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium block mb-1 text-gray-500">Email subject</label>
+          <input class="input" id=${'delivery-' + leg + '-email_subject'} placeholder="You won a prize" value=${d.email_subject} onInput=${e => { d.email_subject = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium block mb-1 text-gray-500">Autoresponder</label>
+          <label class="flex items-center gap-2 text-xs" style="height:36px"><input type="checkbox" id=${'delivery-' + leg + '-autoresponder'} checked=${d.autoresponder} onChange=${e => { d.autoresponder = e.target.checked; renderApp(); }} /> fire the autoresponder integration</label></div>
+      </div>
+      <div class="mt-2"><label class="text-xs font-medium block mb-1 text-gray-500">Email body</label>
+        <textarea class="input" id=${'delivery-' + leg + '-email_body'} rows="3" placeholder="Thanks for playing!" value=${d.email_body} onInput=${e => { d.email_body = e.target.value; }}></textarea></div>
+      <div class="mt-2"><label class="text-xs font-medium block mb-1 text-gray-500">Webhook targets</label>${deliveryTargetList(leg)}</div>
+    </div>`;
+  };
+
   const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
 
   return html`<div>
@@ -463,7 +628,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span></td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
       </tbody></table>
@@ -613,6 +778,23 @@ const Campaigns = () => {
           ${st.embedCopied && html`<div class="text-xs text-green-600" id="embedCopied">✓ Copied the ${st.embedCopied === 'direct' ? 'direct link' : st.embedCopied === 'iframe' ? 'iframe embed' : 'widget script'}</div>`}
         </div>`}
         <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="embedClose" onClick=${closeEmbed}>Close</button></div>
+      </div>
+    </div>`}
+    ${st.deliveryItem && html`<div class="modal" id="deliveryModal" onClick=${e => e.target === e.currentTarget && (closeDelivery())}>
+      <div class="modal-content" style="max-width:760px">
+        <h3 class="text-lg font-bold mb-1">Delivery — ${st.deliveryItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">What happens when the mechanic resolves. Saved into this campaign's delivery_config beside your IQS/CoreSwift keys, which are left untouched.</p>
+        ${st.deliveryErr && html`<div class="text-red-500 text-sm mb-3" id="deliveryErr">${st.deliveryErr}</div>`}
+        ${st.deliverySaved && html`<div class="text-xs text-green-600 mb-3" id="deliverySaved">${st.deliverySaved}</div>`}
+        ${st.deliveryLegs && html`<div>
+          ${deliveryLegBlock('on_win', 'On win')}
+          ${deliveryLegBlock('on_lose', 'On lose')}
+          <div class="text-xs text-gray-400">Webhook targets come from the Integration Center. The redirect is returned to the player after the outcome; the email and webhooks are recorded in the delivery log.</div>
+        </div>`}
+        <div class="flex gap-2 justify-end mt-4">
+          <button class="btn btn-outline" id="deliveryClose" onClick=${closeDelivery}>Close</button>
+          <button class="btn" id="deliverySave" onClick=${saveDelivery}>Save delivery</button>
+        </div>
       </div>
     </div>`}
   </div>`;
