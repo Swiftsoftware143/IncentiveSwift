@@ -47,7 +47,14 @@ pub struct Entry {
 }
 
 /// Create a new entry.
+///
+/// The account's lead allowance is enforced HERE, before the INSERT, because this helper is the
+/// shared creator behind the generic capture route and seven mechanic handlers — see
+/// `crate::features::enforce_lead_limit_for_campaign`, the same gate the direct writers of `entries`
+/// (quiz, raffle, spin/prize-draw, chat-funnel SMS, milestone bonuses) call.
 pub async fn create_entry(pool: &PgPool, input: &CreateEntryInput) -> Result<Uuid, AppError> {
+    crate::features::enforce_lead_limit_for_campaign(pool, input.campaign_id).await?;
+
     let id = Uuid::new_v4();
     let tags_applied = input.tags_applied.clone().unwrap_or_default();
 

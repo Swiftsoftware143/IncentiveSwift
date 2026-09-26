@@ -654,6 +654,17 @@ async fn complete_chat_funnel(
     };
 
     // Create entry
+    // Lead allowance: the campaign owner has to be under its plan's cap (kanban t_8dfcd0a2). This
+    // funnel completes from an inbound SMS, so there is no HTTP caller to hand a verdict to: a
+    // refused completion is logged at warn! and no entry (that is, no lead) is written.
+    if let Err(e) = crate::features::enforce_lead_limit_for_campaign(pool, *campaign_id).await {
+        tracing::warn!(
+            campaign_id = %campaign_id,
+            phone = %phone_val,
+            "chat funnel completed but the lead allowance refused the entry: {e}"
+        );
+        return;
+    }
     let entry_id = Uuid::new_v4();
     let _ = sqlx::query(
         "INSERT INTO entries (id, contact_id, campaign_id, outcome, answers, tags_applied, created_at) VALUES ($1, $2, $3, 'completed', $4::jsonb, '{chat_funnel}', NOW()) ON CONFLICT (id) DO NOTHING"

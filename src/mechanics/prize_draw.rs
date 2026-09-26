@@ -432,6 +432,10 @@ pub async fn record_win(
     user_agent: Option<String>,
     ip_address: Option<String>,
 ) -> Result<Uuid, AppError> {
+    // Lead allowance: a spin's entry is a lead of the campaign owner, so the owner's plan cap gates it
+    // (kanban t_8dfcd0a2). record_win/record_loss are the spin mechanic's own entry writers.
+    crate::features::enforce_lead_limit_for_campaign(pool, *campaign_id).await?;
+
     let entry_id = Uuid::new_v4();
     let answers = serde_json::json!({
         "prize_id": prize.id,
@@ -494,6 +498,10 @@ pub async fn record_loss(
     user_agent: Option<String>,
     ip_address: Option<String>,
 ) -> Result<Uuid, AppError> {
+    // Lead allowance: a spin's entry is a lead of the campaign owner, so the owner's plan cap gates it
+    // (kanban t_8dfcd0a2). record_win/record_loss are the spin mechanic's own entry writers.
+    crate::features::enforce_lead_limit_for_campaign(pool, *campaign_id).await?;
+
     let entry_id = Uuid::new_v4();
     let answers = serde_json::json!({
         "prize_id": prize.id,

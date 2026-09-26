@@ -226,6 +226,8 @@ pub async fn submit_quiz(
     .map_err(|e| AppError::Database(format!("Contact upsert failed: {}", e)))?;
 
     // Create entry (entries table has no account_id column, only contact_id + campaign_id)
+    // The account that owns this campaign has to be under its plan's lead allowance.
+    crate::features::enforce_lead_limit_for_campaign(&state.db, campaign.id).await?;
     let entry_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO entries (id, campaign_id, contact_id, answers, score, outcome,

@@ -47,6 +47,8 @@ pub async fn enter_raffle(
     }
 
     // Create entry
+    // Lead allowance: the raffle's campaign owner has to be under its plan's cap (kanban t_8dfcd0a2).
+    crate::features::enforce_lead_limit_for_campaign(pool, *campaign_id).await?;
     let entry_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO entries (id, contact_id, campaign_id, answers, outcome, tags_applied)

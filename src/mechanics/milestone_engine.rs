@@ -222,6 +222,9 @@ async fn fire_bonus_entry(
     // the answers jsonb, which is where every other entry writer keeps its
     // metadata. A bonus spin is a real entry row, so it shows up in analytics and
     // in the campaign's entry stream rather than being an invisible counter.
+    // A bonus entry is a lead too, so it is gated by the campaign owner's plan allowance
+    // (kanban t_8dfcd0a2) before the first one is written.
+    crate::features::enforce_lead_limit_for_campaign(pool, *campaign_id).await?;
     for _ in 0..spin_count {
         sqlx::query(
             r#"INSERT INTO entries (contact_id, campaign_id, answers)

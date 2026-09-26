@@ -78,6 +78,50 @@ pub async fn enforce_feature_limit(
     }
 }
 
+/// Enforce the account's `max_leads` allowance for whichever account owns `campaign_id`.
+///
+/// This is the app's LEAD-creation choke point. A lead in IncentiveSwift is an entry of a campaign the
+/// account owns (`count_usage`'s `max_leads` arm, `GET /api/v1/leads` and `business_handler`'s
+/// `total_leads` all say so with the identical statement), and EVERY writer of `entries` has the
+/// campaign in hand, so this one helper gives every one of them the same gate:
+///
+///   * `db::entries::create_entry` — the shared creator behind the generic capture route
+///     (`POST /api/v1/entries`) and the mystery / long-form-qualifier / scratch-card / score-reveal /
+///     poll / countdown / chat handlers;
+///   * the direct writers that do not go through it: `handlers::quiz_handler`,
+///     `db::raffles::enter_raffle`, `handlers::sms_handler`'s chat-funnel entry,
+///     `mechanics::milestone_engine` (bonus entries) and `mechanics::prize_draw`'s
+///     `record_win` / `record_loss` (the spin mechanic's entries).
+///
+/// The allowance itself is the canonical entitlement read — `enforce_feature_limit` for the key
+/// `max_leads`, which resolves `tier_features.limit_value` on the account's OWN `plan_tiers` row
+/// (`accounts.plan_tier_id`). It is NOT read from `plans.max_leads`: `plans` has no FK from `accounts`,
+/// that column has no reader and no writer in this crate (the admin plans API never selects or binds
+/// it), and its only link to an account is a slug join that coincides for exactly one of the three
+/// live plans. Its live values were migrated into `tier_features` by
+/// `migrations/20260926_max_leads_entitlement.sql`, so the numbers the catalogue advertised
+/// (Free 5 / Pro 100 / Enterprise -1 = unlimited) are exactly what this gate now applies.
+///
+/// An account with no tier, or a tier with no `max_leads` row, is ALLOWED (the
+/// `enforce_feature_limit` convention: "not configured" is not a cap).
+pub async fn enforce_lead_limit_for_campaign(
+    db: &PgPool,
+    campaign_id: Uuid,
+) -> Result<(), AppError> {
+    let owner: Option<Uuid> = sqlx::query_scalar("SELECT account_id FROM campaigns WHERE id = $1")
+        .bind(campaign_id)
+        .fetch_optional(db)
+        .await?;
+
+    // No campaign row: nothing to attribute the lead to, and the caller's own INSERT will fail the
+    // campaign FK if it is really gone. Not a limit verdict, so do not manufacture one.
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+
+    enforce_feature_limit(db, &owner.to_string(), "max_leads", "Leads").await
+}
+
 async fn check_limit(
     db: &PgPool,
     account_id: Uuid,
