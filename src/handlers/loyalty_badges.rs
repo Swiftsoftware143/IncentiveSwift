@@ -515,7 +515,7 @@ pub async fn scan_member(
     Json(req): Json<ScanRequest>,
 ) -> Result<Json<Value>, AppError> {
     let member = sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32)>(
-        r#"SELECT lm.id, lm.program_id, lm.contact_id, lm.points_balance
+        r#"SELECT lm.id, lm.program_id, lm.contact_id, COALESCE(lm.points_balance, 0)
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
            WHERE lm.qr_code = $1 AND lp.slug = $2 AND lp.is_active = true"#,
@@ -895,11 +895,11 @@ pub async fn member_dashboard(
     }
 
     let member = sqlx::query_as::<_, MemberInfo>(
-        r#"SELECT lm.id, lm.program_id, lm.contact_id, lm.points_balance, lm.lifetime_points,
-                  lm.member_since, lm.last_activity_date, lm.current_streak, lm.longest_streak,
-                  lm.referral_code, lm.total_referrals, lm.qr_code, lm.qr_code_generated_at,
-                  lp.name AS program_name, lp.slug AS program_slug,
-                  lp.currency_name, lp.currency_icon
+        r#"SELECT lm.id, lm.program_id, lm.contact_id, lm.member_since, lm.last_activity_date,
+                  lm.current_streak, lm.longest_streak, lm.referral_code, lm.total_referrals,
+                  lm.qr_code, lm.qr_code_generated_at, COALESCE(lm.points_balance, 0) AS points_balance,
+                  COALESCE(lm.lifetime_points, 0) AS lifetime_points, lp.name AS program_name,
+                  lp.slug AS program_slug, lp.currency_name, lp.currency_icon
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
            WHERE lm.id = $1"#,

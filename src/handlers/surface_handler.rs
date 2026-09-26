@@ -472,8 +472,8 @@ pub async fn get_loyalty_dashboard(
 
             // Top members by points
             let top_members: Vec<LoyaltyMemberRow> = sqlx::query_as(
-                r#"SELECT lm.id, lm.contact_id, lm.points_balance, lm.lifetime_points,
-                          lm.member_since, lm.last_checkin_at
+                r#"SELECT lm.id, lm.contact_id, lm.member_since, lm.last_checkin_at,
+                          COALESCE(lm.points_balance, 0) AS points_balance, COALESCE(lm.lifetime_points, 0) AS lifetime_points
                    FROM loyalty_members lm
                    WHERE lm.program_id = $1
                    ORDER BY lm.points_balance DESC

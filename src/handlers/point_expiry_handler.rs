@@ -90,7 +90,7 @@ pub async fn expire_points(State(s): State<AppState>) -> Result<Json<Value>, App
         "SELECT
              m.id::text                              AS member_id,
              m.program_id::text                      AS program_id,
-             m.points_balance                        AS points_balance,
+             COALESCE(m.points_balance, 0)           AS points_balance,
              COALESCE(p.points_expire_days, $1::int4) AS expire_days,
              COALESCE(e.unexpired_earned, 0)::bigint  AS unexpired_earned,
              COALESCE(e.expired_earned, 0)::bigint    AS expired_earned,

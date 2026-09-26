@@ -171,8 +171,8 @@ pub async fn register(
     if let Some(ref ref_code) = body.referral_code {
         // Look up referrer by their referral code
         let referrer = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
-            r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                      member_since, last_checkin_at
+            r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                      COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
                FROM loyalty_members WHERE referral_code = $1"#,
         )
         .bind(ref_code)
@@ -233,10 +233,9 @@ pub async fn register(
                 // Award points to referee (new user) — create a member record for them
                 // First find or create a contact for this new user
                 let contact_id = sqlx::query_scalar::<_, Uuid>(
-                    r#"SELECT id FROM contacts WHERE email = $1 AND tenant_id = $2 LIMIT 1"#,
+                    r#"SELECT id FROM contacts WHERE lower(email) = lower($1) LIMIT 1"#,
                 )
                 .bind(&body.email)
-                .bind(account_id)
                 .fetch_optional(&state.db)
                 .await?;
 

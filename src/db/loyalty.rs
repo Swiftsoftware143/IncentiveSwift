@@ -332,8 +332,8 @@ pub struct LoyaltyMember {
 
 pub async fn get_member(pool: &PgPool, member_id: &Uuid) -> Result<LoyaltyMember, AppError> {
     let member = sqlx::query_as::<_, LoyaltyMember>(
-        r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                  member_since, last_checkin_at
+        r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                  COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
            FROM loyalty_members WHERE id = $1"#,
     )
     .bind(member_id)

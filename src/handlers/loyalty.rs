@@ -581,8 +581,8 @@ pub async fn online_visit(
 ) -> Result<Json<Value>, AppError> {
     // 1. Look up member by referral code
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
-        r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                  member_since, last_checkin_at
+        r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                  COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
            FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referral_code)
@@ -697,7 +697,7 @@ pub async fn online_visit(
     }
 
     let updated = sqlx::query_as::<_, MemberStreak>(
-        r#"SELECT points_balance, current_streak
+        r#"SELECT COALESCE(points_balance, 0) AS points_balance, current_streak
            FROM loyalty_members WHERE id = $1"#,
     )
     .bind(member.id)
@@ -747,8 +747,8 @@ pub async fn online_share(
 ) -> Result<Json<Value>, AppError> {
     // 1. Find member by referral code
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
-        r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                  member_since, last_checkin_at
+        r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                  COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
            FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referral_code)
@@ -872,8 +872,8 @@ pub async fn referral_click(
 ) -> Result<Json<Value>, AppError> {
     // 1. Find member by referral code (the referrer)
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
-        r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                  member_since, last_checkin_at
+        r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                  COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
            FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&body.referrer_code)
@@ -910,8 +910,8 @@ pub async fn online_stats(
 ) -> Result<Json<Value>, AppError> {
     // 1. Find member
     let member = sqlx::query_as::<_, crate::db::loyalty::LoyaltyMember>(
-        r#"SELECT id, program_id, contact_id, points_balance, lifetime_points,
-                  member_since, last_checkin_at
+        r#"SELECT id, program_id, contact_id, member_since, last_checkin_at,
+                  COALESCE(points_balance, 0) AS points_balance, COALESCE(lifetime_points, 0) AS lifetime_points
            FROM loyalty_members WHERE referral_code = $1"#,
     )
     .bind(&code)
