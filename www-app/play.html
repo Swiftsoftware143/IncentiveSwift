@@ -46,6 +46,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .consent{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:#475569;margin:2px 0 14px}
 .consent input{width:auto;margin:2px 0 0}
 .spin{background:linear-gradient(135deg,var(--brand),rgba(0,0,0,.35));font-size:18px;padding:18px}
+.codebox{border-top:1px solid #e2e8f0;margin-top:22px;padding-top:16px}
 </style>
 </head>
 <body>
@@ -75,6 +76,19 @@ button:disabled{opacity:.6;cursor:not-allowed}
     </form>
 
     <p class="hint">No account needed — just play.</p>
+
+    <!-- Promo code box (campaign secret codes). The participant half of the family the operator
+         console mints in panel 16. It sits OUTSIDE #playForm on purpose: a customer who has
+         already played has the form hidden, and must still be able to redeem a code; the identity
+         inputs it reads keep their values while the form is hidden. -->
+    <div class="codebox" id="codeBlock">
+      <label for="promoCode">Have a promo code?</label>
+      <input id="promoCode" type="text" autocomplete="off" placeholder="Type it here">
+      <button type="button" id="codeBtn">Redeem code</button>
+      <div class="msg err" id="codeError"></div>
+      <div class="msg ok" id="codeSuccess"></div>
+      <p class="hint">We'll credit the email you entered above.</p>
+    </div>
   </div>
 </div>
 
@@ -239,6 +253,70 @@ button:disabled{opacity:.6;cursor:not-allowed}
         el('error').style.display = 'block';
         btn.disabled = false; btn.textContent = original;
       });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Promo code -> campaign points.
+  //
+  // The customer identifies itself with the SAME fields the spin leg sends (email + names):
+  // the route is public and, since kanban t_6c457880, upserts the contact server-side when no
+  // contact_id is supplied -- a served /play/<slug> page never has one. The campaign id comes
+  // from the GET /api/v1/play/<slug> payload this page already fetched.
+  // ---------------------------------------------------------------------------
+  function codeMsg(kind, text) {
+    var errEl = el('codeError'), okEl = el('codeSuccess');
+    errEl.style.display = 'none';
+    okEl.style.display = 'none';
+    if (kind === 'ok') { okEl.textContent = text; okEl.style.display = 'block'; }
+    else { errEl.textContent = text; errEl.style.display = 'block'; }
+  }
+
+  function redeemCode() {
+    if (!campaign) { return; }
+    var btn = el('codeBtn');
+    var code = el('promoCode').value.trim();
+    var email = el('email').value.trim();
+    if (!code) { codeMsg('err', 'Type the code from your offer first.'); return; }
+    if (!email) { codeMsg('err', 'Enter your email above so we can credit your points.'); return; }
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Checking\u2026';
+    fetch(api + '/campaigns/' + encodeURIComponent(campaign.id) + '/redeem-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: code,
+        email: email,
+        first_name: el('firstName').value || null,
+        last_name: el('lastName').value || null
+      })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }); })
+      .then(function (out) {
+        btn.disabled = false;
+        btn.textContent = original;
+        var d = (out.data && out.data.data) ? out.data.data : {};
+        if (!out.ok) {
+          codeMsg('err', (out.data && out.data.error) ? out.data.error
+            : 'That code could not be checked. Please try again.');
+          return;
+        }
+        if (d.success === true) {
+          codeMsg('ok', '\ud83c\udf89 ' + (d.message || ('You earned ' + d.points_awarded + ' points!')));
+        } else {
+          codeMsg('err', d.message || 'That code is not valid.');
+        }
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = original;
+        codeMsg('err', 'Could not reach the campaign service. Please try again.');
+      });
+  }
+
+  el('codeBtn').addEventListener('click', redeemCode);
+  el('promoCode').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); redeemCode(); }
   });
 })();
 </script>

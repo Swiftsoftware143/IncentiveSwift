@@ -24,6 +24,12 @@ pub enum AppError {
 
     #[error("Rate limited")]
     RateLimited,
+
+    /// A route the public can drive that spends a trial-and-error budget (e.g. guessing a
+    /// promo code) answers this once the caller's window is burned. Distinct from RateLimited so
+    /// the customer-facing message is actionable instead of "Rate limit exceeded".
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
     #[error("Upgrade required: {0}")]
     UpgradeRequired(String),
 
@@ -46,6 +52,7 @@ impl IntoResponse for AppError {
                 StatusCode::TOO_MANY_REQUESTS,
                 "Rate limit exceeded".to_string(),
             ),
+            AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 (
