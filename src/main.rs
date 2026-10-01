@@ -85,6 +85,22 @@ async fn main() -> anyhow::Result<()> {
     // afterwards, and validates the guard. Runs after the migrations, before the first request.
     billing::providers::seal_payment_provider_secrets(&state.db).await;
 
+    // Same boot half for the system-mail credential (kanban t_a794cb09): both writers of
+    // `admin_settings.email` seal before they store, and this is what seals a row that arrives
+    // plaintext from a database restored out of an older dump — or from a writer added later.
+    // A failure is logged, never fatal: a broken credential row must not stop the app booting.
+    match email_provider::seal_legacy_config_secrets(&state.db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            rows = n,
+            "admin_settings.email: sealed legacy plaintext credential(s) at rest"
+        ),
+        Err(e) => tracing::error!(
+            "admin_settings.email credential backfill failed (plaintext may remain at rest): {}",
+            e
+        ),
+    }
+
     // Start background email ticker (flushes scheduled follow-ups/reminders)
     email_queue::spawn_email_ticker(state.clone());
 

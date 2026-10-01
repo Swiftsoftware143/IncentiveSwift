@@ -113,6 +113,13 @@ pub async fn update_email_settings(
             ))
         })?;
 
+    // The credential is SEALED before it reaches the database (kanban t_a794cb09). This row holds
+    // the fleet-wide Mailgun private key and used to be written in the clear, so a dump or a
+    // read-only psql handed out a working key for every fleet domain.
+    email_provider::seal_config_secrets(&state.db, &mut body)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to seal email credentials: {}", e)))?;
+
     sqlx::query(
         "INSERT INTO admin_settings (key, value, description, updated_at)
          VALUES ('email', $1::jsonb, 'Global system email provider (admin-editable)', NOW())
