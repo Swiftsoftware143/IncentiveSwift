@@ -18,6 +18,7 @@ pub mod integration_target_handler;
 pub mod plans_handler;
 pub mod portfolio_handler;
 pub mod portfolio_sync_handler;
+pub mod prize_pool_handler;
 pub mod surface_handler;
 
 pub mod analytics_handler;

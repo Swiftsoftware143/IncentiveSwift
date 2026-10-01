@@ -125,6 +125,14 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::campaigns::update_campaign)
                 .delete(handlers::campaigns::delete_campaign_by_id),
         )
+        // The prize pool. `prize_draw` has always READ `config.prize_pool` and nothing ever WROTE
+        // it, so every campaign answered 400 "Campaign has no prize_pool configured" and the loyalty
+        // mechanic could not run. This is the writer (2026-10-01).
+        .route(
+            "/api/v1/campaigns/:slug/prize-pool",
+            get(handlers::prize_pool_handler::get_prize_pool)
+                .put(handlers::prize_pool_handler::set_prize_pool),
+        )
         .route(
             "/api/v1/campaigns/subdomain/:t_slug",
             get(handlers::campaigns::get_campaigns_by_subdomain),
