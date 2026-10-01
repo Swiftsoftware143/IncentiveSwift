@@ -817,6 +817,138 @@ const Campaigns = () => {
 // ============================================================
 // LOYALTY — Full Admin Module (14 areas)
 // ============================================================
+
+/* ── PRIZE POOLS ────────────────────────────────────────────────────────────────────────────────
+   IS-17. Measured 2026-10-01: `POST /api/v1/campaigns/<slug>/spin` answered
+   {"error":"Campaign has no prize_pool configured"} for every campaign, because prize_draw READS
+   config.prize_pool and nothing ever WROTE it — the loyalty mechanic could not run at all and no
+   screen could fix it. The writer now exists (PUT /campaigns/:slug/prize-pool); this is the screen,
+   because a capability only reachable by curl is a defect in this fleet ("I should be able to do
+   everything in the admin panel").
+   The odds column is the SERVER's number (it sums the weights it actually stored), so what the
+   operator reads is what the draw will use, not a guess this page made. */
+const PrizePools = () => {
+  const st = viewState('prizes', { campaigns: [], slug: '', pool: null, saving: false, msg: '', err: '', loaded: false });
+  const fresh = () => ({ id: '', label: '', weight: 10, prize_type: 'prize', inventory: '', color: '#6b7280', odds_percent: null });
+
+  const loadCampaigns = async () => {
+    try {
+      const d = await API.get('/campaigns');
+      st.campaigns = Array.isArray(d) ? d : (d.campaigns || []);
+      if (!st.slug && st.campaigns.length) await pick(st.campaigns[0].slug);
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  const pick = async (slug) => {
+    st.slug = slug; st.pool = null; st.msg = ''; st.err = ''; renderApp();
+    if (!slug) return;
+    try {
+      const d = await API.get('/campaigns/' + slug + '/prize-pool');
+      const pp = d.prize_pool || {};
+      st.pool = {
+        prizes: (pp.prizes || []).map(x => ({
+          id: x.id || '', label: x.label || '', weight: x.weight != null ? x.weight : 1,
+          prize_type: x.prize_type || 'prize',
+          inventory: (x.inventory === null || x.inventory === undefined) ? '' : x.inventory,
+          color: x.color || '#6b7280', odds_percent: x.odds_percent
+        })),
+        inventory_tracking: !!pp.inventory_tracking,
+        allow_when_exhausted: !!pp.allow_when_exhausted
+      };
+      if (!st.pool.prizes.length) st.pool.prizes.push(fresh());
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; loadCampaigns(); }
+
+  const total = () => st.pool ? st.pool.prizes.reduce((n, p) => n + (Number(p.weight) || 0), 0) : 0;
+  const liveOdds = (p) => { const t = total(); return t > 0 ? Math.round(((Number(p.weight) || 0) / t) * 10000) / 100 : 0; };
+  const addPrize = () => { st.pool.prizes.push(fresh()); renderApp(); };
+  const dropPrize = (i) => { st.pool.prizes.splice(i, 1); renderApp(); };
+  const save = async () => {
+    st.saving = true; st.err = ''; st.msg = ''; renderApp();
+    try {
+      const body = {
+        prizes: st.pool.prizes.map(p => {
+          const q = { label: (p.label || '').trim(), weight: Number(p.weight) || 0, prize_type: p.prize_type || 'prize' };
+          if (p.id) q.id = p.id;
+          if (p.inventory !== '' && p.inventory !== null && p.inventory !== undefined) q.inventory = Number(p.inventory);
+          if (p.color) q.color = p.color;
+          return q;
+        }),
+        inventory_tracking: !!st.pool.inventory_tracking,
+        allow_when_exhausted: !!st.pool.allow_when_exhausted
+      };
+      const d = await API.put('/campaigns/' + st.slug + '/prize-pool', body);
+      st.msg = d.message || 'Prize pool saved.';
+      await pick(st.slug);
+      st.msg = 'Prize pool saved — a spin now draws from these prizes.';
+    } catch (e) { st.err = e.message; }
+    st.saving = false; renderApp();
+  };
+
+  const th = 'text-xs font-medium text-gray-500 text-left px-2 py-1';
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-bold">Prize Pools</h2>
+      ${st.pool && html`<button class="btn btn-sm btn-green" disabled=${st.saving} onClick=${save}>${st.saving ? 'Saving…' : 'Save prize pool'}</button>`}
+    </div>
+
+    <div class="card mb-4">
+      <label class="text-xs font-medium block mb-1 text-gray-500">Campaign</label>
+      <select class="input" style="max-width:420px" value=${st.slug} onChange=${e => pick(e.target.value)}>
+        ${st.campaigns.map(c => html`<option value=${c.slug} selected=${c.slug === st.slug}>${c.name} (${c.slug})</option>`)}
+      </select>
+      ${st.campaigns.length === 0 && html`<div class="text-sm text-gray-400 mt-2">No campaigns yet — create one on the Campaigns screen first.</div>`}
+    </div>
+
+    ${st.err && html`<div class="card mb-4" style="border-left:4px solid #dc2626"><div class="text-sm text-red-600">${st.err}</div></div>`}
+    ${st.msg && html`<div class="card mb-4" style="border-left:4px solid #16a34a"><div class="text-sm text-green-700">${st.msg}</div></div>`}
+
+    ${!st.pool ? html`<div class="card text-gray-400 text-sm">${st.slug ? 'Loading…' : 'Pick a campaign.'}</div>` : html`
+    <div class="card p-0 overflow-hidden">
+      <div class="px-4 pt-4 pb-2">
+        <div class="text-sm font-semibold">What a spin can win</div>
+        <div class="text-xs text-gray-500 mt-1">The chance column is the server's own calculation from the weights
+        it stored — what you read here is what the draw uses. A prize with a weight of 0 can never be won, so it is refused.</div>
+      </div>
+      <table class="table"><thead><tr>
+        <th>Prize</th><th>Weight</th><th>Chance</th><th>Type</th><th>Stock</th><th>Colour</th><th></th>
+      </tr></thead><tbody>
+        ${st.pool.prizes.map((p, i) => html`<tr>
+          <td><input class="input" style="min-width:180px" placeholder="e.g. Free coffee" value=${p.label} onInput=${e => { p.label = e.target.value; }} /></td>
+          <td><input class="input" style="width:90px" type="number" min="1" value=${p.weight} onInput=${e => { p.weight = e.target.value; renderApp(); }} /></td>
+          <td class="text-sm">${p.odds_percent != null ? p.odds_percent : liveOdds(p)}%</td>
+          <td><select class="input" value=${p.prize_type} onChange=${e => { p.prize_type = e.target.value; renderApp(); }}>
+            <option value="prize" selected=${p.prize_type === 'prize'}>prize</option>
+            <option value="lose" selected=${p.prize_type === 'lose'}>lose (try again)</option>
+            <option value="coupon" selected=${p.prize_type === 'coupon'}>coupon</option>
+            <option value="points" selected=${p.prize_type === 'points'}>points</option>
+            <option value="physical" selected=${p.prize_type === 'physical'}>physical</option>
+            <option value="discount" selected=${p.prize_type === 'discount'}>discount</option>
+          </select></td>
+          <td><input class="input" style="width:100px" type="number" min="0" placeholder="unlimited" value=${p.inventory} onInput=${e => { p.inventory = e.target.value; }} /></td>
+          <td><input type="color" value=${p.color} onInput=${e => { p.color = e.target.value; }} style="width:44px;height:32px;border:1px solid #e2e8f0;border-radius:6px" /></td>
+          <td><button class="btn btn-sm btn-red" onClick=${() => dropPrize(i)}>Remove</button></td>
+        </tr>`)}
+      </tbody></table>
+      <div class="px-4 py-3 flex items-center justify-between" style="border-top:1px solid #f1f5f9">
+        <button class="btn btn-sm btn-outline" onClick=${addPrize}>+ Add prize</button>
+        <div class="text-xs text-gray-500">Total weight <strong>${total()}</strong> — the chance column is each prize's share of it.</div>
+      </div>
+    </div>
+
+    <div class="card mt-4">
+      <div class="text-sm font-semibold mb-2">Stock rules</div>
+      <label class="flex items-center gap-2 text-sm mb-2"><input type="checkbox" checked=${st.pool.inventory_tracking} onChange=${e => { st.pool.inventory_tracking = e.target.checked; renderApp(); }} /> Count stock down as prizes are won (a prize with a stock number stops being offered once it reaches 0)</label>
+      <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${st.pool.allow_when_exhausted} onChange=${e => { st.pool.allow_when_exhausted = e.target.checked; renderApp(); }} /> Keep offering exhausted prizes anyway</label>
+      <div class="text-xs text-gray-500 mt-3">Nothing is paid out here — this decides what a spin can win. Whether a campaign is live is on the Campaigns screen.</div>
+    </div>
+    `}
+  </div>`;
+};
+
 const LoyaltyPrograms = () => {
   const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], badges: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false });
   if (!st._loaded) { st._loaded = true; loadPrograms(); }
@@ -2484,6 +2616,7 @@ const App = () => {
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
+    { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
     { id: 'tags', label: 'Tags', icon: '🏷' },
@@ -2500,7 +2633,7 @@ const App = () => {
     { id: 'calendar', label: 'Calendar', icon: '📅' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">
