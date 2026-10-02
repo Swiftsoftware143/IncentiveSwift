@@ -1422,20 +1422,30 @@ pub async fn get_referrals(
             .await?
             .flatten();
 
-    // Count referrals across ALL campaigns that reference this account's contact
+    // Referrals are CAMPAIGN-scoped: `campaign_referrals.referrer_contact_id` holds a `contacts.id`
+    // (see viral::ensure_campaign_referral), while this route is ACCOUNT-scoped. The account's
+    // referrals are therefore the referrals recorded in the account's OWN campaigns — the old
+    // `WHERE referrer_contact_id = <accounts.id>` could never match anything, because accounts.id
+    // is not a contacts.id and `accounts` has no contact row at all (kanban t_ad98b6ab).
     let referral_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM campaign_referrals WHERE referrer_contact_id = $1::uuid",
+        "SELECT COUNT(*) FROM campaign_referrals cr
+         JOIN campaigns c ON c.id = cr.campaign_id
+         WHERE c.account_id = $1",
     )
     .bind(account_id)
     .fetch_optional(&s.db)
     .await?
     .unwrap_or(0);
 
-    // Get the actual referral records
-    let referrals = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<Uuid>, String, String, bool, Option<chrono::DateTime<chrono::Utc>>, i32, i32, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, campaign_id, referrer_contact_id, referee_contact_id, referral_code, source, converted, converted_at, click_count, points_earned, created_at
-         FROM campaign_referrals WHERE referrer_contact_id = $1::uuid
-         ORDER BY created_at DESC LIMIT 50"
+    // Get the actual referral records. The campaign NAME rides along so the console tab can say
+    // which campaign a code belongs to — the account's referrals span all of its campaigns
+    // (kanban t_ad98b6ab).
+    let referrals = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<Uuid>, String, String, bool, Option<chrono::DateTime<chrono::Utc>>, i32, i32, chrono::DateTime<chrono::Utc>, String)>(
+        "SELECT cr.id, cr.campaign_id, cr.referrer_contact_id, cr.referee_contact_id, cr.referral_code, cr.source, cr.converted, cr.converted_at, cr.click_count, cr.points_earned, cr.created_at, c.name
+         FROM campaign_referrals cr
+         JOIN campaigns c ON c.id = cr.campaign_id
+         WHERE c.account_id = $1
+         ORDER BY cr.created_at DESC LIMIT 50"
     )
     .bind(account_id)
     .fetch_all(&s.db)
@@ -1456,6 +1466,7 @@ pub async fn get_referrals(
                 "click_count": r.8,
                 "points_earned": r.9,
                 "created_at": r.10,
+                "campaign_name": r.11,
             })
         })
         .collect();

@@ -136,24 +136,39 @@ pub async fn find_referral_by_code(
     Ok(result)
 }
 
+/// A fresh 6-character `[0-9a-z]` code.
+///
+/// The RNG is created and dropped INSIDE this synchronous helper on purpose. `rand::rngs::ThreadRng`
+/// is `!Send`, and the first caller of `generate_unique_referral_code` (kanban t_ad98b6ab) awaits it
+/// from an axum handler: a `ThreadRng` held across the `.await` in the retry loop made the HANDLER's
+/// future `!Send`, which surfaces as `Handler<_, _> is not satisfied` on the route in `main.rs`, not
+/// as a Send error on this function. The helper had 0 callers before, so the trap was latent.
+fn random_referral_code() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    (0..6)
+        .map(|_| {
+            let idx = rng.gen_range(0..36);
+            if idx < 10 {
+                (b'0' + idx as u8) as char
+            } else {
+                (b'a' + (idx - 10) as u8) as char
+            }
+        })
+        .collect()
+}
+
+fn random_referral_suffix() -> u32 {
+    use rand::Rng;
+    rand::thread_rng().gen_range(100000..999999)
+}
+
 pub async fn generate_unique_referral_code(
     pool: &PgPool,
     campaign_id: &Uuid,
 ) -> Result<String, AppError> {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let attempts = 0..20;
-    for _ in attempts {
-        let code: String = (0..6)
-            .map(|_| {
-                let idx = rng.gen_range(0..36);
-                if idx < 10 {
-                    (b'0' + idx as u8) as char
-                } else {
-                    (b'a' + (idx - 10) as u8) as char
-                }
-            })
-            .collect();
+    for _ in 0..20 {
+        let code = random_referral_code();
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT referral_code FROM campaign_referrals WHERE campaign_id = $1 AND referral_code = $2"
         )
@@ -166,7 +181,7 @@ pub async fn generate_unique_referral_code(
         }
     }
     // Fallback: append random suffix
-    Ok(format!("ref{}", rng.gen_range(100000..999999)))
+    Ok(format!("ref{}", random_referral_suffix()))
 }
 
 pub async fn create_referral(
@@ -205,6 +220,71 @@ pub async fn create_referral(
     })
 }
 
+/// The ONLY producer of a `campaign_referrals` row (kanban t_ad98b6ab).
+///
+/// Before this, the table had no writer anywhere: `create_referral` and
+/// `generate_unique_referral_code` below had 0 callers, so no reachable code path could create a
+/// code, and every reader was structurally inert. A participant who enters a campaign now gets a
+/// personal referral code for that campaign; the served `/play/{slug}` page shows the share link
+/// `{origin}/c/{slug}?ref={code}` returned alongside it, a click on that link moves `click_count`,
+/// and an entry that arrives with `?ref=` credits the referrer.
+///
+/// Idempotent per (campaign, referrer contact) through the
+/// `campaign_referrals_campaign_referrer_key` unique index: a second entry by the same contact
+/// reuses the code it already has (and a concurrent one returns whichever row won the index).
+///
+/// NAMESPACE (decided on this card): `referrer_contact_id` is a `contacts.id`. The credit path
+/// (`handle_referral_credit`) compares it against the EARNING contact's id, every sibling campaign
+/// table (`entries.contact_id`, `earn_click_log.contact_id`, `campaign_points_balance.contact_id`)
+/// is contacts.id keyed, and `accounts` has no contact_id column and no relation to `contacts` at
+/// all — so an `accounts.id` can never be a valid value here.
+pub async fn ensure_campaign_referral(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+    referrer_contact_id: &Uuid,
+    source: &str,
+) -> Result<CampaignReferral, AppError> {
+    // LITERAL SQL on purpose — both statements, with the column list spelled out twice. Gate rule 5d
+    // forbids building a statement at run time (`format!` around a query), and the duplication is the
+    // price of a literal; the fleet learned this on gate 5d (fleet/docs, skill
+    // runtime-built-sql-to-const-literal).
+    if let Some(existing) = sqlx::query_as::<_, CampaignReferral>(
+        r#"SELECT id, campaign_id, referrer_contact_id, referee_contact_id,
+                  referral_code, source, converted, converted_at,
+                  click_count, points_earned, created_at
+           FROM campaign_referrals
+           WHERE campaign_id = $1 AND referrer_contact_id = $2"#,
+    )
+    .bind(campaign_id)
+    .bind(referrer_contact_id)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(existing);
+    }
+
+    let code = generate_unique_referral_code(pool, campaign_id).await?;
+    // DO UPDATE (not DO NOTHING) so the statement always RETURNS a row: the arm re-writes the
+    // winner's own code, i.e. a no-op, and hands back the row that owns the index.
+    let row = sqlx::query_as::<_, CampaignReferral>(
+        r#"INSERT INTO campaign_referrals
+               (id, campaign_id, referrer_contact_id, referral_code, source)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (campaign_id, referrer_contact_id) DO UPDATE
+               SET referral_code = campaign_referrals.referral_code
+           RETURNING id, campaign_id, referrer_contact_id, referee_contact_id,
+                     referral_code, source, converted, converted_at,
+                     click_count, points_earned, created_at"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(campaign_id)
+    .bind(referrer_contact_id)
+    .bind(&code)
+    .bind(source)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
 pub async fn increment_referral_click(pool: &PgPool, referral_id: &Uuid) -> Result<(), AppError> {
     sqlx::query(r#"UPDATE campaign_referrals SET click_count = click_count + 1 WHERE id = $1"#)
         .bind(referral_id)

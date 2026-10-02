@@ -1164,11 +1164,13 @@ const LoyaltyPrograms = () => {
 
   // ── Referrals Tab ──
   const referralsTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Referrals</h2><div><span class="text-sm text-gray-500 mr-4">Code: <b>${st.referralCode||'None'}</b></span><span class="badge badge-blue">${st.referralCount||0} total</span></div></div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Referrals</h2><div><span class="text-sm text-gray-500 mr-4">Your account code: <b>${st.referralCode||'None'}</b></span><span class="badge badge-blue">${st.referralCount||0} campaign referrals</span></div></div>
+    <p class="text-sm text-gray-500 mb-3">Participants of your campaigns share a personal link (<code>/c/&lt;campaign&gt;?ref=&lt;code&gt;</code>, shown on the play page); a click counts and a friend who plays through it credits the sharer.</p>
     ${st.refLoading ? html`<div class="card text-center py-8 text-gray-400">Loading...</div>` : html`
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Code</th><th>Source</th><th>Converted</th><th>Clicks</th><th>Points</th><th>Date</th></tr></thead>
+      <table class="table"><thead><tr><th>Campaign</th><th>Code</th><th>Source</th><th>Converted</th><th>Clicks</th><th>Points</th><th>Date</th></tr></thead>
         <tbody>${st.referrals.map(r => html`<tr>
+          <td>${r.campaign_name||'—'}</td>
           <td class="font-mono">${r.referral_code||'?'}</td>
           <td>${r.source||'direct'}</td>
           <td>${r.converted ? html`<span class="badge badge-green">Yes</span>`: html`<span class="badge badge-yellow">No</span>`}</td>
@@ -1176,7 +1178,7 @@ const LoyaltyPrograms = () => {
           <td>${r.points_earned||0}</td>
           <td>${new Date(r.created_at).toLocaleDateString()}</td>
         </tr>`)}
-        ${st.referrals.length===0 && html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No referrals yet.</td></tr>`}
+        ${st.referrals.length===0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No referrals yet.</td></tr>`}
       </tbody></table>
     </div>`}
   </div>`;

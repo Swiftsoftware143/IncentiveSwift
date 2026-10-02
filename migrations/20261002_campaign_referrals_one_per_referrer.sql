@@ -1,0 +1,23 @@
+-- campaign_referrals had NO writer at all (kanban t_ad98b6ab). The table could only ever be empty,
+-- so every reader of it was structurally inert: GET /c/{slug}?ref=<code> click counting, the ?ref=
+-- credit in handle_referral_credit (whose ledger referral_credit_log was deliberately repaired by
+-- t_b1f346f9), the console's per-campaign "Referral stats" action, and the console
+-- Loyalty -> Referrals tab.
+--
+-- This card wires the producer: a participant who enters a campaign gets a personal referral code
+-- for that campaign, the served /play/{slug} page shows the share link, a click on
+-- /c/{slug}?ref=<code> moves click_count, and an entry that arrives with ?ref= credits the
+-- referrer (referral_credit_log row + campaign_points_balance + converted).
+--
+-- The producer needs ONE row per (campaign, referrer contact) so a second entry by the same contact
+-- reuses the code it already has instead of minting a second one; `viral::ensure_campaign_referral`
+-- upserts on this index. Rows are 0 today (and have always been 0), so nothing is deduplicated away.
+--
+-- Namespace (decided on this card): referrer_contact_id holds a `contacts.id`. The credit path
+-- compares it against the EARNING contact's id, every sibling campaign table
+-- (entries.contact_id, earn_click_log.contact_id, campaign_points_balance.contact_id) is
+-- contacts.id keyed, and `accounts` has no contact_id column and no relation to `contacts` at all
+-- -- so an accounts.id can never be a valid value here. The console tab's
+-- `WHERE referrer_contact_id = <accounts.id>` was the bug, not a competing convention.
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_referrals_campaign_referrer_key
+    ON campaign_referrals (campaign_id, referrer_contact_id);

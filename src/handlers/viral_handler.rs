@@ -136,7 +136,12 @@ async fn resolve_earn_contact(
 }
 
 /// Credit referrer if a valid referral code is present.
-async fn handle_referral_credit(
+///
+/// The code must name a `campaign_referrals` row for THIS campaign whose `referrer_contact_id` is
+/// a `contacts.id` (see `viral::ensure_campaign_referral`). A code that matches nothing is a no-op
+/// but is no longer SILENT — `audit` mode's `if let Ok(Some(..))` swallowed every miss, which is how
+/// the whole attribution end could sit dead without a log line (kanban t_ad98b6ab).
+pub(crate) async fn handle_referral_credit(
     state: &AppState,
     campaign_id: &Uuid,
     ref_code: Option<&str>,
@@ -144,9 +149,11 @@ async fn handle_referral_credit(
     action_type: &str,
     campaign_config: &Value,
 ) -> Result<(), AppError> {
-    if let Some(code) = ref_code {
-        if let Ok(Some(referral)) = viral::find_referral_by_code(&state.db, campaign_id, code).await
-        {
+    let Some(code) = ref_code.filter(|c| !c.is_empty()) else {
+        return Ok(());
+    };
+    match viral::find_referral_by_code(&state.db, campaign_id, code).await {
+        Ok(Some(referral)) => {
             if referral.referrer_contact_id != Some(*earning_contact_id) {
                 let referral_bonus = campaign_config
                     .get("referrer_points")
@@ -189,8 +196,23 @@ async fn handle_referral_credit(
                     viral::mark_referral_converted(&state.db, &referral.id, earning_contact_id)
                         .await?;
                 }
+            } else {
+                tracing::debug!(
+                    "referral code {code:?} on campaign {campaign_id} names the earning contact \
+                     itself — self-referral ignored"
+                );
             }
         }
+        // Not silent any more: a code that reaches the server but matches no campaign_referrals row
+        // is exactly the shape that hid this dead attribution end (kanban t_ad98b6ab).
+        Ok(None) => tracing::warn!(
+            "referral code {code:?} matches no campaign_referrals row for campaign {campaign_id} \
+             — the {action_type} credit did not happen"
+        ),
+        Err(e) => tracing::warn!(
+            "referral lookup for code {code:?} on campaign {campaign_id} failed: {e} — the \
+             {action_type} credit did not happen"
+        ),
     }
     Ok(())
 }
@@ -369,14 +391,32 @@ pub async fn campaign_share_link(
         return Err(AppError::Forbidden("Campaign is not active".to_string()));
     }
 
-    // Track referral click
-    if let Some(ref ref_code) = query.r#ref {
-        if let Ok(Some(referral)) =
-            viral::find_referral_by_code(&state.db, &campaign.id, ref_code).await
-        {
-            viral::increment_referral_click(&state.db, &referral.id).await?;
+    // Track referral click. The code is only carried into the redirect when it actually named a
+    // campaign_referrals row: a link with a dead code must not look like a referral to the play
+    // page (and a miss is logged, not swallowed — kanban t_ad98b6ab).
+    let mut carried: Option<String> = None;
+    if let Some(ref_code) = query.r#ref.as_deref().filter(|c| !c.is_empty()) {
+        match viral::find_referral_by_code(&state.db, &campaign.id, ref_code).await {
+            Ok(Some(referral)) => {
+                viral::increment_referral_click(&state.db, &referral.id).await?;
+                carried = Some(ref_code.to_string());
+            }
+            Ok(None) => tracing::warn!(
+                "share link for campaign {} carried referral code {ref_code:?} that matches no \
+                 campaign_referrals row — no click recorded",
+                campaign.slug
+            ),
+            Err(e) => tracing::warn!(
+                "share link for campaign {} failed to look up referral code {ref_code:?}: {e}",
+                campaign.slug
+            ),
         }
     }
+
+    let redirect = match carried.as_deref() {
+        Some(code) => format!("/play/{}?ref={}", campaign.slug, code),
+        None => format!("/play/{}", campaign.slug),
+    };
 
     Ok(Json(json!({
         "campaign": {
@@ -385,8 +425,8 @@ pub async fn campaign_share_link(
             "slug": campaign.slug,
             "type": campaign.r#type,
         },
-        "referral_code": query.r#ref,
-        "redirect": format!("/play/{}", campaign.slug),
+        "referral_code": carried,
+        "redirect": redirect,
     })))
 }
 

@@ -22,6 +22,12 @@ pub struct CreateEntryBody {
     pub utm_campaign: Option<String>,
     pub referrer_url: Option<String>,
     pub page_url: Option<String>,
+    /// The referral code this visitor arrived with (`?ref=` on a shared campaign link). The served
+    /// `/play/{slug}` page forwards it from the URL so the referrer is credited on the ENTRY — the
+    /// conversion that matters — and not only on an earn-link click (kanban t_ad98b6ab). Absent for
+    /// an organic visit, and a code that matches nothing credits nobody (and logs why).
+    #[serde(rename = "ref", default)]
+    pub referral_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -416,18 +422,76 @@ pub async fn create_entry(
     )
     .await?;
 
-    // 11. Return result
+    // 11. Referrals (kanban t_ad98b6ab).
+    //
+    // This handler is the PRODUCER `campaign_referrals` never had, and the served play page is why
+    // it is reachable — both directions land here:
+    //   * a visitor who arrived with `?ref=<code>` credits the referrer of that code (the same
+    //     crediting the earn link performs; a miss credits nobody and logs why);
+    //   * every participant gets their OWN code and share link for this campaign, which the play
+    //     page renders so the next participant can be brought in through it.
+    //
+    // Both are best-effort: the referral is a reward on top of the capture, so a referral write must
+    // never turn a valid entry into a 500. A failure is logged, never swallowed silently.
+    if let Some(ref_code) = body.referral_code.as_deref().filter(|c| !c.is_empty()) {
+        if let Err(e) = crate::handlers::viral_handler::handle_referral_credit(
+            &state,
+            &campaign.id,
+            Some(ref_code),
+            &contact_id,
+            "entry",
+            &campaign.config,
+        )
+        .await
+        {
+            tracing::warn!("entry {entry_id}: referral credit for code {ref_code:?} failed: {e}");
+        }
+    }
+
+    let (referral_code, referral_link) = match crate::db::viral::ensure_campaign_referral(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        "participant",
+    )
+    .await
+    {
+        Ok(r) => (
+            Some(r.referral_code.clone()),
+            Some(format!(
+                "{}/c/{}?ref={}",
+                crate::email::APP_URL,
+                campaign.slug,
+                r.referral_code
+            )),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                "entry {entry_id}: could not mint a campaign referral code for campaign {}: {e}",
+                campaign.slug
+            );
+            (None, None)
+        }
+    };
+
+    // 12. Return result
     //
     // `score` is included (additively) because it is the RESULT of a formula-driven mechanic: the
     // served calculator page renders it as "your result", and it is the same number the lifecycle
     // mail carries, so the customer and the mail can never disagree (kanban t_0e99038b). It is
     // `null` when the campaign produced none.
+    //
+    // `referral_code` / `referral_link` are this participant's own campaign referral share link
+    // (`{origin}/c/{slug}?ref={code}`), null only if minting failed — the play page renders them as
+    // the "share this campaign" affordance (kanban t_ad98b6ab).
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,
         "outcome": payload.outcome,
         "tags_applied": payload.tags_applied,
         "score": score,
+        "referral_code": referral_code,
+        "referral_link": referral_link,
     })))
 }
 

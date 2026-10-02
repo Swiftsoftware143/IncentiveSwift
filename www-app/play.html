@@ -301,7 +301,12 @@ label.opt:hover{border-color:var(--brand)}
       utm_medium: p.get('utm_medium') || null,
       utm_campaign: p.get('utm_campaign') || null,
       page_url: p.get('page_url') || window.location.href,
-      referrer_url: p.get('referrer_url') || document.referrer || null
+      referrer_url: p.get('referrer_url') || document.referrer || null,
+      // The referral code this visit arrived with -- /c/<slug>?ref=<code> redirects here carrying
+      // it, and a hand-shared /play/<slug>?ref=<code> works the same. Forwarded to the server on
+      // the ENTRY so the referrer is credited on the conversion, not only on an earn-link click
+      // (kanban t_ad98b6ab).
+      ref: p.get('ref') || null
     };
   })();
 
@@ -313,6 +318,7 @@ label.opt:hover{border-color:var(--brand)}
         email: el('email').value || null
       },
       campaign_slug: campaign.slug,
+      ref: tracked.ref,
       utm_source: tracked.utm_source,
       utm_medium: tracked.utm_medium,
       utm_campaign: tracked.utm_campaign,
@@ -345,8 +351,32 @@ label.opt:hover{border-color:var(--brand)}
     if (data && data.redemption_code) {
       html += '<div class="code">Your code: <b>' + escapeHtml(data.redemption_code) + '</b></div>';
     }
+    // The participant's OWN campaign referral link (kanban t_ad98b6ab) — the producer the
+    // campaign-scoped referral loop never had. Sharing it makes the click count, and credits this
+    // visitor when a friend enters through it. Only the response can say the link, so nothing is
+    // invented here: no link came back, no share box is shown.
+    if (data && data.referral_link) {
+      html += '<div style="margin-top:14px;padding-top:12px;border-top:1px dashed #cbd5e1">' +
+        '<p style="font-size:14px;color:#334155;margin:0 0 6px">Know someone who would enjoy this? Share your personal link — you earn campaign points when they play:</p>' +
+        '<div class="code" style="word-break:break-all">' + escapeHtml(data.referral_link) + '</div>' +
+        '<button type="button" id="copyRefLink" style="margin-top:8px;padding:8px 14px;border:0;border-radius:8px;background:#4f46e5;color:#fff;font-weight:600;cursor:pointer">Copy link</button>' +
+        '</div>';
+    }
     el('success').innerHTML = html;
     el('success').style.display = 'block';
+    var copyBtn = document.getElementById('copyRefLink');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        var link = (data && data.referral_link) || '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(link).then(function () {
+            copyBtn.textContent = 'Copied!';
+          }).catch(function () { copyBtn.textContent = link; });
+        } else {
+          copyBtn.textContent = link;
+        }
+      });
+    }
     if (data && data.redirect_url) {
       setTimeout(function () { window.location.href = data.redirect_url; }, 1800);
     }
