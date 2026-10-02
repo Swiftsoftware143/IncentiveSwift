@@ -273,8 +273,24 @@ pub async fn admin_guard(
     }
 
     // Sibling-bot / cron bypass using the shared internal sync key.
+    //
+    // SECURITY (kanban t_bc20ec78, measured live 2026-10-02). This branch used to return early
+    // whenever the key matched — BEFORE the Authorization header was ever looked at. Handlers on
+    // this surface that take an `AuthenticatedUser` then accepted *any* valid JWT, so a borrowed
+    // non-operator token inherited the key's authority: measured on the pre-fix binary,
+    // `POST /api/v1/admin/portfolio-sync` with `X-Internal-Sync-Key: <key>` + a `company_admin`
+    // JWT answered **200** and returned every account's portfolio companies (the same shape on
+    // `GET /api/v1/admin/tenants` and `GET /api/v1/admin/credits`). The key alone answers 401
+    // there (the extractor needs a credential), so the key-holder's real credential was the
+    // borrowed tenant token.
+    //
+    // The bypass is therefore narrowed to what it was written for — a service call, i.e. a
+    // request that presents NO Authorization header. A request that presents a JWT is still held
+    // to the operator role, so a tenant token can no longer ride the key. Key-only callers are
+    // unchanged (`GET /api/v1/admin/treasury/summary` 200 before and after; on the two routes
+    // that need a credential it is 401 before and after).
     let sync_key = state.config.internal_sync_key.clone();
-    if !sync_key.is_empty() {
+    if !sync_key.is_empty() && req.headers().get("Authorization").is_none() {
         let presented = req
             .headers()
             .get("X-Internal-Sync-Key")
