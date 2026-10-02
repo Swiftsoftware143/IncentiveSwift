@@ -103,8 +103,13 @@ pub async fn record_draw(
 }
 
 /// Check if a campaign already has a draw seed (has been drawn before).
+///
+/// `config->>'draw_seed'` is TEXT, not JSONB — decoding it as `serde_json::Value` raised
+/// `mismatched types ... JSONB ... TEXT` and answered 500 on any campaign that HAD been drawn
+/// (kanban t_9951bc00: the draw path's own "already been drawn -> 400" branch was a 500). The
+/// value is written as `to_jsonb(seed::text)`, so the text form is what this reads back.
 pub async fn has_existing_draw(pool: &PgPool, campaign_id: &Uuid) -> Result<bool, AppError> {
-    let seed: Option<serde_json::Value> =
+    let seed: Option<String> =
         sqlx::query_scalar("SELECT config->>'draw_seed' FROM campaigns WHERE id = $1")
             .bind(campaign_id)
             .fetch_optional(pool)

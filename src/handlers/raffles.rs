@@ -2,6 +2,7 @@
 
 use crate::db::{campaigns, contacts, raffles};
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::mechanics::raffle_draw;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -127,13 +128,18 @@ pub async fn enter_raffle(
 }
 
 /// POST /api/v1/raffles/:slug/draw — authenticated, seeded Fisher-Yates.
+///
+/// SECURITY (kanban t_9951bc00): the campaign is resolved under the CALLER's account, not by slug
+/// alone. This handler took an `AuthenticatedUser` and then threw it away, so any signed-in tenant
+/// could draw a winner for another tenant's raffle. A foreign or absent slug is a 404 (the app's
+/// convention — never 403), matching `campaign_for_caller` in every other campaign-authoring route.
 pub async fn draw(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
     // (402 before any draw is run for free/subtracted tiers).
@@ -182,13 +188,17 @@ pub async fn draw(
 }
 
 /// POST /api/v1/raffles/:slug/redraw — authenticated, must already have a seed.
+///
+/// SECURITY (kanban t_9951bc00): same defect and same fix as `draw` above — the campaign comes from
+/// the caller's own account, so a foreign slug is a 404 instead of a re-draw of another tenant's
+/// raffle.
 pub async fn redraw(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     // Find campaign
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
     // (402 before any redraw is run for free/subtracted tiers).
@@ -220,8 +230,11 @@ pub async fn redraw(
         ));
     }
 
-    // Get existing seed
-    let seed_value: Option<serde_json::Value> =
+    // Get existing seed. `config->>'draw_seed'` is TEXT (the value is written as
+    // `to_jsonb(seed::text)`), so it must NOT be decoded as `serde_json::Value`: that raised
+    // `mismatched types ... JSONB ... TEXT` and made this whole arm answer 500 for every caller,
+    // owner included (kanban t_9951bc00).
+    let seed_value: Option<String> =
         sqlx::query_scalar("SELECT config->>'draw_seed' FROM campaigns WHERE id = $1")
             .bind(campaign.id)
             .fetch_optional(&state.db)
@@ -229,7 +242,7 @@ pub async fn redraw(
             .flatten();
 
     let seed: u64 = match seed_value {
-        Some(s) => s.as_str().unwrap_or("0").parse().unwrap_or(0),
+        Some(s) => s.parse().unwrap_or(0),
         None => {
             return Err(AppError::BadRequest(
                 "No existing draw seed found. Must draw first.".to_string(),
