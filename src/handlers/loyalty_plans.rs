@@ -213,10 +213,10 @@ pub async fn subscribe(
         ("line_items[0][price_data][recurring][interval]", "month"),
         (
             "line_items[0][price_data][product_data][name]",
-            &format!(
-                "ZaarHub Loyalty — {} ({} ZC/mo)",
-                plan_name, monthly_zc_pool
-            ),
+            // Neutral on purpose. This line item is what a business sees on a receipt when it buys a
+            // loyalty plan, and the engine must not print one customer's brand onto everyone's invoice.
+            // The business's own points name belongs here once it is set on its programme.
+            &format!("Loyalty — {} ({} points/mo)", plan_name, monthly_zc_pool),
         ),
         ("line_items[0][quantity]", "1"),
         ("success_url", &success_url),

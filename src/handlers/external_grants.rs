@@ -66,7 +66,7 @@ pub async fn grant_credits(
     let credit_description = format!(
         "{} — {}: {} credits",
         req.reason,
-        req.program.as_deref().unwrap_or("zaarhub"),
+        req.program.as_deref().unwrap_or("default"),
         req.amount
     );
     let new_balance = add_credits_internal(
@@ -237,6 +237,13 @@ pub struct RegisterMemberRequest {
     pub member_type: String, // "visitor", "supplier", "business_owner"
     pub business_type: Option<String>, // supplier subtype: farm, wholesaler, etc.
     pub directory_slug: Option<String>, // which city directory (optional for network-wide)
+    /// WHICH loyalty programme to enrol in, named by the CALLER.
+    ///
+    /// This replaces a hardcoded default that resolved to ONE particular directory's programmes.
+    /// IncentiveSwift is the engine every app and every business runs on; it must not contain the name
+    /// business runs on; it must not contain the name of a single one of them. The callers are the ones
+    /// who know whose points these are — the businesses dictate what loyalty goes out.
+    pub program_slug: Option<String>,
     pub tags: Option<Vec<String>>,
 }
 
@@ -253,8 +260,8 @@ pub struct RegisterMemberResponse {
 
 /// POST /api/v1/loyalty/external/register-member
 /// Called by MultiDirectory on every member signup (visitor, supplier, business owner).
-/// Creates/finds the IS contact, enrolls in the appropriate ZaarHub loyalty program.
-/// This is the single entry point for all ZaarHub members into the loyalty system.
+/// Creates/finds the IS contact and enrols it in the programme the CALLER names.
+/// This is the single entry point for every directory's members into the loyalty system.
 pub async fn register_member(
     State(state): State<AppState>,
     Json(req): Json<RegisterMemberRequest>,
@@ -274,26 +281,33 @@ pub async fn register_member(
         )));
     }
 
-    // 3. Determine which loyalty program to enroll in
-    //    - suppliers → ZaarHub B2B Loop
-    //    - visitors + business_owners → ZaarHub Local Pass
-    //    - Also link to city directory campaign if directory_slug is provided
-    let (loyalty_program_slug, fallback_program_slug) = if req.member_type == "supplier" {
-        ("zaarhub-b2b-loop", "zaarhub-b2b-loop")
-    } else {
-        ("zaarhub-local-pass", "zaarhub-local-pass")
-    };
+    // 3. WHICH programme? The caller names it. Nothing here may assume a particular directory.
+    //    Resolution order:
+    //      (a) `program_slug` — the caller says exactly whose points these are. This is the contract.
+    //      (b) `directory-<directory_slug>` — the per-directory convention already used by the
+    //          directory visitor path, for callers that think in directories rather than programmes.
+    //      (c) nothing: refuse, and NAME what is missing. There is deliberately NO built-in default,
+    //          because a silent default is how one tenant's name ends up inside the engine.
+    //    A refusal here is visible to the caller at signup; a silent fallback would not be.
+    let resolved_slug: Option<String> =
+        match (req.program_slug.as_deref(), req.directory_slug.as_deref()) {
+            (Some(slug), _) if !slug.trim().is_empty() => Some(slug.trim().to_string()),
+            (_, Some(dir)) if !dir.trim().is_empty() => Some(format!("directory-{}", dir.trim())),
+            _ => None,
+        };
 
-    let lookup_slug = req
-        .directory_slug
-        .as_deref()
-        .unwrap_or(fallback_program_slug);
+    let lookup_slug = resolved_slug.ok_or_else(|| {
+        AppError::BadRequest(
+            "program_slug is required: name the loyalty programme this member belongs to              (or send directory_slug and the `directory-<slug>` programme is used).              IncentiveSwift does not pick a programme for you."
+                .to_string(),
+        )
+    })?;
 
     // 4. Look up loyalty program by slug
     let program = sqlx::query_as::<_, (Uuid, String, bool)>(
         "SELECT id, name, is_active FROM loyalty_programs WHERE slug = $1 AND is_active = true LIMIT 1"
     )
-    .bind(loyalty_program_slug)
+    .bind(&lookup_slug)
     .fetch_optional(&state.db)
     .await?;
 
@@ -301,8 +315,8 @@ pub async fn register_member(
         Some(p) => p,
         None => {
             return Err(AppError::NotFound(format!(
-                "Loyalty program '{}' not found. Create it in IncentiveSwift first.",
-                loyalty_program_slug
+                "Loyalty programme '{}' not found on this account. Create it first.",
+                lookup_slug
             )));
         }
     };
@@ -420,7 +434,7 @@ pub async fn register_member(
         req.member_type,
         email,
         program_name,
-        loyalty_program_slug,
+        lookup_slug,
         contact_id,
         member_id,
         already_existed

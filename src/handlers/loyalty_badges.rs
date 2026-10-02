@@ -1,5 +1,8 @@
 //! Loyalty Badge, Enrollment, QR, Scan, Dashboard & Integration Center handlers
-//! IncentiveSwift → ZaarHub loyalty integration (Phase 1–6)
+//! Loyalty badges for embedding apps — the participant/member badge contract.
+//!
+//! Nothing here names a particular caller: any directory, portal or app that embeds IncentiveSwift
+//! uses the same endpoints, and the badges it renders are its own.
 
 use axum::{
     extract::{Path, Query, State},
@@ -29,7 +32,7 @@ pub struct BadgeStatus {
 
 /// GET /api/v1/loyalty/badge/business/:business_id
 /// Returns whether a business is enrolled in any loyalty program.
-/// ZaarHub calls this to render the "Loyalty Participant" badge on business listings.
+/// The embedding app calls this to render the "Loyalty Participant" badge on business listings.
 pub async fn get_business_badge(
     State(state): State<AppState>,
     Path(business_id): Path<Uuid>,
@@ -112,7 +115,7 @@ pub async fn get_supplier_badge(
 
 /// GET /api/v1/loyalty/badge/member/:contact_id
 /// Returns whether a community member is enrolled in any loyalty program.
-/// ZaarHub calls this to render the "Loyalty Member" badge on user profiles.
+/// The embedding app calls this to render the "Loyalty Member" badge on user profiles.
 pub async fn get_member_badge(
     State(state): State<AppState>,
     Path(contact_id): Path<Uuid>,
@@ -154,7 +157,7 @@ pub async fn get_member_badge(
 
 /// GET /api/v1/loyalty/badges/program/:program_slug
 /// Bulk badge check — returns all enrolled entity IDs for a program.
-/// ZaarHub can call this once to know which businesses/members to badge on a page.
+/// The embedding app calls this once to know which businesses/members to badge on a page.
 #[derive(Debug, Deserialize)]
 pub struct BulkBadgeQuery {
     pub entity_type: Option<String>, // filter: business, supplier, member
@@ -230,7 +233,7 @@ pub struct EnrollEntityRequest {
 
 /// POST /api/v1/loyalty/enroll
 /// Enroll a business, supplier, or member in a loyalty program.
-/// Called from ZaarHub business portal, supplier portal, or on member sign-up.
+/// Called from the business portal, the supplier portal, or on member sign-up.
 /// Idempotent — enrolling an already-enrolled entity returns success.
 pub async fn enroll_entity(
     State(state): State<AppState>,
@@ -398,7 +401,7 @@ pub async fn unenroll_entity(
 /// GET /api/v1/loyalty/member/:member_id/qr
 /// Generate or retrieve the QR code for a loyalty member.
 /// The QR code encodes the member ID + a HMAC signature for validation.
-/// ZaarHub renders this as the scannable loyalty card in-app.
+/// The embedding app renders this as the scannable loyalty card.
 pub async fn get_member_qr(
     State(state): State<AppState>,
     Path(member_id): Path<Uuid>,

@@ -61,7 +61,7 @@ MultiDirectory's referral system (see its Admin Guide → Referral System) integ
 2. New user signs up via referral link (status: `pending`)
 3. Admin verifies the referral in MultiDirectory admin panel
 4. MultiDirectory calls `POST /api/v1/loyalty/external/grant-credits` with:
-   `{"email": "referrer@email.com", "amount": <zaarcash>, "reason": "referral", "program": "zaarhub"}`
+   `{"email": "referrer@email.com", "amount": <points>, "reason": "referral", "program": "default"}`
 5. IncentiveSwift grants credits; balance visible in MultiDirectory dashboards
 
 **Zaarcash amounts by direction:** visitor→visitor: 50, business→business: 200, business→visitor: 50, visitor→business: 100.
@@ -94,7 +94,6 @@ Credits are tracked at the account level with `credits_balance` and `credits_lif
 
 ### CORS Configuration
 IncentiveSwift uses predicate-based CORS — allowed origins are loaded at startup from the `ALLOWED_ORIGINS` environment variable (comma-separated list). Requests from non-matching origins are rejected. Default allowed origins include:
-- `zaarhub.com`, `www.zaarhub.com`
 - `funnelswift.net`, `www.funnelswift.net`
 - `incentiveswift.com`, `www.incentiveswift.com`
 - `localhost:5173`, `localhost:3000` (local dev)

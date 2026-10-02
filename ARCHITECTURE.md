@@ -43,11 +43,12 @@ path when a referred customer moves onto a paid plan:
 [App] → POST /api/v1/internal/affiliate/upgrade-event (header x-internal-key) → [FunnelSwift]
 ```
 
-### Rule 5: Zaarcash ≠ Affiliate
-- **Zaarcash** = loyalty points, owned by IncentiveSwift, used by ZaarHub
+### Rule 5: Loyalty points ≠ Affiliate
+- **Loyalty points** = the loyalty currency, owned by IncentiveSwift. Each programme names its own
+  points (name, icon, colour), so the currency reads as the business's, not as the engine's.
 - **Affiliate** = commission tracking, owned by FunnelSwift, used by ALL apps
 - These are COMPLETELY separate. Never merge them.
-- Multi-Directory: has loyalty proxy (Zaarcash) ONLY. No affiliate logic.
+- Multi-Directory: has a loyalty proxy ONLY. No affiliate logic.
 
 ## App Directory & Port Map
 
@@ -76,9 +77,9 @@ All apps share one Postgres instance (Docker: swift-postgres-1).
 - **Cross-app call**: `POST /api/v1/internal/affiliate/upgrade-event` (`x-internal-key` header) — a sibling's paid upgrade credits the referring affiliate. The plan→product sync route was RETIRED (kanban t_141162e7).
 
 ### 2. Multi-Directory — Directory SaaS
-- **Zaarcash loyalty proxy** → IncentiveSwift (routes loyalty requests)
+- **Loyalty proxy** → IncentiveSwift (routes loyalty requests)
 - **NO affiliate logic** (was removed, do NOT re-add)
-- Serves ZaarHub frontend + multiple tenant directories
+- Serves the app frontend + multiple tenant directories
 - Onboarding survey system for city/preference config
 
 ### 3. CoreSwift CRM — CRM Platform

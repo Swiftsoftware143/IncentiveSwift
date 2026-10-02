@@ -169,7 +169,7 @@ pub async fn list_api_keys(
 /// `FOREIGN KEY (tenant_id) REFERENCES accounts(id) ON DELETE CASCADE`, so binding the raw
 /// `COALESCE(accounts.tenant_id, accounts.id)` made `POST /api/v1/api-keys` return 500 for exactly
 /// those 3 accounts
-/// (Zaarhub@gmail.com, Swiftimpactsolutions@gmail.com, swiftsoftware143@yahoo.com) while the other
+/// (the three oldest tenant accounts) while the other
 /// 53 kept working (kanban t_47dcc978).
 ///
 /// The fix keeps that foreign key honest instead of dropping it: use `accounts.tenant_id` only

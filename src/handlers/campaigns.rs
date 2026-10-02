@@ -146,7 +146,7 @@ pub(crate) fn is_operator(user: &AuthenticatedUser) -> bool {
 /// behaviour rely on. The scope value is the caller's RAW `account_id` — the value `list_campaigns`
 /// filters on and `create_campaign` writes into the row — deliberately NOT
 /// `resolve_owner_account_id`, which maps the multi-account tenants to their `accounts.tenant_id`
-/// and would 404 a tenant on its own campaign (measured: `Zaarhub@gmail.com`'s
+/// and would 404 a tenant on its own campaign (measured on a tenant's own
 /// `campaigns.account_id` is its own id while its `accounts.tenant_id` names another row).
 pub(crate) async fn campaign_for_caller(
     state: &AppState,

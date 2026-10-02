@@ -1663,19 +1663,10 @@ pub async fn survey_response(
         return Err(AppError::BadRequest("Visitor email is required".into()));
     };
 
-    // Ensure this contact is enrolled in the ZaarHub Local Pass loyalty program
-    // and the city-specific loyalty program
-    let local_pass_program = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM loyalty_programs WHERE slug = 'zaarhub-local-pass' LIMIT 1",
-    )
-    .fetch_optional(&s.db)
-    .await?;
-
-    if let Some(program_id) = local_pass_program {
-        let _ = crate::db::loyalty::find_or_create_member(&s.db, &program_id, &contact_id).await;
-    }
-
-    // Also enroll in the city-specific loyalty program if one exists
+    // Enrol in the programme for THIS directory, resolved from the payload rather than from a name
+    // baked into the engine. There used to be an extra hardcoded enrolment above this one, pointing at
+    // a single directory's programme; it is gone. Whose points a visitor earns is the caller's answer,
+    // which is why the slug is built from `directory_slug` and not from a literal.
     let city_program_slug = format!("directory-{}", payload.directory_slug);
     let city_program: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM loyalty_programs WHERE slug = $1 LIMIT 1")

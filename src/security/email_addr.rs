@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn lookup_key_matches_what_normalize_stores() {
-        assert_eq!(lookup_key("  Zaarhub@gmail.com "), "zaarhub@gmail.com");
+        assert_eq!(lookup_key("  Mixed@Case.COM "), "mixed@case.com");
         // A malformed value has no failure arm here — it just matches nothing.
         assert_eq!(lookup_key("bad"), "bad");
     }

@@ -114,7 +114,7 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 
 **Referral grant payload:**
 ```json
-{"email": "referrer@email.com", "amount": 50, "reason": "referral", "program": "zaarhub"}
+{"email": "referrer@email.com", "amount": 50, "reason": "referral", "program": "default"}
 ```
 
 **Directions & amounts:** visitor→visitor: 50, business→business: 200 (2× bonus), business→visitor: 50, visitor→business: 100 Zaarcash.
