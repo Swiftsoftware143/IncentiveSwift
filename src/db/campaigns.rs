@@ -315,7 +315,7 @@ pub async fn create_campaign(
     .bind(input.iqs_funnel_id.as_deref())
     .execute(pool)
     .await
-    .map_err(map_iqs_gate_unique_violation)?;
+    .map_err(map_campaign_write_violation)?;
 
     // Fetch back the created campaign
     get_campaign_by_slug(pool, &slug).await
@@ -360,13 +360,35 @@ pub enum IqsGate {
     Set(Uuid),
 }
 
-/// Turn the DB backstop for one-funnel-one-campaign into the same 409 the handler's pre-check
-/// answers (kanban t_6c8d8e40).
+/// The field-level refusal a caller-supplied `loyalty_program_id` earns when the caller cannot use
+/// it (kanban t_28431966). ONE message for "no such program" and "another account's program", so the
+/// response cannot be used as an existence oracle (skill fk-write-refusal-field-level-4xx).
+pub const LOYALTY_PROGRAM_REFUSAL: &str =
+    "loyalty_program_id must name a loyalty program of this account.";
+
+/// The exact constraint `campaigns.loyalty_program_id` can trip (kanban t_28431966).
+///
+/// Measured live 2026-10-02 (binary 5d0f5a81166787ed): binding an id that references no
+/// `loyalty_programs` row raised `23503` on `campaigns_loyalty_program_id_fkey` and surfaced as
+/// `500 {"error":"Internal server error"}`. The handler's pre-check refuses that id first; this is
+/// the check→write race backstop. Kept PURE so it is unit-tested both ways — a blanket `23503`
+/// translation would turn every FK failure (including this table's tenant integrity defects) into a
+/// 4xx and hide real bugs.
+pub(crate) fn is_loyalty_program_fk_violation(
+    code: Option<&str>,
+    constraint: Option<&str>,
+) -> bool {
+    code == Some("23503") && constraint == Some("campaigns_loyalty_program_id_fkey")
+}
+
+/// One mapping for a campaign write's error arm: the IQS gate's unique index becomes the handler's
+/// own 409, and the loyalty-program pointer becomes the handler's own 4xx. Everything else keeps
+/// the generic database arm.
 ///
 /// `campaigns_iqs_funnel_id_uidx` (migrations/20261002_iqs_one_campaign_per_funnel.sql) can only
 /// fire when two writers race past the pre-check; without this mapping the loser would see a 500 for
 /// a request the API already knows how to explain.
-fn map_iqs_gate_unique_violation(e: sqlx::Error) -> AppError {
+fn map_campaign_write_violation(e: sqlx::Error) -> AppError {
     if let sqlx::Error::Database(db) = &e {
         if db.constraint() == Some("campaigns_iqs_funnel_id_uidx") {
             return AppError::Conflict(
@@ -374,6 +396,9 @@ fn map_iqs_gate_unique_violation(e: sqlx::Error) -> AppError {
                  at a time — detach it from the other campaign first."
                     .to_string(),
             );
+        }
+        if is_loyalty_program_fk_violation(db.code().as_deref(), db.constraint()) {
+            return AppError::NotFound(LOYALTY_PROGRAM_REFUSAL.to_string());
         }
     }
     AppError::from(e)
@@ -434,7 +459,7 @@ pub async fn update_campaign(
     .bind(new_iqs_funnel_id)
     .execute(pool)
     .await
-    .map_err(map_iqs_gate_unique_violation)?;
+    .map_err(map_campaign_write_violation)?;
 
     get_campaign_by_id(pool, id).await
 }
@@ -530,5 +555,42 @@ fn generate_slug(name: &str) -> String {
         Uuid::new_v4().to_string()
     } else {
         format!("{}-{}", slug, &Uuid::new_v4().to_string()[..8])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_loyalty_program_fk_violation, LOYALTY_PROGRAM_REFUSAL};
+
+    /// The 23503 backstop cannot be probed live (it only fires inside the pre-check→write window),
+    /// so the DECISION is pinned here both ways (kanban t_28431966).
+    #[test]
+    fn only_the_loyalty_program_pointer_earns_the_4xx() {
+        assert!(is_loyalty_program_fk_violation(
+            Some("23503"),
+            Some("campaigns_loyalty_program_id_fkey")
+        ));
+        // This table's other foreign keys keep the generic 500.
+        assert!(!is_loyalty_program_fk_violation(
+            Some("23503"),
+            Some("campaigns_account_id_fkey")
+        ));
+        // A different SQLSTATE (e.g. a unique violation) is not this rule.
+        assert!(!is_loyalty_program_fk_violation(
+            Some("23505"),
+            Some("campaigns_loyalty_program_id_fkey")
+        ));
+        // An unnamed constraint or no code at all must not be guessed at.
+        assert!(!is_loyalty_program_fk_violation(Some("23503"), None));
+        assert!(!is_loyalty_program_fk_violation(
+            None,
+            Some("campaigns_loyalty_program_id_fkey")
+        ));
+    }
+
+    /// The refusal message names the offending FIELD (the card's acceptance item 3).
+    #[test]
+    fn the_refusal_names_the_field() {
+        assert!(LOYALTY_PROGRAM_REFUSAL.contains("loyalty_program_id"));
     }
 }

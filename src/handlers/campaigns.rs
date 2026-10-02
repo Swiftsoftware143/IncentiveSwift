@@ -87,6 +87,49 @@ async fn resolve_iqs_gate(
     Ok(IqsGate::Set(funnel_id))
 }
 
+/// Validate a caller-supplied `loyalty_program_id` BEFORE the write (kanban t_28431966).
+///
+/// Measured live 2026-10-02 (binary 5d0f5a81166787ed): `PUT /api/v1/campaigns/<slug>
+/// {"loyalty_program_id":"<random uuid>"}` answered `500 {"error":"Internal server error"}` —
+/// `campaigns_loyalty_program_id_fkey` raises SQLSTATE 23503 and nothing mapped it. Same rule as the
+/// survey gate above (its sibling on this handler) and the same shape: the request boundary refuses
+/// a bad id with a field-level 4xx BEFORE any write, so the row is left untouched.
+///
+/// The predicate is the console picker's OWN (src/handlers/loyalty.rs `list_programs`): the editor
+/// offers `lp` where `c.account_id = $1 OR lp.campaign_id IS NULL`, so everything that screen offers
+/// must stay writable and everything it does not offer is refused. That second clause matters: the
+/// FK references `loyalty_programs(id)` GLOBALLY, so another tenant's real program SATISFIES it —
+/// only a pre-write ownership check can refuse that (measured: it was accepted -> 200 before this).
+///
+/// Tri-state spelling is the writer's own (`Option<Option<Uuid>>`): only `Some(Some(id))` is a
+/// caller-supplied pointer worth validating; `None` (absent) keeps and `Some(None)` (null) clears.
+async fn resolve_loyalty_program_gate(
+    state: &AppState,
+    account_id: &uuid::Uuid,
+    requested: Option<Option<uuid::Uuid>>,
+) -> Result<(), AppError> {
+    let Some(id) = requested.flatten() else {
+        return Ok(());
+    };
+    let usable: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM loyalty_programs lp \
+         LEFT JOIN campaigns c ON c.id = lp.campaign_id \
+         WHERE lp.id = $1 AND (c.account_id = $2 OR lp.campaign_id IS NULL)",
+    )
+    .bind(id)
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await?;
+    if usable == 0 {
+        // ONE message for "no such program" and "another account's program": a distinct response for
+        // each would let a caller probe which ids exist (skill fk-write-refusal-field-level-4xx).
+        return Err(AppError::NotFound(
+            campaigns::LOYALTY_PROGRAM_REFUSAL.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Does this caller act ACROSS accounts? (kanban t_734f1f94)
 ///
 /// The operator audience is `admin`/`super_admin` — the same pair `security::auth::admin_guard`
@@ -238,6 +281,12 @@ pub async fn create_campaign(
     // only the id/ownership rules can refuse here.
     let iqs_gate = resolve_iqs_gate(&state, &account_id, body.iqs_funnel_id.as_ref(), None).await?;
 
+    // The same rule applies on the creation door (kanban t_28431966): this INSERT binds the same
+    // campaign.loyalty_program_id FK, so an id this caller cannot use must be refused here too
+    // instead of surfacing the INSERT's 23503 as a 500. Reached only after the plan gate above, so
+    // the mechanic-403 a plan-less tenant sees is unchanged.
+    resolve_loyalty_program_gate(&state, &account_id, Some(body.loyalty_program_id)).await?;
+
     let input = campaigns::CreateCampaignInput {
         name: name.to_string(),
         r#type: body.r#type,
@@ -334,6 +383,11 @@ pub async fn update_campaign(
         Some(&campaign.id),
     )
     .await?;
+
+    // Validate the requested loyalty program BEFORE any write (kanban t_28431966), same shape as the
+    // survey gate above: an id this caller cannot use must never reach the FK (a 500), and the
+    // refusal must leave the row untouched.
+    resolve_loyalty_program_gate(&state, &campaign.account_id, body.loyalty_program_id).await?;
 
     let campaign = campaigns::update_campaign(
         &state.db,
