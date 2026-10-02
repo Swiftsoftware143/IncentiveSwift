@@ -171,6 +171,9 @@
       <a href="#settings" class="nav-item" onclick="closeMobile()"><span class="nav-icon">⚙️</span> Settings</a>
       <div class="section-title">Support</div>
       <a href="#faq" class="nav-item" onclick="closeMobile()"><span class="nav-icon">❓</span> FAQ</a>
+          <div class="section-title">Knowledge Base</div>
+      <a href="kb.html" class="nav-item">Player walkthrough (users)</a>
+      <a href="kb.html" class="nav-item">Admin walkthrough (account holders)</a>
     </nav>
     <div class="sidebar-footer">&copy; 2026 IncentiveSwift &mdash; Campaign &amp; Survey Platform</div>
   </aside>
@@ -398,13 +401,29 @@
       <h3>Attaching an IQS Survey (Optional)</h3>
       <p>You can gate any campaign with an IQS survey. When enabled, users must complete the survey before they can enter the campaign. To attach a survey:</p>
       <ol class="step-list" start="7">
-        <li><strong>Open Campaign Editor</strong><p>Edit an existing campaign or create a new one.</p></li>
-        <li><strong>Select Survey</strong><p>Find the <strong>Qualifying Survey</strong> section in the editor. Choose an IQS funnel from the dropdown, or leave it as "None" to skip.</p></li>
-        <li><strong>Save</strong><p>Click Save. Now when users visit the campaign link, they'll complete the survey first. Only qualified respondents (based on score thresholds) get access to the campaign.</p></li>
+        <li><strong>Open the survey</strong><p>Go to <strong>IQS</strong> in the sidebar and open the funnel you want to use as the gate.</p></li>
+        <li><strong>Choose the campaign</strong><p>In the funnel editor's <strong>Campaign</strong> box pick the campaign this survey should gate, then click <strong>Save Funnel</strong>. That list marks the campaign it currently gates with a &ldquo;&#10003; gated&rdquo;.</p></li>
+        <li><strong>Detach it</strong><p>To remove a gate, set the same box back to <strong>&mdash; none &mdash;</strong> and save. The campaign then runs without the survey.</p></li>
       </ol>
 
       <div class="alert alert-info">
+        <strong>One campaign per survey:</strong> a survey gates <strong>one</strong> campaign at a time. Attaching it to a second campaign while the first still has it is refused with a message naming the campaign that holds it &mdash; detach it there first (set that funnel's Campaign box to &ldquo;&mdash; none &mdash;&rdquo; and save). Inside the builder this is automatic: picking a different campaign moves the gate in the same save.
+      </div>
+
+      <div class="alert alert-info">
         <strong>How it works:</strong> When a campaign has an attached IQS funnel, the play page detects it automatically. Users see the survey questions first, then based on their score (qualified/disqualified), they're either allowed to enter the campaign or shown a disqualified message with optional redirect.
+      </div>
+
+      <h3>Promo Codes and Their Expiry Date</h3>
+      <p>A promo code is a <strong>campaign secret code</strong>: the customer types it on the campaign and is credited its points. Manage them from the admin console's <strong>16 &middot; Campaign secret codes</strong> panel. <strong>Create code</strong> takes <code>{"code":"SPRING25","points":100,"max_uses":50,"expires_at":"2030-01-01T00:00:00Z"}</code> &mdash; leave <code>expires_at</code> out of the body to create a code that never expires. The code list's Expires column shows <strong>Never</strong> for a code with no expiry date.</p>
+      <div class="alert alert-info">
+        <strong>Removing an expiry date (or changing it):</strong> the panel's <strong>Update code</strong> action treats <code>expires_at</code> as three separate instructions, so an expiry can be taken <em>off</em> a code, not only set:
+        <ul>
+          <li><code>{"expires_at": null}</code> &mdash; <strong>remove</strong> the expiry. The code then never expires again, and the list shows <strong>Never</strong>.</li>
+          <li><code>{"expires_at": "2031-06-30T00:00:00Z"}</code> &mdash; set / change the expiry to that moment.</li>
+          <li>leaving the <code>expires_at</code> key out of the body &mdash; leave the existing date untouched. Omitting the key is <em>not</em> the same as sending <code>null</code>: only the explicit <code>null</code> clears it.</li>
+        </ul>
+        The same applies to <code>source_tag</code> on a survey funnel and to a question's <strong>CRM Field</strong> / <strong>CRM Field Type</strong>: blanking those boxes in the survey builder and saving now clears them, and <code>loyalty_program_id</code> is detachable the same way when set through the API or the console's JSON panels.
       </div>
 
       <h2 id="prize-delivery">🎁 Prize Delivery</h2>
@@ -571,6 +590,7 @@
 
       <h2 id="iqs-campaign">🎯 Survey + Campaigns</h2>
       <p>You can attach an IQS survey as a qualification gate before any campaign type. This creates a two-step flow: survey first, then campaign for qualified respondents.</p>
+      <p>A survey gates <strong>one campaign at a time</strong>: attaching it to a campaign that already runs another survey is refused, and detaching it is what frees it for the next one (see <em>Attaching an IQS Survey</em> above).</p>
 
       <h3>How the Flow Works</h3>
       <ol class="step-list">
