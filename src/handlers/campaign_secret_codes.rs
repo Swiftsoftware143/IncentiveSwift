@@ -1,3 +1,4 @@
+use crate::handlers::tri_state::double_option;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -39,6 +40,10 @@ pub struct UpdateSecretCodeBody {
     pub points: Option<i32>,
     pub max_uses: Option<i32>,
     pub is_active: Option<bool>,
+    /// Tri-state expiry (kanban t_2371942d): absent = keep, `null` = clear (the code never expires
+    /// again), a timestamp = set. The plain `Option<Option<DateTime>>` read `null` as "keep", and
+    /// the writer's `COALESCE` collapsed it a second time — so there was no way to clear an expiry.
+    #[serde(default, deserialize_with = "double_option")]
     pub expires_at: Option<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
@@ -202,17 +207,27 @@ pub async fn update_secret_code(
     Path((_cid, code_id)): Path<(Uuid, Uuid)>,
     Json(b): Json<UpdateSecretCodeBody>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    // `expires_at` is a TWO-layer collapse (kanban t_2371942d). The request boundary must be
+    // tri-state (`#[serde(default, deserialize_with = "double_option")]` on the field above) so
+    // `null` is distinguishable from an absent key at all — and the SQL must be too. The old
+    // `expires_at=COALESCE($5,expires_at)` bound `Some(None)` ("clear") as NULL and then read that
+    // NULL as "keep", so even a correct deserializer could not clear the column. `CASE WHEN $5` is
+    // the instruction itself: spoken-and-null clears, absent keeps, a value sets.
+    let set_expires_at = b.expires_at.is_some();
+    let expires_at = b.expires_at.flatten();
     let sc = sqlx::query_as::<_, CampaignSecretCode>(
         "UPDATE campaign_secret_codes SET
          code=COALESCE($1,code),points=COALESCE($2,points),
          max_uses=COALESCE($3,max_uses),is_active=COALESCE($4,is_active),
-         expires_at=COALESCE($5,expires_at) WHERE id=$6 RETURNING *",
+         expires_at=CASE WHEN $5 THEN $6::timestamptz ELSE expires_at END
+         WHERE id=$7 RETURNING *",
     )
     .bind(&b.code)
     .bind(b.points)
     .bind(b.max_uses)
     .bind(b.is_active)
-    .bind(b.expires_at)
+    .bind(set_expires_at)
+    .bind(expires_at)
     .bind(code_id)
     .fetch_one(&app.db)
     .await

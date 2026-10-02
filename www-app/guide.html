@@ -414,6 +414,18 @@
         <strong>How it works:</strong> When a campaign has an attached IQS funnel, the play page detects it automatically. Users see the survey questions first, then based on their score (qualified/disqualified), they're either allowed to enter the campaign or shown a disqualified message with optional redirect.
       </div>
 
+      <h3>Promo Codes and Their Expiry Date</h3>
+      <p>A promo code is a <strong>campaign secret code</strong>: the customer types it on the campaign and is credited its points. Manage them from the admin console's <strong>16 &middot; Campaign secret codes</strong> panel. <strong>Create code</strong> takes <code>{"code":"SPRING25","points":100,"max_uses":50,"expires_at":"2030-01-01T00:00:00Z"}</code> &mdash; leave <code>expires_at</code> out of the body to create a code that never expires. The code list's Expires column shows <strong>Never</strong> for a code with no expiry date.</p>
+      <div class="alert alert-info">
+        <strong>Removing an expiry date (or changing it):</strong> the panel's <strong>Update code</strong> action treats <code>expires_at</code> as three separate instructions, so an expiry can be taken <em>off</em> a code, not only set:
+        <ul>
+          <li><code>{"expires_at": null}</code> &mdash; <strong>remove</strong> the expiry. The code then never expires again, and the list shows <strong>Never</strong>.</li>
+          <li><code>{"expires_at": "2031-06-30T00:00:00Z"}</code> &mdash; set / change the expiry to that moment.</li>
+          <li>leaving the <code>expires_at</code> key out of the body &mdash; leave the existing date untouched. Omitting the key is <em>not</em> the same as sending <code>null</code>: only the explicit <code>null</code> clears it.</li>
+        </ul>
+        The same applies to <code>source_tag</code> on a survey funnel and to a question's <strong>CRM Field</strong> / <strong>CRM Field Type</strong>: blanking those boxes in the survey builder and saving now clears them, and <code>loyalty_program_id</code> is detachable the same way when set through the API or the console's JSON panels.
+      </div>
+
       <h2 id="prize-delivery">🎁 Prize Delivery</h2>
       <p>Each prize type supports a different delivery mechanism. Configure per-prize delivery in the campaign editor.</p>
       <p>Delivery lives on the campaign row itself: open <strong>Campaigns</strong> and click the <strong>Delivery</strong> button beside <strong>Edit</strong> and <strong>Embed</strong>. The panel keeps the win leg and the lose leg separate, so a winning player and an unsuccessful one can be sent to different places. For each leg it sets the redirect URL and the message the player lands on, the email subject and body sent to the player, which integration targets receive the webhook (chosen from the targets you configured in Integration Hub), and whether the autoresponder fires. Saving writes the delivery block only — the rest of the campaign's configuration is passed through untouched.</p>

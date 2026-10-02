@@ -12,6 +12,7 @@
 
 use crate::delivery::coreswift_external::IqsAnswerField;
 use crate::error::AppError;
+use crate::handlers::tri_state::double_option;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -108,6 +109,10 @@ pub struct UpdateFunnelInput {
     pub funnel_type: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
+    /// Tri-state (kanban t_2371942d): absent = keep, `null` = clear, a value = set. Before this the
+    /// plain `Option<Option<String>>` read `null` as "keep", so a funnel's source tag could never be
+    /// removed. See `crate::handlers::tri_state::double_option`.
+    #[serde(default, deserialize_with = "double_option")]
     pub source_tag: Option<Option<String>>,
     pub theme: Option<Value>,
     pub config: Option<Value>,
@@ -136,7 +141,13 @@ pub struct UpdateQuestionInput {
     pub required: Option<bool>,
     pub options: Option<Value>,
     pub config: Option<Value>,
+    /// Tri-state (kanban t_2371942d): the served builder (`www-app/iqs.html`) sends
+    /// `crm_field: q.crm_field || null` when the operator blanks the box, and before this the
+    /// writer read that `null` as "keep" — a CRM mapping could never be removed from the UI.
+    #[serde(default, deserialize_with = "double_option")]
     pub crm_field: Option<Option<String>>,
+    /// Same tri-state as `crm_field` — the served builder blanks both together.
+    #[serde(default, deserialize_with = "double_option")]
     pub crm_field_type: Option<Option<String>>,
 }
 

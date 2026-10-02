@@ -7,6 +7,8 @@ pub mod health;
 pub mod knowledge_base_handler;
 pub mod loyalty;
 pub mod raffles;
+/// Shared tri-state request-field deserializer (`absent` / JSON `null` / value).
+pub(crate) mod tri_state;
 pub use loyalty::*;
 pub mod loyalty_v2;
 pub use loyalty_v2::*;

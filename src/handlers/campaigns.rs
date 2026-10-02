@@ -3,6 +3,7 @@
 use crate::access::feature_gate;
 use crate::db::campaigns::{self, Campaign, IqsGate};
 use crate::error::AppError;
+use crate::handlers::tri_state::double_option;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -11,24 +12,6 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-/// Deserialize a tri-state field: absent -> `None`, JSON `null` -> `Some(None)`, value ->
-/// `Some(Some(v))` (kanban t_6c8d8e40).
-///
-/// `Option<Option<T>>` on its own does NOT give this: serde's `Option` impl answers the OUTER `None`
-/// for `null`, so `{"iqs_funnel_id": null}` — the served IQS builder's own ungate arm — was
-/// indistinguishable from "the field was not sent" and `db::campaigns::update_campaign` read it as
-/// "keep what is there". There was no spelling of that request which cleared the column.
-///
-/// `deserialize_with` is only invoked when the key IS present, and the inner `Option` answers `None`
-/// for `null`; the outer `Some` is what records "the caller spoke". `default` covers the absent key.
-fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    Deserialize::deserialize(de).map(Some)
-}
 
 /// Resolve and validate an IQS-gate request into the write (kanban t_6c8d8e40).
 ///
@@ -287,6 +270,10 @@ pub struct UpdateCampaignBody {
     pub delivery_method: Option<String>,
     pub delivery_config: Option<Value>,
     pub branding: Option<Value>,
+    /// Tri-state loyalty program (kanban t_2371942d): absent = leave it, `null` = detach, an id =
+    /// attach. The plain `Option<Option<Uuid>>` read `null` as "keep", so a campaign's loyalty
+    /// program could never be detached. See `double_option`.
+    #[serde(default, deserialize_with = "double_option")]
     pub loyalty_program_id: Option<Option<uuid::Uuid>>,
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
