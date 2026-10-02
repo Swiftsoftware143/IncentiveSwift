@@ -197,24 +197,18 @@ pub async fn list(
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/v1/email-templates/:id
+// GET /api/v1/email-templates/:id — DELETED (kanban t_4f20bd5e)
+//
+// Measured on binary 025cb7af (live 2026-10-02): no served surface called it. The only caller
+// candidate, the console's Edit modal, is prefilled from the row object the LIST already returned
+// (`show(tpl)`, www-admin/index.html) and that list runs the SAME 10-column SELECT list this handler
+// ran, so the route could only ever re-serve bytes the caller already held. It was also the family's
+// only UNSCOPED read (`WHERE id = $1`, with `_user: AuthenticatedUser` unused) — deleting it closes
+// the missing-caller axis and the unscoped-read axis together. A census of every served root
+// (www-admin/www-app/www) and the live n8n instance (39 workflows) found zero other callers; the
+// sibling static segments `/email-templates/merge-fields` and `/email-templates/types` keep working.
+// The path stays registered (PUT/DELETE own it), so a GET on it now answers 405.
 // ---------------------------------------------------------------------------
-pub async fn get(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    _user: AuthenticatedUser,
-) -> Result<Json<Value>, AppError> {
-    let item = sqlx::query_as::<_, EmailTemplate>(
-        "SELECT id, template_type, name, subject, body, html_body, is_default, aid, created_at, updated_at
-         FROM email_templates WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Email template not found".to_string()))?;
-
-    Ok(Json(json!({"item": item})))
-}
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/email-templates — create account override template

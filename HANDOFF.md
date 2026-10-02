@@ -109,7 +109,7 @@ IncentiveSwift has a database-backed email template system (`email_templates` ta
 | Method | Path | Description |
 |---|---|---|
 | GET/POST | `/api/email-templates` | List / Create |
-| GET/PUT/DELETE | `/api/email-templates/:id` | Read / Update / Delete |
+| PUT/DELETE | `/api/email-templates/:id` | Update / Delete |
 | GET | `/api/email-templates/merge-fields` | Available merge fields |
 
 **Template fields:** name, template_type, subject, body (txt), html_body, is_html, is_default

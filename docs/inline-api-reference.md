@@ -350,7 +350,6 @@ NAME and is find-or-created for the account, `""` clears it on `PUT`.
 |--------|------|------|---------|-------------|
 | GET | `/email-templates` | JWT | `email_templates_handler::list` | List templates |
 | POST | `/email-templates` | JWT | `email_templates_handler::create` | Create template |
-| GET | `/email-templates/:id` | JWT | `email_templates_handler::get` | Get template |
 | PUT | `/email-templates/:id` | JWT | `email_templates_handler::update` | Update template |
 | DELETE | `/email-templates/:id` | JWT | `email_templates_handler::delete` | Delete template |
 

@@ -1161,10 +1161,13 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::email_templates_handler::list)
                 .post(handlers::email_templates_handler::create),
         )
+        // kanban t_4f20bd5e: the `get(..)` arm was REMOVED — GET /api/v1/email-templates/:id had no
+        // caller in any served surface (the console's Edit modal is prefilled from the row the LIST
+        // already returned, with the same 10-column SELECT list) and was the family's only unscoped
+        // read (`WHERE id = $1` with an unused caller). PUT/DELETE keep the path registered.
         .route(
             "/api/v1/email-templates/:id",
-            get(handlers::email_templates_handler::get)
-                .put(handlers::email_templates_handler::update)
+            put(handlers::email_templates_handler::update)
                 .delete(handlers::email_templates_handler::delete),
         )
         // Settings routes
