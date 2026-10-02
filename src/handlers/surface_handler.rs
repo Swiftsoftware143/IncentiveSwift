@@ -3,7 +3,7 @@
 use crate::error::AppError;
 use crate::handlers::api_keys::resolve_owner_account_id;
 use crate::security::auth::AuthenticatedUser;
-use crate::security::public_projection::public_config;
+use crate::security::public_projection::{public_config, public_delivery_config};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -577,7 +577,10 @@ pub async fn get_play_view(
         "theme": theme,
         "outcome_tags": outcome_tags,
         "delivery_method": delivery_method,
-        "delivery_config": delivery_config,
+        // Anonymous projection (kanban t_10559717): this column carries the direct-API `api_key` /
+        // `webhook_url` vocabulary; the served play shell reads no part of it. See
+        // `security::public_projection::public_delivery_config`.
+        "delivery_config": public_delivery_config(&delivery_config),
         "company": company_info,
     });
 

@@ -206,6 +206,12 @@ pub async fn get_campaigns_by_subdomain(
     let mut campaigns = campaigns::list_campaigns(&state.db, &account_id).await?;
     for campaign in campaigns.iter_mut() {
         campaign.config = crate::security::public_projection::public_config(&campaign.config);
+        // Same projection, second credential column (kanban t_10559717): the row serialises the
+        // whole `delivery_config` jsonb, which carries the direct-API `api_key` / `webhook_url`
+        // vocabulary. Anonymous route, so it is projected; the tenant's own authenticated list
+        // (`GET /api/v1/campaigns`) keeps the raw column, as the IQS / delivery panels expect.
+        campaign.delivery_config =
+            crate::security::public_projection::public_delivery_config(&campaign.delivery_config);
     }
     Ok(Json(json!({ "campaigns": campaigns })))
 }

@@ -24,6 +24,16 @@
 //! Everything else in `config` (`sections`, `rules`, `prize_pool`, `formula`, `cta_text`,
 //! `entry_webhook_url`, … — the keys the served play / IQS / long-form shells actually read) is
 //! emitted byte-for-byte unchanged, so the response shape the shells see does not move.
+//!
+//! ## The second credential vocabulary: `campaigns.delivery_config` (kanban t_10559717)
+//!
+//! The SAME anonymous arms also used to emit the whole `campaigns.delivery_config` jsonb. That
+//! column carries two credential vocabularies: `integrations[].config.{api_key,url}` and the flat
+//! legacy `_method` / `api_type` / `api_key` / `webhook_url` (both read by
+//! `handlers::entries::dispatch_integrations`), beside the hub's `delivery.{on_win,on_lose}` block.
+//! A tenant who configured a direct-API delivery leg published that `api_key` and `webhook_url` to
+//! any caller with no token at all (measured 2026-10-02 on the deployed binary, three arms).
+//! `public_delivery_config` is the projection for that column.
 
 use serde_json::{Map, Value};
 
@@ -52,6 +62,36 @@ pub fn public_config(config: &Value) -> Value {
     let mut out = map.clone();
     out.insert("marketing_boost".to_string(), Value::Object(safe));
     Value::Object(out)
+}
+
+/// The public projection of one campaign's `delivery_config`.
+///
+/// Why the empty object, decided per route (kanban t_10559717):
+///
+/// * **ZERO served shells read this column from an anonymous payload.** Measured on the box
+///   2026-10-02: the only two readers of `delivery_config` are `www-admin/index.html`'s delivery
+///   panel and `www-app/iqs.html`, and both read it from the AUTHENTICATED `GET /api/v1/campaigns`
+///   (then merge the whole column back through an authenticated PUT). No public shell reads it —
+///   `www/` has no match at all and the served `play.html` has no `delivery` reference — so there is
+///   no key here to keep for a public consumer, and keeping one would be keeping a key nobody reads.
+/// * **Every live campaign already emits `{}` on these routes** (all three rows carry
+///   `delivery_config = '{}'`), so the empty object IS the shape the shells see today.
+/// * The column's leaf set is open-ended (its writers can add keys), each known vocabulary carries a
+///   credential, and the payload carries the non-secret `delivery_method` column separately — so the
+///   projection is the whitelist with nothing on it. A key added later can never leak.
+///
+/// A non-object value (a string, array, number) projects to `{}` too: whatever is in that column,
+/// a JSON string could itself be a secret. `null` passes through unchanged — there is nothing in it
+/// to leak (the live column is `NOT NULL`, so a row read cannot produce it).
+///
+/// This is for the ANONYMOUS arms ONLY. The authenticated list/detail arms must keep the raw column:
+/// `www-admin`'s delivery panel and `www-app/iqs.html` merge it and would lose (or write back an
+/// empty) `integrations[]` / `coreswift.list_id` / `iqs` if it were projected there.
+pub fn public_delivery_config(delivery_config: &Value) -> Value {
+    if delivery_config.is_null() {
+        return Value::Null;
+    }
+    Value::Object(Map::new())
 }
 
 #[cfg(test)]
@@ -123,5 +163,58 @@ mod tests {
         let config = json!({"marketing_boost": {"auth_header_value": "still-secret"}});
         let projected = public_config(&config);
         assert_eq!(projected["marketing_boost"], json!({}));
+    }
+
+    #[test]
+    fn delivery_config_projection_drops_both_credential_vocabularies() {
+        use super::public_delivery_config;
+        let dc = json!({
+            "delivery": {
+                "on_win": {"redirect": {"url": "https://probe.invalid/win", "text": "You won"},
+                           "email": {"subject": "s", "body_text": "b"},
+                           "webhooks": ["target-1"], "autoresponder_fire": false},
+                "on_lose": {"redirect": {"url": "https://probe.invalid/lose"}}
+            },
+            "integrations": [{"type": "webhook",
+                              "config": {"url": "https://probe.invalid/hook",
+                                         "api_key": "dc_int_key", "server_prefix": "us9"}}],
+            "_method": "direct_api",
+            "api_type": "hubspot",
+            "api_key": "dc_flat_key",
+            "webhook_url": "https://probe.invalid/flat",
+            "coreswift": {"list_id": "list-1"},
+            "iqs": {"note": "n"}
+        });
+
+        let projected = public_delivery_config(&dc);
+        assert_eq!(projected, json!({}));
+        let text = projected.to_string();
+        for needle in [
+            "dc_int_key",
+            "dc_flat_key",
+            "probe.invalid",
+            "target-1",
+            "list-1",
+            "us9",
+            "hubspot",
+        ] {
+            assert!(
+                !text.contains(needle),
+                "{needle} survived the public delivery_config projection"
+            );
+        }
+    }
+
+    #[test]
+    fn delivery_config_projection_is_total_and_keeps_the_empty_shape() {
+        use super::public_delivery_config;
+        // The shape every live campaign already emits is byte-identical.
+        assert_eq!(public_delivery_config(&json!({})), json!({}));
+        // Nothing to leak in a null.
+        assert_eq!(public_delivery_config(&json!(null)), json!(null));
+        // A string / array / number in that column could itself be a secret — never passed through.
+        assert_eq!(public_delivery_config(&json!("dc_flat_key")), json!({}));
+        assert_eq!(public_delivery_config(&json!(["dc_flat_key"])), json!({}));
+        assert_eq!(public_delivery_config(&json!(12345)), json!({}));
     }
 }
