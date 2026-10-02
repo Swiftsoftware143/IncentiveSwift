@@ -66,21 +66,20 @@ MultiDirectory's referral system (see its Admin Guide → Referral System) integ
 
 **Zaarcash amounts by direction:** visitor→visitor: 50, business→business: 200, business→visitor: 50, visitor→business: 100.
 
-## Affiliate Product Auto-Sync
+## Affiliate Products — FunnelSwift-Owned, No Plan Sync
 
-IncentiveSwift plans are automatically synced to FunnelSwift's `affiliate_products` table.
+IncentiveSwift does **not** push its plans into FunnelSwift's `affiliate_products` table. The endpoint
+that used to do it, `POST /api/v1/internal/sync-affiliate-plan`, was RETIRED and deleted (kanban
+t_141162e7): it required the plan to exist in FunnelSwift's own `plans` table while a sibling's
+`plan_id` is a uuid from another database (a perfectly-keyed call answers `400 plan <uuid> not found`),
+and migration 070 allows an affiliate product for a free plan only.
 
-**How it works:**
+FunnelSwift's catalogue therefore holds one `… Free` / `$0` product per app — IncentiveSwift's is
+`IncentiveSwift Free`, linked by its system tag — and FunnelSwift owns those rows.
 
-| Action | What happens |
-|--------|-------------|
-| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: incentiveswift` |
-| **Plan updated** | Same endpoint with `action: update` |
-| **Plan deactivated** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
-
-The sync fires asynchronously. FunnelSwift must be reachable at `FUNNELSWIFT_URL` (default `http://localhost:8080`).
-
-**Requires:** `FUNNELSWIFT_URL` environment variable.
+What IncentiveSwift DOES send is the commission trigger when a referred customer moves onto a paid
+plan: `POST /api/v1/internal/affiliate/upgrade-event` (`x-internal-key` header). It needs the
+`FUNNELSWIFT_URL` environment variable and credits the referring affiliate permanently.
 
 ### Credit System
 Account-level credits, earned and adjusted by the API; nothing deducts them today:

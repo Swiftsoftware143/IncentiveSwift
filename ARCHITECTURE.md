@@ -23,12 +23,25 @@ There is ONE affiliate system and it lives in FunnelSwift.
 | Free | `free` | `app.funnelswift.net/signup` | Full CRM dashboard |
 | Kinetic Free | `kinetic_free` | `funnelswift.net/kinetic` (modal) | Bio-link card + lead capture |
 
-### Rule 4: Plan Sync Pattern
-Every app MUST sync its plans to FunnelSwift when created/updated:
+### Rule 4: The Commissionable Catalogue Is FunnelSwift-Owned
+FunnelSwift owns `affiliate_products`; a sibling app does NOT push its plans into it. The endpoint
+that used to accept them is RETIRED (kanban t_141162e7) and its senders were deleted:
 ```
-[App] → POST /api/v1/internal/sync-affiliate-plan → [FunnelSwift]
+[App] → POST /api/v1/internal/sync-affiliate-plan → REMOVED (no receiver, no sender)
 ```
-Required fields: `plan_name`, `plan_price`, `plan_slug`, `is_active`, `source_app`
+Why it could never work — both decided after it was written:
+- The receiver required the plan to exist in FunnelSwift's OWN `plans` table (ONE WRITER, kanban
+  t_6d326447). A sibling's `plan_id` is a uuid from a different database and can never resolve —
+  measured live 2026-10-01: a perfectly-keyed call answers `400 plan <uuid> not found`, writes nothing.
+- Migration 070 (David, 2026-09-29) allows an affiliate product ONLY for a free plan, so the live
+  catalogue is exactly one `… Free` / `$0` row per app (7 rows measured 2026-10-01: two FunnelSwift
+  plans by `plan_id`, one tag-linked row per sibling `source_app`).
+
+The cross-app call that IS live is the commission trigger — an app fires it from its own plan-change
+path when a referred customer moves onto a paid plan:
+```
+[App] → POST /api/v1/internal/affiliate/upgrade-event (header x-internal-key) → [FunnelSwift]
+```
 
 ### Rule 5: Zaarcash ≠ Affiliate
 - **Zaarcash** = loyalty points, owned by IncentiveSwift, used by ZaarHub
@@ -60,7 +73,7 @@ All apps share one Postgres instance (Docker: swift-postgres-1).
 - **AFFILIATE SYSTEM**: Codes, links, tracking, conversions, commissions, payouts
 - **Owns**: `affiliate_products`, `affiliate_users`, `affiliate_clicks`, `affiliate_conversions`, `affiliate_links`
 - **Two free entry points**: Kinetic modal + standard signup page
-- **Plan sync endpoint**: `POST /api/v1/internal/sync-affiliate-plan` (receives from all apps)
+- **Cross-app call**: `POST /api/v1/internal/affiliate/upgrade-event` (`x-internal-key` header) — a sibling's paid upgrade credits the referring affiliate. The plan→product sync route was RETIRED (kanban t_141162e7).
 
 ### 2. Multi-Directory — Directory SaaS
 - **Zaarcash loyalty proxy** → IncentiveSwift (routes loyalty requests)
