@@ -1177,6 +1177,13 @@ async fn main() -> anyhow::Result<()> {
             get(handlers::settings_handler::get_settings)
                 .put(handlers::settings_handler::update_settings),
         )
+        // The TENANT's own mail server, tested for real — the shipped console's Settings → Email
+        // pane drives this (kanban t_ba200ddf). Rate-limited like every other authenticated route;
+        // the recipient is the caller's own address, never a body field.
+        .route(
+            "/api/v1/settings/email/test",
+            post(handlers::settings_handler::test_settings_email),
+        )
         // Analytics routes
         .route(
             "/api/v1/analytics/overview",

@@ -1,8 +1,14 @@
 //! Tenant settings handler — manage per-account settings (SEO, branding, etc.)
 //!
 //! Endpoints:
-//!   GET  /api/v1/settings          — list all settings for current account
-//!   PUT  /api/v1/settings          — upsert settings
+//!   GET  /api/v1/settings            — list all settings for current account
+//!   PUT  /api/v1/settings            — upsert settings
+//!   POST /api/v1/settings/email/test — send a real message through THIS account's own mail
+//!                                      server (the `smtp_*` family below), no platform fallback
+//!
+//! The tenant's mail server is what the shipped console's Settings → Email pane drives
+//! (kanban t_ba200ddf): the pane reads this route, writes the `smtp_*` family through the PUT
+//! above and calls the test route. Before that card the whole family was API-only.
 //!
 //! Two mail-credential contracts live on this route (kanban t_123b886b):
 //!
@@ -16,6 +22,7 @@
 //!   shipped screen writes them, and the live database held 0 rows. The tenant's own mail server is
 //!   the bare `smtp_*` family above (see `email_provider::retired_tenant_mail_key`).
 
+use crate::delivery::sender::SmtpConfig;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -47,6 +54,56 @@ const MASK: &str = "••••••••";
 /// field must keep the STORED value, never overwrite it with the literal mask.
 fn is_masked(v: &str) -> bool {
     v.is_empty() || v.chars().all(|c| c == '•' || c == '*')
+}
+
+/// The one answer shape of `POST /api/v1/settings/email/test` (kanban t_ba200ddf). Pure, so the
+/// rule is testable with no database and no transport:
+///
+/// * `success` is the SERVER's verdict on the TENANT's own mail server. The config reported is the
+///   tenant's (`host`/`port`/`username`/`from_email`) because the send never falls back to the
+///   platform provider — a fallback would report on a mailer the panel is not showing;
+/// * a failure carries the transport's own text, so the operator reads what the server said.
+fn test_email_answer(to: &str, sent: &Result<SmtpConfig, String>) -> Value {
+    match sent {
+        Ok(cfg) => json!({
+            "success": true,
+            "host": cfg.host,
+            "port": cfg.port,
+            "username": cfg.username,
+            "from_email": cfg.from_email,
+            "to": to,
+            "detail": format!("{} accepted the test message", cfg.host),
+        }),
+        Err(detail) => json!({
+            "success": false,
+            "to": to,
+            "detail": detail,
+        }),
+    }
+}
+
+/// POST /api/v1/settings/email/test — send a real message through the TENANT's own mail server.
+///
+/// The recipient is the CALLER's own address and is deliberately not caller-settable (no body):
+/// this route can never be used as a relay. The send goes through
+/// [`crate::delivery::sender::test_tenant_smtp_config`], which opens the sealed `smtp_password` at
+/// the send site and AUTHs for real — so "the credential the panel saved actually works" is
+/// answered by the mail server, not by a form check.
+pub async fn test_settings_email(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let to = auth.email.trim().to_string();
+    if to.is_empty() {
+        return Err(AppError::BadRequest(
+            "This account has no email address to send the test to".to_string(),
+        ));
+    }
+
+    let sent = crate::delivery::sender::test_tenant_smtp_config(&state.db, account_id, &to).await;
+    Ok(Json(test_email_answer(&to, &sent)))
 }
 
 /// GET /api/v1/settings
@@ -218,7 +275,58 @@ pub async fn update_settings(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_masked, is_unknown_account_fk, MASK};
+    use super::{is_masked, is_unknown_account_fk, test_email_answer, MASK};
+    use crate::delivery::sender::{SmtpConfig, NO_TENANT_SMTP};
+
+    fn cfg() -> SmtpConfig {
+        SmtpConfig {
+            host: "smtp.acme.example".to_string(),
+            port: 587,
+            username: "postmaster@acme.example".to_string(),
+            password: "secret".to_string(),
+            from_email: "noreply@acme.example".to_string(),
+            from_name: None,
+        }
+    }
+
+    /// The panel's Test send (kanban t_ba200ddf) must report the TENANT's OWN server, and only the
+    /// server's own acknowledgement may turn that into `success`: the config named in a success
+    /// answer is the one the transport actually used.
+    #[test]
+    fn a_successful_tenant_test_names_the_tenants_own_server() {
+        let ok = test_email_answer("op@acme.example", &Ok(cfg()));
+        assert_eq!(ok["success"], serde_json::json!(true));
+        assert_eq!(ok["host"], serde_json::json!("smtp.acme.example"));
+        assert_eq!(ok["port"], serde_json::json!(587));
+        assert_eq!(ok["from_email"], serde_json::json!("noreply@acme.example"));
+        assert_eq!(ok["to"], serde_json::json!("op@acme.example"));
+        assert!(ok["detail"].as_str().unwrap().contains("smtp.acme.example"));
+        // the credential NEVER travels back to the caller
+        assert!(!ok.to_string().contains("secret"));
+    }
+
+    /// The no-fallback rule, as data: an account with no mail server of its own must get a
+    /// failure that points at the panel, and must never be told a platform provider accepted
+    /// anything — a test that silently fell back would report on a mailer the panel is not showing.
+    #[test]
+    fn the_tenant_test_never_falls_back_to_the_platform_provider() {
+        let no = test_email_answer("op@acme.example", &Err(NO_TENANT_SMTP.to_string()));
+        assert_eq!(no["success"], serde_json::json!(false));
+        assert!(no["detail"].as_str().unwrap().contains("Settings"));
+        let lowered = no.to_string().to_lowercase();
+        for forbidden in [
+            "mailgun",
+            "sendgrid",
+            "sendiio",
+            "fallback",
+            "platform provider",
+        ] {
+            assert!(
+                !lowered.contains(forbidden),
+                "the tenant test must not talk about {forbidden}: {no}"
+            );
+        }
+    }
 
     /// The RETIRE decision (kanban t_123b886b) must stay visible and stay KEY-SCOPED: those three
     /// config-object keys can never be stored again because nothing reads them, while the LIVE

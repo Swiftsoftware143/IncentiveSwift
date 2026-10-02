@@ -162,25 +162,18 @@ pub async fn load_system_smtp_fallback(pool: &PgPool) -> Option<SmtpConfig> {
     })
 }
 
-/// Send an email using the tenant's SMTP config, falling back to system Mailgun
-pub async fn send_email(
+/// The transport half of a tenant send: gate the host, build the message, hand it to lettre.
+///
+/// Split out of [`send_email`] so that the PANEL's test-send (kanban t_ba200ddf) can exercise the
+/// tenant's OWN configuration WITHOUT the silent platform fallback — a test that fell through to
+/// the platform provider would report on a mail server the operator never configured.
+async fn deliver_via(
     pool: &PgPool,
-    account_id: Uuid,
+    config: &SmtpConfig,
     to: &str,
     subject: &str,
     body_html: &str,
 ) -> Result<(), String> {
-    // Try tenant SMTP config first, fallback to system Mailgun SMTP
-    let config = match load_smtp_config(pool, account_id).await {
-        Some(c) => Some(c),
-        None => load_system_smtp_fallback(pool).await,
-    };
-
-    let config = config.ok_or_else(|| {
-        "No SMTP configuration found. Configure SMTP in Settings or add Mailgun API key."
-            .to_string()
-    })?;
-
     // The host is TENANT-SETTABLE (`tenant_settings` keys `smtp_*`, written by
     // `PUT /api/v1/settings`), so it is gated before any socket is opened (kanban t_f3c75b2a):
     // a private/reserved host is refused unless it is the platform's own preset for `smtp`.
@@ -227,15 +220,61 @@ pub async fn send_email(
     Ok(())
 }
 
-/// Test SMTP config by sending a test email to the account owner
-pub async fn test_smtp_config(
+/// Send an email using the tenant's SMTP config, falling back to system Mailgun
+pub async fn send_email(
+    pool: &PgPool,
+    account_id: Uuid,
+    to: &str,
+    subject: &str,
+    body_html: &str,
+) -> Result<(), String> {
+    // Try tenant SMTP config first, fallback to system Mailgun SMTP
+    let config = match load_smtp_config(pool, account_id).await {
+        Some(c) => Some(c),
+        None => load_system_smtp_fallback(pool).await,
+    };
+
+    let config = config.ok_or_else(|| {
+        "No SMTP configuration found. Configure SMTP in Settings or add Mailgun API key."
+            .to_string()
+    })?;
+
+    deliver_via(pool, &config, to, subject, body_html).await
+}
+
+/// The answer a tenant test-send gives when the account has no mail server of its own. It names
+/// where to fix it, and deliberately says NOTHING about the platform provider: the platform
+/// provider is not what this panel is testing (kanban t_ba200ddf).
+pub const NO_TENANT_SMTP: &str = "No mail server saved for this account — fill in host, username, \
+     from address and password in Settings → Email, save, then test again.";
+
+/// Test the TENANT's OWN mail server, for real: load the tenant config and send one message
+/// through it.
+///
+/// This is the arm `POST /api/v1/settings/email/test` drives (kanban t_ba200ddf). It deliberately
+/// does NOT fall back to the platform provider: a test-send that silently used the platform's
+/// mailer would answer `success` for a mail server the panel is not showing, which is the
+/// "the panel lies" class this route exists to close. The [`SmtpConfig`] returned is the one that
+/// ACKNOWLEDGED the message, so the caller can name the host it really used.
+pub async fn test_tenant_smtp_config(
     pool: &PgPool,
     account_id: Uuid,
     to_email: &str,
-) -> Result<(), String> {
-    send_email(pool, account_id, to_email, "Test Email from IncentiveSwift", 
-        "<h2>✅ SMTP Configuration Works!</h2><p>Your SMTP settings are correct. This email was sent using your configured SMTP server.</p><p>— IncentiveSwift</p>"
-    ).await
+) -> Result<SmtpConfig, String> {
+    let config = load_smtp_config(pool, account_id)
+        .await
+        .ok_or_else(|| NO_TENANT_SMTP.to_string())?;
+    deliver_via(
+        pool,
+        &config,
+        to_email,
+        "Test email from IncentiveSwift",
+        "<h2>Your mail server works</h2><p>IncentiveSwift reached your SMTP server with the \
+         credentials saved in Settings → Email and it accepted this message.</p>\
+         <p>— IncentiveSwift</p>",
+    )
+    .await?;
+    Ok(config)
 }
 
 /// Render {{key}} placeholders from a vars object.
