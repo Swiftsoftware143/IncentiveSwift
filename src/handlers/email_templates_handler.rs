@@ -234,8 +234,33 @@ pub async fn create(
 }
 
 // ---------------------------------------------------------------------------
-// PUT /api/v1/email-templates/:id — update an account override template
-// ---------------------------------------------------------------------------
+// PUT /api/v1/email-templates/:id
+//
+// Two owners on one route (kanban t_d87422a3):
+//   * an account OVERRIDE row (`aid = <caller>`) — unchanged: only its own account can edit it;
+//   * a PLATFORM DEFAULT (`aid IS NULL`) — the seeded row every account inherits
+//     (`delivery::sender::load_template_by_type`: `WHERE template_type = $1 AND (aid = $2 OR
+//     (aid IS NULL AND is_default = true))`). Until this change `WHERE id = $1 AND aid = $8` gave
+//     those rows NO editor at any role: an operator got 404 "Template not found or not owned"
+//     (measured live). The whole `/api/v1/email-templates` family is operator-only by
+//     `security::auth::is_admin_surface` (the `admin_guard` middleware, mounted above routing), so
+//     reaching this handler already means `admin`/`super_admin` (or the internal sync key) — the
+//     `OR aid IS NULL` arm therefore widens the statement only for a caller the gate has already
+//     accepted. A non-owner still matches neither arm and still gets 404.
+//
+// Editing a platform default is a FLEET-WIDE edit: every account that has not saved its own copy
+// receives this mail. The served console says so before the Save (see www-admin/index.html).
+//
+// KEY COLUMNS ARE NOT WRITABLE ON A PLATFORM DEFAULT, and that is deliberate, not an omission:
+//   * `template_type` is the key every sender looks the row up by (`WHERE template_type = $1`), so
+//     retyping a default silently re-points EVERY account's mail for that trigger — that is exactly
+//     the drift migration 20260927_retire_unreachable_email_templates.sql had to repair (`scratch_winner`
+//     -> `scratch_card_winner`) — and it collides with the sibling default on the partial unique index
+//     `idx_email_templates_unique (template_type, COALESCE(aid,'0…'), is_default) WHERE aid IS NULL AND
+//     is_default = true`, i.e. it would hand the console a 500 instead of an edit;
+//   * `is_default = false` on an `aid IS NULL` row makes it unreachable for EVERY account (the lookup
+//     above requires `aid IS NULL AND is_default = true`), a silent fleet-wide mail outage.
+// Overrides keep both fields writable, exactly as before.
 pub async fn update(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -247,14 +272,14 @@ pub async fn update(
 
     let item = sqlx::query_as::<_, EmailTemplate>(
         "UPDATE email_templates SET
-            template_type = COALESCE($2, template_type),
+            template_type = CASE WHEN aid IS NULL THEN template_type ELSE COALESCE($2, template_type) END,
             name = COALESCE($3, name),
             subject = COALESCE($4, subject),
             body = COALESCE($5, body),
             html_body = COALESCE($6, html_body),
-            is_default = COALESCE($7, is_default),
+            is_default = CASE WHEN aid IS NULL THEN is_default ELSE COALESCE($7, is_default) END,
             updated_at = NOW()
-         WHERE id = $1 AND aid = $8
+         WHERE id = $1 AND (aid = $8 OR aid IS NULL)
          RETURNING id, template_type, name, subject, body, html_body, is_default, aid, created_at, updated_at",
     )
     .bind(id)
@@ -274,6 +299,15 @@ pub async fn update(
 
 // ---------------------------------------------------------------------------
 // DELETE /api/v1/email-templates/:id — delete an account override template
+//
+// Deliberately still `WHERE id = $1 AND aid = $2` (kanban t_d87422a3): a platform default is NOT
+// deletable from any surface, at any role. Removing one is an irreversible, fleet-wide removal of
+// every account's fallback for that trigger — delete the `winner` row and the prize mail
+// (`handlers::entries` step 8 falls back to template_type `winner`) stops for EVERY account, and no
+// surface can restore it. The app's own precedent is that platform defaults are retired by a
+// reviewed migration instead (20260927_retire_unreachable_email_templates.sql deleted 27 rows, after
+// a census proved no producer could select them), which is how an operator removes one today. The
+// served console therefore offers Edit and no Delete on a platform default row.
 // ---------------------------------------------------------------------------
 pub async fn delete(
     State(state): State<AppState>,

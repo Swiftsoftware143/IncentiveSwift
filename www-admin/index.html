@@ -1707,7 +1707,10 @@ const EmailTemplates = () => {
               <button class="text-blue-600 text-sm" onClick=${() => show(tpl)}>Edit</button>
               <button class="text-red-600 text-sm" onClick=${() => { if(confirm('Delete?')) { API.del('/email-templates/' + tpl.id); load(); } }}>Delete</button>
             </div>`
-          : html`<span data-default="1" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded" title="Platform default (read-only): the API updates only a row your own account owns">Platform default</span>`}
+          : html`<div class="flex items-center gap-2">
+              <span data-default="1" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded" title="Platform default - every account inherits this row until it saves its own copy; editing it changes the mail for EVERY account">Platform default</span>
+              <button class="text-blue-600 text-sm" onClick=${() => show(tpl)}>Edit</button>
+            </div>`}
       </div>`)}
       ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No email templates yet</div>` : null}
     </div>
@@ -1717,6 +1720,13 @@ const EmailTemplates = () => {
 
 const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
   const item = st.editItem || {};
+  // kanban t_d87422a3 - a PLATFORM DEFAULT (`aid IS NULL`) is inherited by EVERY account
+  // (`delivery::sender::load_template_by_type`), so editing one here is a FLEET-WIDE edit; the amber
+  // banner below says so before the Save. Its key columns are NOT retyped here: the API keeps
+  // `template_type` (the key every sender looks the row up by) and `is_default` immutable on an
+  // `aid IS NULL` row - retyping would silently re-point every account's mail for that trigger, and
+  // `is_default = false` would make the row unreachable for all of them.
+  const isFleetDefault = !!(item.id && !item.aid);
   // BOTH of this modal's destructures hit the same mistake as the Integration and Tags modals —
   // `viewState` returns the shared OBJECT, not a [state, setter] pair — so '+ Add Template' (and the
   // per-row Edit beside it) had never rendered (real Chromium, kanban t_244bf427). Read the objects
@@ -1751,15 +1761,18 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
   return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
     <div class="bg-white rounded-xl p-6 w-3xl max-w-2xl shadow-xl max-h-screen overflow-y-auto" onClick=${e => e.stopPropagation()}>
       <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Email Template</h3>
+      ${isFleetDefault ? html`<div data-fleet-default="1" class="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">Platform default &mdash; every account inherits this row until it saves its own copy. Saving changes this email for <b>every account</b>.</div>` : null}
       <div class="grid grid-cols-2 gap-3 mb-4">
         <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
         <div><label class="block text-xs font-medium mb-1">Type</label>
-          <select class="border rounded px-3 py-2 w-full text-sm" value=${form.template_type} onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
+          ${isFleetDefault
+            ? html`<div class="border rounded px-3 py-2 w-full text-sm bg-gray-100 text-gray-700" title="A platform default's key is not retyped here: every sender looks the row up by it, so renaming would re-point every account's mail, and it can collide with the sibling default.">${form.template_type}</div>`
+            : html`<select class="border rounded px-3 py-2 w-full text-sm" value=${form.template_type} onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
             <option value="welcome">Welcome Email</option>
             <option value="password_reset">Password Reset</option>
             <option value="notification">Notification</option>
             <option value="general">General</option>
-          </select>
+          </select>`}
         </div>
       </div>
       <div class="mb-3"><label class="block text-xs font-medium mb-1">Subject</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.subject} onInput=${e => { form.subject = e.target.value; renderApp(); }} /></div>
