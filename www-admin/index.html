@@ -2847,6 +2847,168 @@ const KnowledgeBase = () => {
   </div>`;
 };
 
+
+// ---- CALL LOGS (in David's spec; the table existed with zero code references) ----
+const CallLogs = () => {
+  const st = viewState('calls', { list: [], loaded: false, err: '', msg: '', form: null,
+                                  direction: 'outbound', caller: '', callee: '', outcome: '', notes: '', duration: '' });
+  const load = async () => {
+    st.err = '';
+    try { const d = await API.get('/call-logs'); st.list = (d && d.calls) || []; st.loaded = true; }
+    catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const open = () => { st.form = 'new'; st.direction='outbound'; st.caller=''; st.callee=''; st.outcome=''; st.notes=''; st.duration=''; st.msg=''; renderApp(); };
+  const save = async () => {
+    try {
+      await API.post('/call-logs', { direction: st.direction, caller: st.caller, callee: st.callee,
+        outcome: st.outcome, notes: st.notes, duration_secs: st.duration === '' ? null : Number(st.duration) });
+      st.form = null; st.msg = 'Call logged.'; await load();
+    } catch (e) { st.msg = e.message; renderApp(); }
+  };
+  const remove = async (c) => {
+    if (!confirm('Delete this call log?')) return;
+    try { await API.del('/call-logs/' + c.id); st.msg = 'Call log deleted.'; await load(); }
+    catch (e) { st.msg = e.message; renderApp(); }
+  };
+  const fmt = (v) => v ? String(v).slice(0,16).replace('T',' ') : '—';
+  return html`<div class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div><h1 class="text-2xl font-bold">Call Logs</h1>
+        <p class="text-sm text-gray-500 mt-1">Every call your team logs, newest first. Each entry records which way the call went, how it ended and who it was with.</p></div>
+      <button onClick=${open} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">+ Log a call</button>
+    </div>
+    ${st.err ? html`<div class="mb-3 p-3 bg-red-50 text-red-700 rounded text-sm">${st.err}</div>` : ''}
+    ${st.msg ? html`<div class="mb-3 p-3 bg-green-50 text-green-800 rounded text-sm">${st.msg}</div>` : ''}
+    ${st.form ? html`<div class="mb-6 p-4 bg-white border rounded">
+      <div class="font-semibold mb-3">Log a call</div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <label class="text-xs text-gray-600">Direction
+          <select class="border rounded px-3 py-2 w-full text-sm" onChange=${e => { st.direction = e.target.value; }}>
+            <option value="outbound" selected=${st.direction==='outbound'}>Outbound (we called them)</option>
+            <option value="inbound" selected=${st.direction==='inbound'}>Inbound (they called us)</option>
+          </select></label>
+        <label class="text-xs text-gray-600">Outcome
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.outcome} placeholder="e.g. Booked, No answer"
+                 onInput=${e => { st.outcome = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Caller
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.caller} onInput=${e => { st.caller = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Callee
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.callee} onInput=${e => { st.callee = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Duration (seconds)
+          <input type="number" class="border rounded px-3 py-2 w-full text-sm" value=${st.duration} onInput=${e => { st.duration = e.target.value; }} /></label>
+      </div>
+      <label class="text-xs text-gray-600 block mb-3">Notes
+        <textarea rows="3" class="border rounded px-3 py-2 w-full text-sm" value=${st.notes} onInput=${e => { st.notes = e.target.value; }}></textarea></label>
+      <div class="flex gap-2">
+        <button onClick=${save} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">Save</button>
+        <button onClick=${() => { st.form=null; renderApp(); }} class="px-4 py-2 bg-gray-200 rounded text-sm">Cancel</button>
+      </div></div>` : ''}
+    ${!st.loaded ? html`<div class="text-sm text-gray-500">Loading…</div>` :
+      (st.list.length === 0 ? html`<div class="p-6 bg-gray-50 rounded text-sm text-gray-600">
+        No calls logged yet. Use <b>+ Log a call</b> — a log needs at least a caller or a callee, since otherwise there is no number to ring back.</div>` :
+      html`<table class="w-full text-sm bg-white border rounded">
+        <thead><tr class="text-left text-gray-500 border-b"><th class="p-3">When</th><th class="p-3">Direction</th>
+          <th class="p-3">With</th><th class="p-3">Outcome</th><th class="p-3">Mins</th><th class="p-3">Notes</th><th class="p-3"></th></tr></thead>
+        <tbody>${st.list.map(c => html`<tr class="border-b">
+          <td class="p-3 text-gray-600">${fmt(c.called_at)}</td>
+          <td class="p-3">${c.direction === 'inbound' ? '⬅ Inbound' : '➡ Outbound'}</td>
+          <td class="p-3">${c.caller || '—'} → ${c.callee || '—'}</td>
+          <td class="p-3">${c.outcome || '—'}</td>
+          <td class="p-3">${c.duration_secs ? Math.round(c.duration_secs/60) : '—'}</td>
+          <td class="p-3 text-gray-500">${(c.notes || '').slice(0,60)}</td>
+          <td class="p-3 text-right"><button onClick=${() => remove(c)} class="text-red-600">Delete</button></td>
+        </tr>`)}</tbody></table>`)}
+  </div>`;
+};
+
+// ---- DEALS (in David's spec; business_loyalty_deals was a complete table with zero code references) ----
+const Deals = () => {
+  const st = viewState('deals', { list: [], programs: [], loaded: false, err: '', msg: '', form: null,
+                                  business: '', program: '', type: 'discount', value: '', points: '', until: '', limit: '' });
+  const load = async () => {
+    st.err = '';
+    try {
+      const d = await API.get('/deals'); st.list = (d && d.deals) || [];
+      if (!st.programs.length) {
+        try { const pd = await API.get('/loyalty/programs'); st.programs = Array.isArray(pd) ? pd : (pd.programs || []); } catch (e) {}
+      }
+      st.loaded = true;
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const open = () => { st.form='new'; st.business=''; st.program = (st.programs[0] && st.programs[0].id) || ''; st.type='discount'; st.value=''; st.points=''; st.until=''; st.limit=''; st.msg=''; renderApp(); };
+  const save = async () => {
+    try {
+      await API.post('/deals', { business_name: st.business, program_id: st.program, deal_type: st.type,
+        deal_value: st.value || null, points_required: st.points === '' ? null : Number(st.points),
+        valid_until: st.until || null, redemptions_limit: st.limit === '' ? null : Number(st.limit), is_active: true });
+      st.form = null; st.msg = 'Deal saved.'; await load();
+    } catch (e) { st.msg = e.message; renderApp(); }
+  };
+  const remove = async (d) => {
+    if (!confirm('Delete this deal?')) return;
+    try { await API.del('/deals/' + d.id); st.msg = 'Deal deleted.'; await load(); }
+    catch (e) { st.msg = e.message; renderApp(); }
+  };
+  return html`<div class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div><h1 class="text-2xl font-bold">Deals</h1>
+        <p class="text-sm text-gray-500 mt-1">Deals you have with businesses on your loyalty programs — what they offer, what it costs the customer, and how many times it can be redeemed.</p></div>
+      <button onClick=${open} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">+ New deal</button>
+    </div>
+    ${st.err ? html`<div class="mb-3 p-3 bg-red-50 text-red-700 rounded text-sm">${st.err}</div>` : ''}
+    ${st.msg ? html`<div class="mb-3 p-3 bg-green-50 text-green-800 rounded text-sm">${st.msg}</div>` : ''}
+    ${st.form ? html`<div class="mb-6 p-4 bg-white border rounded">
+      <div class="font-semibold mb-3">New deal</div>
+      ${st.programs.length === 0 ? html`<div class="p-3 bg-amber-50 text-amber-900 rounded text-sm mb-3">
+        You need a loyalty program first — a deal belongs to one. Create it under <b>Loyalty Programs</b>, then come back.</div>` : ''}
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <label class="text-xs text-gray-600">Business
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.business} onInput=${e => { st.business = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Loyalty program
+          <select class="border rounded px-3 py-2 w-full text-sm" onChange=${e => { st.program = e.target.value; }}>
+            ${st.programs.map(p => html`<option value=${p.id} selected=${p.id===st.program}>${p.name}</option>`)}
+          </select></label>
+        <label class="text-xs text-gray-600">Deal type
+          <select class="border rounded px-3 py-2 w-full text-sm" onChange=${e => { st.type = e.target.value; }}>
+            <option value="discount_percent" selected=${st.type==='discount_percent'}>Percent discount</option>
+            <option value="fixed_amount" selected=${st.type==='fixed_amount'}>Fixed amount off</option>
+            <option value="free_item" selected=${st.type==='free_item'}>Free item</option>
+            <option value="bogo" selected=${st.type==='bogo'}>Buy one get one</option>
+            <option value="bonus_points" selected=${st.type==='bonus_points'}>Bonus points</option>
+          </select></label>
+        <label class="text-xs text-gray-600">What they offer
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.value} placeholder="e.g. 20% off" onInput=${e => { st.value = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Points needed
+          <input type="number" class="border rounded px-3 py-2 w-full text-sm" value=${st.points} onInput=${e => { st.points = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Valid until
+          <input type="date" class="border rounded px-3 py-2 w-full text-sm" value=${st.until} onInput=${e => { st.until = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">How many can be redeemed
+          <input type="number" class="border rounded px-3 py-2 w-full text-sm" value=${st.limit} onInput=${e => { st.limit = e.target.value; }} /></label>
+      </div>
+      <div class="flex gap-2">
+        <button onClick=${save} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">Save</button>
+        <button onClick=${() => { st.form=null; renderApp(); }} class="px-4 py-2 bg-gray-200 rounded text-sm">Cancel</button>
+      </div></div>` : ''}
+    ${!st.loaded ? html`<div class="text-sm text-gray-500">Loading…</div>` :
+      (st.list.length === 0 ? html`<div class="p-6 bg-gray-50 rounded text-sm text-gray-600">No deals yet. A deal is what a business offers your members — create one with <b>+ New deal</b>.</div>` :
+      html`<table class="w-full text-sm bg-white border rounded">
+        <thead><tr class="text-left text-gray-500 border-b"><th class="p-3">Business</th><th class="p-3">Type</th>
+          <th class="p-3">Offer</th><th class="p-3">Points</th><th class="p-3">Valid until</th>
+          <th class="p-3">Redeemed</th><th class="p-3"></th></tr></thead>
+        <tbody>${st.list.map(d => html`<tr class="border-b">
+          <td class="p-3 font-medium">${d.business_name}</td><td class="p-3">${d.deal_type}</td>
+          <td class="p-3">${d.deal_value || '—'}</td><td class="p-3">${d.points_required == null ? '—' : d.points_required}</td>
+          <td class="p-3 text-gray-600">${d.valid_until ? String(d.valid_until).slice(0,10) : '—'}</td>
+          <td class="p-3 text-gray-600">${d.current_redemptions || 0}${d.redemptions_limit ? ' / ' + d.redemptions_limit : ''}</td>
+          <td class="p-3 text-right"><button onClick=${() => remove(d)} class="text-red-600">Delete</button></td>
+        </tr>`)}</tbody></table>`)}
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -2867,9 +3029,11 @@ const KnowledgeBase = () => {
     { id: 'reviews', label: 'Reviews & Ratings', icon: '⭐', adminOnly: false },
     { id: 'calendar', label: 'Calendar', icon: '📅' },
     { id: 'knowledge-base', label: 'Knowledge Base', icon: '📚' },
+    { id: 'call-logs', label: 'Call Logs', icon: '📞' },
+    { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">

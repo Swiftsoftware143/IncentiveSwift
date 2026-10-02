@@ -1205,6 +1205,28 @@ async fn main() -> anyhow::Result<()> {
         // The user side is public on purpose: the people being walked through the product are often
         // not signed in (a player on a kiosk, a link follow). The admin side requires a caller, and
         // the authoring routes sit under /api/v1/admin/* so admin_guard covers them automatically.
+        // Call logs and deal tracking — David's spec requires both; the tables existed with zero code
+        // references, so these wire what was already there (see handlers/tracking_handler.rs).
+        .route(
+            "/api/v1/call-logs",
+            get(handlers::tracking_handler::list_calls)
+                .post(handlers::tracking_handler::create_call),
+        )
+        .route(
+            "/api/v1/call-logs/:id",
+            put(handlers::tracking_handler::update_call)
+                .delete(handlers::tracking_handler::delete_call),
+        )
+        .route(
+            "/api/v1/deals",
+            get(handlers::tracking_handler::list_deals)
+                .post(handlers::tracking_handler::create_deal),
+        )
+        .route(
+            "/api/v1/deals/:id",
+            put(handlers::tracking_handler::update_deal)
+                .delete(handlers::tracking_handler::delete_deal),
+        )
         .route(
             "/api/v1/knowledge-base",
             get(handlers::knowledge_base_handler::list_articles),
