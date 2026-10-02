@@ -249,7 +249,9 @@ pub struct DealInput {
 ///
 /// Deliberately mirrors the app's own rule in `handlers/loyalty.rs` (`list_programs`):
 ///
-///     WHERE c.account_id = $1 OR lp.campaign_id IS NULL
+/// ```text
+/// WHERE c.account_id = $1 OR lp.campaign_id IS NULL
+/// ```
 ///
 /// A program with NO campaign is the SHARED platform program and is usable by every account — my first
 /// version joined strictly and so refused a deal on exactly that program, which would have made deals
