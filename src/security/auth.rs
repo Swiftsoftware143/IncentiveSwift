@@ -208,23 +208,67 @@ async fn verify_legacy_api_credential(
     }
 }
 
-/// Fleet guard for `/api/v1/admin/*`.
+// Fleet guard for the operator-only surfaces: `/api/v1/admin/*` and `OPERATOR_ONLY_PATHS`.
+//
+// SECURITY (2026-09-20): these routes previously answered 2xx to *anonymous*
+// callers (12 of them, including the state-changing
+// `POST /api/v1/admin/treasury/expire-points`). This middleware is applied
+// globally but only inspects operator paths, so tenant traffic is untouched.
+//
+// Allowed callers:
+// - a valid JWT or API key whose role is `admin` / `super_admin`;
+// - a sibling service presenting the shared `X-Internal-Sync-Key`.
+//
+// Route families that only a platform operator (`admin` / `super_admin`) may reach.
+//
+// The `/api/v1/admin` prefix is the app's long-standing operator surface, but it is not the ONLY
+// one: the served console (`www-admin/index.html`) marks six nav entries `adminOnly: true`, and
+// three of the screens behind them read routes that live OUTSIDE the prefix. Measured live
+// 2026-10-02 (kanban t_88e535af), a token minted for the same account at role `company_admin`
+// answered **200** on all of these while `/api/v1/admin/*` correctly answered **403**:
+//
+// ```text
+// GET /api/v1/plans                         200   <- LEFT OPEN, deliberately (see below)
+// GET /api/v1/portfolio-companies           200
+// GET /api/v1/email-templates               200
+// GET /api/v1/email-templates/merge-fields  200
+// ```
+const OPERATOR_ONLY_PATHS: &[&str] = &["/api/v1/portfolio-companies", "/api/v1/email-templates"];
+
+/// Is `path` on an operator-only surface?
 ///
-/// SECURITY (2026-09-20): these routes previously answered 2xx to *anonymous*
-/// callers (12 of them, including the state-changing
-/// `POST /api/v1/admin/treasury/expire-points`). This middleware is applied
-/// globally but only inspects admin paths, so non-admin traffic is untouched.
+/// Segment match (`exact` or `exact/...`), not a string prefix: `/api/v1/email-templatesX` is a
+/// different route and must not be caught. `format!`-free on purpose — this runs on every request
+/// of a ~700-route router.
 ///
-/// Allowed callers:
-/// - a valid JWT or API key whose role is `admin` / `super_admin`;
-/// - a sibling service presenting the shared `X-Internal-Sync-Key`.
+/// `/api/v1/plans` is deliberately NOT in the set: it is the public plan catalogue
+/// (`handlers::dashboard_handler::list_public_plans`, doc-commented "public - no auth required",
+/// anonymous 200 live) with no caller-scoped data, and the fleet's other apps expose the same
+/// path as the self-serve upgrade listing. The console's `plans` SCREEN is still operator-only:
+/// its list and CRUD all go through `/api/v1/admin/plans`, which this guard already refuses.
+pub fn is_admin_surface(path: &str) -> bool {
+    if path == "/api/v1/admin" || path.starts_with("/api/v1/admin/") {
+        return true;
+    }
+    OPERATOR_ONLY_PATHS.iter().any(|base| {
+        path.strip_prefix(base)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Auth guard for the operator-only surfaces: `/api/v1/admin/*` and [`OPERATOR_ONLY_PATHS`].
+///
+/// SECURITY (kanban t_88e535af). Until this pass the console's `adminOnly` nav flag was the ONLY
+/// thing hiding those three screens from a tenant admin: hiding a nav entry does not hide the
+/// surface from a token, so a `company_admin` could call the routes directly. The gate is
+/// method-agnostic and path-based, so one call per path proves it for every verb.
 pub async fn admin_guard(
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, AppError> {
     let path = req.uri().path().to_string();
-    if !path.starts_with("/api/v1/admin") {
+    if !is_admin_surface(&path) {
         return Ok(next.run(req).await);
     }
 
@@ -265,7 +309,52 @@ pub async fn admin_guard(
 
 #[cfg(test)]
 mod tests {
-    use super::{issued_key_prefix, KEY_PREFIX_LEN};
+    use super::{is_admin_surface, issued_key_prefix, KEY_PREFIX_LEN};
+
+    /// The operator-only surface set (kanban t_88e535af). Every path here answered 200 to a
+    /// `company_admin` token before the guard covered it; each must now be refused, and the
+    /// deliberate NON-members must not be swept up by an over-broad match.
+    #[test]
+    fn operator_surfaces_include_the_three_console_screens_that_are_not_prefixed() {
+        for p in [
+            "/api/v1/admin/site",
+            "/api/v1/admin",
+            "/api/v1/admin/",
+            // the console's `adminOnly` screens outside the /admin prefix (measured live).
+            // The id segments are arbitrary on purpose: the guard matches a path SEGMENT, so the
+            // suffix is what is under test — and the deploy gate forbids UUID literals in src/.
+            "/api/v1/portfolio-companies",
+            "/api/v1/portfolio-companies/0a1b2c3d",
+            "/api/v1/email-templates",
+            "/api/v1/email-templates/0a1b2c3d",
+            "/api/v1/email-templates/merge-fields",
+        ] {
+            assert!(is_admin_surface(p), "{p} must be operator-only");
+        }
+    }
+
+    /// The other side of the same rule: these must stay reachable by a tenant token.
+    /// `/api/v1/plans` is the PUBLIC catalogue (anonymous 200 live, no caller-scoped data) and the
+    /// tenant surfaces are the positive control — a blanket gate is this card's stated failure mode.
+    #[test]
+    fn public_and_tenant_surfaces_are_not_operator_only() {
+        for p in [
+            "/api/v1/plans",
+            "/api/v1/dashboard/stats",
+            "/api/v1/leads",
+            "/api/v1/tags",
+            "/api/v1/campaigns",
+            "/api/v1/settings",
+            "/api/v1/integration-targets",
+            "/api/v1/internal/portfolio-companies",
+            // segment match, not string prefix: neither of these is the gated route
+            "/api/v1/email-templatesX",
+            "/api/v1/portfolio-companies-archive",
+            "/api/v1/administrators",
+        ] {
+            assert!(!is_admin_surface(p), "{p} must stay reachable");
+        }
+    }
 
     /// The column `POST /api/v1/api-keys` fills: first 8 chars of the random part.
     #[test]
