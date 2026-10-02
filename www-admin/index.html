@@ -1100,7 +1100,50 @@ const LoyaltyPrograms = () => {
   async function loadCredits() { try { const data = await API.get('/credits/balance'); const hist = await API.get('/credits/history'); st.credits = {balance:data,history:hist.transactions||hist||[]}; renderApp(); } catch(e){ st.credits={balance:{},history:[]}; } }
   async function loadBadges(progId) { try { const data = await API.get('/loyalty/badges/program/'+progId); st.badges = data.badges||[]; renderApp(); } catch(e){ st.badges=[]; } }
   async function loadDashboard(progSlug) { try { const data = await API.get('/loyalty/dashboard/admin/'+progSlug); st.dashboard = data; renderApp(); } catch(e){ st.dashboard=null; } }
-  async function loadLedger() { try { const data = await API.get('/admin/treasury/summary'); st.treasury = data; renderApp(); } catch(e){ st.treasury = null; } try { const businesses = await API.get('/admin/treasury/businesses'); st.businessLedgers = businesses; renderApp(); } catch(e){ st.businessLedgers = []; } }
+  async function loadLedger() {
+    try { const data = await API.get('/admin/treasury/summary'); st.treasury = data; renderApp(); } catch(e){ st.treasury = null; }
+    try { const businesses = await API.get('/admin/treasury/businesses'); st.businessLedgers = businesses; renderApp(); } catch(e){ st.businessLedgers = []; }
+    // The float POSITION and the rule in force. `/summary` is the counters; this is whether the
+    // programme can PAY — the two are not the same question and only this one is the safety rule.
+    try { st.tFloat = await API.get('/admin/treasury/state'); } catch(e){ st.tFloat = null; }
+    try { st.tFunding = await API.get('/admin/treasury/funding'); } catch(e){ st.tFunding = { items: [] }; }
+    try { st.tHolds = await API.get('/admin/treasury/holds'); } catch(e){ st.tHolds = { items: [] }; }
+    renderApp();
+  }
+
+  // Money in. `method` is the provider seam: manual today, Stripe when connected — the field is the
+  // whole integration point, so the panel offers it rather than hard-coding 'manual'.
+  async function submitTreasuryFunding() {
+    const biz = prompt('Which business paid?');
+    if (!biz) return;
+    const amt = prompt('How much did they pay in? (e.g. 250.00)');
+    if (!amt) return;
+    const method = prompt('Method — manual, stripe, paypal or bank_transfer', 'manual') || 'manual';
+    try {
+      const r = await API.post('/admin/treasury/funding', { business_name: biz, amount: amt, method });
+      alert('Recorded. Programme balance is now ' + (r.available_after ?? '?'));
+      await loadLedger();
+    } catch (e) { alert('Could not record that payment: ' + (e.message || e)); }
+  }
+
+  async function saveTreasuryRule() {
+    const behaviour = prompt('When paying a reward would take the programme below its safety balance:\n  hold            — park it and ask the business to top up (default)\n  allow_and_bill  — pay it and bill the shortfall\n  suspend         — stop paying rewards until they top up', st.tFloat?.on_float_breach || 'hold');
+    if (!behaviour) return;
+    const minimum = prompt('Safety balance the programme must never go below (e.g. 100)', String(st.tFloat?.minimum_float ?? 100));
+    try {
+      await API.put('/admin/treasury/rule', { on_float_breach: behaviour, minimum_float: minimum });
+      alert('Saved. The rules your businesses read change with it.');
+      await loadLedger();
+    } catch (e) { alert('Could not save the rule: ' + (e.message || e)); }
+  }
+
+  async function resolveTreasuryHold(id, decision) {
+    const note = prompt('Optional note for the record');
+    try {
+      await API.post('/admin/treasury/holds/' + id + '/resolve', { decision, note });
+      await loadLedger();
+    } catch (e) { alert('Could not resolve that hold: ' + (e.message || e)); }
+  }
   async function loadSettings() { try { const data = await API.get('/admin/clearinghouse/config'); st.chConfig = data; renderApp(); } catch(e){ st.chConfig = null; } try { const caps = await API.get('/admin/clearinghouse/caps'); st.chCaps = caps||[]; renderApp(); } catch(e){ st.chCaps = []; } try { const scfg = await API.get('/admin/clearinghouse/supplier-config'); st.supConfig = scfg||[]; renderApp(); } catch(e){ st.supConfig = []; } }
   async function loadMembers(progId) { try { const data = await API.get('/loyalty/dashboard/admin/'+progId); st.members = data.members||[]; st.dashboard = data; renderApp(); } catch(e){ st.members=[]; } }
 
@@ -1464,6 +1507,60 @@ const settingsTab = html`<div>
 
 const ledgerTab = html`<div>
   <h2 class="text-xl font-bold mb-4">Treasury Ledger</h2>
+
+  <!-- THE SAFETY RULE. Shown FIRST because the counters below describe what already happened, and this
+       answers the question that matters: can the programme pay right now? -->
+  ${st.tFloat ? html`
+    <div class="card mb-6" style="border-left:4px solid ${st.tFloat.is_safe ? '#12b76a' : '#f04438'}">
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div class="text-sm text-gray-500">Programme can pay rewards</div>
+          <div class="text-2xl font-bold" style="color:${st.tFloat.is_safe ? '#067647' : '#b42318'}">
+            ${st.tFloat.is_safe ? 'Yes' : 'No — held for topping up'}
+          </div>
+          <div class="text-sm text-gray-600 mt-1">
+            Available $${Number(st.tFloat.available||0).toFixed(2)} · safety balance $${Number(st.tFloat.minimum_float||0).toFixed(2)} ·
+            headroom $${Number(st.tFloat.headroom||0).toFixed(2)}
+          </div>
+          <div class="text-xs text-gray-500 mt-1">Rule in force: <strong>${st.tFloat.on_float_breach||'hold'}</strong> · breaches counted: ${st.tFloat.float_breaches||0}</div>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-primary" onClick=${() => submitTreasuryFunding()}>Record a payment in</button>
+          <button class="btn" onClick=${() => saveTreasuryRule()}>Change the rule</button>
+        </div>
+      </div>
+    </div>` : html`<p class="text-gray-500 text-sm mb-6">Float position unavailable.</p>`}
+
+  <!-- HELD REDEMPTIONS: rewards the guard parked rather than paying out of money that was not there. -->
+  ${(st.tHolds && st.tHolds.items && st.tHolds.items.length) ? html`
+    <h3 class="text-lg font-bold mb-3">Held rewards (${st.tHolds.items.length})</h3>
+    <div class="card p-0 overflow-hidden mb-6">
+      <table class="table"><thead><tr><th>Business</th><th>Points</th><th>Amount</th><th>Short by</th><th>Status</th><th></th></tr></thead>
+        <tbody>${st.tHolds.items.map(h => html`<tr>
+          <td class="font-medium">${h.business_name||'—'}</td>
+          <td>${h.points||0}</td>
+          <td>$${Number(h.amount||0).toFixed(2)}</td>
+          <td>$${Number(h.shortfall||0).toFixed(2)}</td>
+          <td><span class="badge ${h.status==='pending'?'badge-yellow':'badge-green'}">${h.status}</span></td>
+          <td>${h.status==='pending' ? html`
+            <button class="btn btn-sm btn-primary" onClick=${() => resolveTreasuryHold(h.id, 'approved')}>Pay it</button>
+            <button class="btn btn-sm" onClick=${() => resolveTreasuryHold(h.id, 'declined')}>Refuse</button>` : html`—`}</td>
+        </tr>`)}</tbody></table>
+    </div>` : ''}
+
+  <h3 class="text-lg font-bold mb-3">Money in</h3>
+  <div class="card p-0 overflow-hidden mb-6">
+    <table class="table"><thead><tr><th>Business</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr></thead>
+      <tbody>${((st.tFunding&&st.tFunding.items)||[]).map(f => html`<tr>
+        <td class="font-medium">${f.business_name||'—'}</td>
+        <td>$${Number(f.amount||0).toFixed(2)}</td>
+        <td>${f.method||'—'}</td>
+        <td class="text-xs text-gray-500">${f.reference||'—'}</td>
+        <td><span class="badge badge-green">${f.status||'received'}</span></td>
+      </tr>`)}
+      ${(!st.tFunding||!st.tFunding.items||st.tFunding.items.length===0) ? html`<tr><td colspan="5" class="text-center text-gray-500 py-4">No payments recorded yet — use "Record a payment in".</td></tr>` : ''}
+    </tbody></table>
+  </div>
   ${st.treasury ? html`<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
     <div class="stat-card"><div class="stat-value">${Number(st.treasury.total_points_issued||0).toLocaleString()}</div><div class="stat-label">Points Issued</div></div>
     <div class="stat-card"><div class="stat-value">${Number(st.treasury.total_points_redeemed||0).toLocaleString()}</div><div class="stat-label">Points Redeemed</div></div>
