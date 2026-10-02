@@ -221,7 +221,13 @@ const Portfolio = () => {
   const load = async () => { try { const data = await API.get('/portfolio-companies'); st.list = (data && data.companies) ? data.companies : (Array.isArray(data) ? data : []); renderApp(); } catch(e) { try { const data2 = await API.get('/portfolio-companies'); st.list = (data2 && data2.companies) ? data2.companies : (Array.isArray(data2) ? data2 : []); renderApp(); } catch(e2) { console.error(e2); } } };
   if (!st._loaded) { st._loaded = true; load(); }
 
-  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  // DRAFT-IN-LOCALS (kanban t_8e0ae96e): this modal used to initialise its fields from
+  // `st.editItem` in per-render locals inside the template IIFE, so EVERY renderApp() re-seeded
+  // them from the stored row and erased whatever the operator had typed (the view's own Search
+  // box, the list load() after a save, a poll) — Save then wrote the row's old values back. The
+  // draft now lives in the SHARED viewState object and is seeded ON OPEN only: the shape the Tags
+  // modal (t_286aead1) and the Campaigns form (t_f4aefe45) already use.
+  const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
     try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
@@ -252,13 +258,19 @@ const Portfolio = () => {
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
       <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Portfolio Company</h3>
-        ${(() => { let name = st.editItem?.name||'', slug = st.editItem?.slug||'';
+        ${(() => {
+          const pf = viewState('portfolio_form', { name: '', slug: '' });
+          if (!st.formSeeded) {
+            pf.name = st.editItem?.name || '';
+            pf.slug = st.editItem?.slug || '';
+            st.formSeeded = true;
+          }
           return html`<div class="space-y-3">
-            <div><label class="text-sm font-medium block mb-1">Company Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
-            <div><label class="text-sm font-medium block mb-1">Slug</label><input class="input" value=${slug} onInput=${e => slug = e.target.value} /></div>
+            <div><label class="text-sm font-medium block mb-1">Company Name</label><input class="input" value=${pf.name} onInput=${e => { pf.name = e.target.value; }} /></div>
+            <div><label class="text-sm font-medium block mb-1">Slug</label><input class="input" value=${pf.slug} onInput=${e => { pf.slug = e.target.value; }} /></div>
             <div class="flex gap-2 justify-end mt-4">
               <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
-              <button class="btn" onClick=${() => save({name,slug})}>${st.editItem ? 'Save' : 'Add'}</button>
+              <button class="btn" onClick=${() => save({name: pf.name, slug: pf.slug})}>${st.editItem ? 'Save' : 'Add'}</button>
             </div>
           </div>`; })()}
       </div>
@@ -269,23 +281,30 @@ const Portfolio = () => {
 // ---- PLANS ----
 const Plans = () => {
   const st = viewState('plans', { list: [], showModal: false, editItem: null });
-  const load = async () => { try { const data = await API.get('/plans'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  // The list must come from the OPERATOR catalogue, GET /api/v1/admin/plans: the old
+  // `API.get('/plans')` is the PUBLIC marketing listing, which (a) answers an envelope
+  // `{plans:[…]}` that `Array.isArray(data) ? data : []` turned into [], so the table rendered
+  // ZERO rows and the per-row Edit arm was unreachable, and (b) carries `monthly_price`, not the
+  // `price_monthly` / `price_yearly` this editor round-trips. Measured live, kanban t_8e0ae96e.
+  const load = async () => { try { const data = await API.get('/admin/plans'); st.list = (data && data.plans) ? data.plans : (Array.isArray(data) ? data : []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
-  const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
+  const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
+  // The plan CRUD lives on /api/v1/admin/plans (+ /:id). The old `/plans` path answered live 404
+  // on PUT and 405 on POST, so this editor's Save could never succeed (kanban t_8e0ae96e).
   const save = async (data) => {
-    try { if(st.editItem) await API.put('/plans/' + st.editItem.id, data); else await API.post('/plans', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+    try { if(st.editItem) await API.put('/admin/plans/' + st.editItem.id, data); else await API.post('/admin/plans', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
   };
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div>
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Name</th><th>Price</th><th>Interval</th><th>Actions</th></tr></thead>
+      <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Actions</th></tr></thead>
         <tbody>${st.list.map(p => html`<tr>
           <td class="font-medium">${p.name}</td>
-          <td class="text-gray-500">${p.price ? '$' + p.price : '-'}</td>
-          <td class="text-gray-500">${p.interval || '-'}</td>
+          <td class="text-gray-500">${p.price_monthly ? '$' + p.price_monthly : '-'}</td>
+          <td class="text-gray-500">${p.price_yearly ? '$' + p.price_yearly : '-'}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
         </tr>`)}
         ${st.list.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
@@ -293,14 +312,27 @@ const Plans = () => {
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
       <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
-        ${(() => { let name = st.editItem?.name||'', price = st.editItem?.price||'', interval = st.editItem?.interval||'monthly';
+        ${(() => {
+          const pf = viewState('plans_form', { name: '', price_monthly: '', price_yearly: '' });
+          // Seeded ON OPEN from the row. The draft itself lives in the shared object above, so a
+          // re-render while the modal is open can no longer revert it (kanban t_8e0ae96e).
+          if (!st.formSeeded) {
+            pf.name = st.editItem?.name || '';
+            pf.price_monthly = (st.editItem && st.editItem.price_monthly != null) ? String(st.editItem.price_monthly) : '';
+            pf.price_yearly = (st.editItem && st.editItem.price_yearly != null) ? String(st.editItem.price_yearly) : '';
+            st.formSeeded = true;
+          }
+          const numOrNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v);
+          // The fields are the columns the CRUD route really reads and writes (the old `price` /
+          // `interval` pair does not exist in the schema: `price` is read by the PUBLIC listing
+          // only, and no migration ever created `interval`).
           return html`<div class="space-y-3">
-            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${name} onInput=${e => name = e.target.value} /></div>
-            <div><label class="text-sm font-medium block mb-1">Price</label><input type="number" class="input" value=${price} onInput=${e => price = e.target.value} /></div>
-            <div><label class="text-sm font-medium block mb-1">Interval</label><select class="input" value=${interval} onChange=${e => interval = e.target.value}><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One Time</option></select></div>
+            <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${pf.name} onInput=${e => { pf.name = e.target.value; }} /></div>
+            <div><label class="text-sm font-medium block mb-1">Monthly price ($)</label><input type="number" class="input" value=${pf.price_monthly} onInput=${e => { pf.price_monthly = e.target.value; }} /></div>
+            <div><label class="text-sm font-medium block mb-1">Yearly price ($)</label><input type="number" class="input" value=${pf.price_yearly} onInput=${e => { pf.price_yearly = e.target.value; }} /></div>
             <div class="flex gap-2 justify-end mt-4">
               <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
-              <button class="btn" onClick=${() => save({name,price,interval})}>${st.editItem ? 'Save' : 'Add'}</button>
+              <button class="btn" onClick=${() => save({name: pf.name, price_monthly: numOrNull(pf.price_monthly), price_yearly: numOrNull(pf.price_yearly)})}>${st.editItem ? 'Save' : 'Add'}</button>
             </div>
           </div>`; })()}
       </div>

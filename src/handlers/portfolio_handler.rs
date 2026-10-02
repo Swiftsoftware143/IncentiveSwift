@@ -162,8 +162,15 @@ pub async fn update_portfolio_company(
     let company_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
 
+    // The column list used to omit `subdomain`/`domain` while the arms below read them with
+    // `Row::get`, which PANICS on ColumnNotFound — and those closures run exactly when the body
+    // omits the field, which is what the operator console sends ({name, slug}). Measured live
+    // 2026-10-02 (kanban t_8e0ae96e): PUT /api/v1/portfolio-companies/:id answered 502 through the
+    // vhost, the log carried `panicked at src/handlers/portfolio_handler.rs:179: called
+    // Result::unwrap() on an Err value: ColumnNotFound("subdomain")`, and the API process died
+    // (docker RestartCount 1 -> 2). Select every column the arms read.
     let existing = sqlx::query(
-        r#"SELECT name, slug, settings, email, description
+        r#"SELECT name, slug, settings, email, description, subdomain, domain
            FROM portfolio_companies WHERE id = $1"#,
     )
     .bind(company_id)
