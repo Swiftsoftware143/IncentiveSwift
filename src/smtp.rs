@@ -55,31 +55,40 @@ pub async fn send_via_smtp(
             .map_err(|e| format!("Failed to build email: {}", e))?,
     };
 
+    // Credentials are attached ONLY when a username is actually configured.
+    //
+    // Measured 2026-10-01: with an empty username the transport still NEGOTIATES auth, and a relay that
+    // wants none answers "No compatible authentication mechanism was found" — which is exactly how the
+    // credential email died the first time this path was exercised end to end. An unauthenticated relay
+    // is an ordinary mail server (an internal one, or a local sink), so asking it to authenticate makes
+    // the panel's "SMTP (any mail server)" label false. Same fix as FunnelSwift's smtp.rs.
+    let has_auth = !config.username.trim().is_empty();
     let creds = Credentials::new(config.username.clone(), config.password.clone());
 
-    let mailer = match config.encryption.as_deref() {
+    let base = match config.encryption.as_deref() {
         Some("tls") => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-            .map_err(|e| format!("Failed to create TLS SMTP transport: {}", e))?
-            .port(config.port)
-            .credentials(creds)
-            .build(),
+            .map_err(|e| format!("Failed to create TLS SMTP transport: {}", e))?,
         // PLAIN SMTP, no TLS at all. Added 2026-10-01 for the same reason FunnelSwift needed it: the
         // panel offers this field as "SMTP (any mail server)", and an internal relay — or a local
         // sink — without TLS is a perfectly ordinary mail server. Refusing it made that label false,
         // and it left the credential proof unable to capture what the app actually sent.
-        Some("none") => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
-            .port(config.port)
-            .credentials(creds)
-            .build(),
+        Some("none") => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host),
         _ => {
             // STARTTLS (default)
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
                 .map_err(|e| format!("Failed to create STARTTLS SMTP transport: {}", e))?
-                .port(config.port)
-                .credentials(creds)
-                .build()
         }
     };
+
+    // Every arm above yields the same builder type, so the port and the OPTIONAL credentials are
+    // applied once, here.
+    let base = base.port(config.port);
+    let base = if has_auth {
+        base.credentials(creds)
+    } else {
+        base
+    };
+    let mailer = base.build();
 
     mailer
         .send(email)
