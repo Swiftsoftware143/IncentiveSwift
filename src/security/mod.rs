@@ -10,4 +10,5 @@ pub mod email_addr;
 pub mod headers;
 pub mod jwt;
 pub mod provider_key_crypto;
+pub mod public_projection;
 pub mod webhook_security;

@@ -193,12 +193,20 @@ pub async fn get_campaign(
 }
 
 /// GET /api/v1/campaigns/by-subdomain/:slug — public campaigns for a tenant subdomain.
+///
+/// Listed from the callers', not the tenant's, point of view — but the ROWS are the tenant's, so the
+/// projection is redacted exactly like the other anonymous surface arms (kanban t_eeed1bba): the
+/// whole `campaigns.config` blob used to answer here, carrying the tenant's Marketing Boost
+/// credential to any caller with no token at all.
 pub async fn get_campaigns_by_subdomain(
     State(state): State<AppState>,
     Path(t_slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let account_id = campaigns::get_account_by_slug(&state.db, &t_slug).await?;
-    let campaigns = campaigns::list_campaigns(&state.db, &account_id).await?;
+    let mut campaigns = campaigns::list_campaigns(&state.db, &account_id).await?;
+    for campaign in campaigns.iter_mut() {
+        campaign.config = crate::security::public_projection::public_config(&campaign.config);
+    }
     Ok(Json(json!({ "campaigns": campaigns })))
 }
 

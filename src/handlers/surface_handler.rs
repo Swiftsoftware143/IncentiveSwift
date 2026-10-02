@@ -3,6 +3,7 @@
 use crate::error::AppError;
 use crate::handlers::api_keys::resolve_owner_account_id;
 use crate::security::auth::AuthenticatedUser;
+use crate::security::public_projection::public_config;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -445,7 +446,7 @@ pub async fn get_widget_config(
             "slug": slug,
             "type": campaign_type,
         },
-        "config": config,
+        "config": public_config(&config),
         "surface_config": surface_config,
         "theme": theme,
         "outcome_tags": outcome_tags,
@@ -571,7 +572,7 @@ pub async fn get_play_view(
             "tag_namespace": tag_namespace,
             "created_at": created_at,
         },
-        "config": config,
+        "config": public_config(&config),
         "surface_config": surface_config,
         "theme": theme,
         "outcome_tags": outcome_tags,
@@ -732,7 +733,7 @@ pub async fn get_embed_view(
             "type": campaign_type,
         },
         "embed_html": embed_html,
-        "config": config,
+        "config": public_config(&config),
         "surface_config": surface_config,
         "theme": theme,
         "outcome_tags": outcome_tags,
@@ -792,7 +793,7 @@ pub async fn get_embed_campaign_list(
             "name": name,
             "slug": slug,
             "type": campaign_type,
-            "config": config,
+            "config": public_config(&config),
             "company_name": company,
         }));
     }
@@ -883,7 +884,7 @@ pub async fn get_campaign_embed(
             "slug": slug_str,
             "type": campaign_type,
         },
-        "config": config,
+        "config": public_config(&config),
         "surface_config": surface_config,
         "theme": theme,
         "play_url": play_url,
