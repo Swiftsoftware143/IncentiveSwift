@@ -498,8 +498,8 @@ pub async fn me(
                   ), '{}'::jsonb) as features,
                   t.max_campaigns,
                   t.max_entries_per_month,
-                  t.price_monthly,
-                  t.price_annual
+                  COALESCE(t.price_monthly::float8, 0.0) as price_monthly,
+                  COALESCE(t.price_annual::float8, 0.0) as price_annual
            FROM accounts a
            LEFT JOIN plan_tiers t ON a.plan_tier_id = t.id
            WHERE a.id = $1"#,
@@ -518,6 +518,11 @@ pub async fn me(
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
     let max_campaigns: Option<i32> = row.get("max_campaigns");
     let max_entries: Option<i32> = row.get("max_entries_per_month");
+    // The account's OWN tier price (plan_tiers), so the tenant view never has to price its own
+    // plan by slug-joining the public `plans` catalogue (kanban t_1a29087b). Same decode
+    // convention as tier_handler.rs / admin_handler.rs: numeric -> float8 in SQL, f64 here.
+    let price_monthly: f64 = row.get("price_monthly");
+    let price_annual: f64 = row.get("price_annual");
 
     // Fetch account industries
     let industries: Vec<Value> = sqlx::query(
@@ -563,6 +568,8 @@ pub async fn me(
                 "features": features,
                 "max_campaigns": max_campaigns.unwrap_or(0),
                 "max_entries_per_month": max_entries.unwrap_or(0),
+                "price_monthly": price_monthly,
+                "price_annual": price_annual,
             },
             "industries": industries,
             "industry_limit": industry_limit,
@@ -694,8 +701,8 @@ pub async fn update_profile(
                   ), '{}'::jsonb) as features,
                   t.max_campaigns,
                   t.max_entries_per_month,
-                  t.price_monthly,
-                  t.price_annual
+                  COALESCE(t.price_monthly::float8, 0.0) as price_monthly,
+                  COALESCE(t.price_annual::float8, 0.0) as price_annual
            FROM accounts a
            LEFT JOIN plan_tiers t ON a.plan_tier_id = t.id
            WHERE a.id = $1"#,
@@ -742,6 +749,11 @@ pub async fn update_profile(
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
     let max_campaigns: Option<i32> = row.get("max_campaigns");
     let max_entries: Option<i32> = row.get("max_entries_per_month");
+    // The account's OWN tier price (plan_tiers), so the tenant view never has to price its own
+    // plan by slug-joining the public `plans` catalogue (kanban t_1a29087b). Same decode
+    // convention as tier_handler.rs / admin_handler.rs: numeric -> float8 in SQL, f64 here.
+    let price_monthly: f64 = row.get("price_monthly");
+    let price_annual: f64 = row.get("price_annual");
 
     Ok(Json(json!({
         "user": {
@@ -756,6 +768,8 @@ pub async fn update_profile(
                 "features": features,
                 "max_campaigns": max_campaigns.unwrap_or(0),
                 "max_entries_per_month": max_entries.unwrap_or(0),
+                "price_monthly": price_monthly,
+                "price_annual": price_annual,
             },
             "industries": industries,
             "industry_limit": industry_limit,

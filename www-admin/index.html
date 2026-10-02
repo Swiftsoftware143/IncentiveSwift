@@ -366,7 +366,16 @@ const MyPlan = () => {
   const pretty = (k) => String(k == null ? '' : k).split('_').join(' ');
   const money = (v) => (v === null || v === undefined || v === '') ? '\u2014' : ('$' + v);
   const catalogue = st.plans || [];
-  const cur = catalogue.filter(p => String(p.slug || '').toLowerCase() === curSlug)[0] || null;
+  // The account's OWN price is read from /auth/me user.plan, which serves it from `plan_tiers`
+  // (the entitlement/accounting identity) -- the SAME table the plan name/slug/limits come from.
+  // It is deliberately NOT read from the public catalogue below: that is a DIFFERENT table
+  // (`plans`, marketing/checkout) whose slugs agree with plan_tiers TODAY but are not constrained
+  // to, so a slug join could show the tenant a price its tier does not carry
+  // (kanban t_1a29087b, measured 2026-10-02: plan_tiers free 0/pro 49/enterprise 199,
+  //  plans.price free 0/pro 49/enterprise 199). The catalogue still prices the OTHER plans.
+  const ownMonthly = (plan.price_monthly === undefined || plan.price_monthly === null) ? null : plan.price_monthly;
+  const ownAnnual = (plan.price_annual === undefined || plan.price_annual === null) ? null : plan.price_annual;
+  const isCurrent = (p) => String(p.slug || '').toLowerCase() === curSlug;
   const featKeys = (plan.features && typeof plan.features === 'object') ? Object.keys(plan.features) : [];
   const limitBits = [];
   if (plan.max_campaigns !== undefined && plan.max_campaigns !== null) limitBits.push(plan.max_campaigns < 0 ? 'Unlimited campaigns' : (plan.max_campaigns + ' campaigns'));
@@ -383,8 +392,9 @@ const MyPlan = () => {
       <div class="text-xs uppercase text-gray-400 font-semibold mb-1">Your current plan</div>
       ${st.me ? html`<div class="flex items-center gap-3 flex-wrap">
         <h3 class="text-lg font-bold">${plan.name || 'Free'}</h3>
-        <span class="badge badge-blue">${cur ? money(cur.monthly_price) + ' per month' : 'no charge'}</span>
+        <span class="badge badge-blue">${money(ownMonthly) + ' per month'}</span>
       </div>
+      ${st.me && ownAnnual > 0 && html`<div class="text-sm text-gray-600 mt-1">${money(ownAnnual)} per year if billed annually</div>`}
       <div class="text-sm text-gray-600 mt-2">${limitBits.length ? limitBits.join(' \u00b7 ') : 'Limits are set on your plan tier.'}</div>
       <div class="text-sm text-gray-600 mt-1">${featKeys.length ? 'Included: ' + featKeys.map(pretty).join(', ') : ''}</div>` :
       html`<div class="text-sm text-gray-500">Loading your plan\u2026</div>`}
@@ -393,9 +403,9 @@ const MyPlan = () => {
       <table class="table"><thead><tr><th>Plan</th><th>Monthly</th><th>Included</th><th></th></tr></thead>
         <tbody>${catalogue.map(p => html`<tr>
           <td class="font-medium">${p.name}</td>
-          <td class="text-gray-500">${money(p.monthly_price)}</td>
+          <td class="text-gray-500">${isCurrent(p) && ownMonthly !== null ? money(ownMonthly) : money(p.monthly_price)}</td>
           <td class="text-gray-500">${Array.isArray(p.features) ? p.features.map(pretty).join(', ') : '\u2014'}</td>
-          <td>${String(p.slug || '').toLowerCase() === curSlug ? html`<span class="badge badge-green">Current</span>` : ''}</td>
+          <td>${isCurrent(p) ? html`<span class="badge badge-green">Current</span>` : ''}</td>
         </tr>`)}
         ${catalogue.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">Loading plans\u2026</td></tr>`}
       </tbody></table>
