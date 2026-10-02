@@ -451,6 +451,15 @@ fn build_default_email_body(outcome: &OutcomePayload) -> String {
 // ---------------------------------------------------------------------------
 
 /// Deliver outcome to an integration target (webhook).
+///
+/// SECURITY (kanban t_305a0549): the target load used to be `WHERE id = $1` only, so a campaign
+/// whose `delivery_config` named a FOREIGN target id fired a webhook — with the campaign's lead
+/// payload — at another tenant's URL. Measured live before the fix (receiver on the foreign URL:
+/// 1 hit). The predicate is now `id = $1 AND account_id = $2` bound to the CAMPAIGN's own
+/// `account_id`: a campaign may only deliver to a target its own account owns. Delivery is
+/// per-account by construction (`fire_autoresponder` already scoped this way), the console's
+/// target picker offers only the campaign's own targets, and every live campaign's
+/// `delivery_config` is still `{}`, so no configured delivery is affected.
 async fn deliver_to_integration_target(
     pool: &PgPool,
     target_id_str: &str,
@@ -460,12 +469,14 @@ async fn deliver_to_integration_target(
         .map_err(|_| format!("Invalid target id: {}", target_id_str))?;
 
     let target = sqlx::query_as::<_, IntegrationTargetRow>(
-        r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
+        r#"-- the target must belong to the campaign's own account
+           SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active, COALESCE(allowed_domains, '{}') AS allowed_domains,
                   daily_limit
-           FROM integration_targets WHERE id = $1"#,
+           FROM integration_targets WHERE id = $1 AND account_id = $2"#,
     )
     .bind(target_id)
+    .bind(ctx.campaign.account_id)
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("DB error: {}", e))?

@@ -52,17 +52,44 @@ pub struct UpdateIntegrationTargetInput {
     pub is_active: Option<bool>,
 }
 
-/// GET /api/v1/integration-targets
+/// The caller's own account id, from the verified session.
+fn account_uuid(user: &AuthenticatedUser) -> Result<Uuid, AppError> {
+    Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))
+}
+
+/// GET /api/v1/integration-targets — the CALLER's own targets only.
+///
+/// SECURITY (kanban t_305a0549). This statement used to have no `WHERE` clause at all:
+/// `SELECT … FROM integration_targets ORDER BY name`. Measured live 2026-10-01, a fresh free
+/// tenant that owned exactly ONE target received the whole table — 9 foreign rows carrying
+/// other accounts' `webhook_url` AND plaintext `api_key` (the Delivery panel then made the same
+/// data reachable from a second surface). The console's Integration Center shows this route's
+/// answer to every session (`adminOnly: false`), so the leak was one `Array.isArray` away from
+/// being rendered, and it IS rendered on the current served console.
+///
+/// Scoped UNCONDITIONALLY to `account_id` — no `role == "admin"` bypass. Decided by
+/// measurement, not by taste: this app has NO operator view of `integration_targets`
+/// (`grep -rn "integration-targets" src/main.rs` -> this route only; there is no
+/// `/api/v1/admin/integration-targets`, and the Operator Console's OPS_PANELS call `/admin/*`
+/// only). The operator's own session is, on this surface, just another tenant's: nav item
+/// `IntegrationCenter` is `adminOnly: false` and its own account owns 0 targets — measured, an
+/// operator session read 9 rows of which 0 were its own. The sibling handler family (`tags`)
+/// already scopes unconditionally (t_286aead1); a cross-account listing, if ever wanted, belongs
+/// on an `admin_guard`-protected `/api/v1/admin/*` route, not here.
 pub async fn list_integration_targets(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = account_uuid(&user)?;
     let targets = sqlx::query_as::<_, IntegrationTarget>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
                   api_key, events, is_active, created_at, updated_at
            FROM integration_targets
+           WHERE account_id = $1
            ORDER BY name"#,
     )
+    .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
@@ -113,21 +140,30 @@ pub async fn create_integration_target(
     Ok(Json(json!({ "target": target })))
 }
 
-/// PUT /api/v1/integration-targets/{id}
+/// PUT /api/v1/integration-targets/{id} — the caller's OWN target, or 404.
+///
+/// SECURITY (kanban t_305a0549): every statement below used to match on the row id alone, so any
+/// authenticated account could re-point (`webhook_url`!) or rewrite another account's target.
+/// The ownership predicate is on the *read* as well as the *write*: this handler is read-then-
+/// write, so scoping only the UPDATE would 404 on the id and then write the body back anyway.
+/// 404 (not 403) is this app's convention — a 403 would confirm the id exists somewhere
+/// (same rule as `tags_handler::update_tag`, t_286aead1).
 pub async fn update_integration_target(
     State(state): State<AppState>,
     Path(id): Path<String>,
     user: AuthenticatedUser,
     Json(body): Json<UpdateIntegrationTargetInput>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = account_uuid(&user)?;
     let target_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
 
     let existing = sqlx::query(
-        r#"SELECT name, provider, webhook_url, api_key, events, is_active
-           FROM integration_targets WHERE id = $1"#,
+        r#"SELECT name, provider, webhook_url, api_key, events, is_active, portfolio_company_id
+           FROM integration_targets WHERE id = $1 AND account_id = $2"#,
     )
     .bind(target_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Integration target not found".to_string()))?;
@@ -147,18 +183,14 @@ pub async fn update_integration_target(
                 .map_err(|_| AppError::BadRequest("Invalid portfolio_company_id".to_string()))?,
         )
     } else {
-        sqlx::query_scalar("SELECT portfolio_company_id FROM integration_targets WHERE id = $1")
-            .bind(target_id)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten()
+        existing.get("portfolio_company_id")
     };
 
-    sqlx::query(
+    let updated = sqlx::query(
         r#"UPDATE integration_targets SET
                name = $1, provider = $2, webhook_url = $3, api_key = $4,
                events = $5, is_active = $6, portfolio_company_id = $7, updated_at = now()
-           WHERE id = $8"#,
+           WHERE id = $8 AND account_id = $9"#,
     )
     .bind(&name)
     .bind(&provider)
@@ -168,8 +200,15 @@ pub async fn update_integration_target(
     .bind(is_active)
     .bind(portfolio_company_id)
     .bind(target_id)
+    .bind(account_id)
     .execute(&state.db)
     .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "Integration target not found".to_string(),
+        ));
+    }
 
     let target = sqlx::query_as::<_, IntegrationTarget>(
         r#"SELECT id, account_id, portfolio_company_id, name, provider, webhook_url,
@@ -183,17 +222,22 @@ pub async fn update_integration_target(
     Ok(Json(json!({ "target": target })))
 }
 
-/// DELETE /api/v1/integration-targets/{id}
+/// DELETE /api/v1/integration-targets/{id} — the caller's OWN target, or 404.
+///
+/// SECURITY (kanban t_305a0549): this used to be `DELETE … WHERE id = $1`, i.e. any account
+/// could delete any other account's target. Measured live before the fix.
 pub async fn delete_integration_target(
     State(state): State<AppState>,
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = account_uuid(&user)?;
     let target_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid target ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM integration_targets WHERE id = $1")
+    let result = sqlx::query("DELETE FROM integration_targets WHERE id = $1 AND account_id = $2")
         .bind(target_id)
+        .bind(account_id)
         .execute(&state.db)
         .await?;
 
