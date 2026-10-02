@@ -24,7 +24,7 @@ use uuid::Uuid;
 // advertise 16 names of which `prize_value`, `voucher_code`, `points_awarded`, `tier_name`,
 // `unsubscribe_link`, `campaign_url`, `expiry_date`, `score` and `company_name` were bound
 // by NOBODY — a tenant who used one got the braces verbatim (plus the
-// `template placeholders were NOT substituted` warn) — while the names the lifecycle sender
+// `template markup was NOT processed` warn) — while the names the lifecycle sender
 // really does carry (`ticket_number`, `user_score`, `share_link`, `reward_code`) were not
 // advertised at all.
 //
