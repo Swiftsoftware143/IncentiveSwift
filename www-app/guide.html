@@ -401,10 +401,14 @@
       <h3>Attaching an IQS Survey (Optional)</h3>
       <p>You can gate any campaign with an IQS survey. When enabled, users must complete the survey before they can enter the campaign. To attach a survey:</p>
       <ol class="step-list" start="7">
-        <li><strong>Open Campaign Editor</strong><p>Edit an existing campaign or create a new one.</p></li>
-        <li><strong>Select Survey</strong><p>Find the <strong>Qualifying Survey</strong> section in the editor. Choose an IQS funnel from the dropdown, or leave it as "None" to skip.</p></li>
-        <li><strong>Save</strong><p>Click Save. Now when users visit the campaign link, they'll complete the survey first. Only qualified respondents (based on score thresholds) get access to the campaign.</p></li>
+        <li><strong>Open the survey</strong><p>Go to <strong>IQS</strong> in the sidebar and open the funnel you want to use as the gate.</p></li>
+        <li><strong>Choose the campaign</strong><p>In the funnel editor's <strong>Campaign</strong> box pick the campaign this survey should gate, then click <strong>Save Funnel</strong>. That list marks the campaign it currently gates with a &ldquo;&#10003; gated&rdquo;.</p></li>
+        <li><strong>Detach it</strong><p>To remove a gate, set the same box back to <strong>&mdash; none &mdash;</strong> and save. The campaign then runs without the survey.</p></li>
       </ol>
+
+      <div class="alert alert-info">
+        <strong>One campaign per survey:</strong> a survey gates <strong>one</strong> campaign at a time. Attaching it to a second campaign while the first still has it is refused with a message naming the campaign that holds it &mdash; detach it there first (set that funnel's Campaign box to &ldquo;&mdash; none &mdash;&rdquo; and save). Inside the builder this is automatic: picking a different campaign moves the gate in the same save.
+      </div>
 
       <div class="alert alert-info">
         <strong>How it works:</strong> When a campaign has an attached IQS funnel, the play page detects it automatically. Users see the survey questions first, then based on their score (qualified/disqualified), they're either allowed to enter the campaign or shown a disqualified message with optional redirect.
@@ -574,6 +578,7 @@
 
       <h2 id="iqs-campaign">🎯 Survey + Campaigns</h2>
       <p>You can attach an IQS survey as a qualification gate before any campaign type. This creates a two-step flow: survey first, then campaign for qualified respondents.</p>
+      <p>A survey gates <strong>one campaign at a time</strong>: attaching it to a campaign that already runs another survey is refused, and detaching it is what frees it for the next one (see <em>Attaching an IQS Survey</em> above).</p>
 
       <h3>How the Flow Works</h3>
       <ol class="step-list">

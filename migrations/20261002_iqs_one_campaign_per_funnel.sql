@@ -1,0 +1,32 @@
+-- One survey runs in one campaign (kanban t_6c8d8e40).
+--
+-- MEASURED DEFECT (live, 2026-10-01, kanban t_7f2d2995): `campaigns.iqs_funnel_id` (added by
+-- 00016_iqs_campaign_link.sql) had no constraint of any kind, and the API could not even CLEAR it —
+-- `PUT /api/v1/campaigns/<slug> {"iqs_funnel_id": null}` (what the served IQS builder's ungate arm
+-- sends) answered 200 and kept the old value, because JSON null deserialized to "field absent" and
+-- the writer read that as "keep". So a campaign's survey could never be detached, and the run that
+-- measured it left TWO campaigns gated to one funnel. That matters downstream: the IQS submit path
+-- (`delivery::coreswift_external::find_campaign_by_iqs_funnel`) resolved that funnel's campaign with
+-- `LIMIT 1` and no `ORDER BY`, i.e. it pushed the submission to an arbitrary one of the two
+-- campaigns' CoreSwift list ids.
+--
+-- WHAT SHIPS WITH THIS FILE
+--   * `handlers::campaigns::resolve_iqs_gate` makes the detach expressible (null / "" / an id) and
+--     refuses a second attachment with 409 ("one funnel <=> one campaign"), after checking the
+--     funnel exists and belongs to the campaign's own account;
+--   * `delivery::coreswift_external::find_campaign_by_iqs_funnel` resolves deterministically
+--     (`ORDER BY created_at DESC, id DESC`) and logs any legacy duplicate;
+--   * this partial unique index is the DB-level backstop for the same rule — it is what holds when
+--     two writers pass the pre-check at the same instant, and it holds for any future writer, not
+--     just the one route that exists today. `db::campaigns::map_iqs_gate_unique_violation` turns its
+--     23505 into the same 409 the pre-check answers.
+--
+-- NULLs are excluded on purpose: the column is NULLABLE and "not gated" is not a value to be unique
+-- about, so every un-gated campaign (the overwhelmingly common case) is untouched.
+--
+-- `IF NOT EXISTS` because this app's runner re-runs a file it could not record
+-- (src/db/migrations.rs), and the whole file must stay idempotent. Measured on live before this
+-- deploy: 3 campaigns, 0 of them gated, so the index builds with nothing to reconcile.
+CREATE UNIQUE INDEX IF NOT EXISTS campaigns_iqs_funnel_id_uidx
+    ON campaigns (iqs_funnel_id)
+    WHERE iqs_funnel_id IS NOT NULL;

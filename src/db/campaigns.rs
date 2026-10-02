@@ -39,6 +39,10 @@ pub struct CreateCampaignInput {
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
     pub theme: Option<JsonValue>,
+    /// IQS funnel to gate this campaign with at creation. `None` = no gate. Written in the same
+    /// INSERT as the rest of the row (kanban t_6c8d8e40): the route used to ACCEPT this field and
+    /// silently drop it, which is the same "write that cannot happen" the PUT clear was.
+    pub iqs_funnel_id: Option<String>,
 }
 
 /// A campaign record.
@@ -252,8 +256,8 @@ pub async fn create_campaign(
     };
 
     sqlx::query(
-        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty, surface_config)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13, $14)"#
+        r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty, surface_config, iqs_funnel_id)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#
     )
     .bind(id)
     .bind(input.account_id)
@@ -269,8 +273,10 @@ pub async fn create_campaign(
     .bind(loyalty_points_per_play)
     .bind(auto_enroll_loyalty)
     .bind(&surface_config)
+    .bind(input.iqs_funnel_id.as_deref())
     .execute(pool)
-    .await?;
+    .await
+    .map_err(map_iqs_gate_unique_violation)?;
 
     // Fetch back the created campaign
     get_campaign_by_slug(pool, &slug).await
@@ -299,6 +305,41 @@ pub async fn get_campaign_by_id(pool: &PgPool, id: &Uuid) -> Result<Campaign, Ap
     Ok(campaign)
 }
 
+/// The IQS gate a campaign write asked for (kanban t_6c8d8e40).
+///
+/// Tri-state on purpose: "the field was absent" and "the field was explicitly null" are different
+/// instructions, and collapsing them is exactly the bug — `{"iqs_funnel_id": null}` was read as
+/// "keep", so a campaign's survey could never be detached.
+#[derive(Debug, Clone, Copy)]
+pub enum IqsGate {
+    /// The request did not mention the gate — leave `campaigns.iqs_funnel_id` untouched.
+    Keep,
+    /// Explicit JSON null / blank string — detach the survey.
+    Clear,
+    /// Attach this funnel (already validated by the handler: it exists, it belongs to the campaign's
+    /// account, and no other campaign holds it).
+    Set(Uuid),
+}
+
+/// Turn the DB backstop for one-funnel-one-campaign into the same 409 the handler's pre-check
+/// answers (kanban t_6c8d8e40).
+///
+/// `campaigns_iqs_funnel_id_uidx` (migrations/20261002_iqs_one_campaign_per_funnel.sql) can only
+/// fire when two writers race past the pre-check; without this mapping the loser would see a 500 for
+/// a request the API already knows how to explain.
+fn map_iqs_gate_unique_violation(e: sqlx::Error) -> AppError {
+    if let sqlx::Error::Database(db) = &e {
+        if db.constraint() == Some("campaigns_iqs_funnel_id_uidx") {
+            return AppError::Conflict(
+                "That survey is already attached to another campaign. A survey runs in one campaign \
+                 at a time — detach it from the other campaign first."
+                    .to_string(),
+            );
+        }
+    }
+    AppError::from(e)
+}
+
 /// Update a campaign's name, config, and other fields.
 pub async fn update_campaign(
     pool: &PgPool,
@@ -311,7 +352,7 @@ pub async fn update_campaign(
     loyalty_program_id: Option<Option<Uuid>>,
     loyalty_points_per_play: Option<i32>,
     auto_enroll_loyalty: Option<bool>,
-    iqs_funnel_id: Option<Option<String>>,
+    iqs_funnel_id: IqsGate,
 ) -> Result<Campaign, AppError> {
     let existing = get_campaign_by_id(pool, id).await?;
 
@@ -324,8 +365,13 @@ pub async fn update_campaign(
     let new_loyalty_points_per_play =
         loyalty_points_per_play.unwrap_or(existing.loyalty_points_per_play);
     let new_auto_enroll_loyalty = auto_enroll_loyalty.unwrap_or(existing.auto_enroll_loyalty);
-    let new_iqs_funnel_id =
-        iqs_funnel_id.unwrap_or(existing.iqs_funnel_id.map(|id| id.to_string()));
+    // Keep / Clear / Set — the three instructions the request boundary now distinguishes
+    // (kanban t_6c8d8e40). `unwrap_or(existing)` used to collapse "null" into "absent" here.
+    let new_iqs_funnel_id: Option<String> = match iqs_funnel_id {
+        IqsGate::Keep => existing.iqs_funnel_id.clone(),
+        IqsGate::Clear => None,
+        IqsGate::Set(fid) => Some(fid.to_string()),
+    };
 
     sqlx::query(
         r#"UPDATE campaigns
@@ -348,7 +394,8 @@ pub async fn update_campaign(
     .bind(id)
     .bind(new_iqs_funnel_id)
     .execute(pool)
-    .await?;
+    .await
+    .map_err(map_iqs_gate_unique_violation)?;
 
     get_campaign_by_id(pool, id).await
 }

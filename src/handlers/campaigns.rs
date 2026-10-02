@@ -1,7 +1,7 @@
 //! Campaign handlers — list, get by slug, create.
 
 use crate::access::feature_gate;
-use crate::db::campaigns;
+use crate::db::campaigns::{self, IqsGate};
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -11,6 +11,98 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+/// Deserialize a tri-state field: absent -> `None`, JSON `null` -> `Some(None)`, value ->
+/// `Some(Some(v))` (kanban t_6c8d8e40).
+///
+/// `Option<Option<T>>` on its own does NOT give this: serde's `Option` impl answers the OUTER `None`
+/// for `null`, so `{"iqs_funnel_id": null}` — the served IQS builder's own ungate arm — was
+/// indistinguishable from "the field was not sent" and `db::campaigns::update_campaign` read it as
+/// "keep what is there". There was no spelling of that request which cleared the column.
+///
+/// `deserialize_with` is only invoked when the key IS present, and the inner `Option` answers `None`
+/// for `null`; the outer `Some` is what records "the caller spoke". `default` covers the absent key.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
+
+/// Resolve and validate an IQS-gate request into the write (kanban t_6c8d8e40).
+///
+/// Measured defect (live, 2026-10-01, kanban t_7f2d2995): `PUT /api/v1/campaigns/<slug>
+/// {"iqs_funnel_id": null}` — the served IQS builder's own ungate arm (www-app/iqs.html,
+/// `previouslyGated`) — answered **200** and kept the old value, so a campaign's survey gate could
+/// never be detached. Two campaigns ended up pointing at one funnel, and because the submit path
+/// (`delivery::coreswift_external::find_campaign_by_iqs_funnel`, `LIMIT 1`, no `ORDER BY`) then
+/// resolved that funnel's campaign arbitrarily, IQS submissions were routed to whichever of the two
+/// the planner happened to return first.
+///
+/// DECIDED here (the card's arm (a)) — one funnel gates at most one campaign. An absent field means
+/// `Keep` (this request does not mention the column); `null` or a blank string means `Clear` (the
+/// detach the builder sends); a funnel id means `Set`, but only when it parses as a UUID, names a
+/// funnel that exists and belongs to THIS account, and no other campaign holds it (409).
+/// A refusal rather than a silent move: no request may strip a survey from a campaign it never
+/// mentioned, and the builder already detaches the old holder before attaching the new one, so the
+/// UI flow is unchanged and its loop becomes belt-and-braces instead of the only guard.
+///
+/// The same rule exists as a partial unique index (`campaigns_iqs_funnel_id_uidx`,
+/// migrations/20261002_iqs_one_campaign_per_funnel.sql), which is what closes the check-then-write
+/// race; `db::campaigns::map_iqs_gate_unique_violation` turns that race into the identical 409.
+async fn resolve_iqs_gate(
+    state: &AppState,
+    account_id: &uuid::Uuid,
+    requested: Option<&Option<String>>,
+    writing: Option<&uuid::Uuid>,
+) -> Result<IqsGate, AppError> {
+    let raw = match requested {
+        None => return Ok(IqsGate::Keep),
+        Some(None) => return Ok(IqsGate::Clear),
+        Some(Some(raw)) => raw.trim(),
+    };
+    if raw.is_empty() {
+        return Ok(IqsGate::Clear);
+    }
+
+    let funnel_id = uuid::Uuid::parse_str(raw).map_err(|_| {
+        AppError::BadRequest(
+            "iqs_funnel_id must be the id of an IQS funnel, or null to detach the survey."
+                .to_string(),
+        )
+    })?;
+
+    // A gate has to point at a funnel the caller can actually see: the column is a plain VARCHAR
+    // with no FK, and `GET /campaigns/:slug/iqs-funnel-questions` then reads the funnel by id alone,
+    // so an unvalidated write could attach a campaign to ANOTHER tenant's survey.
+    let owned: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iqs_funnels WHERE id = $1 AND account_id = $2")
+            .bind(funnel_id)
+            .bind(account_id)
+            .fetch_one(&state.db)
+            .await?;
+    if owned == 0 {
+        return Err(AppError::NotFound("IQS funnel not found".to_string()));
+    }
+
+    let holder: Option<String> = sqlx::query_scalar(
+        "SELECT slug FROM campaigns WHERE iqs_funnel_id = $1 AND ($2::uuid IS NULL OR id <> $2) \
+         ORDER BY created_at ASC, id ASC LIMIT 1",
+    )
+    .bind(funnel_id.to_string())
+    .bind(writing.copied())
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(other) = holder {
+        return Err(AppError::Conflict(format!(
+            "That survey is already attached to campaign '{other}'. A survey runs in one campaign \
+             at a time — detach it there first."
+        )));
+    }
+
+    Ok(IqsGate::Set(funnel_id))
+}
 
 /// GET /api/v1/campaigns — list campaigns scoped to authenticated user's account.
 pub async fn list_campaigns(
@@ -56,6 +148,9 @@ pub struct CreateCampaignBody {
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
     pub theme: Option<Value>,
+    /// IQS survey gate, tri-state: absent = leave it, `null` or `""` = detach, an id = attach.
+    /// See `double_option` for why the plain `Option<Option<String>>` shape was not enough.
+    #[serde(default, deserialize_with = "double_option")]
     pub iqs_funnel_id: Option<Option<String>>,
 }
 
@@ -112,6 +207,12 @@ pub async fn create_campaign(
         )));
     }
 
+    // A creation request may gate the new campaign in the same INSERT (kanban t_6c8d8e40). This
+    // field used to be accepted and silently dropped — the same "write that cannot happen" the PUT
+    // clear was. A campaign that does not exist yet can never be the funnel's current holder, so
+    // only the id/ownership rules can refuse here.
+    let iqs_gate = resolve_iqs_gate(&state, &account_id, body.iqs_funnel_id.as_ref(), None).await?;
+
     let input = campaigns::CreateCampaignInput {
         name: name.to_string(),
         r#type: body.r#type,
@@ -125,6 +226,10 @@ pub async fn create_campaign(
         loyalty_points_per_play: body.loyalty_points_per_play,
         auto_enroll_loyalty: body.auto_enroll_loyalty,
         theme: body.theme,
+        iqs_funnel_id: match iqs_gate {
+            IqsGate::Set(fid) => Some(fid.to_string()),
+            IqsGate::Keep | IqsGate::Clear => None,
+        },
     };
 
     let campaign = campaigns::create_campaign(&state.db, &input).await?;
@@ -144,6 +249,9 @@ pub struct UpdateCampaignBody {
     pub loyalty_points_per_play: Option<i32>,
     pub auto_enroll_loyalty: Option<bool>,
     pub theme: Option<Value>,
+    /// IQS survey gate, tri-state: absent = leave it, `null` or `""` = detach, an id = attach.
+    /// See `double_option` for why the plain `Option<Option<String>>` shape was not enough.
+    #[serde(default, deserialize_with = "double_option")]
     pub iqs_funnel_id: Option<Option<String>>,
 }
 
@@ -192,6 +300,16 @@ pub async fn update_campaign(
         body.config.clone()
     };
 
+    // Validate the requested survey gate BEFORE any write: a refusal here (bad id / foreign funnel /
+    // funnel already held) must leave the row untouched (kanban t_6c8d8e40).
+    let iqs_gate = resolve_iqs_gate(
+        &state,
+        &campaign.account_id,
+        body.iqs_funnel_id.as_ref(),
+        Some(&campaign.id),
+    )
+    .await?;
+
     let campaign = campaigns::update_campaign(
         &state.db,
         &campaign.id,
@@ -203,7 +321,7 @@ pub async fn update_campaign(
         body.loyalty_program_id,
         body.loyalty_points_per_play,
         body.auto_enroll_loyalty,
-        body.iqs_funnel_id.clone(),
+        iqs_gate,
     )
     .await?;
 

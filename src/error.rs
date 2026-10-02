@@ -22,6 +22,13 @@ pub enum AppError {
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
+    /// A write that is well-formed but refused because it would break an invariant the rest of the
+    /// system relies on — today: attaching a survey to a campaign when another campaign already
+    /// runs it (kanban t_6c8d8e40, one funnel <=> one campaign). Distinct from BadRequest so the
+    /// caller can tell "you typed something wrong" from "the thing you asked for is taken".
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Rate limited")]
     RateLimited,
 
@@ -47,6 +54,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,

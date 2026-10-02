@@ -166,13 +166,47 @@ pub async fn get_campaign_coreswift_list(state: &AppState, campaign_id: &Uuid) -
 }
 
 /// Find the campaign id linked to an IQS funnel via campaigns.iqs_funnel_id.
+///
+/// DETERMINISTIC on purpose (kanban t_6c8d8e40). This used to be
+/// `SELECT id ... WHERE iqs_funnel_id = $1 LIMIT 1` with no ORDER BY, and the card that filed this
+/// one measured what that costs: two campaigns were left gated to one funnel (see
+/// `handlers::campaigns::resolve_iqs_gate` — the write path now refuses a second attachment), and
+/// the `LIMIT 1` picked one of them arbitrarily, which is to say the submission was pushed to an
+/// arbitrary campaign's CoreSwift `list_id`.
+///
+/// Order: newest campaign first, id as the tie-break, so the same data always resolves the same way.
+/// More than one match can now only be legacy data (the write refuses it and
+/// `campaigns_iqs_funnel_id_uidx` backstops that), so the duplicate is logged loudly instead of
+/// being silently absorbed.
 pub async fn find_campaign_by_iqs_funnel(state: &AppState, funnel_id: &Uuid) -> Option<Uuid> {
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM campaigns WHERE iqs_funnel_id = $1 LIMIT 1")
-        .bind(funnel_id.to_string())
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
+    let ids = match sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM campaigns WHERE iqs_funnel_id = $1 ORDER BY created_at DESC, id DESC",
+    )
+    .bind(funnel_id.to_string())
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                funnel = %funnel_id,
+                "IQS funnel -> campaign lookup failed; no CoreSwift list id will be resolved"
+            );
+            return None;
+        }
+    };
+
+    if ids.len() > 1 {
+        tracing::warn!(
+            funnel = %funnel_id,
+            gated_campaigns = ids.len(),
+            "IQS funnel is gated by more than one campaign (legacy data): resolving to the most \
+             recent one. The campaign write path refuses a second attachment"
+        );
+    }
+
+    ids.into_iter().next()
 }
 
 /// Core push: contact + fields + tags + list -> POST /api/external/contacts.
