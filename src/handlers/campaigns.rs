@@ -70,6 +70,39 @@ pub async fn create_campaign(
     let account_id = uuid::Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
+    // ── Identity validation (kanban t_a56c03a1) ────────────────────────────────────────────
+    // Measured live 2026-10-02 on binary f03d7fe8: this route answered 200 for `name: ""` and
+    // created a campaign whose console row renders as a blank <td>, and 200 for `tag_namespace: ""`,
+    // whose outcome tags are `_entrant`/`_winner` — one shared vocabulary for the whole account.
+    // Both columns are NOT NULL with no default, so an empty string is the only way a caller can
+    // omit them, and nothing rejected it.
+    //
+    // Arm picked by measurement: REJECT (400). The fleet's only caller, www-admin/index.html,
+    // always sends `name` and turns a 400 into `alert(e.message)` — the same path the mechanic-403
+    // takes (API.handle throws `new Error(d.error)`, Campaigns.save's catch alerts it) — so the
+    // operator is told. Defaulting would silently create rows an operator still cannot tell apart.
+    // The DB keeps the same invariant (campaigns_name_not_blank / campaigns_tag_namespace_not_blank
+    // + campaigns_account_tag_namespace_uidx, migrations/20261002_campaign_identity_not_blank.sql).
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest(
+            "Campaign name is required.".to_string(),
+        ));
+    }
+    let tag_namespace = body.tag_namespace.trim();
+    if tag_namespace.is_empty() {
+        return Err(AppError::BadRequest(
+            "Campaign tag namespace is required.".to_string(),
+        ));
+    }
+    if campaigns::tag_namespace_taken(&state.db, &account_id, tag_namespace).await? {
+        return Err(AppError::BadRequest(format!(
+            "Tag namespace '{}' is already used by another campaign in this account. \
+             Every outcome tag of this campaign is prefixed with it, so it must be unique per account.",
+            tag_namespace
+        )));
+    }
+
     let has_access =
         feature_gate::has_mechanic_access(&state, &user.account_id, &body.r#type).await?;
     if !has_access {
@@ -80,9 +113,9 @@ pub async fn create_campaign(
     }
 
     let input = campaigns::CreateCampaignInput {
-        name: body.name,
+        name: name.to_string(),
         r#type: body.r#type,
-        tag_namespace: body.tag_namespace,
+        tag_namespace: tag_namespace.to_string(),
         config: body.config,
         outcome_tags: body.outcome_tags,
         delivery_method: body.delivery_method,
@@ -129,6 +162,25 @@ pub async fn update_campaign(
     };
     let campaign = campaign?;
 
+    // A rename to "" (or to whitespace) left the row exactly as blank as an empty create did:
+    // measured live 2026-10-02 (binary f03d7fe8) `PUT /api/v1/campaigns/:slug {"name":""}` -> 200
+    // with `name=''` in the DB, and the console's Edit form sends whatever the operator typed
+    // (www-admin/index.html doSave: `{ name: cf.name, config }`), so clearing the Name box and
+    // saving produced a nameless campaign. Same refusal and same shape as the create path
+    // (kanban t_a56c03a1). A non-empty rename is still trimmed and stored.
+    let new_name: Option<String> = match body.name.as_deref() {
+        Some(n) => {
+            let trimmed = n.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::BadRequest(
+                    "Campaign name is required.".to_string(),
+                ));
+            }
+            Some(trimmed.to_string())
+        }
+        None => None,
+    };
+
     // Merge branding into existing campaign config if provided
     let config: Option<Value> = if let Some(ref branding) = body.branding {
         let mut merged = body.config.clone().unwrap_or(campaign.config);
@@ -143,7 +195,7 @@ pub async fn update_campaign(
     let campaign = campaigns::update_campaign(
         &state.db,
         &campaign.id,
-        body.name.as_deref(),
+        new_name.as_deref(),
         config.as_ref(),
         body.outcome_tags.as_ref(),
         body.delivery_method.as_deref(),
@@ -198,6 +250,13 @@ pub async fn clone_campaign(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let new_id = uuid::Uuid::new_v4();
 
+    // The clone must NOT inherit its source's `tag_namespace` (kanban t_a56c03a1): every outcome tag
+    // is `{tag_namespace}_*` and `tags` is UNIQUE per account, so copying it made the copy's audience
+    // the same tag rows as the original's — the two campaigns were indistinguishable downstream.
+    // Derive a fresh, collision-checked namespace (the unique index is the backstop).
+    let new_tag_namespace =
+        campaigns::clone_tag_namespace(&state.db, &account_id, &original.tag_namespace).await?;
+
     sqlx::query(
         r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
            VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11, $12, $13)"#
@@ -208,7 +267,7 @@ pub async fn clone_campaign(
     .bind(&new_slug)
     .bind(&original.r#type)
     .bind(&original.config)
-    .bind(&original.tag_namespace)
+    .bind(&new_tag_namespace)
     .bind(&original.outcome_tags)
     .bind(&original.delivery_method)
     .bind(&original.delivery_config)

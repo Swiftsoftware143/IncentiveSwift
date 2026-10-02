@@ -72,6 +72,52 @@ pub fn validate_mechanic_type(type_str: &str) -> bool {
     VALID_MECHANIC_TYPES.contains(&type_str)
 }
 
+/// Is `tag_namespace` already taken by another campaign in this account? (kanban t_a56c03a1)
+///
+/// Case-INSENSITIVE on purpose: every outcome tag a campaign applies is `{tag_namespace}_*`
+/// (`entries.rs` determine_outcome, `score_reveal_handler.rs`, `long_form_qualifier_handler.rs`,
+/// `mystery_handler.rs`) and `public.tags` is `UNIQUE (account_id, lower(name))`, so `Summer` and
+/// `summer` name the SAME tag vocabulary. Two campaigns sharing it makes their audiences
+/// indistinguishable. The `campaigns_account_tag_namespace_uidx` index
+/// (migrations/20261002_campaign_identity_not_blank.sql) is the class-wide backstop; this is the
+/// check that turns the collision into a 400 instead of a unique-violation 500.
+pub async fn tag_namespace_taken(
+    pool: &PgPool,
+    account_id: &Uuid,
+    tag_namespace: &str,
+) -> Result<bool, AppError> {
+    let taken: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM campaigns \
+         WHERE account_id = $1 AND lower(tag_namespace) = lower($2) LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(tag_namespace)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(taken.is_some())
+}
+
+/// A tag namespace for a CLONE that cannot collide with its source (kanban t_a56c03a1).
+///
+/// `clone_campaign` used to copy `tag_namespace` verbatim, so EVERY clone produced a second campaign
+/// whose outcome tags are the same strings as its source's — and since `tags` is unique per account
+/// (and `entries.tags_applied` is what segments an audience), the copy and the original were
+/// indistinguishable. Bounded retry against the live table; the unique index is the backstop.
+pub async fn clone_tag_namespace(
+    pool: &PgPool,
+    account_id: &Uuid,
+    source: &str,
+) -> Result<String, AppError> {
+    for _ in 0..8 {
+        let candidate = format!("{}-clone-{}", source, &Uuid::new_v4().to_string()[..8]);
+        if !tag_namespace_taken(pool, account_id, &candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    Ok(Uuid::new_v4().to_string())
+}
+
 /// Get a campaign by its slug.
 pub async fn get_campaign_by_slug(pool: &PgPool, slug: &str) -> Result<Campaign, AppError> {
     let campaign = sqlx::query_as::<_, Campaign>(
