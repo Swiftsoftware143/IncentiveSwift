@@ -463,6 +463,10 @@ pub async fn admin_list_all_campaigns(
 /// decision (see `retire-dead-letters.py` in the ticket's audit dir for how the 18 probe rows were
 /// retired), and an operator control that silently re-sends customer mail is worse than none.
 ///
+/// Since kanban t_44a990da the ticker retries a failed send a bounded number of times before a row
+/// lands here, so `rows` is the set the app has GIVEN UP on; mail still inside a retry window is
+/// neither listed nor lost, and is counted by `retrying`.
+///
 /// Mounted under `/api/v1/admin/*`, so `security::auth::admin_guard` covers it: anonymous callers
 /// answer 401 and a non-admin session cannot read another tenant's queue.
 pub async fn email_queue(
@@ -480,6 +484,17 @@ pub async fn email_queue(
         total += n;
         by_status.insert(status, json!(n));
     }
+
+    // POLICY (kanban t_44a990da): a row that failed an attempt is RE-ARMED, not written off — it
+    // stays `pending` with `attempts > 0` and `send_at` pushed past its backoff. That is neither
+    // `sent` nor a dead letter, so it must NOT appear in the list below, but an operator still has
+    // to be able to see that mail is sitting in a retry window. This is that number, and
+    // `counts.pending` already includes it.
+    let retrying: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM pending_emails WHERE status = 'pending' AND attempts > 0",
+    )
+    .fetch_one(&state.db)
+    .await?;
 
     let dead: Vec<(
         Uuid,
@@ -537,8 +552,9 @@ pub async fn email_queue(
     Ok(Json(json!({
         "counts": Value::Object(by_status),
         "total": total,
+        "retrying": retrying,
         "dead_letters": rows.len(),
-        "note": "read-only. 'failed' = the ticker gave up (it never retries a failed row); 'retired' = withdrawn on purpose, the reason is in last_error.",
+        "note": "read-only. 'failed' = the ticker gave up after 3 attempts (it never retries a failed row); 'retired' = withdrawn on purpose, the reason is in last_error. A row that failed and is waiting for its next attempt is NOT listed here — it is still 'pending' with attempts > 0, and is counted by `retrying`.",
         "rows": rows,
     })))
 }
