@@ -210,9 +210,9 @@ async fn deliver_via(
                     format!("Invalid from address: {}", e)
                 })?,
         )
-        .to(to
-            .parse()
-            .map_err(|e: lettre::address::AddressError| format!("Invalid to address: {}", e))?)
+        .to(to.parse().map_err(|e: lettre::address::AddressError| {
+            format!("{INVALID_RECIPIENT_PREFIX} {}", e)
+        })?)
         .subject(subject)
         .header(ContentType::TEXT_HTML)
         .body(body_html.to_string())
@@ -361,6 +361,16 @@ pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
     result
 }
 
+/// The error text [`send_template_by_type`] returns when the row's `template_type` matches no
+/// template. PUBLIC because it is one of the two pieces of vocabulary the ticker's fairness rule
+/// classifies on (kanban t_96695538): a missing template is a property of the ROW, so it must not
+/// defer the account's other rows. Kept as a const so the producer and the classifier cannot drift.
+pub const NO_TEMPLATE_PREFIX: &str = "No email template found for type";
+
+/// The error text [`deliver_via`] (and `crate::smtp::send_via_smtp`) returns for a recipient lettre
+/// cannot parse. ROW-scoped for the same reason: the next row may be a perfectly good address.
+pub const INVALID_RECIPIENT_PREFIX: &str = "Invalid to address:";
+
 /// THE selection rule for "the template of this type, for this account" — the only
 /// place in the app that decides it (kanban t_0fb81177).
 ///
@@ -436,7 +446,7 @@ pub async fn send_template_by_type(
     let row = load_template_by_type(pool, Some(account_id), template_type)
         .await
         .map_err(|e| format!("DB error loading template: {e}"))?
-        .ok_or_else(|| format!("No email template found for type '{template_type}'"))?;
+        .ok_or_else(|| format!("{NO_TEMPLATE_PREFIX} '{template_type}'"))?;
 
     let subject = row
         .subject

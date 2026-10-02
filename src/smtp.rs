@@ -37,9 +37,13 @@ pub async fn send_via_smtp(
                 .parse()
                 .map_err(|e| format!("Invalid from address: {}", e))?,
         )
-        .to(to
-            .parse()
-            .map_err(|e| format!("Invalid to address: {}", e))?)
+        .to(to.parse().map_err(|e| {
+            format!(
+                "{} {}",
+                crate::delivery::sender::INVALID_RECIPIENT_PREFIX,
+                e
+            )
+        })?)
         .subject(subject);
 
     let email = match html.filter(|h| !h.is_empty()) {

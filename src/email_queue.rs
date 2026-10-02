@@ -24,8 +24,59 @@
 //! A timed-out tenant dial is NOT a separate state (kanban t_05b6efa2): `sender::deliver_via`
 //! bounds ONE dial at `sender::TENANT_SMTP_DEADLINE` (10 s), so a tenant mail server that accepts
 //! the connection and stays silent now fails in 10 s with `last_error` naming the bound instead of
-//! parking this loop. The loop is SEQUENTIAL (LIMIT 100), so one unreachable tenant server can
-//! still delay the rows queued behind it by 10 s per row — bounded, not indefinite.
+//! parking this loop. The loop is still SEQUENTIAL (LIMIT 100); what one unreachable tenant server is
+//! allowed to cost the OTHER tenants' mail is the FAIRNESS block below.
+//!
+//! # FAIRNESS OF THE FLUSH (kanban t_96695538)
+//!
+//! DECISION: **arm B — an ACCOUNT-scoped failure costs this tick ONE bound, not one bound per queued
+//! row.** The flush stays sequential and `sent` keeps its exact meaning; the change is that the first
+//! account-scoped failure of a tick puts that account on the tick's skip list, and every LATER due row
+//! for that same account is skipped for the rest of this tick — no dial, no write. One unreachable
+//! tenant server can therefore delay the other tenants' mail by at most one `TENANT_SMTP_DEADLINE`
+//! per tick, not by one per queued row.
+//!
+//! MEASURED (this card's own probe: 3 due rows for one account whose mail server is a silent sink,
+//! plus a 4th row for ANOTHER account): BEFORE, the tick dialled the sink 3 times (3 x 10 s) and the
+//! other account's row only settled at the end of that ~30 s; AFTER, 1 dial, the other account's row
+//! settled at ~10 s, and the two skipped rows were still `pending` with `attempts = 0` and no
+//! `last_error` — they were never attempted.
+//!
+//! ARMS REJECTED:
+//!   * arm A (`buffer_unordered(4)` and friends) — a wider flush DIVIDES the delay, it does not bound
+//!     it: with the query's own worst case (100 due rows for one unreachable tenant) a 4-wide flush
+//!     still spends 25 x 10 s parked on that tenant, so the other tenants' mail is still late. It
+//!     would also open up to 4 simultaneous SMTP dials to ONE tenant's mail server (a server whose
+//!     credentials this app holds, and whose operator sees the connection burst) and interleave the
+//!     per-row `sent` counter / DB writes — cost the defect does not ask for.
+//!   * arm C (status quo + a log line) — the delay IS the defect (up to ~17 min of other tenants' mail
+//!     per tick at LIMIT 100), so it cannot be the fix. Its useful half is KEPT: a flush that failed,
+//!     deferred something, or spent >= 1 s logs ONE INFO line naming how long the tick took, so a
+//!     slow tick can be told from a stuck one.
+//!
+//! WHICH failures are account-scoped ([`failure_scope`]):
+//!   * ROW-scoped — the account's other rows can still go out, so they are NOT deferred: a bad
+//!     `template_type` ([`sender::NO_TEMPLATE_PREFIX`]), a recipient that provably cannot receive
+//!     mail ([`crate::security::email_addr::RECIPIENT_REFUSED`], kanban t_f56f4a79), an unparseable
+//!     recipient ([`sender::INVALID_RECIPIENT_PREFIX`]). None of these predicts the NEXT row.
+//!   * ACCOUNT-scoped — a property of the account's transport/config, so its next due row fails the
+//!     same way this tick: the bound (`... did not answer within 10s ...`), any other
+//!     `SMTP send failed: ...`, a host the SSRF gate refuses, `Invalid SMTP host:`,
+//!     `Invalid from address:`, and the platform provider's own failure when the account rides
+//!     platform mail. Anything NOT named ROW-scoped above is account-scoped, so an unrecognised
+//!     failure text defaults to "defer the account" rather than to "burn a bound per row".
+//!
+//! WHAT HAPPENS TO A DEFERRED ROW: **nothing is written for it.** It stays `status = 'pending'` with
+//! its `attempts` and `last_error` EXACTLY as they were, because an attempt that never happened must
+//! not be recorded as one (that would consume the bounded-retry budget of t_44a990da and lie about
+//! it). It is simply still due, so the NEXT tick (30 s) picks it up — while one account's server is
+//! down its rows march at one bound per tick, and every other account's mail is not delayed behind
+//! them. `failed` is still TERMINAL and the retry policy is untouched.
+//!
+//! `GET /api/v1/admin/email-queue` needs NO change for this arm: a deferred row is indistinguishable
+//! from a row that is queued-but-not-yet-due (`pending`, `attempts = 0`), which is exactly the truth
+//! — it was not attempted. The thing that names the stall is the tick's own INFO line
+//! (`email ticker flush took ...`), not the row.
 //!
 //! # POLICY (kanban t_44a990da): a failed send is retried a BOUNDED number of times
 //!
@@ -75,6 +126,7 @@ use crate::delivery::sender;
 use crate::state::AppState;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -111,6 +163,66 @@ pub fn disposition_after_failure(failures: i32) -> Disposition {
         Disposition::Retry(RETRY_BACKOFF[idx])
     } else {
         Disposition::DeadLetter
+    }
+}
+
+/// Whether a send failure is a property of the ROW alone or of the ACCOUNT's transport, which
+/// decides the fairness rule of this tick (kanban t_96695538) — see the module's FAIRNESS block.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum FailureScope {
+    /// Only this row's own input is bad; the account's other rows can still go out.
+    Row,
+    /// The account's transport/config failed, so its next due row fails the same way this tick.
+    Account,
+}
+
+/// THE classification the tick's skip list rests on — pure, so it is unit-tested.
+///
+/// ROW-scoped is a CLOSED list on purpose (three producers, all named as consts so they cannot
+/// drift); everything else — including a text no version of this app produces today — is
+/// account-scoped. Deferring a row costs one 30 s tick; dialling an account whose transport has just
+/// failed costs the WHOLE tick another bound, which is the defect this card removes.
+pub fn failure_scope(err: &str) -> FailureScope {
+    const ROW_SCOPED: [&str; 3] = [
+        sender::NO_TEMPLATE_PREFIX,
+        crate::security::email_addr::RECIPIENT_REFUSED,
+        sender::INVALID_RECIPIENT_PREFIX,
+    ];
+    if ROW_SCOPED.iter().any(|p| err.starts_with(p)) {
+        FailureScope::Row
+    } else {
+        FailureScope::Account
+    }
+}
+
+/// This tick's skip list: the accounts whose dial already failed ACCOUNT-scoped, so their remaining
+/// due rows are deferred instead of dialled (kanban t_96695538). Pure and cheap — the flush loop is
+/// the only caller.
+#[derive(Default)]
+struct TickSkipList {
+    deferred_accounts: HashSet<Uuid>,
+}
+
+impl TickSkipList {
+    /// Leave this row for the next tick: a PREVIOUS row for the same account already failed
+    /// account-scoped in this tick, so dialling it again would just pay another bound.
+    fn should_skip(&self, account_id: Uuid) -> bool {
+        self.deferred_accounts.contains(&account_id)
+    }
+
+    /// Record a failure for `account_id`. Returns true when this failure NEWLY puts the account on
+    /// the skip list — an account-scoped failure for an account not already listed.
+    fn note_failure(&mut self, account_id: Uuid, err: &str) -> bool {
+        if failure_scope(err) == FailureScope::Account {
+            self.deferred_accounts.insert(account_id)
+        } else {
+            false
+        }
+    }
+
+    /// How many accounts had a dial fail account-scoped this tick (named in the tick's log line).
+    fn accounts(&self) -> usize {
+        self.deferred_accounts.len()
     }
 }
 
@@ -160,8 +272,20 @@ pub async fn process_due_emails(state: &AppState) -> usize {
         Default::default()
     });
 
+    let due_count = due.len();
+    let started = std::time::Instant::now();
     let mut sent = 0;
+    let mut failed_this_tick = 0usize;
+    let mut deferred_this_tick = 0usize;
+    let mut skips = TickSkipList::default();
     for (id, account_id, to, template_type, vars, attempts) in due {
+        // FAIRNESS (kanban t_96695538): an account whose dial already failed ACCOUNT-scoped this tick
+        // has its remaining due rows DEFERRED — no dial, no write, so the row keeps `attempts = 0`
+        // and its `send_at`. See the module's FAIRNESS block.
+        if skips.should_skip(account_id) {
+            deferred_this_tick += 1;
+            continue;
+        }
         let result =
             sender::send_template_by_type(&state.db, account_id, &to, &template_type, &vars).await;
 
@@ -176,6 +300,12 @@ pub async fn process_due_emails(state: &AppState) -> usize {
                 sent += 1;
             }
             Err(e) => {
+                failed_this_tick += 1;
+                // FAIRNESS (kanban t_96695538): an ACCOUNT-scoped failure defers the rest of this
+                // account's due rows for the remainder of this tick. A ROW-scoped failure (a bad
+                // template_type, a refused recipient) predicts nothing about the next row and must
+                // NOT defer it — see `failure_scope`.
+                skips.note_failure(account_id, &e);
                 // VISIBILITY (kanban t_9d711589). Before that line the row's ONLY record of the
                 // failure was `last_error` — nothing logged, nothing listed — which is how 18 dead
                 // letters sat unnoticed from 2026-09-20. The recipient address is deliberately NOT
@@ -234,6 +364,30 @@ pub async fn process_due_emails(state: &AppState) -> usize {
                 }
             }
         }
+    }
+
+    // ARM C's useful half (kanban t_96695538): the tick's DELAY is named, so an operator can tell a
+    // slow tick (a tenant server eating bounds) from a stuck one. One INFO line, only when the flush
+    // had something to say — a short, clean, quiet flush logs nothing.
+    let elapsed = started.elapsed();
+    if due_count > 0
+        && (failed_this_tick > 0 || deferred_this_tick > 0 || elapsed >= Duration::from_secs(1))
+    {
+        tracing::info!(
+            due = due_count,
+            sent,
+            failed = failed_this_tick,
+            deferred = deferred_this_tick,
+            stalled_accounts = skips.accounts(),
+            elapsed_ms = elapsed.as_millis() as u64,
+            "email ticker flush took {:.1}s for {} due row(s): {} sent, {} failed, {} deferred \
+             to the next tick after an account's dial failed",
+            elapsed.as_secs_f64(),
+            due_count,
+            sent,
+            failed_this_tick,
+            deferred_this_tick
+        );
     }
     sent
 }
@@ -305,6 +459,82 @@ mod retry_policy_tests {
         assert!(
             MAX_SEND_ATTEMPTS >= 2,
             "a one-attempt budget is the old defect"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tick_fairness_tests {
+    use super::*;
+
+    fn account(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    /// THE rule the skip list rests on (kanban t_96695538): a failure that is a property of the ROW
+    /// must NOT defer the account's other rows — they can still go out, and deferring them would cost
+    /// them a tick for nothing.
+    #[test]
+    fn a_row_scoped_failure_never_defers_the_account() {
+        let cases = [
+            format!("{} 'welcome'", sender::NO_TEMPLATE_PREFIX),
+            format!(
+                "{} the address is reserved",
+                crate::security::email_addr::RECIPIENT_REFUSED
+            ),
+            format!("{} invalid address", sender::INVALID_RECIPIENT_PREFIX),
+        ];
+        for err in cases {
+            assert_eq!(failure_scope(&err), FailureScope::Row, "{err}");
+            let mut skips = TickSkipList::default();
+            assert!(
+                !skips.note_failure(account(1), &err),
+                "{err} must not put the account on the skip list"
+            );
+            assert!(
+                !skips.should_skip(account(1)),
+                "a row-scoped failure deferred a row that could still send: {err}"
+            );
+        }
+    }
+
+    /// The defect arm: a TRANSPORT failure — what a dead tenant server produces — defers THAT
+    /// account only, and only once however many times it fails. Before this rule each of the
+    /// account's due rows paid its own 10 s bound.
+    #[test]
+    fn a_transport_failure_defers_its_account_and_no_other() {
+        let cases = [
+            "SMTP send failed: 209.222.97.179:2525 did not answer within 10s — the dial was \
+             abandoned at the bound (TCP connect, STARTTLS or SMTP dialogue)",
+            "SMTP send failed: connection refused",
+            "SMTP host refused by security policy: private address",
+            "Invalid SMTP host: no such name",
+            "Invalid from address: bad from",
+            "Mailgun returned 502",
+        ];
+        for err in cases {
+            assert_eq!(failure_scope(&err), FailureScope::Account, "{err}");
+            let mut skips = TickSkipList::default();
+            assert!(skips.note_failure(account(1), &err), "{err}");
+            assert!(skips.should_skip(account(1)));
+            assert!(
+                !skips.should_skip(account(2)),
+                "another account must never be deferred by this one's dead server: {err}"
+            );
+            assert_eq!(skips.accounts(), 1);
+            // Idempotent: the same account failing repeatedly is still ONE stalled account.
+            assert!(!skips.note_failure(account(1), &err));
+            assert_eq!(skips.accounts(), 1);
+        }
+    }
+
+    /// An unrecognised text is account-scoped ON PURPOSE: deferring a row costs a 30 s tick, while
+    /// dialling an account whose transport has just failed costs the whole tick another bound.
+    #[test]
+    fn an_unrecognised_failure_defers_rather_than_burning_a_bound() {
+        assert_eq!(
+            failure_scope("some failure text a later seam invented"),
+            FailureScope::Account
         );
     }
 }
