@@ -532,6 +532,9 @@ pub async fn scan_member(
 
     // ── CLEARINGHOUSE: points awarded based on scan type ──
     let mut points_awarded: i32 = 0;
+    // Set by the float guard when a redemption is parked instead of paid. Surfaced in the
+    // response so the counter is told the truth rather than seeing a silent success.
+    let mut float_held: Option<rust_decimal::Decimal> = None;
     let transaction_amount: Option<rust_decimal::Decimal> = req.purchase_amount;
 
     match scan_type {
@@ -621,14 +624,68 @@ pub async fn scan_member(
                 .execute(&state.db)
                 .await?;
 
-                // Update treasury
-                sqlx::query(
-                    "UPDATE point_treasury SET total_points_redeemed = total_points_redeemed + $1, total_reimbursements_paid = total_reimbursements_paid + $2, outstanding_liability = outstanding_liability - $2, updated_at = NOW()"
+                // ── THE FLOAT GUARD ────────────────────────────────────────────────────────────
+                // David, 2026-10-02: *"the main concern is the loyalty engine so there's always money in
+                // there."* Before this, `minimum_float` was displayed and compared against NOTHING: this
+                // UPDATE ran unconditionally, so a redemption could drain the programme below its safety
+                // balance with no record and nobody told. The live treasury row proves it happened —
+                // issued=110, redeemed=200, collected=1.10, reimbursed=1.60, min_float=100.00.
+                //
+                // The customer is standing at the counter, so the answer is NOT a silent failure: the
+                // payment becomes a HOLD that a human resolves and the business is asked to top up.
+                // `reimbursement` is f64 throughout this handler (its numeric convention); the treasury
+                // stores money as numeric, so convert once at the boundary rather than change either side.
+                let reimbursement_dec =
+                    rust_decimal::Decimal::from_f64_retain(reimbursement).unwrap_or_default();
+                match crate::handlers::treasury_engine_handler::check_float(
+                    &state,
+                    reimbursement_dec,
                 )
-                .bind(points_awarded.abs() as i64)
-                .bind(reimbursement)
-                .execute(&state.db)
-                .await?;
+                .await?
+                {
+                    crate::handlers::treasury_engine_handler::FloatCheck::Allowed { .. } => {
+                        sqlx::query(
+                            "UPDATE point_treasury SET total_points_redeemed = total_points_redeemed + $1, total_reimbursements_paid = total_reimbursements_paid + $2, outstanding_liability = outstanding_liability - $2, updated_at = NOW()"
+                        )
+                        .bind(points_awarded.abs() as i64)
+                        .bind(reimbursement)
+                        .execute(&state.db)
+                        .await?;
+                    }
+                    crate::handlers::treasury_engine_handler::FloatCheck::Breached {
+                        available,
+                        shortfall,
+                        behaviour,
+                    } => {
+                        // The hold is recorded under EVERY behaviour, not only 'hold': the money still has
+                        // to be accounted for, and what differs is what the business is told. 'hold' is
+                        // the default, so an unconfigured programme is the safe one.
+                        let hold_id = Uuid::new_v4();
+                        sqlx::query(
+                            "INSERT INTO treasury_holds (id, campaign_id, contact_id, business_id, business_name, points, amount, shortfall, status, reason)
+                             VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'pending', $8)"
+                        )
+                        .bind(hold_id)
+                        .bind(member_id)
+                        .bind(req.business_id)
+                        .bind(&biz_name)
+                        .bind(points_awarded.abs() as i64)
+                        .bind(reimbursement)
+                        .bind(shortfall)
+                        .bind(format!(
+                            "Float would fall below the safety balance: available {} vs required {}. Rule in force: {}. The redemption is parked, nothing is paid, and the business is asked to top up.",
+                            available, shortfall, behaviour
+                        ))
+                        .execute(&state.db)
+                        .await?;
+
+                        float_held = Some(shortfall);
+                        tracing::warn!(
+                            business = %biz_name, available = %available, shortfall = %shortfall, behaviour = %behaviour,
+                            "treasury float guard: redemption HELD, nothing paid out"
+                        );
+                    }
+                }
             }
         }
         _ => {
@@ -758,9 +815,18 @@ pub async fn scan_member(
             "processed": true,
             "issuance_billed": if points_awarded > 0 { points_awarded as f64 * 0.01 } else { 0.0 },
             "redemption_reimbursed": if points_awarded < 0 { points_awarded.abs() as f64 * 0.008 } else { 0.0 },
+            // Set by the float guard. The counter is told the truth instead of seeing a silent success:
+            // a reward that would have drained the programme is HELD, not paid, and not silently refused.
+            "float_held": float_held.is_some(),
+            "float_held_shortfall": float_held,
         },
-        "message": format!("Scanned — {} points {}", points_awarded.abs(),
-            if points_awarded >= 0 { "awarded" } else { "deducted" }),
+        "message": if float_held.is_some() {
+            "Scanned — reward held for confirmation while the business tops up. Nothing was paid out."
+                .to_string()
+        } else {
+            format!("Scanned — {} points {}", points_awarded.abs(),
+                if points_awarded >= 0 { "awarded" } else { "deducted" })
+        },
     })))
 }
 

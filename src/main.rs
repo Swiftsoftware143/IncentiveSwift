@@ -424,6 +424,31 @@ async fn main() -> anyhow::Result<()> {
         )
         // Clearinghouse configuration
         .route(
+            "/api/v1/admin/treasury/state",
+            get(handlers::treasury_engine_handler::get_state),
+        )
+        .route(
+            "/api/v1/admin/treasury/funding",
+            get(handlers::treasury_engine_handler::list_funding)
+                .post(handlers::treasury_engine_handler::record_funding),
+        )
+        .route(
+            "/api/v1/admin/treasury/rule",
+            axum::routing::put(handlers::treasury_engine_handler::set_rule),
+        )
+        .route(
+            "/api/v1/admin/treasury/holds",
+            get(handlers::treasury_engine_handler::list_holds),
+        )
+        .route(
+            "/api/v1/admin/treasury/holds/:id/resolve",
+            axum::routing::post(handlers::treasury_engine_handler::resolve_hold),
+        )
+        .route(
+            "/api/v1/treasury/rules",
+            get(handlers::treasury_engine_handler::get_business_rules),
+        )
+        .route(
             "/api/v1/admin/clearinghouse/config",
             get(handlers::clearinghouse_config_handler::get_treasury_config)
                 .put(handlers::clearinghouse_config_handler::update_treasury_config),
