@@ -2989,18 +2989,37 @@ const OpsList = ({ path }) => {
     const k = Object.keys(data).find(kk => Array.isArray(data[kk]));
     if (k) rows = data[k];
   }
+  // kanban t_eee3e79e — ARM A. A payload that COUNTS mail still inside a retry window must say so.
+  // GET /admin/email-queue answers {counts, total, retrying, dead_letters, note, rows} and `rows`
+  // (the first array-valued key, so the picker above still selects it) is the set the ticker has
+  // GIVEN UP on. Table-only, the panel read as "nothing else is waiting" while 5-30 minute retries
+  // were in flight (measured: payload retrying=1, panel showed the 18 retired rows and nothing
+  // about it). This renders one summary line — and ONLY for a payload that carries the retry
+  // shape, so every other panel using OpsList is byte-for-byte unaffected.
+  const retry = (data && typeof data === 'object' && !Array.isArray(data)
+    && typeof data.retrying === 'number'
+    && data.counts && typeof data.counts === 'object' && !Array.isArray(data.counts)) ? data : null;
+  let summary = null;
+  if (retry) {
+    const c = retry.counts || {};
+    const byStatus = Object.keys(c).map(k => k + ' ' + c[k]).join(', ') || 'empty';
+    summary = html`<div class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-1">
+      <b>${retry.retrying}</b> message(s) in a retry window — still <code>pending</code>, waiting for
+      their next attempt, so they are NOT dead letters and are not in the table below. Queue by
+      status: ${byStatus}${retry.total != null ? html` (total ${retry.total})` : null}.</div>`;
+  }
   let body;
   if (err) body = html`<div class="text-xs text-red-600">${err}</div>`;
   else if (!data) body = html`<div class="text-xs text-gray-400">loading...</div>`;
   else if (rows) {
     const cols = Array.from(rows.slice(0, 5).reduce((a, r) => { if (r && typeof r === 'object') Object.keys(r).forEach(k => a.add(k)); return a; }, new Set())).slice(0, 12);
-    body = html`<div class="text-xs text-gray-500 mb-1">${rows.length} row(s)</div>
+    body = html`${summary}<div class="text-xs text-gray-500 mb-1">${rows.length} row(s)${retry ? ' — dead letters (failed / retired)' : ''}</div>
       <div class="overflow-auto" style="max-height:260px"><table class="ops-table text-xs w-full border-collapse">
         <thead><tr>${cols.map(c => html`<th class="text-left border-b px-2 py-1 bg-gray-100">${c}</th>`)}</tr></thead>
         <tbody>${rows.slice(0, 50).map(r => html`<tr>${cols.map(c => html`<td class="border-b px-2 py-1 align-top">${r && r[c] != null ? String(typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]).slice(0, 80) : ''}</td>`)}</tr>`)}</tbody>
       </table></div>`;
   } else {
-    body = html`<pre class="text-xs bg-white border rounded p-2 overflow-auto" style="max-height:200px">${JSON.stringify(data, null, 1).slice(0, 3000)}</pre>`;
+    body = html`${summary}<pre class="text-xs bg-white border rounded p-2 overflow-auto" style="max-height:200px">${JSON.stringify(data, null, 1).slice(0, 3000)}</pre>`;
   }
   return html`<div class="ops-list mb-2">
     <div class="flex items-center gap-2 mb-1">
