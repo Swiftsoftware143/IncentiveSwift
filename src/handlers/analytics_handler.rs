@@ -31,6 +31,13 @@ pub struct ExportQuery {
 /// t_563a3f10): the SELECT/FROM/WHERE/GROUP BY half is one literal and the ORDER BY term comes from
 /// the complete literals in `campaign_list` — the sort column and direction are validated request
 /// values, so the statement text is known before the request arrives.
+///
+/// `win_rate` is a SELECT alias, not a table column (`campaigns` has no such column): the ORDER BY
+/// arms below take the sort term verbatim, so an ORDER BY name the SELECT list does not produce is
+/// a `column "…" does not exist` 500 at analysis time (kanban t_ab5a4e0f — the `win_rate`/asc and
+/// `win_rate`/desc arms 500d for every tenant before this alias existed). The alias is the same
+/// ratio the handler emits as the JSON `win_rate` field (which it reports as that ratio × 100,
+/// rounded to 2dp — a monotonic transform, so ordering by either agrees).
 macro_rules! analytics_campaign_sql {
     ($order_by:literal) => {
         concat!(
@@ -38,7 +45,9 @@ macro_rules! analytics_campaign_sql {
                 COUNT(DISTINCT e.id) as total_entries,
                 COUNT(DISTINCT e.contact_id) as unique_contacts,
                 COUNT(DISTINCT w.id) FILTER (WHERE w.id IS NOT NULL) as total_wins,
-                COALESCE(AVG(e.score) FILTER (WHERE e.score IS NOT NULL), 0)::float as avg_score
+                COALESCE(AVG(e.score) FILTER (WHERE e.score IS NOT NULL), 0)::float as avg_score,
+                CASE WHEN COUNT(DISTINCT e.id) = 0 THEN 0
+                     ELSE COUNT(DISTINCT w.id)::float / COUNT(DISTINCT e.id) END as win_rate
          FROM campaigns c
          LEFT JOIN entries e ON e.campaign_id = c.id
          LEFT JOIN campaign_wins w ON w.campaign_id = c.id
@@ -821,5 +830,33 @@ fn esc_csv(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every bare (unqualified) ORDER BY term `campaign_list` accepts must be a name the statement
+    /// itself produces — a SELECT alias. A term the SELECT list does not declare is a
+    /// `column "…" does not exist` 500 at analysis time, not a compile error, because the statement
+    /// is a plain string literal (kanban t_ab5a4e0f: the `win_rate`/asc + `/desc` arms 500d for every
+    /// tenant until the `win_rate` alias was added).
+    #[test]
+    fn bare_order_by_terms_are_declared_select_aliases() {
+        for (arm, term) in [
+            (
+                analytics_campaign_sql!("total_entries DESC"),
+                "total_entries",
+            ),
+            (analytics_campaign_sql!("total_wins ASC"), "total_wins"),
+            (analytics_campaign_sql!("win_rate ASC"), "win_rate"),
+        ] {
+            let (select_half, order_half) =
+                arm.split_once("ORDER BY ").expect("statement has ORDER BY");
+            assert_eq!(order_half.split_whitespace().next(), Some(term));
+            assert!(
+                select_half.contains(&format!("as {term}")),
+                "ORDER BY {term} is not a SELECT alias in: {select_half}"
+            );
+        }
     }
 }
