@@ -3,10 +3,24 @@
 //! SECURITY RULES:
 //! - API keys: NEVER compare via direct hash equality. ALWAYS use bcrypt::verify.
 //! - JWTs: Decode header+payload, verify HMAC-SHA256 signature with the JWT secret.
+//!
+//! REQUEST-ENTRY ACCOUNT GUARD (kanban t_a7b7b5b9): a valid-but-stale token — a signed JWT (or an
+//! issued API key) whose `sub`/`user_id` names an `accounts` row that no longer exists, e.g. after
+//! the account is deleted or a dump is restored without it — used to reach every writer that binds
+//! `claims.sub` into a column carrying an FK to `accounts(id)` (`tenant_settings.tenant_id`,
+//! `tags.account_id`, `provider_keys.account_id`, …: 34 such columns live). There it surfaced as
+//! `500 {"error":"Internal server error"}`, with `insert or update on table "…" violates foreign
+//! key constraint "…"` in the log, and read exactly like a product defect. The id names WHICH
+//! account is unknown, so the refusal belongs at the boundary where the request enters: this
+//! extractor. Reads are untouched (a GET for a gone account is an empty list, never a 500).
 
 use crate::error::AppError;
 use axum::extract::FromRef;
-use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
+use axum::{
+    async_trait,
+    extract::FromRequestParts,
+    http::{request::Parts, Method},
+};
 use sqlx::Row;
 
 /// Authenticated user context extracted from request.
@@ -29,6 +43,8 @@ where
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // Captured before the body is consumed: the account guard below is method-dependent.
+        let method = parts.method.clone();
         let token = parts
             .headers
             .get("Authorization")
@@ -42,13 +58,14 @@ where
 
         // Try API key validation first (bcrypt verify)
         if let Some(user) = validate_api_key(&app_state, token).await? {
+            guard_account_exists(&app_state.db, &method, &user.account_id).await?;
             return Ok(user);
         }
 
         // Fall back to local JWT validation
         let claims = crate::security::jwt::verify_jwt(token, &app_state.config.jwt_secret)?;
 
-        Ok(AuthenticatedUser {
+        let user = AuthenticatedUser {
             account_id: claims.sub.clone().unwrap_or_default(),
             email: claims.email.clone().unwrap_or_default(),
             role: claims
@@ -56,7 +73,87 @@ where
                 .clone()
                 .unwrap_or_else(|| "authenticated".to_string()),
             impersonating: claims.impersonating.clone(),
-        })
+        };
+        guard_account_exists(&app_state.db, &method, &user.account_id).await?;
+        Ok(user)
+    }
+}
+
+/// What the request-entry account guard must do for one request.
+///
+/// Pure so both halves of the rule are unit-tested: a STATE-CHANGING method whose id names no
+/// `accounts` row is refused, everything else is left exactly as it was (reads must keep answering
+/// 200/empty for a gone account, and a known account must never pay a second query's refusal).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AccountGate {
+    /// Not a state-changing method: no lookup, no refusal.
+    Skip,
+    /// A write naming an account row that does not exist: refuse with the field-level 4xx.
+    Refuse,
+    /// A write naming a real account (or an id shape we cannot parse — see [`account_gate`]).
+    Proceed,
+}
+
+/// Is this method one that can WRITE (and therefore bind `claims.sub` into an FK column)?
+///
+/// POST/PUT/PATCH/DELETE only. `GET`/`HEAD`/`OPTIONS` cannot violate an FK — they never insert —
+/// and refusing them would turn every stale token's empty dashboard into an error.
+pub(crate) fn is_state_changing(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    )
+}
+
+/// The guard's decision, independent of the database.
+pub(crate) fn account_gate(method: &Method, account_id_names_a_row: bool) -> AccountGate {
+    if !is_state_changing(method) {
+        AccountGate::Skip
+    } else if account_id_names_a_row {
+        AccountGate::Proceed
+    } else {
+        AccountGate::Refuse
+    }
+}
+
+/// The 4xx a state-changing request gets when its token names an account that does not exist.
+///
+/// 404 (not 500, and not a blanket 403): the caller learns WHICH thing was wrong. The message
+/// deliberately does not echo the id — the caller already has it in its own token, and echoing it
+/// would put an arbitrary value into the response body.
+pub(crate) fn unknown_account() -> AppError {
+    AppError::NotFound(
+        "Unknown account: this token names an account that does not exist".to_string(),
+    )
+}
+
+/// Refuse a STATE-CHANGING request whose token names an `accounts` row that does not exist.
+///
+/// One existence lookup, at the boundary, before any handler runs — which is what closes the whole
+/// class at once: every writer that binds `claims.sub` into an FK column (`tenant_settings.
+/// tenant_id`, `tags.account_id`, `provider_keys.account_id`, …) takes `AuthenticatedUser`, so
+/// there is no path around this check. A shape that is not a uuid at all cannot name a row either
+/// (`credits_handler` used to bind `Uuid::nil()` for one, which is just as absent), so it is
+/// refused the same way — still a 4xx, never a 500.
+async fn guard_account_exists(
+    db: &sqlx::PgPool,
+    method: &Method,
+    account_id: &str,
+) -> Result<(), AppError> {
+    if !is_state_changing(method) {
+        return Ok(());
+    }
+    let names_a_row = match uuid::Uuid::parse_str(account_id) {
+        Ok(id) => sqlx::query_scalar::<_, i32>("SELECT 1 FROM accounts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(db)
+            .await?
+            .is_some(),
+        Err(_) => false,
+    };
+    match account_gate(method, names_a_row) {
+        AccountGate::Refuse => Err(unknown_account()),
+        _ => Ok(()),
     }
 }
 
@@ -325,7 +422,40 @@ pub async fn admin_guard(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_admin_surface, issued_key_prefix, KEY_PREFIX_LEN};
+    use super::{
+        account_gate, is_admin_surface, is_state_changing, issued_key_prefix, unknown_account,
+        AccountGate, KEY_PREFIX_LEN,
+    };
+    use crate::error::AppError;
+    use axum::http::Method;
+
+    /// The request-entry account guard (kanban t_a7b7b5b9), reduced to its pure decision: a
+    /// STATE-CHANGING method naming no `accounts` row is refused; a write naming a real account
+    /// proceeds; a read is left exactly as it was (a gone account's GET is an empty list, never a
+    /// 500 and never a refusal).
+    #[test]
+    fn account_guard_refuses_writes_for_an_unknown_account_and_leaves_reads_alone() {
+        for m in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            assert!(is_state_changing(&m), "{m} can write");
+            assert_eq!(account_gate(&m, false), AccountGate::Refuse, "{m} unknown");
+            assert_eq!(account_gate(&m, true), AccountGate::Proceed, "{m} known");
+        }
+        for m in [Method::GET, Method::HEAD, Method::OPTIONS] {
+            assert!(!is_state_changing(&m), "{m} cannot write");
+            assert_eq!(account_gate(&m, false), AccountGate::Skip, "{m} unknown");
+            assert_eq!(account_gate(&m, true), AccountGate::Skip, "{m} known");
+        }
+    }
+
+    /// The refusal is the app's own 4xx and NAMES the account — the whole point of moving it off
+    /// the database, where the same request answered `500 Internal server error`.
+    #[test]
+    fn unknown_account_is_a_404_that_names_the_account() {
+        match unknown_account() {
+            AppError::NotFound(msg) => assert!(msg.contains("account"), "{msg}"),
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
 
     /// The operator-only surface set (kanban t_88e535af). Every path here answered 200 to a
     /// `company_admin` token before the guard covered it; each must now be refused, and the

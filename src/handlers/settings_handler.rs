@@ -138,6 +138,29 @@ async fn seal_smtp_password(
     Ok(json!(sealed))
 }
 
+/// The check→write race backstop for the request-entry account guard (kanban t_a7b7b5b9).
+///
+/// `AuthenticatedUser` now refuses a state-changing request whose token names an account that does
+/// not exist (`security::auth::guard_account_exists`), so this writer only reaches the INSERT for a
+/// real account — unless the row is deleted in the window between that lookup and this statement.
+/// Then the FK fires `23503` and the same request would be a 500 again. Translated here for EXACTLY
+/// this constraint, so the table's other foreign keys (and every other SQLSTATE) keep their generic
+/// 500: a blanket `23503` translation would hide real integrity defects behind a 4xx.
+fn is_unknown_account_fk(code: Option<&str>, constraint: Option<&str>) -> bool {
+    code == Some("23503") && constraint == Some("tenant_settings_tenant_id_fkey")
+}
+
+/// The write's error arm: the account-gone FK becomes the app's own 4xx, everything else stays a
+/// 500 with the database's own message.
+fn write_err(e: sqlx::Error) -> AppError {
+    if let sqlx::Error::Database(db) = &e {
+        if is_unknown_account_fk(db.code().as_deref(), db.constraint()) {
+            return crate::security::auth::unknown_account();
+        }
+    }
+    AppError::Internal(format!("DB error: {}", e))
+}
+
 /// PUT /api/v1/settings
 pub async fn update_settings(
     State(state): State<AppState>,
@@ -187,7 +210,7 @@ pub async fn update_settings(
         .bind(value.to_string())
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+        .map_err(write_err)?;
     }
 
     Ok(Json(json!({ "message": "Settings updated" })))
@@ -195,7 +218,7 @@ pub async fn update_settings(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_masked, MASK};
+    use super::{is_masked, is_unknown_account_fk, MASK};
 
     /// The RETIRE decision (kanban t_123b886b) must stay visible and stay KEY-SCOPED: those three
     /// config-object keys can never be stored again because nothing reads them, while the LIVE
@@ -239,5 +262,31 @@ mod tests {
         assert!(!is_masked("t12...9f4"));
         assert!(!is_masked("hunter2"));
         assert!(!is_masked("•partial"));
+    }
+
+    /// The check→write race backstop (kanban t_a7b7b5b9) must stay EXACT: only a 23503 raised by
+    /// `tenant_settings_tenant_id_fkey` becomes the app's "unknown account" 4xx. Another foreign key
+    /// on the same table, another SQLSTATE, or a driver that does not name the constraint at all
+    /// must keep the generic 500 — otherwise a real integrity defect would be reported to the caller
+    /// as their own bad input.
+    #[test]
+    fn only_the_account_gone_fk_is_translated() {
+        assert!(is_unknown_account_fk(
+            Some("23503"),
+            Some("tenant_settings_tenant_id_fkey")
+        ));
+        assert!(!is_unknown_account_fk(
+            Some("23503"),
+            Some("tenant_settings_pkey")
+        ));
+        assert!(!is_unknown_account_fk(
+            Some("23505"),
+            Some("tenant_settings_tenant_id_fkey")
+        ));
+        assert!(!is_unknown_account_fk(Some("23503"), None));
+        assert!(!is_unknown_account_fk(
+            None,
+            Some("tenant_settings_tenant_id_fkey")
+        ));
     }
 }
