@@ -33,6 +33,7 @@ pub mod security;
 mod smtp;
 mod state;
 mod template_render;
+pub mod template_types;
 mod theme;
 
 use axum::{
@@ -1114,6 +1115,12 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/email-templates/merge-fields",
             get(handlers::email_templates_handler::merge_fields),
+        )
+        // The canonical SENDABLE type vocabulary the console's Type picker renders and the write
+        // path validates against (kanban t_0eed3151). Static segment, so it outranks `:id`.
+        .route(
+            "/api/v1/email-templates/types",
+            get(handlers::email_templates_handler::types),
         )
         .route(
             "/api/v1/email-templates",

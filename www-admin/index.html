@@ -1672,9 +1672,15 @@ const SettingsView = () => {
 
 // ---- EMAIL TEMPLATES (Admin Only) ----
 const EmailTemplates = () => {
-  const st = viewState('emailtemplates', { list: [], showModal: false, editItem: null, mode: 'html' });
+  const st = viewState('emailtemplates', { list: [], showModal: false, editItem: null, mode: 'html', types: [] });
   const load = async () => { try { const data = await API.get('/email-templates'); st.list = Array.isArray(data) ? data : (data.items || []); renderApp(); } catch(e) { console.error(e); } };
-  if (!st._loaded) { st._loaded = true; load(); }
+  // The Type picker's vocabulary comes from the API, never from a list typed here (kanban
+  // t_0eed3151): `GET /api/v1/email-templates/types` serves
+  // `crate::template_types::sendable_types()` — the types a SENDER can select — and the same list
+  // gates `POST`/`PUT` server-side, so the picker cannot offer a type the API would refuse and
+  // cannot omit one the API accepts.
+  const loadTypes = async () => { try { const d = await API.get('/email-templates/types'); st.types = (d && d.types) || []; renderApp(); } catch(e) { console.error(e); } };
+  if (!st._loaded) { st._loaded = true; load(); loadTypes(); }
   const show = (item) => { st.editItem = item || {}; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
@@ -1696,7 +1702,7 @@ const EmailTemplates = () => {
   const MERGE_FIELDS = ['{{name}}', '{{email}}', '{{password}}', '{{login_url}}', '{{token}}', '{{app_name}}', '{{app_url}}', '{{plan_name}}'];
   return html`<div>
     <div class="flex items-center justify-between mb-4">
-      <div><h2 class="text-xl font-bold">Email Templates</h2><p class="text-sm text-gray-500">System emails: welcome, password reset, notifications</p></div>
+      <div><h2 class="text-xl font-bold">Email Templates</h2><p class="text-sm text-gray-500">Every email the platform can send: account mail, campaign lifecycle and per-mechanic winners. A platform default is inherited by every account until it saves its own copy.</p></div>
       <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${() => show()}>+ Add Template</button>
     </div>
     <div class="space-y-3">
@@ -1717,11 +1723,34 @@ const EmailTemplates = () => {
       </div>`)}
       ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No email templates yet</div>` : null}
     </div>
-    ${st.showModal ? EmailTemplateModal({ st, show, hide, save, MERGE_FIELDS }) : null}
+    ${st.showModal ? EmailTemplateModal({ st, show, hide, save, MERGE_FIELDS, TYPES: st.types }) : null}
   </div>`;
 };
 
-const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
+// The Type picker's options. `TYPES` is the API's sendable vocabulary (grouped); a row whose type
+// is NOT in it still gets an option of its own, so an existing row stays representable and its
+// `template_type` is never silently rewritten by an untouched select (kanban t_0eed3151). The
+// select carries no `value=` attribute: per-option `selected` is what plain HTML and Preact both
+// honour, and it is also what makes the legacy-value case select the right option instead of
+// none.
+const templateTypeOptions = (types, current) => {
+  const groups = [];
+  const seen = new Set();
+  (types || []).forEach(t => {
+    let g = groups.find(x => x.name === t.group);
+    if (!g) { g = { name: t.group, items: [] }; groups.push(g); }
+    g.items.push(t);
+    seen.add(t.key);
+  });
+  const legacy = (current && !seen.has(current))
+    ? html`<option value=${current} selected=${true}>${current} (current: no sender selects this)</option>`
+    : null;
+  return [legacy, ...groups.map(g => html`<optgroup label=${g.name}>
+      ${g.items.map(t => html`<option value=${t.key} selected=${t.key === current}>${t.label} — ${t.key}</option>`)}
+    </optgroup>`)];
+};
+
+const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS, TYPES }) => {
   const item = st.editItem || {};
   // kanban t_d87422a3 - a PLATFORM DEFAULT (`aid IS NULL`) is inherited by EVERY account
   // (`delivery::sender::load_template_by_type`), so editing one here is a FLEET-WIDE edit; the amber
@@ -1770,12 +1799,11 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS }) => {
         <div><label class="block text-xs font-medium mb-1">Type</label>
           ${isFleetDefault
             ? html`<div class="border rounded px-3 py-2 w-full text-sm bg-gray-100 text-gray-700" title="A platform default's key is not retyped here: every sender looks the row up by it, so renaming would re-point every account's mail, and it can collide with the sibling default.">${form.template_type}</div>`
-            : html`<select class="border rounded px-3 py-2 w-full text-sm" value=${form.template_type} onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
-            <option value="welcome">Welcome Email</option>
-            <option value="password_reset">Password Reset</option>
-            <option value="notification">Notification</option>
-            <option value="general">General</option>
-          </select>`}
+            : ((TYPES || []).length
+              ? html`<select class="border rounded px-3 py-2 w-full text-sm" onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
+            ${templateTypeOptions(TYPES, form.template_type)}
+          </select>`
+              : html`<div class="border rounded px-3 py-2 w-full text-sm bg-gray-50 text-gray-500">Loading the sendable types&hellip;</div>`)}
         </div>
       </div>
       <div class="mb-3"><label class="block text-xs font-medium mb-1">Subject</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.subject} onInput=${e => { form.subject = e.target.value; renderApp(); }} /></div>

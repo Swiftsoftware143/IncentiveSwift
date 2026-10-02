@@ -79,6 +79,28 @@ const LIFECYCLE_MAP: &[(&str, &str, &str)] = &[
 /// `leaderboard` and `loyalty` reach the sender through this pair.
 const DEFAULT_LIFECYCLE: (&str, &str) = ("entry_confirmation", "challenge_share");
 
+/// Every template name a SENDER can reach through this path: the entry and follow-up template of
+/// every arm plus the default pair, deduplicated, in map order. The tenant-facing picker renders
+/// exactly this list (`crate::template_types::sendable_types`, kanban t_0eed3151), so an arm added
+/// here is offered for editing with no second edit there — and `every_arm_keys_a_creatable_mechanic`
+/// still keeps an unmatchable KEY from landing.
+pub fn lifecycle_template_names() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for (_key, entry, followup) in LIFECYCLE_MAP {
+        for name in [entry, followup] {
+            if !out.contains(name) {
+                out.push(name);
+            }
+        }
+    }
+    for name in [DEFAULT_LIFECYCLE.0, DEFAULT_LIFECYCLE.1] {
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// Map a campaign type → (entry_template, followup_template).
 /// Stage 2 (result) is handled inline in create_entry (winner/result path).
 pub fn lifecycle_templates(campaign_type: &str) -> (&'static str, &'static str) {

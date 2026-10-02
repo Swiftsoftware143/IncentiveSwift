@@ -148,6 +148,24 @@ pub async fn merge_fields(
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/email-templates/types — the canonical SENDABLE vocabulary (kanban t_0eed3151)
+//
+// The served console renders its Type picker from this list and the write path below validates
+// against the same `crate::template_types::sendable_types()`, so the two can no longer drift: the
+// old hand-written `<select>` offered `notification` / `general` (a type NO sender names — they are
+// the `_` arms of `email::get_default_subject` / `send_inline`, for a template_type nobody sets)
+// and could not express `purchase_confirmed` / `password_reset`, the two types
+// `billing::webhooks::deliver_credentials` and `email::send_reset_email` actually ask for.
+// ---------------------------------------------------------------------------
+pub async fn types(
+    State(_state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let types = crate::template_types::sendable_types();
+    Ok(Json(json!({ "types": types, "count": types.len() })))
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/v1/email-templates — list (defaults + account overrides)
 // ---------------------------------------------------------------------------
 pub async fn list(
@@ -209,10 +227,21 @@ pub async fn create(
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
 
-    if body.template_type.trim().is_empty() || body.name.trim().is_empty() {
+    let template_type = body.template_type.trim().to_string();
+    if template_type.is_empty() || body.name.trim().is_empty() {
         return Err(AppError::BadRequest(
             "template_type and name are required".to_string(),
         ));
+    }
+    // A row whose type no sender looks up is a row nothing can ever send (`template_type` is the
+    // key `delivery::sender::load_template_by_type` selects by). Refusing it here is what makes the
+    // picker's vocabulary the API's vocabulary too (kanban t_0eed3151).
+    if !crate::template_types::is_sendable(&template_type) {
+        return Err(AppError::BadRequest(format!(
+            "'{template_type}' is not a type any sender selects. GET /api/v1/email-templates/types \
+             lists the {} types a sender can select.",
+            crate::template_types::sendable_types().len()
+        )));
     }
 
     let item: EmailTemplate = sqlx::query_as::<_, EmailTemplate>(
@@ -220,7 +249,7 @@ pub async fn create(
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, template_type, name, subject, body, html_body, is_default, aid, created_at, updated_at",
     )
-    .bind(&body.template_type)
+    .bind(&template_type)
     .bind(&body.name)
     .bind(&body.subject)
     .bind(&body.body)
@@ -269,6 +298,29 @@ pub async fn update(
 ) -> Result<Json<Value>, AppError> {
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
+
+    if let Some(requested) = body.template_type.as_deref() {
+        let requested = requested.trim();
+        if !requested.is_empty() && !crate::template_types::is_sendable(requested) {
+            // Carve-out: a row that ALREADY carries this exact type stays editable — a legacy row
+            // whose type predates this gate must not become uneditable (its subject/body would be
+            // frozen). Only a CHANGE to a type no sender selects is refused.
+            let current: Option<String> = sqlx::query_scalar(
+                "SELECT template_type FROM email_templates WHERE id = $1 AND (aid = $2 OR aid IS NULL)",
+            )
+            .bind(id)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+            if current.as_deref() != Some(requested) {
+                return Err(AppError::BadRequest(format!(
+                    "'{requested}' is not a type any sender selects. GET /api/v1/email-templates/types \
+                     lists the {} types a sender can select.",
+                    crate::template_types::sendable_types().len()
+                )));
+            }
+        }
+    }
 
     let item = sqlx::query_as::<_, EmailTemplate>(
         "UPDATE email_templates SET
