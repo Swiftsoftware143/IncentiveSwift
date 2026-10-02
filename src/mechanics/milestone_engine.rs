@@ -374,89 +374,50 @@ pub async fn update_milestone(
     milestone_id: &Uuid,
     input: &UpdateMilestoneInput,
 ) -> Result<CampaignMilestone, AppError> {
-    // Build dynamic UPDATE with sequential $1, $2, ... params
-    // Use placeholders array; each entry corresponds to a bind
-    let mut fields: Vec<String> = Vec::new();
-
-    if input.name.is_some() {
-        fields.push("name".to_string());
-    }
-    if input.description.is_some() {
-        fields.push("description".to_string());
-    }
-    if input.points_required.is_some() {
-        fields.push("points_required".to_string());
-    }
-    if input.action_type.is_some() {
-        fields.push("action_type".to_string());
-    }
-    if input.action_config.is_some() {
-        fields.push("action_config".to_string());
-    }
-    if input.is_repeatable.is_some() {
-        fields.push("is_repeatable".to_string());
-    }
-    if input.max_repeats.is_some() {
-        fields.push("max_repeats".to_string());
-    }
-    if input.cooldown_hours.is_some() {
-        fields.push("cooldown_hours".to_string());
-    }
-    if input.is_active.is_some() {
-        fields.push("is_active".to_string());
-    }
-
-    if fields.is_empty() {
+    // One complete compile-time statement (gate rule 5d / class 14, kanban t_563a3f10): the old
+    // builder pushed `"col = ${n}"` pieces and joined them at run time. Every column now sits at a
+    // FIXED slot wrapped in COALESCE($n, col), so a NULL bind leaves the column alone — the same
+    // outcome the builder had, with the statement visible at the call site.
+    if input.name.is_none()
+        && input.description.is_none()
+        && input.points_required.is_none()
+        && input.action_type.is_none()
+        && input.action_config.is_none()
+        && input.is_repeatable.is_none()
+        && input.max_repeats.is_none()
+        && input.cooldown_hours.is_none()
+        && input.is_active.is_none()
+    {
         return Err(AppError::BadRequest("No fields to update".to_string()));
     }
 
-    let set_clauses: Vec<String> = fields
-        .iter()
-        .enumerate()
-        .map(|(i, name)| format!("{} = ${}", name, i + 1))
-        .collect();
-    let set_clause = set_clauses.join(", ");
-    let sql = format!(
-        "UPDATE campaign_milestones SET {}, updated_at = now() WHERE id = ${}",
-        set_clause,
-        fields.len() + 1
-    );
-
-    let mut query = sqlx::query(&sql);
-
-    if let Some(v) = &input.name {
-        query = query.bind(v);
-    }
-    if let Some(v) = &input.description {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.points_required {
-        query = query.bind(v);
-    }
-    if let Some(v) = &input.action_type {
-        query = query.bind(v);
-    }
-    if let Some(v) = &input.action_config {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.is_repeatable {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.max_repeats {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.cooldown_hours {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.is_active {
-        query = query.bind(v);
-    }
-
-    query
-        .bind(milestone_id)
-        .execute(pool)
-        .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+    sqlx::query(
+        "UPDATE campaign_milestones SET
+            name = COALESCE($1, name),
+            description = COALESCE($2, description),
+            points_required = COALESCE($3, points_required),
+            action_type = COALESCE($4, action_type),
+            action_config = COALESCE($5, action_config),
+            is_repeatable = COALESCE($6, is_repeatable),
+            max_repeats = COALESCE($7, max_repeats),
+            cooldown_hours = COALESCE($8, cooldown_hours),
+            is_active = COALESCE($9, is_active),
+            updated_at = now()
+         WHERE id = $10",
+    )
+    .bind(&input.name)
+    .bind(&input.description)
+    .bind(input.points_required)
+    .bind(&input.action_type)
+    .bind(&input.action_config)
+    .bind(input.is_repeatable)
+    .bind(input.max_repeats)
+    .bind(input.cooldown_hours)
+    .bind(input.is_active)
+    .bind(milestone_id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
 
     let milestone =
         sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")

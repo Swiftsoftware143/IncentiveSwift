@@ -111,80 +111,45 @@ pub async fn update_question(
     question_id: &Uuid,
     input: &UpdateQuestionInput,
 ) -> Result<(), AppError> {
-    let mut sets = Vec::new();
-    let mut bind_idx = 1usize;
-
-    if let Some(ref v) = input.question_text {
-        sets.push(format!("question_text = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(ref v) = input.question_type {
-        sets.push(format!("question_type = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(v) = input.sort_order {
-        sets.push(format!("sort_order = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(ref v) = input.correct_answer {
-        sets.push(format!("correct_answer = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(v) = input.score_weight {
-        sets.push(format!("score_weight = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(ref v) = input.options {
-        sets.push(format!("options = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(ref v) = input.crm_field {
-        sets.push(format!("crm_field = ${}", bind_idx));
-        bind_idx += 1;
-    }
-    if let Some(ref v) = input.crm_field_type {
-        sets.push(format!("crm_field_type = ${}", bind_idx));
-        bind_idx += 1;
-    }
-
-    if sets.is_empty() {
+    // One complete compile-time statement (gate rule 5d / class 14, kanban t_563a3f10): the old
+    // builder pushed `format!("col = ${n}")` fragments and joined them at run time. Every column now
+    // sits at a FIXED slot wrapped in COALESCE($n, col), so a NULL bind leaves the column alone —
+    // the same outcome the builder had, with the statement visible at the call site.
+    if input.question_text.is_none()
+        && input.question_type.is_none()
+        && input.sort_order.is_none()
+        && input.correct_answer.is_none()
+        && input.score_weight.is_none()
+        && input.options.is_none()
+        && input.crm_field.is_none()
+        && input.crm_field_type.is_none()
+    {
         return Ok(());
     }
 
-    let q = format!(
-        "UPDATE questions SET {} WHERE id = ${}",
-        sets.join(", "),
-        bind_idx
-    );
-
-    let mut query = sqlx::query(&q);
-    if let Some(ref v) = input.question_text {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = input.question_type {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.sort_order {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = input.correct_answer {
-        query = query.bind(v);
-    }
-    if let Some(v) = input.score_weight {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = input.options {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = input.crm_field {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = input.crm_field_type {
-        query = query.bind(v);
-    }
-    query = query.bind(question_id);
-
-    query.execute(pool).await?;
+    sqlx::query(
+        "UPDATE questions SET
+            question_text = COALESCE($1, question_text),
+            question_type = COALESCE($2, question_type),
+            sort_order = COALESCE($3, sort_order),
+            correct_answer = COALESCE($4, correct_answer),
+            score_weight = COALESCE($5, score_weight),
+            options = COALESCE($6, options),
+            crm_field = COALESCE($7, crm_field),
+            crm_field_type = COALESCE($8, crm_field_type)
+         WHERE id = $9",
+    )
+    .bind(&input.question_text)
+    .bind(&input.question_type)
+    .bind(input.sort_order)
+    .bind(&input.correct_answer)
+    .bind(input.score_weight)
+    .bind(&input.options)
+    .bind(&input.crm_field)
+    .bind(&input.crm_field_type)
+    .bind(question_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

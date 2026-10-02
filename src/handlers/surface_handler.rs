@@ -452,6 +452,31 @@ pub async fn get_widget_config(
     })))
 }
 
+/// The public-surface campaign lookup, as COMPLETE compile-time literals (gate rule 5d / class 14,
+/// kanban t_563a3f10): the optional account predicate used to be appended with `push_str` at run
+/// time. The caller supplies the match key (`id` / `slug`) and whether the account predicate
+/// applies, so every statement is one literal known to the compiler.
+macro_rules! surface_campaign_sql {
+    ($key:literal, false) => {
+        concat!(
+            "SELECT id, name, slug, type, status, config, surface_config,
+                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
+                FROM campaigns WHERE ",
+            $key,
+            " = $1 AND status = 'active'"
+        )
+    };
+    ($key:literal, true) => {
+        concat!(
+            "SELECT id, name, slug, type, status, config, surface_config,
+                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
+                FROM campaigns WHERE ",
+            $key,
+            " = $1 AND status = 'active' AND account_id = $2"
+        )
+    };
+}
+
 /// GET /api/v1/play/{id}
 /// Optional query param: ?company=subdomain to scope to a portfolio company
 pub async fn get_play_view(
@@ -488,40 +513,36 @@ pub async fn get_play_view(
 
     // Try as UUID first, then as slug
     let campaign = match Uuid::parse_str(&id) {
-        Ok(cid) => {
-            let mut q = String::from(
-                "SELECT id, name, slug, type, status, config, surface_config,
-                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
-                FROM campaigns WHERE id = $1 AND status = 'active'",
-            );
-            if let Some(aid) = account_filter {
-                q.push_str(" AND account_id = $2");
-                sqlx::query(&q)
+        Ok(cid) => match account_filter {
+            Some(aid) => {
+                sqlx::query(surface_campaign_sql!("id", true))
                     .bind(cid)
                     .bind(aid)
                     .fetch_optional(&state.db)
                     .await?
-            } else {
-                sqlx::query(&q).bind(cid).fetch_optional(&state.db).await?
             }
-        }
-        Err(_) => {
-            let mut q = String::from(
-                "SELECT id, name, slug, type, status, config, surface_config,
-                       tag_namespace, outcome_tags, delivery_method, delivery_config, created_at
-                FROM campaigns WHERE slug = $1 AND status = 'active'",
-            );
-            if let Some(aid) = account_filter {
-                q.push_str(" AND account_id = $2");
-                sqlx::query(&q)
+            None => {
+                sqlx::query(surface_campaign_sql!("id", false))
+                    .bind(cid)
+                    .fetch_optional(&state.db)
+                    .await?
+            }
+        },
+        Err(_) => match account_filter {
+            Some(aid) => {
+                sqlx::query(surface_campaign_sql!("slug", true))
                     .bind(&id)
                     .bind(aid)
                     .fetch_optional(&state.db)
                     .await?
-            } else {
-                sqlx::query(&q).bind(&id).fetch_optional(&state.db).await?
             }
-        }
+            None => {
+                sqlx::query(surface_campaign_sql!("slug", false))
+                    .bind(&id)
+                    .fetch_optional(&state.db)
+                    .await?
+            }
+        },
     };
     let campaign =
         campaign.ok_or_else(|| AppError::NotFound("Active campaign not found".to_string()))?;

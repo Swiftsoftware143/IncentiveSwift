@@ -43,8 +43,15 @@ pub const API_KEY_CONSTRAINT: &str = "payment_providers_api_key_encrypted";
 pub const WEBHOOK_SECRET_CONSTRAINT: &str = "payment_providers_webhook_secret_encrypted";
 
 /// The predicate both constraints apply, as a SQL fragment.
-const UNSEALED_PREDICATE: &str =
-    "(api_key <> '' AND api_key NOT LIKE 'enc:v1:%') OR (webhook_secret <> '' AND webhook_secret NOT LIKE 'enc:v1:%')";
+///
+/// A `macro_rules!` and not a `const` since kanban t_563a3f10: both readers below must be ONE
+/// compile-time literal, so the predicate is expanded by `concat!` instead of interpolated by
+/// `format!` at run time (gate rule 5d / class 14). The statement bytes are unchanged.
+macro_rules! unsealed_predicate {
+    () => {
+        "(api_key <> '' AND api_key NOT LIKE 'enc:v1:%') OR (webhook_secret <> '' AND webhook_secret NOT LIKE 'enc:v1:%')"
+    };
+}
 
 /// Add a constraint if it is ABSENT. The migration runner records each file in `_migrations` and
 /// never re-runs it, so a constraint dropped by hand (or left out by a restore) would stay missing
@@ -102,8 +109,9 @@ pub async fn seal_payment_provider_secrets(pool: &sqlx::PgPool) {
 
     // 1. Seal what is still in the clear. Empty values are left alone (an empty slot is not a
     //    credential), and anything already carrying the prefix is skipped.
-    let rows = match sqlx::query(&format!(
-        "SELECT id, api_key, webhook_secret FROM payment_providers WHERE {UNSEALED_PREDICATE}"
+    let rows = match sqlx::query(concat!(
+        "SELECT id, api_key, webhook_secret FROM payment_providers WHERE ",
+        unsealed_predicate!()
     ))
     .fetch_all(pool)
     .await
@@ -181,8 +189,9 @@ pub async fn seal_payment_provider_secrets(pool: &sqlx::PgPool) {
 
     // 2. Validate, but only once nothing is left unsealed — VALIDATE against a plaintext row
     //    fails, and a half-validated guard reads as guarded when it is not.
-    let unsealed: i64 = match sqlx::query_scalar(&format!(
-        "SELECT count(*) FROM payment_providers WHERE {UNSEALED_PREDICATE}"
+    let unsealed: i64 = match sqlx::query_scalar(concat!(
+        "SELECT count(*) FROM payment_providers WHERE ",
+        unsealed_predicate!()
     ))
     .fetch_one(pool)
     .await

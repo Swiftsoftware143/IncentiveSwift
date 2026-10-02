@@ -27,6 +27,29 @@ pub struct ExportQuery {
     pub r#type: Option<String>,
 }
 
+/// The per-campaign analytics statement, built at COMPILE TIME (gate rule 5d / class 14, kanban
+/// t_563a3f10): the SELECT/FROM/WHERE/GROUP BY half is one literal and the ORDER BY term comes from
+/// the complete literals in `campaign_list` — the sort column and direction are validated request
+/// values, so the statement text is known before the request arrives.
+macro_rules! analytics_campaign_sql {
+    ($order_by:literal) => {
+        concat!(
+            "SELECT c.id, c.name, c.slug, c.type, c.status, c.created_at,
+                COUNT(DISTINCT e.id) as total_entries,
+                COUNT(DISTINCT e.contact_id) as unique_contacts,
+                COUNT(DISTINCT w.id) FILTER (WHERE w.id IS NOT NULL) as total_wins,
+                COALESCE(AVG(e.score) FILTER (WHERE e.score IS NOT NULL), 0)::float as avg_score
+         FROM campaigns c
+         LEFT JOIN entries e ON e.campaign_id = c.id
+         LEFT JOIN campaign_wins w ON w.campaign_id = c.id
+         WHERE c.account_id = $1
+         GROUP BY c.id, c.name, c.slug, c.type, c.status, c.created_at
+         ORDER BY ",
+            $order_by
+        )
+    };
+}
+
 /// GET /api/v1/analytics/overview — Account-level KPIs
 pub async fn overview(
     State(state): State<AppState>,
@@ -147,22 +170,25 @@ pub async fn campaign_list(
         _ => "total_entries",
     };
 
-    let sql = format!(
-        "SELECT c.id, c.name, c.slug, c.type, c.status, c.created_at,
-                COUNT(DISTINCT e.id) as total_entries,
-                COUNT(DISTINCT e.contact_id) as unique_contacts,
-                COUNT(DISTINCT w.id) FILTER (WHERE w.id IS NOT NULL) as total_wins,
-                COALESCE(AVG(e.score) FILTER (WHERE e.score IS NOT NULL), 0)::float as avg_score
-         FROM campaigns c
-         LEFT JOIN entries e ON e.campaign_id = c.id
-         LEFT JOIN campaign_wins w ON w.campaign_id = c.id
-         WHERE c.account_id = $1
-         GROUP BY c.id, c.name, c.slug, c.type, c.status, c.created_at
-         ORDER BY {} {}",
-        sort_col, order_sql
-    );
+    let sql = match (sort_col, order_sql) {
+        ("c.name", "ASC") => analytics_campaign_sql!("c.name ASC"),
+        ("c.name", "DESC") => analytics_campaign_sql!("c.name DESC"),
+        ("total_entries", "ASC") => analytics_campaign_sql!("total_entries ASC"),
+        ("total_entries", "DESC") => analytics_campaign_sql!("total_entries DESC"),
+        ("total_wins", "ASC") => analytics_campaign_sql!("total_wins ASC"),
+        ("total_wins", "DESC") => analytics_campaign_sql!("total_wins DESC"),
+        ("win_rate", "ASC") => analytics_campaign_sql!("win_rate ASC"),
+        ("win_rate", "DESC") => analytics_campaign_sql!("win_rate DESC"),
+        ("c.created_at", "ASC") => analytics_campaign_sql!("c.created_at ASC"),
+        ("c.created_at", "DESC") => analytics_campaign_sql!("c.created_at DESC"),
+        ("c.type", "ASC") => analytics_campaign_sql!("c.type ASC"),
+        ("c.type", "DESC") => analytics_campaign_sql!("c.type DESC"),
+        // `sort_col` is one of the six literals mapped above and `order_sql` is ASC or DESC, so this
+        // arm is unreachable — it only makes the match exhaustive.
+        _ => analytics_campaign_sql!("total_entries DESC"),
+    };
 
-    let rows = sqlx::query(&sql).bind(uuid).fetch_all(&state.db).await?;
+    let rows = sqlx::query(sql).bind(uuid).fetch_all(&state.db).await?;
 
     let mut campaigns: Vec<Value> = Vec::new();
     let mut campaign_ids: Vec<Uuid> = Vec::new();
