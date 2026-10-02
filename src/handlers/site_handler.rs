@@ -56,6 +56,22 @@ const SITE_KEY: &str = "incentiveswift_site";
 pub(crate) const SITE_ROOT: &str = "/opt/swift/nginx/www/incentiveswift/";
 pub(crate) const SITE_INDEX: &str = "/opt/swift/nginx/www/incentiveswift/index.html";
 
+/// The served marketing page's OWN element openers, verbatim (kanban t_7ec9b2a0).
+///
+/// Each is the COMPLETE opening tag and not a prefix: `replace_inner` starts replacing immediately
+/// after the marker, so a prefix would swallow the rest of the tag. Every one of these is measured
+/// UNIQUE on `/opt/swift/nginx/www/incentiveswift/index.html` — the panel's five Homepage editors
+/// each have exactly one element to drive — so "first occurrence" is unambiguous and the in-place
+/// surgery can never touch unrelated markup. The test
+/// `every_homepage_marker_is_unique_in_the_served_page` pins that, so a reworded page cannot turn a
+/// reader into a silent no-op.
+const LOGO_OPEN: &str = r##"<span class="text-lg font-semibold text-white">"##;
+const H1_OPEN: &str =
+    r##"<h1 class="text-4xl md:text-6xl font-extrabold text-white leading-tight mb-6">"##;
+const SUB_OPEN: &str = r##"<p class="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto mb-10">"##;
+const CTA_OPEN: &str = r##"<button onclick="openRegister()" class="cta-gradient text-white px-8 py-4 rounded-xl text-lg font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-purple-600/25" style="border:none;font-family:inherit;">"##;
+const SECONDARY_OPEN: &str = r##"<a href="#features" class="text-gray-300 border border-gray-700 px-8 py-4 rounded-xl text-lg font-medium hover:bg-gray-800/50">"##;
+
 /// The legal pages this applier owns: (slug, <h1>/<title> text, settings key, bytes after the body).
 ///
 /// The trailing field is the exact closing bytes of the published page. It is a per-page constant
@@ -458,6 +474,45 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
         }
     }
 
+    // The Site Configuration editors no reader honoured (kanban t_7ec9b2a0, the same class
+    // t_9dede800 closed for CoreSwift-CRM). The panel writes `canonical_url`, `favicon_url` and the
+    // five `homepage` fields into `admin_settings.incentiveswift_site` (both panel builders:
+    // www-admin/incentiveswift/index.html ~1304-1313 and ~1868-1877) and NOTHING read them: only the
+    // defaults below mentioned the names, so an operator's canonical / favicon / hero input landed in
+    // the row and appeared NOWHERE on the served marketing page (incentiveswift.com). Each field now
+    // drives the element the served page already carries; the favicon is the ONE exception, because
+    // this page carries no icon tag at all (measured: zero `rel="icon"`, /favicon.ico 404), so a
+    // non-blank value upserts a whole `<link rel="icon">` before `</head>` and a blank one leaves the
+    // shipped bytes alone.
+    //
+    // The row and the defaults were reconciled to the SERVED bytes (audits/t_7ec9b2a0/
+    // populate-row.py), so this is a byte-level no-op for the shipped values and the first scheduled
+    // apply cannot rewrite the live page. A BLANK value always leaves the shipped element alone:
+    // clearing a panel field can never blank a live page.
+    if let Some(c) = s.get("canonical_url").and_then(|v| v.as_str()) {
+        if !c.trim().is_empty() {
+            upsert_link_href(&mut result, "canonical", c);
+        }
+    }
+    if let Some(f) = s.get("favicon_url").and_then(|v| v.as_str()) {
+        if !f.trim().is_empty() {
+            upsert_link_href(&mut result, "icon", f);
+        }
+    }
+    if let Some(hp) = s.get("homepage") {
+        replace_verbatim(&mut result, hp, "logo_text", LOGO_OPEN, "</span>");
+        replace_verbatim(&mut result, hp, "headline", H1_OPEN, "</h1>");
+        replace_verbatim(&mut result, hp, "subheadline", SUB_OPEN, "</p>");
+        replace_verbatim(&mut result, hp, "button_text", CTA_OPEN, "</a>");
+        replace_verbatim(
+            &mut result,
+            hp,
+            "secondary_button_text",
+            SECONDARY_OPEN,
+            "</a>",
+        );
+    }
+
     result
 }
 
@@ -598,6 +653,72 @@ fn inject_before_body_end(result: &mut String, content: &str) {
     }
 }
 
+/// Point the `href` of the FIRST `<link rel="{rel}"` tag at `href`, insert the attribute into a tag
+/// that has none, or inject a whole `<link>` before `</head>` when the page carries no such tag.
+///
+/// The tag prefix carries the closing quote, so `rel="icon"` can never match `rel="alternate icon"`.
+/// The search is bounded to that ONE tag, so a following tag's href is never rewritten. On the
+/// served IncentiveSwift page `<link rel="canonical" ...>` exists (so the canonical arm is in-place
+/// surgery) while no `rel="icon"` tag exists at all (so a non-blank favicon is the inject arm); a
+/// blank value never calls this, so the shipped bytes stay untouched (kanban t_7ec9b2a0).
+fn upsert_link_href(result: &mut String, rel: &str, href: &str) {
+    let pat = format!(r#"<link rel="{}""#, rel);
+    match result.find(&pat) {
+        None => inject_before_head_end(result, &format!(r#"<link rel="{}" href="{}">"#, rel, href)),
+        Some(p) => {
+            // Bound the search to this one tag: a following tag's href must never be rewritten.
+            let tag_end = match result[p..].find('>') {
+                Some(e) => p + e,
+                None => return,
+            };
+            match result[p..tag_end].find("href=\"") {
+                Some(h) => {
+                    let a = p + h + "href=\"".len();
+                    match result[a..tag_end].find('"') {
+                        Some(e) => result.replace_range(a..a + e, href),
+                        None => result.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+                    }
+                }
+                None => result.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+            }
+        }
+    }
+}
+
+/// Replace the inner HTML of the FIRST `open`…`close` element with `value`, VERBATIM.
+///
+/// Verbatim is required: the shipped headline is
+/// `Turn Customers Into<br class="hidden md:block"><span class="gradient-text">Your Best Marketers</span>`
+/// and the hero CTAs carry their own surrounding newline+indent, so escaping or trimming the value
+/// would publish different bytes. The served page carries exactly one element per marker (measured,
+/// and pinned by `every_homepage_marker_is_unique_in_the_served_page`), so "first" is unambiguous,
+/// and a page that carries no such element is returned unchanged.
+fn replace_inner(result: &mut String, open: &str, close: &str, value: &str) {
+    let start = match result.find(open) {
+        Some(p) => p + open.len(),
+        None => return,
+    };
+    if let Some(e) = result[start..].find(close) {
+        result.replace_range(start..start + e, value);
+    }
+}
+
+/// Replace the element at `open` with `homepage[key]`. A blank or absent value leaves the shipped
+/// element alone, so clearing a panel field can never blank a live page.
+fn replace_verbatim(
+    result: &mut String,
+    homepage: &serde_json::Value,
+    key: &str,
+    open: &str,
+    close: &str,
+) {
+    if let Some(v) = homepage.get(key).and_then(|v| v.as_str()) {
+        if !v.trim().is_empty() {
+            replace_inner(result, open, close, v);
+        }
+    }
+}
+
 fn merge_json(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
     match (a, b) {
         (serde_json::Value::Object(mut a_map), serde_json::Value::Object(b_map)) => {
@@ -628,12 +749,18 @@ fn default_site_settings() -> serde_json::Value {
         "legal_tos": "",
         "legal_privacy": "",
         "legal_refunds": "",
+        // Reconciled to the SERVED marketing page (kanban t_7ec9b2a0): each of these five is the
+        // VERBATIM inner HTML of the one element the page carries for it, so a row built from these
+        // defaults renders the served file byte-for-byte and the first scheduled apply is a no-op.
+        // `audits/t_7ec9b2a0/populate-row.py` derives them from the file; they are never retyped, and
+        // the headline/CTA values keep their own leading newline + indentation deliberately (that is
+        // what makes the render byte-identical).
         "homepage": {
             "logo_text": "IncentiveSwift",
-            "headline": "Create Viral Campaigns That Drive Results",
-            "subheadline": "Loyalty rewards, raffles, sweepstakes, and more — all in one platform.",
-            "button_text": "Get Started Free",
-            "secondary_button_text": "View Demo"
+            "headline": "\n      Turn Customers Into<br class=\"hidden md:block\">\n      <span class=\"gradient-text\">Your Best Marketers</span>\n    ",
+            "subheadline": "\n      IncentiveSwift powers viral referral campaigns, gamified loyalty programs, and smart rewards. Watch your customers bring you new customers — automatically.\n    ",
+            "button_text": "\n        Launch Your First Campaign →\n      ",
+            "secondary_button_text": "See Features"
         }
     })
 }
@@ -768,5 +895,198 @@ mod tests {
         let injected = inject_site_settings(clean, &s);
         assert!(injected.contains("<head>\n  <script async src="));
         assert_eq!(inject_site_settings(&injected, &s), injected);
+    }
+
+    // The SEO editors no reader honoured (kanban t_7ec9b2a0). The row is reconciled to the SHIPPED
+    // page, so the new render paths have to be byte-level no-ops on it — otherwise the first
+    // scheduled apply would rewrite the live marketing page.
+    //
+    // `ga_id` is carried too (derived from the served file, never retyped): `remove_ga_gtm` runs on
+    // every render, so a settings value that omitted the page's own GA id would strip the shipped GA
+    // block and the byte-identity assertion would be measuring that removal instead of this card's
+    // render paths.
+    fn shipped_only_settings(src: Option<&str>) -> serde_json::Value {
+        let d = default_site_settings();
+        let mut v = json!({
+            "canonical_url": d["canonical_url"],
+            "favicon_url": d["favicon_url"],
+            "homepage": d["homepage"],
+            "ga_id": "",
+        });
+        if let Some(s) = src {
+            if let Some(i) = s.find("gtag/js?id=") {
+                let rest = &s[i + "gtag/js?id=".len()..];
+                let end = rest.find(['"', '&']).unwrap_or(rest.len());
+                v["ga_id"] = json!(&rest[..end]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_reconciled_row_leaves_the_live_homepage_byte_for_byte() {
+        // The real served page, when this runs on the host that owns it. This is the guard that makes
+        // the deploy safe: if it ever fails, the applier would rewrite the live page.
+        let served = match fs::read_to_string(SITE_INDEX) {
+            Ok(s) => s,
+            Err(_) => return, // host-only path: nothing to guard in another runtime
+        };
+        assert_eq!(
+            inject_site_settings(&served, &shipped_only_settings(Some(&served))),
+            served
+        );
+    }
+
+    #[test]
+    fn the_shipped_defaults_are_the_served_pages_own_canonical_and_hero() {
+        let d = default_site_settings();
+        assert_eq!(d["canonical_url"], "https://incentiveswift.com");
+        assert_eq!(d["favicon_url"], ""); // this page carries no icon tag; blank keeps it that way
+        let hp = &d["homepage"];
+        assert_eq!(hp["logo_text"], "IncentiveSwift");
+        assert!(hp["headline"]
+            .as_str()
+            .unwrap()
+            .contains(r#"<span class="gradient-text">Your Best Marketers</span>"#));
+        assert!(hp["subheadline"]
+            .as_str()
+            .unwrap()
+            .contains("— automatically."));
+        assert_eq!(
+            hp["button_text"],
+            "\n        Launch Your First Campaign →\n      "
+        );
+        assert_eq!(hp["secondary_button_text"], "See Features");
+
+        // ...and, when the served file is present, each default IS that file's own inner HTML. This
+        // is the anti-transcription guard: the literals above can never drift from the page.
+        if let Ok(src) = fs::read_to_string(SITE_INDEX) {
+            for (open, close, key) in [
+                (LOGO_OPEN, "</span>", "logo_text"),
+                (H1_OPEN, "</h1>", "headline"),
+                (SUB_OPEN, "</p>", "subheadline"),
+                (CTA_OPEN, "</a>", "button_text"),
+                (SECONDARY_OPEN, "</a>", "secondary_button_text"),
+            ] {
+                let a = src.find(open).expect("marker must be on the served page") + open.len();
+                let b = src[a..].find(close).expect("close tag after the marker") + a;
+                assert_eq!(hp[key], src[a..b], "default {key} must be the served bytes");
+            }
+            assert_eq!(src.matches("<link rel=\"canonical\"").count(), 1);
+        }
+    }
+
+    #[test]
+    fn every_homepage_marker_is_unique_in_the_served_page() {
+        // Without this, a marker that no longer matches would turn a reader into a SILENT no-op and
+        // the byte-identity test above would still pass (nothing found -> nothing replaced).
+        let src = match fs::read_to_string(SITE_INDEX) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (open, close) in [
+            (LOGO_OPEN, "</span>"),
+            (H1_OPEN, "</h1>"),
+            (SUB_OPEN, "</p>"),
+            (CTA_OPEN, "</a>"),
+            (SECONDARY_OPEN, "</a>"),
+        ] {
+            assert_eq!(
+                src.matches(open).count(),
+                1,
+                "marker must be unique: {open}"
+            );
+            let a = src.find(open).unwrap() + open.len();
+            assert!(src[a..].contains(close), "no {close} after {open}");
+        }
+    }
+
+    #[test]
+    fn an_operator_value_reaches_the_served_bytes_and_the_shipped_value_does_not() {
+        // The fixture mirrors the served page: same canonical tag, same nav brand span, same h1 /
+        // hero <p> / primary CTA button (closed by `</a>` on this page) / secondary <a>, and NO
+        // favicon tag at all — that absence is what the favicon arm has to cope with.
+        let d = default_site_settings();
+        let hp = &d["homepage"];
+        let page = format!(
+            concat!(
+                "<head>\n<link rel=\"canonical\" href=\"{}\">\n</head>\n<body>\n",
+                "{}{}</span>\n",
+                "{}{}</h1>\n",
+                "{}{}</p>\n",
+                "{}{}</a>\n",
+                "{}{}</a>\n",
+                "</body>\n"
+            ),
+            d["canonical_url"].as_str().unwrap(),
+            LOGO_OPEN,
+            hp["logo_text"].as_str().unwrap(),
+            H1_OPEN,
+            hp["headline"].as_str().unwrap(),
+            SUB_OPEN,
+            hp["subheadline"].as_str().unwrap(),
+            CTA_OPEN,
+            hp["button_text"].as_str().unwrap(),
+            SECONDARY_OPEN,
+            hp["secondary_button_text"].as_str().unwrap(),
+        );
+        // the shipped row is a no-op...
+        assert_eq!(
+            inject_site_settings(&page, &shipped_only_settings(None)),
+            page
+        );
+
+        // ...and an operator's canonical_url reaches the served link, in place
+        let c = inject_site_settings(
+            &page,
+            &json!({"canonical_url": "https://is.example.com/home"}),
+        );
+        assert!(c.contains(r#"<link rel="canonical" href="https://is.example.com/home">"#));
+        assert!(!c.contains("https://incentiveswift.com"));
+
+        // favicon_url on a page with NO icon tag injects one in <head> (this page's arm)...
+        let f = inject_site_settings(&page, &json!({"favicon_url": "/assets/favicon.ico"}));
+        assert!(f.contains(r#"<link rel="icon" href="/assets/favicon.ico">"#));
+        assert!(f.find(r#"<link rel="icon""#).unwrap() < f.find("</head>").unwrap());
+
+        // ...and on a page that HAS one it edits that tag only, never `rel="alternate icon"`
+        let with_icon = page.replace(
+            "</head>",
+            "<link rel=\"icon\" href=\"/shipped-d6446083.ico\"><link rel=\"alternate icon\" href=\"/shipped-d6446083.svg\"></head>",
+        );
+        let g = inject_site_settings(&with_icon, &json!({"favicon_url": "/assets/favicon.ico"}));
+        assert!(g.contains(r#"<link rel="icon" href="/assets/favicon.ico">"#));
+        assert!(g.contains(r#"<link rel="alternate icon" href="/shipped-d6446083.svg">"#));
+        assert!(!g.contains("/shipped-d6446083.ico"));
+
+        // the hero copy reaches every one of the five elements, markup intact
+        let h = inject_site_settings(
+            &page,
+            &json!({"homepage": {
+                "logo_text": "Brand",
+                "headline": "Stop <span class=\"gradient-text\">Guessing</span>",
+                "subheadline": "One line.",
+                "button_text": "Go",
+                "secondary_button_text": "Learn more"
+            }}),
+        );
+        assert!(h.contains(&format!("{LOGO_OPEN}Brand</span>")));
+        assert!(h.contains(&format!(
+            "{H1_OPEN}Stop <span class=\"gradient-text\">Guessing</span></h1>"
+        )));
+        assert!(h.contains(&format!("{SUB_OPEN}One line.</p>")));
+        assert!(h.contains(&format!("{CTA_OPEN}Go</a>")));
+        assert!(h.contains(&format!("{SECONDARY_OPEN}Learn more</a>")));
+        assert!(!h.contains("Your Best Marketers"));
+
+        // a blank value leaves the shipped element alone: clearing a field cannot blank a live page
+        let b = inject_site_settings(
+            &page,
+            &json!({"canonical_url": "  ", "favicon_url": "", "homepage": {
+                "logo_text": "", "headline": "", "subheadline": "   ",
+                "button_text": "", "secondary_button_text": ""
+            }}),
+        );
+        assert_eq!(b, page);
     }
 }
