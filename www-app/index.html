@@ -92,6 +92,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>IncentiveSwift — Login</title>
+<!-- The app root's own favicon pair (kanban t_81bbc2b6). app.incentiveswift.com answered
+     `404 text/html 162` for /favicon.ico and /favicon.svg and this shell declared no icon, so a real
+     Chromium load (the inline auth guard answers the root from /login.html) issued the browser's
+     automatic `GET /favicon.ico` and 404'd it on every page load
+     (/opt/swift/audits/t_81bbc2b6/10-chromium-before.txt). The mark is the app's OWN: a #EA1B2D disc,
+     the ink of the icon the console root already publishes — reproduced by bin/is-make-favicon.py
+     (its 16x16 face is pixel-identical to the console's published mask). Files are published by
+     bin/publish-incentiveswift-frontend.sh. -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
 body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0}

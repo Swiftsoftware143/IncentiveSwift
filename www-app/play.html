@@ -4,9 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Play</title>
-<!-- no icon in this root; the empty data URI stops the browser's /favicon.ico request
-     from 404-ing in the customer's console on every campaign page -->
-<link rel="icon" href="data:,">
+<!-- Real app-root favicon (kanban t_81bbc2b6). This page used to declare `<link rel="icon"
+     href="data:,">` — an empty icon whose only job was to stop the browser's automatic
+     /favicon.ico request from 404-ing, because the app root shipped NO icon file. The root now
+     ships the pair (bin/is-make-favicon.py + publish-incentiveswift-frontend.sh), so the customer's
+     console gets the app's real mark instead of a blank one. -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
 <!--
   The page a CUSTOMER lands on from a campaign link (the app's own share/earn links
   build /play/<slug>, and so does GET /api/v1/c/<slug>). It is deliberately outside

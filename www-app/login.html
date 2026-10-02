@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Login — Incentiveswift</title>
+<!-- App-root favicon (kanban t_81bbc2b6): this is the page the app root's inline auth guard lands a
+     logged-out visitor on, so it is the document that issued the automatic `GET /favicon.ico` and
+     got a 404. Declaring the shipped pair suppresses that request entirely; the files answer 200 for
+     direct/legacy requests. Same mark the console root publishes (bin/is-make-favicon.py). -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
