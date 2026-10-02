@@ -63,6 +63,14 @@ pub async fn send_via_smtp(
             .port(config.port)
             .credentials(creds)
             .build(),
+        // PLAIN SMTP, no TLS at all. Added 2026-10-01 for the same reason FunnelSwift needed it: the
+        // panel offers this field as "SMTP (any mail server)", and an internal relay — or a local
+        // sink — without TLS is a perfectly ordinary mail server. Refusing it made that label false,
+        // and it left the credential proof unable to capture what the app actually sent.
+        Some("none") => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)
+            .port(config.port)
+            .credentials(creds)
+            .build(),
         _ => {
             // STARTTLS (default)
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)

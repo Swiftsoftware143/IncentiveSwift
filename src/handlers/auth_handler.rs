@@ -44,6 +44,11 @@ pub struct ResetPasswordInput {
 #[derive(Deserialize)]
 pub struct RegisterInput {
     pub email: String,
+    /// OPTIONAL since 2026-10-01. David's rule: *"users have a option to become an affiliate… the
+    /// system for all the software generates a password that works for each new user"* — a signup is
+    /// NAME + EMAIL and the credential is minted here and emailed, never asked for. A caller that still
+    /// supplies one (an API client, a test, a legacy form) keeps exactly that password.
+    #[serde(default)]
     pub password: String,
     pub name: Option<String>,
     pub referral_code: Option<String>,
@@ -55,16 +60,26 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterInput>,
 ) -> Result<Json<Value>, AppError> {
-    if body.email.is_empty() || body.password.is_empty() {
-        return Err(AppError::BadRequest(
-            "Email and password are required".to_string(),
-        ));
+    if body.email.is_empty() {
+        return Err(AppError::BadRequest("Email is required".to_string()));
     }
-    if body.password.len() < 6 {
+    // A supplied password is still honoured, but it is no longer required: the generated one below is
+    // what David's model asks for, and it is what the credential email binds.
+    if !body.password.is_empty() && body.password.len() < 6 {
         return Err(AppError::BadRequest(
             "Password must be at least 6 characters".to_string(),
         ));
     }
+    let generated_password: Option<String> = if body.password.is_empty() {
+        Some(crate::billing::webhooks::generate_temp_password())
+    } else {
+        None
+    };
+    // The one plaintext that will be hashed AND emailed — so the password a new user is sent is
+    // provably the password their account accepts.
+    let plaintext_password = generated_password
+        .clone()
+        .unwrap_or_else(|| body.password.clone());
 
     // Check if account already exists
     let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1")
@@ -92,7 +107,7 @@ pub async fn register(
 
     // Generate account id first (so we can use as tenant_id)
     let account_id = Uuid::new_v4();
-    let password_hash = hash_password(&body.password)?;
+    let password_hash = hash_password(&plaintext_password)?;
     let name = body
         .name
         .unwrap_or_else(|| body.email.split('@').next().unwrap_or("User").to_string());
@@ -277,23 +292,39 @@ pub async fn register(
     let wl_name = name.clone();
     // The account this mail is FOR — the template lookup is tenant-scoped (kanban t_0fb81177).
     let wl_account = account_id;
+    let wl_generated = generated_password.clone();
     tokio::spawn(async move {
         let vars = serde_json::json!({
             "name": wl_name,
             "email": wl_email,
+            "password": wl_generated.clone().unwrap_or_default(),
             "app_name": "IncentiveSwift",
             "login_url": "https://app.incentiveswift.com"
         });
+        // `welcome_credentials` is the only template that carries a Password line, so it is used
+        // exactly when THIS handler minted the password — the same producer/consumer rule the
+        // template's own comment states. A caller that brought its own password keeps the plain
+        // `welcome` mail, because mailing a password the user chose seconds ago is the thing the
+        // fleet's other credential mails deliberately avoid.
+        let template = if wl_generated.is_some() {
+            "welcome_credentials"
+        } else {
+            "welcome"
+        };
         if let Err(e) = crate::email::send_template_email(
             &wl_pool,
             Some(wl_account),
             &wl_email,
-            "welcome",
+            template,
             &vars,
         )
         .await
         {
-            tracing::warn!("Welcome email failed for {}: {}", wl_email, e);
+            tracing::error!(
+            "CREDENTIAL EMAIL FAILED for {} — the account exists but its generated password was never sent: {}",
+            wl_email,
+            e
+        );
         }
     });
 

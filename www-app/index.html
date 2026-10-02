@@ -138,9 +138,9 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;min-height:100vh;
         <label style="font-size:13px;font-weight:500;color:#475569;display:block;margin-bottom:6px">Email</label>
         <input type="email" class="input" id="regEmail" placeholder="you@company.com" required autocomplete="email">
       </div>
-      <div>
-        <label style="font-size:13px;font-weight:500;color:#475569;display:block;margin-bottom:6px">Password</label>
-        <input type="password" class="input" id="regPassword" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 12px;font-size:12.5px;color:#0c4a6e">
+        We'll email you a password. Just give us your name and email &mdash; your login details arrive by
+        email, and you can change the password from your profile once you're in.
       </div>
       <button type="submit" class="btn" id="regBtn">Create Free Account</button>
       <p style="text-align:center;font-size:12px;color:#94a3b8;margin:0">No credit card required</p>
@@ -211,18 +211,30 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
     const res = await fetch(API_BASE + '/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // NAME + EMAIL only: the server generates the password and emails it (David's rule —
+      // an automatic two-step verification, and nothing for the user to invent).
       body: JSON.stringify({
         email: document.getElementById('regEmail').value,
-        password: document.getElementById('regPassword').value,
         name: document.getElementById('regName').value
       })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || data.message || 'Registration failed');
 
-    sessionStorage.setItem(TOKEN_KEY, data.token);
-    sessionStorage.setItem(USER_KEY, JSON.stringify(data.user || data));
-    window.location.href = '/dashboard';
+    // Deliberately NOT an auto-login: the whole point of the generated credential is that the user
+    // signs in with the password that was just emailed, so the account and the email are proved to
+    // agree. Sending them straight to the dashboard would hide a broken credential mail until their
+    // first real sign-in.
+    const email = document.getElementById('regEmail').value;
+    document.getElementById('registerForm').innerHTML =
+      '<div style="text-align:center">' +
+      '<div style="font-size:34px;margin-bottom:8px">📬</div>' +
+      '<div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px">Account created</div>' +
+      '<div style="font-size:13.5px;color:#475569;line-height:1.5">We have emailed your password to ' +
+      '<strong>' + email.replace(/[<>&]/g, '') + '</strong>.<br>Open that email and sign in with it &mdash; ' +
+      'you can change it from your profile afterwards.</div>' +
+      '<button class="btn" style="margin-top:14px" onclick="document.querySelector(\'.tab\').click()">Go to Sign In</button>' +
+      '</div>';
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.style.display = 'block';
