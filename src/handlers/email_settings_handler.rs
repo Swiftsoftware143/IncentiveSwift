@@ -138,7 +138,10 @@ pub async fn test_email_settings(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let Some(cfg) = email_provider::resolve(&state.db, None).await else {
+    // Reads the SAME row this route's GET and PUT use (the fleet-wide `admin_settings.email`): a
+    // test-send that silently used a tenant override would report on a config the panel is not
+    // showing. The tenant override was retired (kanban t_123b886b, see `email_provider`).
+    let Some(cfg) = email_provider::resolve(&state.db).await else {
         return Ok(Json(json!({
             "success": false,
             "detail": "Global email provider not configured — save provider + credentials first."

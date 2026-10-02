@@ -120,18 +120,19 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
 
-    // Same boot half for the TENANT-side mail credential (kanban t_a65483ff): the tenant settings
-    // writer seals before it stores, and this is what seals a `tenant_settings` config row that
-    // arrives plaintext from a database restored out of an older dump — or from a writer added
-    // later. Never fatal: a broken credential row must not stop the app booting.
-    match email_provider::seal_legacy_tenant_config_secrets(&state.db).await {
+    // Same boot half for the TENANT's own SMTP password (kanban t_123b886b). The bare
+    // `tenant_settings.smtp_password` scalar is a LIVE credential — `delivery::sender::load_smtp_config`
+    // hands it to lettre for every tenant-scoped send — and the tenant settings writer seals it. This
+    // seals a row that arrives plaintext from a database restored out of an older dump, or from a
+    // writer added later. Never fatal: a broken credential row must not stop the app booting.
+    match delivery::sender::seal_legacy_tenant_smtp_passwords(&state.db).await {
         Ok(0) => {}
         Ok(n) => tracing::warn!(
             rows = n,
-            "tenant_settings email config: sealed legacy plaintext credential(s) at rest"
+            "tenant_settings smtp_password: sealed legacy plaintext credential(s) at rest"
         ),
         Err(e) => tracing::error!(
-            "tenant_settings email config credential backfill failed (plaintext may remain at rest): {}",
+            "tenant_settings smtp_password backfill failed (plaintext may remain at rest): {}",
             e
         ),
     }

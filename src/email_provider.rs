@@ -3,11 +3,15 @@
 //! Nothing here reads the process environment. Credentials come from the database and are
 //! entered in the admin panel (Admin > Settings > Email Provider).
 //!
-//! Resolution order for a tenant:
-//!   1. `tenant_settings` key `email_config`   (explicit `provider`: smtp|mailgun|sendgrid|sendiio)
-//!   2. `tenant_settings` key `mailgun_config` (legacy row → provider "mailgun")
-//!   3. `tenant_settings` key `smtp_config`    (legacy row → provider "smtp")
-//!   4. `admin_settings`  key `email`          (global system mail, admin-editable)
+//! Resolution order:
+//!   1. `admin_settings` key `email`  (global system mail, admin-editable — the only source)
+//!
+//! The per-tenant override that used to sit in front of this (`tenant_settings` keys
+//! `email_config` / `mailgun_config` / `smtp_config`) is RETIRED (kanban t_123b886b): it had no
+//! caller with a tenant in hand, no writer in any shipped screen and 0 rows in the live database.
+//! A tenant's own mail server is supported through the LIVE `smtp_*` scalar family read by
+//! `delivery::sender::load_smtp_config`. Those three keys are now REFUSED by the tenant settings
+//! writer (see [`retired_tenant_mail_key`]) instead of being stored for a reader that never came.
 //!
 //! Unconfigured resolves to `None`; every caller logs and skips (never panics, never
 //! silently falls back to a server-wide env var).
@@ -15,7 +19,6 @@
 use crate::security::provider_key_crypto;
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
@@ -201,52 +204,31 @@ pub async fn seal_legacy_config_secrets(
     Ok(1)
 }
 
-/// The three TENANT-side mail-config keys `resolve` reads (resolution order 1-3) and the one
-/// tenant route may write (`PUT /api/v1/settings`). Their `api_key` / `smtp_password` fields are
-/// credentials and carry the SAME `enc:v1:` envelope as the admin `admin_settings.email` row
-/// (kanban t_a794cb09) — this was the sibling write path that stored a tenant's provider key in
-/// the clear (kanban t_a65483ff).
-pub const TENANT_CONFIG_KEYS: [&str; 3] = ["email_config", "mailgun_config", "smtp_config"];
-
-/// Seal every credential still sitting in the clear in a TENANT's own mail-config rows
-/// (`tenant_settings` keys [`TENANT_CONFIG_KEYS`]).
+/// The TENANT-side mail-config OBJECT keys this app no longer accepts (kanban t_123b886b).
 ///
-/// The tenant writer seals before it stores, exactly as the admin writer does, but these rows can
-/// also arrive plaintext from a database restored out of an older dump — or from a writer added
-/// later that forgets. This is the boot half that converges them. Idempotent; returns the number
-/// of rows it had to rewrite.
-pub async fn seal_legacy_tenant_config_secrets(
-    pool: &PgPool,
-) -> Result<u64, provider_key_crypto::CryptoError> {
-    let mut sealed = 0u64;
-    for key in TENANT_CONFIG_KEYS {
-        let rows: Vec<(Uuid, Value)> =
-            sqlx::query_as("SELECT tenant_id, value FROM tenant_settings WHERE key = $1")
-                .bind(key)
-                .fetch_all(pool)
-                .await?;
-        for (tenant_id, mut value) in rows {
-            if !value.is_object() {
-                continue;
-            }
-            let before = value.clone();
-            seal_config_secrets(pool, &mut value).await?;
-            if value == before {
-                continue;
-            }
-            sqlx::query(
-                "UPDATE tenant_settings SET value = $1::jsonb, updated_at = NOW()
-                  WHERE tenant_id = $2 AND key = $3",
-            )
-            .bind(&value)
-            .bind(tenant_id)
-            .bind(key)
-            .execute(pool)
-            .await?;
-            sealed += 1;
-        }
+/// They were the resolution order 1-3 of the retired tenant override; today NOTHING reads them
+/// (see the module docs) and the tenant settings writer refuses them, so no credential can be
+/// stored for a reader that does not exist. The tenant's own mail server is the bare `smtp_*`
+/// scalar family (`delivery::sender::load_smtp_config`).
+pub const RETIRED_TENANT_MAIL_KEYS: [&str; 3] = ["email_config", "mailgun_config", "smtp_config"];
+
+/// Why a tenant mail-config key is refused, or `None` when the key is accepted.
+///
+/// MEASURED before the decision (kanban t_123b886b): `resolve`'s tenant branch had no caller with
+/// a tenant in hand, no writer in any shipped screen (the tenant SPA has no mail-settings panel at
+/// all), and the live `tenant_settings` table held 0 rows for these keys. A config that is written
+/// and never read is a credential at rest with no consumer, so it is refused at the source rather
+/// than sealed for nobody.
+pub fn retired_tenant_mail_key(key: &str) -> Option<&'static str> {
+    if RETIRED_TENANT_MAIL_KEYS.contains(&key) {
+        Some(
+            "this tenant mail-config key is retired: nothing reads it. Configure the tenant's own \
+             mail server with the smtp_host / smtp_port / smtp_username / smtp_password / \
+             smtp_from_email settings instead.",
+        )
+    } else {
+        None
     }
-    Ok(sealed)
 }
 
 async fn row(pool: &PgPool, sql: &str, binds: &[&str]) -> Option<Value> {
@@ -257,37 +239,12 @@ async fn row(pool: &PgPool, sql: &str, binds: &[&str]) -> Option<Value> {
     q.fetch_optional(pool).await.ok().flatten()
 }
 
-/// Resolve the email configuration for a tenant, falling back to the global
-/// `admin_settings.email` row (system mail). Returns `None` when nothing is configured.
-pub async fn resolve(pool: &PgPool, tenant_id: Option<Uuid>) -> Option<EmailConfig> {
-    if let Some(tid) = tenant_id {
-        let candidates: [(&str, &str); 3] = [
-            ("email_config", "smtp"),
-            ("mailgun_config", "mailgun"),
-            ("smtp_config", "smtp"),
-        ];
-        for (key, default_provider) in candidates {
-            if let Some(mut v) = row(
-                pool,
-                "SELECT value FROM tenant_settings WHERE tenant_id = $1 AND key = $2",
-                &[&tid.to_string(), key],
-            )
-            .await
-            {
-                // The credential is ciphertext at rest; the provider must see the plaintext
-                // (an envelope sent as a password is a guaranteed 401, not a send).
-                if let Err(e) = open_config_secrets(pool, &mut v).await {
-                    tracing::error!(error = %e, key, "tenant email config credential cannot be opened — skipped");
-                    continue;
-                }
-                let cfg = EmailConfig::from_json(&v, default_provider);
-                if cfg.is_configured() {
-                    return Some(cfg);
-                }
-            }
-        }
-    }
-
+/// Resolve the GLOBAL email configuration (`admin_settings.email`, system mail). Returns `None`
+/// when nothing is configured.
+///
+/// A tenant argument was removed here (kanban t_123b886b): it existed for the tenant config-object
+/// override that is now RETIRED — see the module docs.
+pub async fn resolve(pool: &PgPool) -> Option<EmailConfig> {
     if let Some(mut v) = row(
         pool,
         "SELECT value FROM admin_settings WHERE key = 'email'",

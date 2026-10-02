@@ -2,6 +2,13 @@
 //!
 //! Each tenant can configure their own SMTP server (host, port, username, password, from address).
 //! This falls back to system-wide Mailgun SMTP if no tenant config is set.
+//!
+//! The `smtp_password` scalar is a CREDENTIAL and is stored under this app's `enc:v1:` envelope
+//! (kanban t_123b886b): the tenant settings writer seals it, [`open_smtp_password`] is the read
+//! half used before lettre ever sees it, and [`seal_legacy_tenant_smtp_passwords`] is the boot half
+//! that converges a row arriving plaintext from an older dump. An envelope this deployment cannot
+//! open is NEVER handed to the transport — the tenant config is skipped so the send falls back to
+//! the system provider instead of authenticating with the envelope.
 
 use lettre::message::header::ContentType;
 use lettre::{
@@ -11,6 +18,11 @@ use lettre::{
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// The `tenant_settings` key carrying a tenant's SMTP password. It is a bare STRING, not a config
+/// object, which is why the seal that covers `email_config`/`mailgun_config`/`smtp_config` never
+/// covered it.
+pub const SMTP_PASSWORD_KEY: &str = "smtp_password";
 
 /// SMTP configuration for a tenant
 #[derive(Debug, Clone)]
@@ -23,7 +35,57 @@ pub struct SmtpConfig {
     pub from_name: Option<String>,
 }
 
-/// Load SMTP config for a specific tenant account
+/// Open a stored `smtp_password`: an `enc:v1:` value is decrypted with this deployment's master
+/// key, a value without the envelope is a legacy plaintext row and passes through unchanged.
+pub async fn open_smtp_password(
+    pool: &PgPool,
+    stored: &str,
+) -> Result<String, crate::security::provider_key_crypto::CryptoError> {
+    crate::security::provider_key_crypto::decrypt_from_storage(pool, stored).await
+}
+
+/// Seal every `tenant_settings.smtp_password` still sitting in the clear.
+///
+/// The write path seals before it stores, but a row can also arrive plaintext from a database
+/// restored out of an older dump — or from a writer added later that forgets. Idempotent; returns
+/// the number of rows it had to rewrite.
+pub async fn seal_legacy_tenant_smtp_passwords(
+    pool: &PgPool,
+) -> Result<u64, crate::security::provider_key_crypto::CryptoError> {
+    use crate::security::provider_key_crypto;
+    let rows: Vec<(Uuid, Value)> =
+        sqlx::query_as("SELECT tenant_id, value FROM tenant_settings WHERE key = $1")
+            .bind(SMTP_PASSWORD_KEY)
+            .fetch_all(pool)
+            .await?;
+    let mut sealed = 0u64;
+    for (tenant_id, value) in rows {
+        let Some(current) = value.as_str() else {
+            continue;
+        };
+        if current.is_empty() || provider_key_crypto::is_encrypted(current) {
+            continue;
+        }
+        let envelope = provider_key_crypto::encrypt_for_storage(pool, current).await?;
+        sqlx::query(
+            "UPDATE tenant_settings SET value = to_jsonb($1::text), updated_at = NOW()
+              WHERE tenant_id = $2 AND key = $3",
+        )
+        .bind(&envelope)
+        .bind(tenant_id)
+        .bind(SMTP_PASSWORD_KEY)
+        .execute(pool)
+        .await?;
+        sealed += 1;
+    }
+    Ok(sealed)
+}
+
+/// Load SMTP config for a specific tenant account.
+///
+/// The stored `smtp_password` is opened HERE, before it becomes a lettre credential. This is a LIVE
+/// path (the pending-email ticker, lifecycle emails, entry emails and output actions all reach it),
+/// so the open is what makes the seal on write safe.
 pub async fn load_smtp_config(pool: &PgPool, account_id: Uuid) -> Option<SmtpConfig> {
     let rows = sqlx::query_as::<_, (String, Value)>(
         "SELECT key, value FROM tenant_settings WHERE tenant_id = $1 AND key LIKE 'smtp_%'",
@@ -40,7 +102,19 @@ pub async fn load_smtp_config(pool: &PgPool, account_id: Uuid) -> Option<SmtpCon
 
     let host = config.get("smtp_host")?.as_str()?.to_string();
     let username = config.get("smtp_username")?.as_str()?.to_string();
-    let password = config.get("smtp_password")?.as_str()?.to_string();
+    let stored_password = config.get(SMTP_PASSWORD_KEY)?.as_str()?.to_string();
+    let password = match open_smtp_password(pool, &stored_password).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                %account_id,
+                "tenant smtp_password cannot be opened by this deployment — not handing the \
+                 envelope to the SMTP transport (falling back to the system mail provider)"
+            );
+            return None;
+        }
+    };
     let from_email = config.get("smtp_from_email")?.as_str()?.to_string();
     let port = config
         .get("smtp_port")

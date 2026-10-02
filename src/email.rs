@@ -201,9 +201,11 @@ pub async fn send_reset_email(
     send_template_email(pool, Some(account_id), to, "password_reset", &vars).await
 }
 
-/// Core email sender — the provider (`smtp | mailgun | sendgrid | sendiio`) and its
-/// credentials come from the database (`admin_settings.email`, overridable per tenant in
-/// `tenant_settings`). Nothing is read from the process environment.
+/// Core email sender — the provider (`smtp | mailgun | sendgrid | sendiio`) and its credentials
+/// come from the database (`admin_settings.email`, the fleet-wide system row). Nothing is read from
+/// the process environment. The per-tenant override this used to fall back on is RETIRED (kanban
+/// t_123b886b, see `email_provider`); a tenant's own server is the `smtp_*` family in
+/// `delivery::sender`.
 async fn send_email_request(
     pool: &sqlx::PgPool,
     to: &str,
@@ -211,7 +213,7 @@ async fn send_email_request(
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
-    let Some(cfg) = crate::email_provider::resolve(pool, None).await else {
+    let Some(cfg) = crate::email_provider::resolve(pool).await else {
         tracing::warn!(
             to = %to,
             subject = %subject,
