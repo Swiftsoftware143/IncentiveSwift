@@ -176,9 +176,12 @@ const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] =
 
 // ---- LOGIN ----
 const LoginView = () => {
-  let email = '', pw = '';
+  // kanban t_02ef49ca — the login draft lives in the SHARED view object (S.views['login_form']),
+  // never a per-render local: the Sign In handler itself calls renderApp() (S.loading / S.error),
+  // so the old `let email = '', pw = ''` blanked BOTH fields on every attempt.
+  const f = viewState('login_form', { email: '', pw: '' });
   const submit = async (e) => { e.preventDefault(); S.loading = true; S.error = null; renderApp();
-    try { const r = await API.login(email, pw); API.setAuth(r.token, r.user); S.view = 'dashboard'; } catch(err) { S.error = err.message; }
+    try { const r = await API.login(f.email, f.pw); API.setAuth(r.token, r.user); f.email = ''; f.pw = ''; S.view = 'dashboard'; } catch(err) { S.error = err.message; }
     S.loading = false; renderApp();
   };
   return html`<div class="flex items-center justify-center min-h-screen w-full">
@@ -189,8 +192,8 @@ const LoginView = () => {
         <p class="text-sm text-gray-500 mt-1">Incentive & Loyalty Platform</p>
       </div>
       <form onSubmit=${submit} class="space-y-4">
-        <div><label class="text-sm font-medium text-gray-600 block mb-1">Email</label><input type="email" class="input" value=${email} onInput=${e => email = e.target.value} placeholder="admin@company.com" required /></div>
-        <div><label class="text-sm font-medium text-gray-600 block mb-1">Password</label><input type="password" class="input" value=${pw} onInput=${e => pw = e.target.value} placeholder="......" required /></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Email</label><input type="email" class="input" value=${f.email} onInput=${e => f.email = e.target.value} placeholder="admin@company.com" required /></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1">Password</label><input type="password" class="input" value=${f.pw} onInput=${e => f.pw = e.target.value} placeholder="......" required /></div>
         ${S.error && html`<div class="text-red-600 text-sm bg-red-50 p-2 rounded-lg">${S.error}</div>`}
         <button type="submit" class="btn w-full">Sign In</button>
       </form>
