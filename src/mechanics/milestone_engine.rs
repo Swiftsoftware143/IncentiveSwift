@@ -435,12 +435,17 @@ pub async fn update_milestone(
         return Ok(None);
     }
 
+    // `fetch_optional`, not `fetch_one` (kanban t_be9344c9, arm (a)): the UPDATE proved the row was
+    // there, but a row deleted between the UPDATE and this read would make `fetch_one` a
+    // `RowNotFound` — a 500 for a row that is simply gone. The missing-row read answers the fleet's
+    // 404, the same refusal the `rows_affected() == 0` arm above gives.
     let milestone =
         sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")
             .bind(milestone_id)
-            .fetch_one(pool)
+            .fetch_optional(pool)
             .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .ok_or_else(|| AppError::NotFound("Milestone not found".to_string()))?;
 
     Ok(Some(milestone))
 }
