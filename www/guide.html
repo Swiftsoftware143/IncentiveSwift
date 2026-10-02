@@ -407,6 +407,7 @@
 
       <h2 id="prize-delivery">🎁 Prize Delivery</h2>
       <p>Each prize type supports a different delivery mechanism. Configure per-prize delivery in the campaign editor.</p>
+      <p>Delivery lives on the campaign row itself: open <strong>Campaigns</strong> and click the <strong>Delivery</strong> button beside <strong>Edit</strong> and <strong>Embed</strong>. The panel keeps the win leg and the lose leg separate, so a winning player and an unsuccessful one can be sent to different places. For each leg it sets the redirect URL and the message the player lands on, the email subject and body sent to the player, which integration targets receive the webhook (chosen from the targets you configured in Integration Hub), and whether the autoresponder fires. Saving writes the delivery block only — the rest of the campaign's configuration is passed through untouched.</p>
 
       <table>
         <thead><tr><th>Prize Type</th><th>Delivery Method</th><th>Notes</th></tr></thead>
@@ -427,6 +428,7 @@
         <li><strong>Iframe Embed</strong> — Copy an iframe snippet to embed the campaign within your site's content</li>
         <li><strong>Widget Script</strong> — A JavaScript widget that overlays on your page, great for popup campaigns</li>
       </ul>
+      <p>In the campaign editor's <strong>Theme</strong> section, pick the colours, font, corner radius and dark mode for the campaign. The play page and every embed use the saved theme automatically, so the widget keeps your branding rather than the defaults.</p>
 
       <div class="alert alert-warning">
         <strong>Note:</strong> The embed widget auto-captures source tracking fields (referrer URL, page URL, UTM parameters) for your analytics.
@@ -768,6 +770,10 @@
       <div class="faq-item">
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">How do I reset the daily webhook limit?</button>
         <div class="faq-a">The daily limit runs on the UTC day, so it resets automatically at midnight UTC. To change the maximum, edit the integration target and adjust its daily limit field.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Where do I set what happens after a win or a loss?</button>
+        <div class="faq-a">On the campaign row: open <strong>Campaigns</strong> in the admin console and click <strong>Delivery</strong> beside Edit and Embed. Each leg — win and lose — has its own redirect URL and message, email subject and body, the integration targets that receive the webhook, and its autoresponder toggle. Saving writes only the delivery block, so the rest of the campaign's configuration is left as it was.</div>
       </div>
       <div class="faq-item">
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Can I export my campaign analytics to Excel?</button>
