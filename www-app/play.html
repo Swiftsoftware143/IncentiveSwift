@@ -19,7 +19,11 @@
     POST /api/v1/campaigns/<slug>/spin          -> spin_wheel mechanic
     POST /api/v1/raffles/<slug>/enter           -> raffle mechanic
     POST /api/v1/entries                        -> every other mechanic (calculator,
-                                                   quiz-by-entry, countdown, ...)
+                                                   quiz-with-no-questions, countdown, ...)
+    GET  /api/v1/play/<campaign_id>/questions   -> quiz mechanic: the public question feed
+                                                   (no correct_answer in the payload)
+    POST /api/v1/quiz/<campaign_id>/submit      -> quiz mechanic: the SERVER scores the
+                                                   answers and stores entries.score
   Served for /play/* by an nginx location in
   /opt/swift/nginx/sites/incentiveswift.conf.
 -->
@@ -47,6 +51,12 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .consent input{width:auto;margin:2px 0 0}
 .spin{background:linear-gradient(135deg,var(--brand),rgba(0,0,0,.35));font-size:18px;padding:18px}
 .codebox{border-top:1px solid #e2e8f0;margin-top:22px;padding-top:16px}
+/* quiz mechanic: one block per question, its answer options as tappable rows */
+.qblock{margin:0 0 14px}
+.qblock>label.qtext{font-weight:600;color:var(--text);font-size:15px;margin-bottom:8px}
+label.opt{display:flex;gap:8px;align-items:center;font-weight:400;color:var(--text);font-size:14px;border:1px solid #cbd5e1;border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer}
+label.opt input{width:auto;margin:0}
+label.opt:hover{border-color:var(--brand)}
 </style>
 </head>
 <body>
@@ -176,6 +186,110 @@ button:disabled{opacity:.6;cursor:not-allowed}
     });
   }
 
+  // ---- Quiz player ----------------------------------------------------------------------
+  // A `quiz` campaign is played through the quiz mechanic's OWN endpoints: the public question
+  // feed (GET /api/v1/play/<campaign_id>/questions, which never carries `correct_answer`) and
+  // the scoring submit (POST /api/v1/quiz/<campaign_id>/submit). The visitor's answers go up as
+  // `answers: [{question_id, value}]` and the SERVER scores them
+  // (`questions_answers::score_quiz_submission`) into `entries.score` — so the number this page
+  // shows is the number the entry stores and the number the lifecycle mail carries (the page
+  // never scores anything itself; there is exactly one evaluator).
+  //
+  // A quiz campaign with NO questions configured keeps the generic entry form: there is nothing
+  // to answer, so there is nothing to score, and the page never invents a result. A refusal from
+  // the feed (402 — the campaign owner's tier does not include the quiz mechanic) is SHOWN, not
+  // papered over: falling back to the generic capture form there would capture a scoreless quiz
+  // entry on a plan that does not sell the mechanic.
+  var quizQuestions = [];
+
+  function renderQuizQuestions(qs) {
+    var btn = el('btn');
+    qs.forEach(function (q, i) {
+      var block = document.createElement('div');
+      block.className = 'qblock';
+      block.setAttribute('data-quiz-question', q.id);
+      var text = document.createElement('label');
+      text.className = 'qtext';
+      text.textContent = q.question_text;
+      block.appendChild(text);
+      var opts = Array.isArray(q.options) ? q.options : [];
+      opts.forEach(function (opt, j) {
+        // An option is the string the SERVER compares against the question's `correct_answer`,
+        // so the value posted must be the option verbatim. The console writes plain strings;
+        // an object option is read for its value/label/text.
+        var v = (opt && typeof opt === 'object')
+          ? (opt.value || opt.label || opt.text || '') : (opt === null ? '' : String(opt));
+        if (v === '') { return; }
+        var row = document.createElement('label');
+        row.className = 'opt';
+        var radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'quizQ' + i;
+        radio.value = v;
+        row.appendChild(radio);
+        row.appendChild(document.createTextNode(v));
+        block.appendChild(row);
+      });
+      if (!block.querySelector('input[type=radio]')) {
+        // No usable options: the question is answered by typing (question_type text/short/number).
+        var inp = document.createElement('input');
+        inp.type = 'text';
+        inp.autocomplete = 'off';
+        inp.setAttribute('data-quiz-text', q.id);
+        block.appendChild(inp);
+      }
+      btn.parentNode.insertBefore(block, btn);
+    });
+    quizQuestions = qs;
+  }
+
+  // The posted answers, or null when the visitor skipped a question.
+  function collectQuizAnswers() {
+    var out = [];
+    var blocks = document.querySelectorAll('.qblock[data-quiz-question]');
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      var chosen = block.querySelector('input[type=radio]:checked');
+      var typed = block.querySelector('input[data-quiz-text]');
+      var value = chosen ? chosen.value : (typed ? typed.value.trim() : '');
+      if (!value) { return null; }
+      out.push({ question_id: block.getAttribute('data-quiz-question'), value: value });
+    }
+    return out;
+  }
+
+  function loadQuizQuestions() {
+    fetch(api + '/play/' + encodeURIComponent(campaign.id) + '/questions')
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }); })
+      .then(function (res) {
+        if (res.status === 402) {
+          show((res.data && (res.data.message || res.data.error)) ||
+            'This quiz is not available on the campaign owner\'s plan.', true);
+          return;
+        }
+        if (!res.ok) { show('Could not load this quiz right now. Please try again.', true); return; }
+        var qs = (res.data && res.data.questions) || [];
+        if (!qs.length) { return; }   // nothing to answer -> the generic entry form stays
+        renderQuizQuestions(qs);
+      })
+      .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
+  }
+
+  // The quiz's own result: the score the SERVER computed (its `score`/`max_score`), never a
+  // number this page derived.
+  function renderQuizResult(data) {
+    el('playForm').style.display = 'none';
+    var html = '<div class="big">You scored ' + escapeHtml(String(data.score)) + ' / ' +
+      escapeHtml(String(data.max_score)) + '</div>' +
+      '<p style="text-align:center;color:#64748b;font-size:14px;margin:0">' +
+      (data.passed === true ? 'Nice — you passed!' : 'Thanks for playing!') + '</p>';
+    el('success').innerHTML = html;
+    el('success').style.display = 'block';
+    if (data.redirect_url) {
+      setTimeout(function () { window.location.href = data.redirect_url; }, 1800);
+    }
+  }
+
   // Source tracking. The served guide documents these as "URL parameter on the play page or
   // embed" (utm_source/utm_medium/utm_campaign/page_url); the widget overlay hands the HOST
   // page's values in on this URL, a shared link carries its own, and a plain visit falls back
@@ -265,6 +379,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
       if (campaign.type === 'raffle') { el('consentRow').style.display = 'flex'; }
       el('loading').style.display = 'none';
       el('panel').style.display = 'block';
+      // The quiz player renders its questions into the same form (the identity fields stay).
+      if (campaign.type === 'quiz') { loadQuizQuestions(); }
     })
     .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
 
@@ -282,7 +398,40 @@ button:disabled{opacity:.6;cursor:not-allowed}
     }
 
     var url, body;
-    if (campaign.type === 'spin_wheel') {
+    if (campaign.type === 'quiz' && quizQuestions.length) {
+      // POST /api/v1/quiz/<campaign_id>/submit takes {contact:{...}, answers:[{question_id,
+      // value}], source:{utm_*}} — the ANSWERS the visitor gave, never a score: the server
+      // scores them (questions_answers::score_quiz_submission) into entries.score, which is
+      // what the lifecycle mail then carries.
+      var email = el('email').value.trim();
+      if (!email) {
+        el('error').textContent = 'Enter your email so we can send your result.';
+        el('error').style.display = 'block';
+        return;
+      }
+      var answers = collectQuizAnswers();
+      if (!answers) {
+        el('error').textContent = 'Please answer every question before submitting.';
+        el('error').style.display = 'block';
+        return;
+      }
+      url = api + '/quiz/' + encodeURIComponent(campaign.id) + '/submit';
+      body = {
+        contact: {
+          first_name: el('firstName').value || null,
+          last_name: el('lastName').value || null,
+          email: email
+        },
+        answers: answers,
+        source: {
+          utm_source: tracked.utm_source,
+          utm_medium: tracked.utm_medium,
+          utm_campaign: tracked.utm_campaign,
+          referrer_url: tracked.referrer_url,
+          page_url: tracked.page_url
+        }
+      };
+    } else if (campaign.type === 'spin_wheel') {
       // POST /api/v1/campaigns/<slug>/spin takes the identity at the TOP level
       // (SpinRequestBody: contact_id | email | phone), not nested under `contact` --
       // sending {contact:{...}} answers 400 "Either contact_id, email, or phone is required".
@@ -339,6 +488,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
           el('error').textContent = m;
           el('error').style.display = 'block';
           btn.disabled = false; btn.textContent = original;
+          return;
+        }
+        if (quizQuestions.length && campaign && campaign.type === 'quiz') {
+          renderQuizResult(out.data || {});
           return;
         }
         render(out.data && out.data.result, out.data);

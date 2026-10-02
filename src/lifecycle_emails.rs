@@ -53,8 +53,19 @@ use uuid::Uuid;
 ///     for a mechanic the product cannot create.
 ///
 /// `every_arm_keys_a_creatable_mechanic` keeps the next drift from landing.
+///
+/// THE QUIZ ARM HAS ITS OWN FOLLOW-UP (kanban t_d8eef6ae). It used to share `challenge_share`
+/// with the default pair, and that row had to stop promising `{{user_score}}` (migration
+/// `20260928_challenge_share_stops_promising_a_score.sql`) because personality/chat/leaderboard/
+/// loyalty cannot produce a score on any served surface. The quiz CAN — `www-app/play.html` now
+/// plays a quiz through `quiz_handler::submit_quiz`, which scores the answers and carries the
+/// number into `entry_email_vars` — so the quiz's follow-up is its OWN row,
+/// `quiz_challenge_share`, which asks for the score again. The default pair keeps the de-scored
+/// row, so no other mechanic's recipient ever sees a brace. The score-shaped row is also guarded
+/// at SEND time (`followup_template`): a quiz entry that has no score — the same campaign played
+/// through the generic capture route — gets the de-scored row instead.
 const LIFECYCLE_MAP: &[(&str, &str, &str)] = &[
-    ("quiz", "entry_ack", "challenge_share"),
+    ("quiz", "entry_ack", "quiz_challenge_share"),
     ("poll", "vote_confirm", "next_topic"),
     ("spin_wheel", "win_voucher", "post_redemption_thanks"),
     ("raffle", "entry_ticket", "bonus_entry_prompt"),
@@ -110,6 +121,31 @@ pub fn lifecycle_templates(campaign_type: &str) -> (&'static str, &'static str) 
         }
     }
     DEFAULT_LIFECYCLE
+}
+
+/// The follow-up rows that ASK THE RECIPIENT FOR A SCORE — i.e. whose copy carries
+/// `{{user_score}}`. The renderer implements no mustache sections (kanban t_c8df11e6 ships them
+/// verbatim), so a row on this list may only be sent to an entry that HAS a score; otherwise the
+/// recipient reads the braces.
+const SCORE_SHAPED_FOLLOWUPS: &[&str] = &["quiz_challenge_share"];
+
+/// The follow-up row THIS entry actually gets.
+///
+/// It is its arm's follow-up (`lifecycle_templates`), UNLESS that row asks for a score the entry
+/// does not have — then it is the de-scored `challenge_share`. The quiz arm is the case this
+/// exists for: its follow-up promises `{{user_score}}` because the SERVED quiz player produces one
+/// (`www-app/play.html` -> `POST /api/v1/quiz/{id}/submit` -> `entries.score`, kanban t_d8eef6ae),
+/// but the same campaign type can also be captured through the generic `POST /api/v1/entries` (a
+/// quiz campaign with no questions configured keeps that form), and THAT entry has no score.
+/// Deciding here rather than at the call site means every path is safe by construction, including
+/// a future score producer on another arm.
+pub fn followup_template(campaign_type: &str, vars: &Value) -> &'static str {
+    let (_, followup) = lifecycle_templates(campaign_type);
+    if SCORE_SHAPED_FOLLOWUPS.contains(&followup) && vars.get("user_score").is_none() {
+        DEFAULT_LIFECYCLE.1
+    } else {
+        followup
+    }
 }
 
 /// The entry's ticket reference: the first 8 hex characters of the entry id, uppercased.
@@ -266,7 +302,10 @@ pub async fn trigger_entry_lifecycle(
     if to_email.is_empty() {
         return;
     }
-    let (entry_tpl, followup_tpl) = lifecycle_templates(campaign_type);
+    let (entry_tpl, _) = lifecycle_templates(campaign_type);
+    // ...and the FOLLOW-UP is chosen by what this entry actually has (a row that asks for a score
+    // is never sent to an entry without one — see `followup_template`).
+    let followup_tpl = followup_template(campaign_type, vars);
 
     // Stage 1 — immediate
     let r = sender::send_template_by_type(&state.db, account_id, to_email, entry_tpl, vars).await;
@@ -334,6 +373,32 @@ mod tests {
         }
     }
 
+    /// The promise survives only where the datum exists (kanban t_d8eef6ae). A quiz entry that HAS
+    /// a score gets the score-shaped follow-up; one that does not (the same campaign played through
+    /// the generic capture route, e.g. a quiz with no questions configured) gets the de-scored row
+    /// — because the renderer ships `{{user_score}}` verbatim and the recipient would read braces.
+    #[test]
+    fn a_score_shaped_followup_is_only_sent_to_a_scored_entry() {
+        let scored = serde_json::json!({"campaign_name": "Quiz", "user_score": 2});
+        let unscored = serde_json::json!({"campaign_name": "Quiz"});
+        assert_eq!(followup_template("quiz", &scored), "quiz_challenge_share");
+        assert_eq!(followup_template("quiz", &unscored), "challenge_share");
+        assert_eq!(followup_template("personality", &scored), "challenge_share");
+        assert_eq!(
+            followup_template("spin_wheel", &scored),
+            "post_redemption_thanks"
+        );
+        // the list may only name a row some arm actually selects, or the guard protects nothing
+        for name in SCORE_SHAPED_FOLLOWUPS {
+            assert!(
+                LIFECYCLE_MAP
+                    .iter()
+                    .any(|(_, _, followup)| followup == name),
+                "score-shaped follow-up '{name}' is NO arm's follow-up, so this list is dead code"
+            );
+        }
+    }
+
     /// The one drifted key whose mechanic exists: a scratch-card campaign must fire ITS rows,
     /// not fall through to the default pair.
     #[test]
@@ -349,5 +414,25 @@ mod tests {
     fn an_armless_creatable_mechanic_gets_the_default_pair() {
         assert_eq!(lifecycle_templates("personality"), DEFAULT_LIFECYCLE);
         assert_eq!(lifecycle_templates("loyalty"), DEFAULT_LIFECYCLE);
+    }
+
+    /// The quiz's follow-up asks for the score, and ONLY the quiz gets that row (kanban
+    /// t_d8eef6ae). The score has one producer on a served surface — the served quiz player ->
+    /// `quiz_handler::submit_quiz` -> `entries.score` -> `entry_email_vars`'s `user_score` — so
+    /// the row that promises `{{user_score}}` must be reachable from the quiz arm alone. The
+    /// default pair keeps `challenge_share`, which was de-scored precisely because personality/
+    /// chat/leaderboard/loyalty have no such producer.
+    #[test]
+    fn only_the_quiz_arm_asks_for_a_score() {
+        assert_eq!(lifecycle_templates("quiz").1, "quiz_challenge_share");
+        assert_eq!(DEFAULT_LIFECYCLE.1, "challenge_share");
+        for (key, _entry, followup) in LIFECYCLE_MAP {
+            assert_eq!(
+                *followup == "quiz_challenge_share",
+                *key == "quiz",
+                "the score-shaped follow-up is reachable from arm '{key}' — only the quiz may \
+                 select it, because only the quiz has a served score producer"
+            );
+        }
     }
 }

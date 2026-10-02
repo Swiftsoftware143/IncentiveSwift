@@ -229,25 +229,51 @@ pub async fn submit_quiz(
     .await
     .map_err(|e| AppError::Database(format!("Contact upsert failed: {}", e)))?;
 
+    // The campaign's own daily entry cap (`config.max_spins_per_day`) — the same guard
+    // `handlers::entries` applies to every mechanic it captures. A served quiz used to reach
+    // this campaign through POST /api/v1/entries, so the cap applied; the mechanic's own submit
+    // path must not become the way around it (kanban t_d8eef6ae).
+    crate::mechanics::pity_timer::check_daily_limit(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        &campaign.config,
+    )
+    .await?;
+
     // Create entry (entries table has no account_id column, only contact_id + campaign_id)
     // The account that owns this campaign has to be under its plan's lead allowance.
     crate::features::enforce_lead_limit_for_campaign(&state.db, campaign.id).await?;
     let entry_id = Uuid::new_v4();
+    // The tag this submission applied: the quiz's own persona tag when the campaign's
+    // `outcome_tags` names one, else the `<namespace>_entrant` tag the generic entry path would
+    // have written. EVERY entry-producing handler fills this column — it is what the output
+    // actions, the CoreSwift push and the webhook payload carry — so a quiz entry must not be
+    // the one kind that arrives untagged.
+    let quiz_tag = if persona_tag.trim().is_empty() {
+        format!("{}_entrant", campaign.tag_namespace)
+    } else {
+        persona_tag.clone()
+    };
+    // The entry's own `answers` value, built once: it is what the row stores, and the same
+    // object is what the lifecycle sender reads its prize fields from.
+    let entry_answers = json!({
+        "persona": persona.clone(),
+        "persona_tag": persona_tag.clone(),
+        "crm_fields": crm_fields.clone()
+    });
     sqlx::query(
-        r#"INSERT INTO entries (id, campaign_id, contact_id, answers, score, outcome,
+        r#"INSERT INTO entries (id, campaign_id, contact_id, answers, score, outcome, tags_applied,
             utm_source, utm_medium, utm_campaign, referrer_url, page_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"#,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"#,
     )
     .bind(entry_id)
     .bind(campaign.id)
     .bind(contact_id)
-    .bind(json!({
-        "persona": persona,
-        "persona_tag": persona_tag,
-        "crm_fields": crm_fields
-    }))
+    .bind(entry_answers.clone())
     .bind(score)
     .bind(if passed { "won" } else { "lost" })
+    .bind(vec![quiz_tag.clone()])
     .bind(input.source.as_ref().and_then(|s| s.utm_source.as_ref()))
     .bind(input.source.as_ref().and_then(|s| s.utm_medium.as_ref()))
     .bind(input.source.as_ref().and_then(|s| s.utm_campaign.as_ref()))
@@ -326,6 +352,204 @@ pub async fn submit_quiz(
         delivery.autoresponder_fired,
         delivery.errors,
     );
+
+    // ---- The rest of what an entry on this campaign MEANS ---------------------------------
+    // A served quiz used to be captured through POST /api/v1/entries (play.html's generic arm),
+    // and these are the legs that path ran: the daily record for the cap checked above, the
+    // campaign's loyalty bridge, its lifecycle mail, its CoreSwift push, its output actions and
+    // its direct integrations. play.html now plays through THIS handler, so they are carried
+    // here — without them, switching the served page to the quiz endpoint would silently stop a
+    // quiz campaign's mail, its CRM push and its automations (kanban t_d8eef6ae).
+    crate::mechanics::pity_timer::record_daily_spin(&state.db, &campaign.id, &contact_id).await?;
+
+    // Loyalty bridge — auto-enroll and award points when the campaign links a loyalty program.
+    // Best-effort, exactly as on the entry path.
+    if campaign.auto_enroll_loyalty {
+        if let Some(program_id) = campaign.loyalty_program_id {
+            let points = campaign.loyalty_points_per_play;
+            let _ = crate::mechanics::loyalty_checkin::process_checkin_from_entry(
+                &state,
+                &program_id.to_string(),
+                &contact_id.to_string(),
+                &entry_id.to_string(),
+                &campaign.slug,
+                points,
+            )
+            .await;
+        }
+    }
+
+    // Lifecycle email — stage 1 immediately + stage 3 queued 24h, rendered from the ONE var set
+    // the platform can answer for this entry (`lifecycle_emails::entry_email_vars`). `score` is
+    // the number `score_quiz_submission` computed above, which is the whole point of this card:
+    // a score-shaped follow-up binds a real number instead of mailing braces. Dedupe is per
+    // contact per campaign, the same rule the entry path applies.
+    let to_email = input.contact.email.trim().to_string();
+    if !to_email.is_empty() {
+        let already = crate::lifecycle_emails::already_emailed(
+            &state.db,
+            campaign.account_id,
+            &to_email,
+            &campaign.r#type,
+        )
+        .await;
+        if !already {
+            let state_clone = state.clone();
+            let campaign_clone = campaign.clone();
+            let em = to_email.clone();
+            let answers_clone = entry_answers.clone();
+            let fname = input.contact.first_name.clone();
+            let lname = input.contact.last_name.clone();
+            let cid = contact_id;
+            let mail_score = score;
+            tokio::spawn(async move {
+                let vars = crate::lifecycle_emails::entry_email_vars(
+                    &state_clone,
+                    &campaign_clone,
+                    cid,
+                    entry_id,
+                    Some(mail_score),
+                    Some(&answers_clone),
+                    fname.as_deref(),
+                    lname.as_deref(),
+                    &em,
+                )
+                .await;
+                crate::lifecycle_emails::trigger_entry_lifecycle(
+                    &state_clone,
+                    campaign_clone.account_id,
+                    &em,
+                    &campaign_clone.r#type,
+                    &vars,
+                )
+                .await;
+            });
+        }
+    }
+
+    // CoreSwift external push (the tenant's own BYOK connection + campaign list): a lead
+    // captured by a quiz has to reach the CRM hub exactly as a lead captured by any other
+    // mechanic does. Fire-and-forget.
+    {
+        let state_clone = state.clone();
+        let push_contact_id = contact_id;
+        let push_campaign_id = campaign.id;
+        let push_entry_id = entry_id;
+        let push_tags: Vec<String> = vec![quiz_tag.clone()];
+        tokio::spawn(async move {
+            crate::delivery::coreswift_external::push_entry_to_coreswift(
+                &state_clone,
+                &push_contact_id,
+                &push_campaign_id,
+                &push_entry_id,
+                &push_tags,
+            )
+            .await;
+        });
+    }
+
+    // Output actions (webhook, CoreSwift sync, email, SMS — `config.output_actions`).
+    // Fire-and-forget, as on the entry path.
+    {
+        let state_clone = state.clone();
+        let oa_campaign_id = campaign.id;
+        let oa_campaign_name = campaign.name.clone();
+        let oa_campaign_slug = campaign.slug.clone();
+        let oa_campaign_type = campaign.r#type.clone();
+        let oa_campaign_config = campaign.config.clone();
+        let oa_account_id = campaign.account_id;
+        let oa_outcome = if passed { "won" } else { "lost" }.to_string();
+        let oa_tags = vec![quiz_tag.clone()];
+        let oa_answers = entry_answers.clone();
+        let oa_contact_id = contact_id;
+        let fn1 = input.contact.first_name.clone().unwrap_or_default();
+        let ln1 = input.contact.last_name.clone().unwrap_or_default();
+        let em1 = to_email.clone();
+        let ph1 = input.contact.phone.clone().unwrap_or_default();
+        let bn1 = input.contact.company.clone().unwrap_or_default();
+        let utm_source = input.source.as_ref().and_then(|s| s.utm_source.clone());
+        let utm_medium = input.source.as_ref().and_then(|s| s.utm_medium.clone());
+        let utm_campaign = input.source.as_ref().and_then(|s| s.utm_campaign.clone());
+        let referrer_url = input.source.as_ref().and_then(|s| s.referrer_url.clone());
+        let page_url = input.source.as_ref().and_then(|s| s.page_url.clone());
+        tokio::spawn(async move {
+            crate::delivery::output_actions::execute_output_actions(
+                &state_clone,
+                &oa_campaign_id,
+                &oa_campaign_name,
+                &oa_campaign_slug,
+                &oa_campaign_type,
+                &oa_campaign_config,
+                &oa_contact_id,
+                &fn1,
+                &ln1,
+                &em1,
+                &ph1,
+                "",
+                &bn1,
+                &oa_account_id,
+                &oa_outcome,
+                &oa_tags,
+                Some(score as f64),
+                Some(&oa_answers),
+                utm_source.as_deref(),
+                utm_medium.as_deref(),
+                utm_campaign.as_deref(),
+                referrer_url.as_deref(),
+                page_url.as_deref(),
+            )
+            .await;
+        });
+    }
+
+    // Direct integrations (`delivery_config.integrations[]` — the second vocabulary in that
+    // column, read by `handlers::entries::dispatch_integrations`), with the quiz's own question
+    // text paired to the visitor's answer. Best-effort: the entry is committed, so a broken
+    // tenant webhook must not swallow the score the customer came for.
+    let qa_pairs: Vec<crate::delivery::payload::QuestionAnswerPair> = input
+        .answers
+        .iter()
+        .filter_map(|a| {
+            questions.iter().find(|q| q.id == a.question_id).map(|q| {
+                crate::delivery::payload::QuestionAnswerPair {
+                    question: q.question_text.clone(),
+                    answer: a.value.clone(),
+                }
+            })
+        })
+        .collect();
+    let payload = crate::delivery::payload::DeliveryPayload::build(
+        crate::delivery::payload::ContactPayload {
+            first_name: input.contact.first_name.clone(),
+            last_name: input.contact.last_name.clone(),
+            email: Some(to_email.clone()),
+            phone: input.contact.phone.clone(),
+            website: None,
+            business_name: input.contact.company.clone(),
+        },
+        crate::delivery::payload::CampaignPayload {
+            name: campaign.name.clone(),
+            campaign_type: campaign.r#type.clone(),
+            tag_namespace: campaign.tag_namespace.clone(),
+        },
+        if passed { "won" } else { "lost" }.to_string(),
+        vec![quiz_tag.clone()],
+        Some(score),
+        qa_pairs,
+        entry_id.to_string(),
+    );
+    if let Err(e) = crate::handlers::entries::dispatch_integrations(
+        &state.http_client,
+        &campaign.delivery_config,
+        &payload,
+        &state.db,
+        &entry_id,
+        &campaign.account_id,
+    )
+    .await
+    {
+        tracing::warn!("quiz direct integrations for entry {}: {e}", entry_id);
+    }
 
     let result = QuizResult {
         score,
