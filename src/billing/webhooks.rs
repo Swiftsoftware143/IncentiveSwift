@@ -178,10 +178,16 @@ async fn deliver_credentials(
     account_id: Uuid,
     plan_name: &str,
 ) -> Result<(), AppError> {
+    // ── Address boundary (kanban t_d7ef4a88) ─────────────────────────────────────
+    // This path MINTS an account and mails credentials to whatever `email` the provider metadata
+    // carried, with no validation at all. Normalise before the first SELECT so the INSERT below
+    // can never store an unreachable login identity.
+    let email = crate::security::email_addr::normalize(email).map_err(AppError::BadRequest)?;
+
     // Look for existing account by email
     let existing_account =
-        sqlx::query("SELECT id, password_hash, name FROM accounts WHERE email = $1")
-            .bind(email)
+        sqlx::query("SELECT id, password_hash, name FROM accounts WHERE lower(email) = $1")
+            .bind(&email)
             .fetch_optional(&state.db)
             .await?;
 
@@ -196,7 +202,7 @@ async fn deliver_credentials(
                 if let Err(e) = email::send_purchase_confirmed_email(
                     &state.db,
                     account_id, // the account this mail is FOR (tenant-scoped lookup, t_0fb81177)
-                    email,
+                    &email,
                     &existing_name,
                     plan_name,
                 )
@@ -223,7 +229,7 @@ async fn deliver_credentials(
                 if let Err(e) = email::send_welcome_email(
                     &state.db,
                     account_id,
-                    email,
+                    &email,
                     &existing_name,
                     &temp_password,
                 )
@@ -254,7 +260,7 @@ async fn deliver_credentials(
         )
         .bind(account_id)
         .bind(customer_name)
-        .bind(email)
+        .bind(&email)
         .bind(&hash)
         .bind(&slug)
         .bind(account_id) // tenant_id = self
@@ -282,7 +288,7 @@ async fn deliver_credentials(
         }
 
         if let Err(e) =
-            email::send_welcome_email(&state.db, account_id, email, customer_name, &temp_password)
+            email::send_welcome_email(&state.db, account_id, &email, customer_name, &temp_password)
                 .await
         {
             tracing::warn!("Failed to send welcome email to {}: {}", email, e);

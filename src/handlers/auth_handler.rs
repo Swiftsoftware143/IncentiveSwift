@@ -2,6 +2,7 @@
 
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
+use crate::security::email_addr;
 use crate::state::AppState;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -60,9 +61,14 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterInput>,
 ) -> Result<Json<Value>, AppError> {
-    if body.email.is_empty() {
-        return Err(AppError::BadRequest("Email is required".to_string()));
-    }
+    // ── Address boundary (kanban t_d7ef4a88, class t_4722a331) ─────────────────────────────
+    // FIRST, before any SELECT and long before any INSERT. `accounts.email` is both the login
+    // identity and the only address the generated-credentials mail can ever reach; the handler
+    // used to bind `body.email` verbatim after an `is_empty()` check, so the literal string `bad`
+    // became a real, permanently-unreachable account. Normalises (trim + lowercase) as well as
+    // validates, and the normalised value is what is checked, derived from, stored, put in the
+    // token and mailed.
+    let email = email_addr::normalize(&body.email).map_err(AppError::BadRequest)?;
     // A supplied password is still honoured, but it is no longer required: the generated one below is
     // what David's model asks for, and it is what the credential email binds.
     if !body.password.is_empty() && body.password.len() < 6 {
@@ -82,11 +88,12 @@ pub async fn register(
         .unwrap_or_else(|| body.password.clone());
 
     // Check if account already exists
-    let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1")
-        .bind(&body.email)
-        .fetch_optional(&state.db)
-        .await?
-        .flatten();
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
     if existing.is_some() {
         return Err(AppError::BadRequest(
             "An account with this email already exists".to_string(),
@@ -110,10 +117,10 @@ pub async fn register(
     let password_hash = hash_password(&plaintext_password)?;
     let name = body
         .name
-        .unwrap_or_else(|| body.email.split('@').next().unwrap_or("User").to_string());
+        .unwrap_or_else(|| email.split('@').next().unwrap_or("User").to_string());
 
     // Generate a unique slug from email
-    let slug_base = body.email.split('@').next().unwrap_or("user");
+    let slug_base = email.split('@').next().unwrap_or("user");
     let slug = format!("{}-{}", slug_base, &account_id.to_string()[..8]);
 
     // Insert account with tenant_id = self (standalone tenant)
@@ -124,7 +131,7 @@ pub async fn register(
     )
     .bind(account_id)
     .bind(&name)
-    .bind(&body.email)
+    .bind(&email)
     .bind(&password_hash)
     .bind(free_tier_id)
     .bind(account_id) // tenant_id = self
@@ -177,7 +184,7 @@ pub async fn register(
     // Generate JWT
     let token = create_jwt(
         &account_id.to_string(),
-        &body.email,
+        &email,
         "company_admin",
         &state.config.jwt_secret,
     )?;
@@ -232,7 +239,7 @@ pub async fn register(
                 // Record the referral action
                 let metadata = serde_json::json!({
                     "type": "signup_referral",
-                    "referee_email": body.email,
+                    "referee_email": email,
                     "bonus": bonus
                 });
                 sqlx::query(
@@ -250,7 +257,7 @@ pub async fn register(
                 let contact_id = sqlx::query_scalar::<_, Uuid>(
                     r#"SELECT id FROM contacts WHERE lower(email) = lower($1) LIMIT 1"#,
                 )
-                .bind(&body.email)
+                .bind(&email)
                 .fetch_optional(&state.db)
                 .await?;
 
@@ -288,7 +295,7 @@ pub async fn register(
 
     // Send welcome email
     let wl_pool = state.db.clone();
-    let wl_email = body.email.clone();
+    let wl_email = email.clone();
     let wl_name = name.clone();
     // The account this mail is FOR — the template lookup is tenant-scoped (kanban t_0fb81177).
     let wl_account = account_id;
@@ -332,7 +339,7 @@ pub async fn register(
         "token": token,
         "user": {
             "id": account_id,
-            "email": body.email,
+            "email": email,
             "name": name,
             "role": "company_admin",
             "plan": "free",
@@ -412,9 +419,9 @@ pub async fn login(
     // Look up account by email
     let row = sqlx::query(
         r#"SELECT id, email, password_hash, role
-           FROM accounts WHERE email = $1"#,
+           FROM accounts WHERE lower(email) = $1"#,
     )
-    .bind(&body.email)
+    .bind(email_addr::lookup_key(&body.email))
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
@@ -805,12 +812,19 @@ pub async fn forgot_password(
     State(state): State<AppState>,
     Json(body): Json<ForgotPasswordInput>,
 ) -> Result<Json<Value>, AppError> {
+    // The SAME boundary rule as `register`, from the same function: an address that could never
+    // receive the reset mail is refused with the same 4xx/field shape instead of silently reporting
+    // "if the email exists\u2026" for an address that cannot exist as a mailbox. The reply stays
+    // unconditional for every well-formed address, so it still leaks nothing about accounts.
+    let email = email_addr::normalize(&body.email).map_err(AppError::BadRequest)?;
+
     // Check if account exists
-    let account_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1")
-        .bind(&body.email)
-        .fetch_optional(&state.db)
-        .await?
-        .flatten();
+    let account_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     // Always return success to prevent email enumeration
     if account_id.is_none() {
@@ -846,14 +860,13 @@ pub async fn forgot_password(
     };
     tracing::info!(
         "Password reset token issued for {} (hint {}, expires at {})",
-        body.email,
+        email,
         token_hint,
         expires_at
     );
 
     // Attempt to send the email via configured provider
-    let email_sent =
-        crate::email::send_reset_email(&state.db, account_id, &body.email, &token).await;
+    let email_sent = crate::email::send_reset_email(&state.db, account_id, &email, &token).await;
     if let Err(e) = email_sent {
         tracing::warn!("Failed to send password reset email: {}", e);
     }

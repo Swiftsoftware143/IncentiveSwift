@@ -49,10 +49,9 @@ pub async fn grant_credits(
 
     validate_system_api_key(&state, api_key).await?;
 
-    // 2. Validate input
-    if req.email.trim().is_empty() {
-        return Err(AppError::BadRequest("email is required".to_string()));
-    }
+    // 2. Validate input — the address (normalised below) is the login identity this call may
+    // MINT an account for, so it is refused here when it is not an address (kanban t_d7ef4a88).
+    let email = crate::security::email_addr::normalize(&req.email).map_err(AppError::BadRequest)?;
     if req.amount <= 0 {
         return Err(AppError::BadRequest("amount must be positive".to_string()));
     }
@@ -61,7 +60,7 @@ pub async fn grant_credits(
     }
 
     // 3. Find or create account by email
-    let account_id = find_or_create_account(&state.db, &req.email).await?;
+    let account_id = find_or_create_account(&state.db, &email).await?;
 
     // 4. Grant credits
     let credit_description = format!(
@@ -86,7 +85,7 @@ pub async fn grant_credits(
         "Granted {} credits to account {} (email: {}) for reason: {}",
         req.amount,
         account_id,
-        req.email,
+        email,
         req.reason
     );
 
@@ -102,9 +101,16 @@ pub async fn grant_credits(
 /// Find an account by email, or create a minimal one if it doesn't exist.
 /// Returns the account UUID.
 async fn find_or_create_account(db: &sqlx::PgPool, email: &str) -> Result<Uuid, AppError> {
+    // ── Address boundary (kanban t_d7ef4a88) ─────────────────────────────────────
+    // `accounts.email` is a login identity and the only address credentials mail can reach. This
+    // function MINTS an account when the address is unknown and it had NO guard at all, so any
+    // string from the referral/credit callers became a real account. Normalise BEFORE the first
+    // SELECT and use the normalised value for the lookup and the INSERT.
+    let email = crate::security::email_addr::normalize(email).map_err(AppError::BadRequest)?;
+
     // First try to find existing account
-    let existing = sqlx::query_scalar::<_, Uuid>("SELECT id FROM accounts WHERE email = $1")
-        .bind(email)
+    let existing = sqlx::query_scalar::<_, Uuid>("SELECT id FROM accounts WHERE lower(email) = $1")
+        .bind(&email)
         .fetch_optional(db)
         .await?;
 
@@ -123,7 +129,7 @@ async fn find_or_create_account(db: &sqlx::PgPool, email: &str) -> Result<Uuid, 
            RETURNING id"#
     )
     .bind(new_id)
-    .bind(email)
+    .bind(&email)
     .bind(format!("Referral User: {}", email))
     .bind(now)
     .bind(now)
@@ -256,10 +262,9 @@ pub async fn register_member(
     // NOTE: This endpoint is internal-only (called by MultiDirectory on localhost).
     // No API key required — same pattern as survey-response endpoint.
 
-    // 1. Validate input
-    if req.email.trim().is_empty() {
-        return Err(AppError::BadRequest("email is required".to_string()));
-    }
+    // 1. Validate input — the address is checked-and-normalised BEFORE the first SELECT/INSERT,
+    // because this endpoint can MINT an accounts row for it (kanban t_d7ef4a88).
+    let email = crate::security::email_addr::normalize(&req.email).map_err(AppError::BadRequest)?;
 
     let valid_types = ["visitor", "supplier", "business_owner"];
     if !valid_types.contains(&req.member_type.as_str()) {
@@ -308,7 +313,7 @@ pub async fn register_member(
         &crate::db::contacts::ContactInput {
             first_name: req.first_name.clone(),
             last_name: req.last_name.clone(),
-            email: Some(req.email.clone()),
+            email: Some(email.clone()),
             phone: req.phone.clone(),
             business_name: None,
             website: None,
@@ -372,8 +377,8 @@ pub async fn register_member(
     // 9. If business_owner, ensure an IS accounts entry exists for credit tracking
     let _account_id: Option<Uuid> = if req.member_type == "business_owner" {
         let existing_acct: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1 LIMIT 1")
-                .bind(&req.email)
+            sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1 LIMIT 1")
+                .bind(&email)
                 .fetch_optional(&state.db)
                 .await?;
 
@@ -389,11 +394,7 @@ pub async fn register_member(
                 )
                 .trim()
                 .to_string();
-                let display_name = if name.is_empty() {
-                    req.email.clone()
-                } else {
-                    name
-                };
+                let display_name = if name.is_empty() { email.clone() } else { name };
 
                 sqlx::query(
                     r#"INSERT INTO accounts (id, email, name, role, credits_balance, credits_lifetime_used, created_at, updated_at)
@@ -401,7 +402,7 @@ pub async fn register_member(
                        ON CONFLICT (email) DO UPDATE SET updated_at = NOW()"#
                 )
                 .bind(new_id)
-                .bind(&req.email)
+                .bind(&email)
                 .bind(&display_name)
                 .bind(now)
                 .bind(now)
@@ -417,7 +418,7 @@ pub async fn register_member(
     tracing::info!(
         "[register-member] {} {} enrolled in {} (program={}) contact={} member={} existed={}",
         req.member_type,
-        req.email,
+        email,
         program_name,
         loyalty_program_slug,
         contact_id,
@@ -433,9 +434,9 @@ pub async fn register_member(
         "loyalty_program_name": program_name,
         "already_existed": already_existed,
         "message": if already_existed {
-            format!("{} was already enrolled in {}", req.email, program_name)
+            format!("{} was already enrolled in {}", email, program_name)
         } else {
-            format!("{} enrolled in {}", req.email, program_name)
+            format!("{} enrolled in {}", email, program_name)
         },
     })))
 }

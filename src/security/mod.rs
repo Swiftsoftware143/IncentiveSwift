@@ -6,6 +6,7 @@
 //! `axum::serve` never populates `ConnectInfo<SocketAddr>`. See kanban t_636d4979.
 
 pub mod auth;
+pub mod email_addr;
 pub mod headers;
 pub mod jwt;
 pub mod provider_key_crypto;

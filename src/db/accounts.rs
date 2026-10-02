@@ -39,9 +39,9 @@ pub async fn get_account(pool: &PgPool, account_id: &Uuid) -> Result<Account, Ap
 pub async fn get_account_by_email(pool: &PgPool, email: &str) -> Result<Option<Account>, AppError> {
     let row = sqlx::query(
         r#"SELECT id, name, email, plan_tier_id, created_at
-           FROM accounts WHERE email = $1"#,
+           FROM accounts WHERE lower(email) = $1"#,
     )
-    .bind(email)
+    .bind(crate::security::email_addr::lookup_key(email))
     .fetch_optional(pool)
     .await?;
 

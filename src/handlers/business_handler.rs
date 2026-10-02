@@ -93,17 +93,20 @@ pub async fn register_business(
     if internal_key.is_empty() || provided_key != internal_key {
         return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
-    if req.name.is_empty() || req.email.is_empty() {
-        return Err(AppError::BadRequest("Name and email are required".into()));
+    if req.name.is_empty() {
+        return Err(AppError::BadRequest("Name is required".into()));
     }
+    // ── Address boundary (kanban t_d7ef4a88) ─────────────────────────────────────
+    // `accounts.email` (inserted below) is a login identity; normalise before the first SELECT.
+    let email = crate::security::email_addr::normalize(&req.email).map_err(AppError::BadRequest)?;
 
     let biz_slug = req.name.to_lowercase().replace(' ', "-");
     let biz_name = req.name;
 
     // Check if account already exists by email
     let existing: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE email = $1 LIMIT 1")
-            .bind(&req.email)
+        sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1 LIMIT 1")
+            .bind(&email)
             .fetch_optional(&s.db)
             .await?
             .flatten();
@@ -145,7 +148,7 @@ pub async fn register_business(
            VALUES ($1, $2, $3, 'company_admin', $4, 0, 0, $5)"#
     )
     .bind(business_id)
-    .bind(&req.email)
+    .bind(&email)
     .bind(&biz_name)
     .bind(&slug)
     .bind(now)
@@ -155,7 +158,7 @@ pub async fn register_business(
     // Also create portfolio_company for directory integration tracking
     let pf_id = Uuid::new_v4();
     let settings = json!({
-        "email": req.email,
+        "email": email.clone(),
         "business_type": req.business_type,
         "directory_slug": req.directory_slug,
         "phone": req.phone,
