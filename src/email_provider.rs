@@ -304,6 +304,13 @@ pub async fn deliver(
     text: &str,
     html: Option<&str>,
 ) -> Result<(), String> {
+    // THE RECIPIENT-SIDE GUARD (kanban t_f56f4a79). This function is the leaf that SPENDS a
+    // provider send: the platform arm the queue ticker, the lifecycle stages and every future
+    // caller ride. A recipient that provably cannot receive mail is refused HERE, by name,
+    // before any request — no provider send, no bounce. See
+    // `security::email_addr::refuse_undeliverable_recipient` for the decision and the vocabulary.
+    let to = crate::security::email_addr::refuse_undeliverable_recipient(to)?;
+
     if !cfg.api_url.is_empty() {
         crate::security::webhook_security::gate_provider_endpoint(
             pool,
@@ -338,12 +345,12 @@ pub async fn deliver(
                     Some(cfg.smtp_encryption.clone())
                 },
             };
-            crate::smtp::send_via_smtp(&sc, to, subject, text, html).await
+            crate::smtp::send_via_smtp(&sc, &to, subject, text, html).await
         }
-        "sendgrid" => send_sendgrid(cfg, to, subject, text, html).await,
-        "sendiio" => send_sendiio(cfg, to, subject, text, html).await,
+        "sendgrid" => send_sendgrid(cfg, &to, subject, text, html).await,
+        "sendiio" => send_sendiio(cfg, &to, subject, text, html).await,
         // "mailgun" — and any unknown value, so a pre-provider row keeps working.
-        _ => send_mailgun(cfg, to, subject, text, html).await,
+        _ => send_mailgun(cfg, &to, subject, text, html).await,
     }
 }
 

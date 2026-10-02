@@ -5,6 +5,18 @@
 //! system-mail path, `email_provider` (`admin_settings.email`, the row the admin Email panel and
 //! its test-send use) — so "removed" really means "back on platform mail" (kanban t_2e9117a5).
 //!
+//!
+//! # The recipient side (kanban t_f56f4a79)
+//!
+//! Both arms refuse a recipient that provably cannot receive mail — RFC 2606 `example.com`/`.net`/
+//! `.org` (any subdomain) and the special-use TLDs `.invalid`/`.test`/`.example`/`.local`/
+//! `.localhost`, plus a malformed address — BEFORE any socket is opened, via
+//! [`crate::security::email_addr::refuse_undeliverable_recipient`] (the same guard
+//! `email_provider::deliver` applies on the platform arm). The refusal is an ordinary `Err` whose
+//! text starts `recipient-refused:`, so the Settings → Email pane, the queue's `last_error` and
+//! the ticker's log line all name WHY instead of reporting a transport failure. Sending anyway is
+//! not an option: those domains are reserved precisely so they can never deliver, so the only
+//! outcomes are a wasted send and a bounce against the sending reputation.
 //! The `smtp_password` scalar is a CREDENTIAL and is stored under this app's `enc:v1:` envelope
 //! (kanban t_123b886b): the tenant settings writer seals it, [`open_smtp_password`] is the read
 //! half used before lettre ever sees it, and [`seal_legacy_tenant_smtp_passwords`] is the boot half
@@ -173,6 +185,11 @@ async fn deliver_via(
     subject: &str,
     body_html: &str,
 ) -> Result<(), String> {
+    // THE RECIPIENT-SIDE GUARD (kanban t_f56f4a79) — the same seam as the platform arm's, on a
+    // tenant's own mail server: a recipient that provably cannot receive mail is refused before
+    // the dial (no socket is opened for a message that can never arrive).
+    let to = crate::security::email_addr::refuse_undeliverable_recipient(to)?;
+
     // The host is TENANT-SETTABLE (`tenant_settings` keys `smtp_*`, written by
     // `PUT /api/v1/settings`), so it is gated before any socket is opened (kanban t_f3c75b2a):
     // a private/reserved host is refused unless it is the platform's own preset for `smtp`.

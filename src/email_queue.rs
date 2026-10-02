@@ -58,6 +58,18 @@
 //! NOT resurrected (and deliberately not a goal): rows already sitting `failed` from before this
 //! change stay terminal, and `failed` is NOT added to the ticker's predicate. The live table holds
 //! 0 such rows (measured 2026-10-02), so nothing is stranded by that choice.
+//!
+//! # An undeliverable recipient (kanban t_f56f4a79)
+//!
+//! A row whose recipient provably cannot receive mail is NOT special-cased in this loop. The
+//! refusal happens at the send seam (`security::email_addr::refuse_undeliverable_recipient`, called
+//! by both `email_provider::deliver` and `sender::deliver_via`), so this loop sees an ordinary
+//! `Err` and treats it like any other failure: the reason (`recipient-refused: …`) is recorded in
+//! `last_error`, the row is re-armed once, and it settles as a terminal dead letter on the 3rd
+//! attempt. Every one of those attempts makes NO provider request and opens NO socket — the guard
+//! runs before the transport — so the cost is a bounded log line, not a send and a bounce. The
+//! retry budget itself is unchanged (see POLICY above); a permanently-undeliverable row is instead
+//! made visible to the operator, which is what the dead-letter surface exists for.
 
 use crate::delivery::sender;
 use crate::state::AppState;
