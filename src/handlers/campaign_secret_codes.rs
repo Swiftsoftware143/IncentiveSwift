@@ -154,15 +154,40 @@ fn note_redeem_failure(key: &str) {
     w.failures += 1;
 }
 
+/// Resolve the campaign named in the path for THIS caller (kanban t_3e5aabd8).
+///
+/// Every arm in this file routes by a caller-supplied `campaign_id` and used to bind it with NO
+/// account predicate at all — the same cross-tenant IDOR class t_734f1f94 closed for the
+/// campaign-authoring routes: `list_secret_codes` handed over another tenant's promo codes,
+/// `create_secret_code` wrote the caller's codes INTO a foreign campaign, `list_redemptions`
+/// disclosed another tenant's redemption rows, and `update|delete_secret_code` bound only the
+/// `code_id` (ignoring even the campaign segment, so a caller could mutate a foreign code by naming
+/// its OWN campaign in the path). The scope decision lives in ONE place,
+/// `handlers::campaigns::campaign_for_caller`: a tenant is scoped to its own raw `account_id`, a
+/// foreign/absent campaign is a **404** (never 403), and the operator audience
+/// (`admin`/`super_admin`, signed claim or `api_keys` row) keeps acting across accounts — which is
+/// what the admin console's panel-16 catalogue does.
+///
+/// For the `code_id`-only arms the predicate then goes through the PARENT row: the campaign is
+/// resolved first, and `campaign.id` becomes part of the UPDATE/DELETE statement.
+async fn scoped_campaign(
+    app: &AppState,
+    campaign_id: &Uuid,
+    user: &AuthenticatedUser,
+) -> Result<crate::db::campaigns::Campaign, crate::error::AppError> {
+    crate::handlers::campaigns::campaign_for_caller(app, &campaign_id.to_string(), user).await
+}
+
 pub async fn list_secret_codes(
     State(app): State<AppState>,
     user: AuthenticatedUser,
     Path(campaign_id): Path<Uuid>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
     let codes = sqlx::query_as::<_, CampaignSecretCode>(
         "SELECT * FROM campaign_secret_codes WHERE campaign_id = $1 ORDER BY created_at DESC",
     )
-    .bind(campaign_id)
+    .bind(campaign.id)
     .fetch_all(&app.db)
     .await
     .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
@@ -175,13 +200,16 @@ pub async fn create_secret_code(
     Path(campaign_id): Path<Uuid>,
     Json(body): Json<CreateSecretCodeBody>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    // A foreign campaign is a 404, and an ABSENT one too: the INSERT used to take any
+    // caller-supplied campaign id (an absent id surfaced as a raw 23503 -> 500).
+    let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
     let code = body.code.trim().to_uppercase();
     let points = body.points.unwrap_or(100);
     match sqlx::query_as::<_, CampaignSecretCode>(
         "INSERT INTO campaign_secret_codes (campaign_id,code,points,max_uses,expires_at)
          VALUES ($1,$2,$3,$4,$5) RETURNING *",
     )
-    .bind(campaign_id)
+    .bind(campaign.id)
     .bind(&code)
     .bind(points)
     .bind(body.max_uses)
@@ -204,9 +232,15 @@ pub async fn create_secret_code(
 pub async fn update_secret_code(
     State(app): State<AppState>,
     user: AuthenticatedUser,
-    Path((_cid, code_id)): Path<(Uuid, Uuid)>,
+    Path((campaign_id, code_id)): Path<(Uuid, Uuid)>,
     Json(b): Json<UpdateSecretCodeBody>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    // The parent id is part of the statement (kanban t_3e5aabd8). The predicate used to be
+    // `WHERE id = $7` alone, so ANY authenticated caller could rewrite ANY campaign's code —
+    // including by naming its own campaign in the path segment the handler never read. Resolve the
+    // campaign for THIS caller first (404 on a foreign campaign), then bind its id: a code that
+    // does not belong to that campaign is a 404, never a write.
+    let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
     // `expires_at` is a TWO-layer collapse (kanban t_2371942d). The request boundary must be
     // tri-state (`#[serde(default, deserialize_with = "double_option")]` on the field above) so
     // `null` is distinguishable from an absent key at all — and the SQL must be too. The old
@@ -220,7 +254,7 @@ pub async fn update_secret_code(
          code=COALESCE($1,code),points=COALESCE($2,points),
          max_uses=COALESCE($3,max_uses),is_active=COALESCE($4,is_active),
          expires_at=CASE WHEN $5 THEN $6::timestamptz ELSE expires_at END
-         WHERE id=$7 RETURNING *",
+         WHERE id=$7 AND campaign_id=$8 RETURNING *",
     )
     .bind(&b.code)
     .bind(b.points)
@@ -229,22 +263,31 @@ pub async fn update_secret_code(
     .bind(set_expires_at)
     .bind(expires_at)
     .bind(code_id)
-    .fetch_one(&app.db)
+    .bind(campaign.id)
+    .fetch_optional(&app.db)
     .await
-    .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
+    .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?
+    .ok_or_else(|| crate::error::AppError::NotFound("Secret code not found".into()))?;
     Ok(ok(json!({"secret_code": sc})))
 }
 
 pub async fn delete_secret_code(
     State(app): State<AppState>,
     user: AuthenticatedUser,
-    Path((_cid, code_id)): Path<(Uuid, Uuid)>,
+    Path((campaign_id, code_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Value>, crate::error::AppError> {
-    sqlx::query("DELETE FROM campaign_secret_codes WHERE id=$1")
+    let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
+    let res = sqlx::query("DELETE FROM campaign_secret_codes WHERE id=$1 AND campaign_id=$2")
         .bind(code_id)
+        .bind(campaign.id)
         .execute(&app.db)
         .await
         .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
+    if res.rows_affected() == 0 {
+        return Err(crate::error::AppError::NotFound(
+            "Secret code not found".into(),
+        ));
+    }
     Ok(ok(json!({"deleted": true})))
 }
 
@@ -381,6 +424,7 @@ pub async fn list_redemptions(
     user: AuthenticatedUser,
     Path(campaign_id): Path<Uuid>,
 ) -> Result<Json<Value>, crate::error::AppError> {
+    let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
     let rows = sqlx::query(
         "SELECT r.id, sc.code AS secret_code, sc.points, r.contact_id,
                 r.points_awarded, r.redeemed_at
@@ -388,7 +432,7 @@ pub async fn list_redemptions(
          JOIN campaign_secret_codes sc ON r.secret_code_id=sc.id
          WHERE r.campaign_id=$1 ORDER BY r.redeemed_at DESC LIMIT 100",
     )
-    .bind(campaign_id)
+    .bind(campaign.id)
     .fetch_all(&app.db)
     .await
     .map_err(|e| crate::error::AppError::Internal(format!("DB: {}", e)))?;
