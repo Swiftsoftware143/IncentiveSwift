@@ -662,10 +662,14 @@
       <p>Navigate to <strong>Integrations</strong> in the sidebar. Here you can:</p>
       <ul>
         <li><strong>Add Integration Targets</strong> — External endpoints or services that receive data</li>
-        <li><strong>Configure Provider Keys</strong> — API keys for connected services (Marketing Boost, Telnyx, etc.)</li>
+        <li><strong>Configure Provider Keys</strong> — API keys for connected services (Marketing Boost, Telnyx, DeepSeek/OpenAI for Chat Funnel AI replies, etc.)</li>
         <li><strong>Link Integrations to Campaigns</strong> — Toggle which integrations fire for each campaign</li>
         <li><strong>Monitor Webhook Security</strong> — View domain allowlists and daily usage</li>
       </ul>
+
+      <h3>Chat Funnel AI replies</h3>
+      <p>A <strong>Chat Funnel</strong> campaign serves the questions you write in its config (<code>chat_flow</code>) and, when a visitor types a message, can answer with an LLM. The LLM is your own credential: connect a <strong>DeepSeek</strong> key (preferred) or an <strong>OpenAI</strong> key under <strong>Integrations</strong> → <strong>Provider Keys</strong>. The key is stored encrypted, is used only for your account's chat campaigns, and both providers use their public vendor endpoint by default.</p>
+      <p>With no LLM key connected the funnel still works — it replies with your scripted <code>chat_flow</code> text. So the AI reply is an enhancement you switch on, never a requirement. A connected endpoint must be a <strong>public destination</strong>: a base URL that resolves to a private, loopback or link-local address is refused when it is saved and is never contacted. The platform's own CoreSwift bridge is the one exception — it is the preset endpoint those accounts already use.</p>
 
       <h3>Integration Types</h3>
       <table>
