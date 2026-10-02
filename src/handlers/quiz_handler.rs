@@ -66,25 +66,41 @@ pub async fn create_question(
 }
 
 /// PUT /api/v1/campaigns/{slug}/questions/{question_id} — update a question
+///
+/// SECURITY (kanban t_27e3e083): the campaign resolved under the caller's account AND the question
+/// id are BOTH part of the write. Resolving only the slug left the id free, so a tenant could name
+/// its own campaign and a question id belonging to another tenant's campaign and rewrite that row.
+/// No row matched -> 404, the house refusal for a foreign or absent id.
 pub async fn update_question(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((slug, question_id)): Path<(String, Uuid)>,
     Json(input): Json<questions_answers::UpdateQuestionInput>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
-    questions_answers::update_question(&state.db, &question_id, &input).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
+    let updated =
+        questions_answers::update_question(&state.db, &campaign.id, &question_id, &input).await?;
+    if !updated {
+        return Err(AppError::NotFound("Question not found".to_string()));
+    }
     Ok(Json(json!({ "status": "updated" })))
 }
 
 /// DELETE /api/v1/campaigns/{slug}/questions/{question_id}
+///
+/// SECURITY (kanban t_27e3e083): the same predicate as `update_question` — the DELETE binds the
+/// campaign resolved under the caller's account, so a foreign question id deletes nothing and the
+/// route answers 404.
 pub async fn delete_question(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((slug, question_id)): Path<(String, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
-    questions_answers::delete_question(&state.db, &question_id).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
+    let deleted = questions_answers::delete_question(&state.db, &campaign.id, &question_id).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Question not found".to_string()));
+    }
     Ok(Json(json!({ "status": "deleted" })))
 }
 

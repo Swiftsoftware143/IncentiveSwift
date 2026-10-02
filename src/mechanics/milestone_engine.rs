@@ -369,11 +369,19 @@ pub async fn create_milestone(
     Ok(milestone)
 }
 
+/// Update a milestone that BELONGS to `campaign_id`.
+///
+/// SECURITY (kanban t_27e3e083): the same arm as the quiz-question CRUD. The handler resolved the
+/// campaign under the caller's account and then threw the scope away (`let _campaign = …`), so the
+/// UPDATE bound only `id` and a tenant owning campaign X could PUT
+/// `/campaigns/X/milestones/{id}` with another tenant's milestone id and rewrite it. Foreign or
+/// absent id -> `None`, which the handler answers with 404.
 pub async fn update_milestone(
     pool: &sqlx::PgPool,
+    campaign_id: &Uuid,
     milestone_id: &Uuid,
     input: &UpdateMilestoneInput,
-) -> Result<CampaignMilestone, AppError> {
+) -> Result<Option<CampaignMilestone>, AppError> {
     // One complete compile-time statement (gate rule 5d / class 14, kanban t_563a3f10): the old
     // builder pushed `"col = ${n}"` pieces and joined them at run time. Every column now sits at a
     // FIXED slot wrapped in COALESCE($n, col), so a NULL bind leaves the column alone — the same
@@ -391,7 +399,7 @@ pub async fn update_milestone(
         return Err(AppError::BadRequest("No fields to update".to_string()));
     }
 
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE campaign_milestones SET
             name = COALESCE($1, name),
             description = COALESCE($2, description),
@@ -403,7 +411,7 @@ pub async fn update_milestone(
             cooldown_hours = COALESCE($8, cooldown_hours),
             is_active = COALESCE($9, is_active),
             updated_at = now()
-         WHERE id = $10",
+         WHERE id = $10 AND campaign_id = $11",
     )
     .bind(&input.name)
     .bind(&input.description)
@@ -415,9 +423,17 @@ pub async fn update_milestone(
     .bind(input.cooldown_hours)
     .bind(input.is_active)
     .bind(milestone_id)
+    .bind(campaign_id)
     .execute(pool)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
+
+    // The UPDATE carries the campaign predicate, so rows_affected == 0 means the id is not in THIS
+    // campaign: foreign, absent, or a milestone the caller owns under another campaign. Never read
+    // it back, never report success.
+    if updated.rows_affected() == 0 {
+        return Ok(None);
+    }
 
     let milestone =
         sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")
@@ -426,16 +442,23 @@ pub async fn update_milestone(
             .await
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-    Ok(milestone)
+    Ok(Some(milestone))
 }
 
-pub async fn delete_milestone(pool: &sqlx::PgPool, milestone_id: &Uuid) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM campaign_milestones WHERE id = $1")
+/// Delete a milestone that BELONGS to `campaign_id` (same arm as the quiz-question DELETE).
+/// `false` = nothing matched (foreign or absent id) and the handler answers 404.
+pub async fn delete_milestone(
+    pool: &sqlx::PgPool,
+    campaign_id: &Uuid,
+    milestone_id: &Uuid,
+) -> Result<bool, AppError> {
+    let result = sqlx::query("DELETE FROM campaign_milestones WHERE id = $1 AND campaign_id = $2")
         .bind(milestone_id)
+        .bind(campaign_id)
         .execute(pool)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn list_milestones(

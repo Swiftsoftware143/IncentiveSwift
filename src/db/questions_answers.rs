@@ -105,16 +105,37 @@ pub async fn create_question(
     Ok(id)
 }
 
-/// Update a question.
+/// Update a question that BELONGS to `campaign_id`.
+///
+/// SECURITY (kanban t_27e3e083): `campaign_id` is part of the statement, not a caller courtesy.
+/// The handler had already resolved the campaign under the caller's account, but the UPDATE bound
+/// only `id`, so a tenant who owned campaign X could PUT `/campaigns/X/questions/{id}` with a
+/// question id belonging to ANOTHER tenant's campaign and rewrite that row (measured live on
+/// 7870f1c3: HTTP 200, foreign `question_text` changed). Returns `false` when no row matched —
+/// foreign id, absent id, or a question in the caller's own OTHER campaign — and the handler
+/// answers 404. The ownership probe runs even for a body that sets nothing, so an empty PUT
+/// cannot read as a successful write on a foreign id.
 pub async fn update_question(
     pool: &PgPool,
+    campaign_id: &Uuid,
     question_id: &Uuid,
     input: &UpdateQuestionInput,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     // One complete compile-time statement (gate rule 5d / class 14, kanban t_563a3f10): the old
     // builder pushed `format!("col = ${n}")` fragments and joined them at run time. Every column now
     // sits at a FIXED slot wrapped in COALESCE($n, col), so a NULL bind leaves the column alone —
     // the same outcome the builder had, with the statement visible at the call site.
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM questions WHERE id = $1 AND campaign_id = $2)",
+    )
+    .bind(question_id)
+    .bind(campaign_id)
+    .fetch_one(pool)
+    .await?;
+    if !owned {
+        return Ok(false);
+    }
+
     if input.question_text.is_none()
         && input.question_type.is_none()
         && input.sort_order.is_none()
@@ -124,7 +145,7 @@ pub async fn update_question(
         && input.crm_field.is_none()
         && input.crm_field_type.is_none()
     {
-        return Ok(());
+        return Ok(true);
     }
 
     sqlx::query(
@@ -137,7 +158,7 @@ pub async fn update_question(
             options = COALESCE($6, options),
             crm_field = COALESCE($7, crm_field),
             crm_field_type = COALESCE($8, crm_field_type)
-         WHERE id = $9",
+         WHERE id = $9 AND campaign_id = $10",
     )
     .bind(&input.question_text)
     .bind(&input.question_type)
@@ -148,9 +169,10 @@ pub async fn update_question(
     .bind(&input.crm_field)
     .bind(&input.crm_field_type)
     .bind(question_id)
+    .bind(campaign_id)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(true)
 }
 
 /// Get all questions for a campaign (admin view — includes correct_answer).
@@ -191,13 +213,23 @@ pub async fn get_campaign_questions_public(
     Ok(rows.into_iter().map(PublicQuestion::from).collect())
 }
 
-/// Delete a question.
-pub async fn delete_question(pool: &PgPool, question_id: &Uuid) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM questions WHERE id = $1")
+/// Delete a question that BELONGS to `campaign_id`.
+///
+/// SECURITY (kanban t_27e3e083): the predicate is the whole fix — the old statement bound `id`
+/// alone, so a tenant owning campaign X could DELETE `/campaigns/X/questions/{id}` and remove a
+/// question from ANOTHER tenant's campaign (measured live on 7870f1c3: HTTP 200, foreign row gone).
+/// `false` = nothing matched (foreign id, absent id) and the handler answers 404.
+pub async fn delete_question(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+    question_id: &Uuid,
+) -> Result<bool, AppError> {
+    let result = sqlx::query("DELETE FROM questions WHERE id = $1 AND campaign_id = $2")
         .bind(question_id)
+        .bind(campaign_id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 /// Score a quiz submission by comparing answers against correct_answer.

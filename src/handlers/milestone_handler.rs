@@ -42,30 +42,46 @@ pub async fn create_milestone(
     Ok(Json(json!({ "milestone": milestone })))
 }
 
-/// PUT /api/v1/campaigns/:slug/milestones/:milestone_id ??? update a milestone
+/// PUT /api/v1/campaigns/:slug/milestones/:milestone_id — update a milestone
+///
+/// SECURITY (kanban t_27e3e083): the campaign is part of the write, not just a gate in front of it.
+/// This handler resolved the campaign under the caller's account and discarded it, so the UPDATE
+/// bound only the milestone id — a tenant could name its own campaign and rewrite another tenant's
+/// milestone. No row matched -> 404.
 pub async fn update_milestone(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((slug, milestone_id)): Path<(String, Uuid)>,
     Json(body): Json<milestone_engine::UpdateMilestoneInput>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
-    let milestone = milestone_engine::update_milestone(&state.db, &milestone_id, &body).await?;
+    let milestone =
+        milestone_engine::update_milestone(&state.db, &campaign.id, &milestone_id, &body).await?;
 
-    Ok(Json(json!({ "milestone": milestone })))
+    match milestone {
+        Some(milestone) => Ok(Json(json!({ "milestone": milestone }))),
+        None => Err(AppError::NotFound("Milestone not found".to_string())),
+    }
 }
 
-/// DELETE /api/v1/campaigns/:slug/milestones/:milestone_id ??? delete a milestone
+/// DELETE /api/v1/campaigns/:slug/milestones/:milestone_id — delete a milestone
+///
+/// SECURITY (kanban t_27e3e083): the DELETE binds the campaign resolved under the caller's account,
+/// so a foreign milestone id deletes nothing and the route answers 404.
 pub async fn delete_milestone(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((slug, milestone_id)): Path<(String, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
-    milestone_engine::delete_milestone(&state.db, &milestone_id).await?;
+    let deleted =
+        milestone_engine::delete_milestone(&state.db, &campaign.id, &milestone_id).await?;
 
+    if !deleted {
+        return Err(AppError::NotFound("Milestone not found".to_string()));
+    }
     Ok(Json(json!({ "deleted": true })))
 }
 
