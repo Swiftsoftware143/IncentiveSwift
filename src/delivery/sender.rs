@@ -19,6 +19,7 @@ use lettre::{
 };
 use serde_json::Value;
 use sqlx::PgPool;
+use std::time::Duration;
 use uuid::Uuid;
 
 /// The `tenant_settings` key carrying a tenant's SMTP password. It is a bare STRING, not a config
@@ -203,19 +204,65 @@ async fn deliver_via(
     // Connect via STARTTLS
     let creds = Credentials::new(config.username.clone(), config.password.clone());
 
+    let label = format!("{}:{}", config.host, config.port);
     let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
         .map_err(|e| format!("Invalid SMTP host: {}", e))?
         .port(config.port)
         .credentials(creds)
+        // Bounds the TCP CONNECT. On lettre 0.11's tokio1 path this knob is used ONLY for the
+        // connect (`client::async_net::try_connect` wraps `socket.connect(addr)` in
+        // `tokio::time::timeout`); it does NOT set a read/write timeout on the async stream, so it
+        // cannot bound a server that accepts the connection and then says nothing. That half is
+        // [`send_with_deadline`]'s job.
+        .timeout(Some(TENANT_SMTP_DEADLINE))
         .build();
 
-    // Send
-    mailer
-        .send(email)
-        .await
-        .map_err(|e| format!("SMTP send failed: {}", e))?;
+    // Send, under the same deadline, so the WHOLE dial is bounded (kanban t_05b6efa2).
+    send_with_deadline(mailer, email, &label, TENANT_SMTP_DEADLINE).await?;
 
     Ok(())
+}
+
+/// How long ONE tenant SMTP dial may take, end to end: TCP connect, STARTTLS handshake and the
+/// SMTP dialogue (banner / EHLO / AUTH / MAIL / RCPT / DATA). The tenant's mail server is a
+/// host:port the tenant types into Settings → Email that this box has no control over.
+///
+/// Why 10 s (kanban t_05b6efa2): it is this app's dominant outbound bound — `delivery/webhook.rs`,
+/// `delivery/direct_api/*`, `handlers/sms_handler.rs` and `handlers/provider_keys_handler.rs` all
+/// use 10 s; `delivery/output_actions.rs` and `state.rs` use 15 s; `email_provider.rs` 20 s. A mail
+/// server that is up answers a banner in well under a second, so 10 s is generous for a real one
+/// and is the difference between "the pane answers" and "the pane sits on Sending…".
+///
+/// Why it takes TWO bounds and not just lettre's `.timeout(...)` (read in the vendored lettre
+/// 0.11.23 source): the builder's timeout reaches `AsyncSmtpTransportBuilder::info.timeout` →
+/// `E::connect(server, timeout)` → `AsyncNetworkStream::connect_tokio1(..)`, which wraps ONLY
+/// `socket.connect(addr)` in `tokio::time::timeout`. The async stream it then builds carries no
+/// `set_read_timeout`/`set_write_timeout` (those exist on the SYNC path only, `client/net.rs`), so
+/// the dialogue's `conn.read_response().await` is unbounded. The default is `Some(60 s)`
+/// (`smtp::DEFAULT_TIMEOUT`): a BLACKHOLED SYN was therefore already answered at ~60 s, while a
+/// server that ACCEPTS and then stays silent hung for ever — which is what the pane did (measured
+/// pre-change: still pending at t+75 s against a silent sink).
+pub const TENANT_SMTP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Hand the message to lettre under `deadline`, so a server that never answers cannot park the
+/// caller. `label` is `host:port`, named in the refusal so an operator — and the ticker's
+/// `last_error`, and the console's "Not sent. …" line — reads WHICH server was abandoned.
+async fn send_with_deadline(
+    mailer: AsyncSmtpTransport<Tokio1Executor>,
+    email: Message,
+    label: &str,
+    deadline: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(deadline, mailer.send(email)).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!("SMTP send failed: {}", e)),
+        Err(_elapsed) => Err(format!(
+            "SMTP send failed: {} did not answer within {}s — the dial was abandoned at the bound \
+             (TCP connect, STARTTLS or SMTP dialogue)",
+            label,
+            deadline.as_secs()
+        )),
+    }
 }
 
 /// Send an email through the account's OWN mail server, or — when it has none — through the
@@ -383,4 +430,61 @@ pub async fn send_template_by_type(
     let body = render_template(&body, vars);
 
     send_email(pool, account_id, to, &subject, &body).await
+}
+
+#[cfg(test)]
+mod smtp_deadline_tests {
+    use super::*;
+    use lettre::message::Mailbox;
+    use tokio::net::TcpListener;
+
+    /// The case the tenant dial had to be fixed for (kanban t_05b6efa2): a server that ACCEPTS the
+    /// TCP connection and then sends nothing — no banner, no RST. lettre's own `.timeout(...)` does
+    /// NOT bound that on the tokio1 path (it only bounds the connect), so without the wrapper in
+    /// `send_with_deadline` this dial never returns. The sink is a real socket; the bound is
+    /// shortened so the test stays fast.
+    #[tokio::test]
+    async fn a_silent_sink_is_abandoned_at_the_deadline() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            // Accept, hold the socket open, never write: the "accepts and says nothing" sink.
+            if let Ok((stream, _)) = listener.accept().await {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                drop(stream);
+            }
+        });
+
+        let from: Mailbox = "probe@example.com".parse().unwrap();
+        let to: Mailbox = "probe@example.com".parse().unwrap();
+        let email = Message::builder()
+            .from(from)
+            .to(to)
+            .subject("probe")
+            .body("probe".to_string())
+            .unwrap();
+        let mailer = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous("127.0.0.1")
+            .port(port)
+            .timeout(Some(Duration::from_millis(200)))
+            .build();
+
+        let started = std::time::Instant::now();
+        let err = send_with_deadline(
+            mailer,
+            email,
+            "127.0.0.1:silent-sink",
+            Duration::from_millis(400),
+        )
+        .await
+        .expect_err("a silent sink is not a delivered message");
+        assert!(
+            err.contains("did not answer within"),
+            "the refusal must name the bound, got: {err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the dial was not bounded: {:?}",
+            started.elapsed()
+        );
+    }
 }

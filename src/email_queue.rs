@@ -16,6 +16,14 @@
 //! A failure used to be visible ONLY in `last_error` — no log line, no panel — and 18 dead rows sat
 //! unnoticed for 12 days (measured 2026-10-02, kanban t_9d711589). Hence the ERROR line below and
 //! the admin read route that lists the dead letters.
+//!
+//! A timed-out tenant dial is NOT a separate state (kanban t_05b6efa2): `sender::deliver_via`
+//! bounds ONE dial at `sender::TENANT_SMTP_DEADLINE` (10 s), so a tenant mail server that accepts
+//! the connection and stays silent now fails in 10 s with `last_error` naming the bound instead of
+//! parking this loop. The loop is SEQUENTIAL (LIMIT 100), so one unreachable tenant server can
+//! still delay the rows queued behind it by 10 s per row — bounded, not indefinite. The row is
+//! written `failed` exactly like any other send error, i.e. TERMINAL today; whether a `failed` row
+//! should be retried is the policy card t_44a990da and is deliberately not decided here.
 
 use crate::delivery::sender;
 use crate::state::AppState;
