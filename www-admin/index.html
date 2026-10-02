@@ -1283,7 +1283,7 @@ const LoyaltyPrograms = () => {
   <div class="flex items-center justify-between">
     <h2 class="text-xl font-bold">Site Configuration</h2>
   </div>
-  <p class="text-xs text-gray-500">SEO, tracking, legal pages, and homepage. Changes regenerate the live marketing site.</p>
+  <p class="text-xs text-gray-500">SEO, tracking, legal pages, and homepage. Changes are saved here and materialized on the host within 5 minutes.</p>
   <div id="scform"></div>
 </div>`;
 
@@ -1345,7 +1345,7 @@ function loadSiteConfig() {
       body.schema_json=g('schema_json');
       const st = document.getElementById('scstatus');st.textContent='Saving...';st.className='text-sm ml-2 text-blue-600';
       const r = await API.put('/admin/site',body);
-      if(r){st.textContent='Saved! Marketing page regenerated.';st.className='text-sm ml-2 text-green-600'}
+      if(r){st.textContent='Saved! Pages materialize on the host within 5 minutes.';st.className='text-sm ml-2 text-green-600'}
       else{st.textContent='Error saving.';st.className='text-sm ml-2 text-red-600'}
     };
   }).catch(() => el.innerHTML='<p class="text-red-500">Not available.</p>');
@@ -1844,7 +1844,7 @@ const SiteConfigView = () => {
       const body = { ...st.data };
       body.homepage = st.data.homepage || {};
       await API.put('/admin/site', body);
-      st.status = 'Saved! Marketing page regenerated.';
+      st.status = 'Saved! Pages materialize on the host within 5 minutes.';
     } catch(e) { st.status = 'Error saving: ' + e.message; }
     st.saving = false; renderApp();
   };

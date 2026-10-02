@@ -73,6 +73,24 @@ async fn main() -> anyhow::Result<()> {
         .with_thread_ids(true)
         .init();
 
+    // ── Host-side applier mode ────────────────────────────────────────────────────────────────
+    // The static marketing page + the three legal pages live on the HOST
+    // (/opt/swift/nginx/www/incentiveswift/) and the server runs in a container with ZERO mounts
+    // for them, so the request path never writes them (that attempt is what made
+    // PUT /api/v1/admin/site answer 500 after its row had already committed — kanban t_3fb0d3d2).
+    // Running the SAME binary on the host with this argument is what materializes them;
+    // /opt/swift/bin/is-site-apply.sh drives it from cron (*/5). Checked BEFORE the config load,
+    // the migrations/backfills and the listener — it needs DATABASE_URL and nothing else, and it
+    // must never start a second API against the live port.
+    //
+    //   incentiveswift-api apply-site-settings            write only the files whose bytes changed
+    //   incentiveswift-api apply-site-settings --check    render and report, write NOTHING
+    //   incentiveswift-api apply-site-settings --emit DIR also drop the rendered bytes under DIR (a
+    //                                                     read-only-in-SITE_ROOT comparison artifact)
+    if std::env::args().nth(1).as_deref() == Some("apply-site-settings") {
+        return apply_site_settings_mode().await;
+    }
+
     // Load configuration
     let config = config::AppConfig::from_env()?;
     let config = Arc::new(config);
@@ -1341,4 +1359,115 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("Shutdown signal received, starting graceful shutdown...");
+}
+
+/// The host-side applier (`incentiveswift-api apply-site-settings`, driven by
+/// /opt/swift/bin/is-site-apply.sh from cron */5). It is the ONLY writer of
+/// /opt/swift/nginx/www/incentiveswift/*.
+///
+/// It prints one machine-readable summary line — `site artifacts: written=N skipped=M` — and one
+/// line per file it touched or deliberately left alone, so the cron log and the card's proof can both
+/// read what happened without a second probe and an unchanged tree stays a one-line no-op.
+async fn apply_site_settings_mode() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let check = args.iter().any(|a| a == "--check");
+    let emit_dir = args
+        .iter()
+        .position(|a| a == "--emit")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    let url = std::env::var("DATABASE_URL").map_err(|_| {
+        anyhow::anyhow!("apply-site-settings: DATABASE_URL is not set (run it through /opt/swift/bin/is-site-apply.sh)")
+    })?;
+
+    let pool = sqlx::PgPool::connect(&url).await.map_err(|e| {
+        anyhow::anyhow!("apply-site-settings: cannot connect to the database: {}", e)
+    })?;
+
+    let settings = handlers::site_handler::load_settings(&pool)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "apply-site-settings: cannot read the site settings row: {:?}",
+                e
+            )
+        })?;
+
+    let (targets, skipped) = handlers::site_handler::plan(&settings);
+
+    // --emit: drop the rendered bytes somewhere else so they can be compared byte-for-byte with the
+    // served file WITHOUT this process writing anything under SITE_ROOT.
+    if let Some(dir) = emit_dir {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            anyhow::anyhow!(
+                "apply-site-settings: cannot create --emit dir {}: {}",
+                dir,
+                e
+            )
+        })?;
+        for (path, rendered) in &targets {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rendered".to_string());
+            let dest = std::path::Path::new(&dir).join(name);
+            std::fs::write(&dest, rendered.as_bytes()).map_err(|e| {
+                anyhow::anyhow!(
+                    "apply-site-settings: cannot write {}: {}",
+                    dest.display(),
+                    e
+                )
+            })?;
+            println!("emit {} -> {}", path, dest.display());
+        }
+    }
+
+    if check {
+        for (path, reason) in &skipped {
+            println!("skip {} {}", path, reason);
+        }
+        for (path, rendered) in &targets {
+            let now = std::fs::read_to_string(path).unwrap_or_default();
+            let state = if now == *rendered {
+                "unchanged"
+            } else {
+                "would-write"
+            };
+            println!(
+                "check {} state={} sha256={} served_sha256={}",
+                path,
+                state,
+                sha256_hex(rendered.as_bytes()),
+                sha256_hex(now.as_bytes())
+            );
+        }
+        println!(
+            "site artifacts (check, nothing written): targets={} skipped={}",
+            targets.len(),
+            skipped.len()
+        );
+        return Ok(());
+    }
+
+    let (written, skipped) = handlers::site_handler::apply_to_disk(&settings);
+    for path in &written {
+        println!("write {} (the rendered bytes differ from the file)", path);
+    }
+    for (path, reason) in &skipped {
+        println!("skip {} {}", path, reason);
+    }
+    println!(
+        "site artifacts: written={} skipped={}",
+        written.len(),
+        skipped.len()
+    );
+    Ok(())
+}
+
+/// Lowercase SHA-256 hex, used by the `--check` leg so a rendered/served mismatch is one comparable
+/// line in the log (the same shape the ADASwift applier prints).
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
 }
