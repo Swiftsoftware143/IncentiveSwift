@@ -217,9 +217,20 @@ fully enforced product:
 * `credits_monthly`, `credits_overdraft` → the allowances on `GET /api/v1/credits/balance`.
 * `module_loyalty_program` → the loyalty plan check (absent row means allowed).
 
-Every other registered key — including the `surface_*` / `branding_*` / `delivery_*` duplicates
-(`surface_tablet_mode` vs `tablet_mode`, etc.) — is catalogue-only today: it renders and it grants,
-but no code path reads it yet.
+The `surface_*` / `branding_*` duplicate registry rows were **flattened on 2026-10-02** (kanban
+t_c307f7a7): the registry now carries ONE name per capability — `custom_domains`, `white_label`,
+`tablet_mode`, `widget_embed`, `full_page` — because the Plan Tiers panel draws one switch per row,
+so a duplicate row was a switch that looked real and moved nothing. Migration
+`20261002_flatten_duplicate_feature_keys.sql` re-points every grant the retired row carried onto the
+survivor before deleting it (the FK is `ON DELETE CASCADE`), so no tier lost a capability; the top
+tier went 38 -> 31 rows, Free stayed at 5 and Pro at 17.
+
+Which keys are still catalogue-only (they render and they grant, but no code path reads them yet):
+`delivery_webhook`, `delivery_direct_api`, `limit_unlimited_campaigns`, `stripe_credit_topups`, and
+the four surviving surface/option keys (`full_page`, `tablet_mode`, `white_label`, `widget_embed`).
+Whether those should be wired is a pricing decision (for example, gating `delivery_webhook` would
+deny webhook delivery to Free and Pro, which every live campaign uses today) and is recorded in
+kanban t_c307f7a7 rather than taken silently.
 
 This replaced the previous `plan_tier_features`/`feature_limits` tables (removed — see reconciliation note in `src/features.rs`).
 

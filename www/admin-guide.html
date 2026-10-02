@@ -175,7 +175,7 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
   </div>
   <div class="card">
     <h3>The top tier gets everything (2026-10-02)</h3>
-    <p>The top tier — highest price, then highest sort order: <strong>Enterprise</strong>, $199&#47;mo — now carries a row for <strong>every</strong> key in the <code>features</code> registry: <strong>38 of 38</strong>, up from 18. The 20 missing keys were seated by migration <code>20261002_enterprise_top_tier_all_features.sql</code>, which fills gaps only (it never overwrites a grant or a number you set) and gives every <code>limits</code>-category key <code>-1</code>. Free (5) and Pro (17) are untouched.</p>
+    <p>The top tier — highest price, then highest sort order: <strong>Enterprise</strong>, $199&#47;mo — carries a row for <strong>every</strong> key in the <code>features</code> registry. It read <strong>38 of 38</strong> on 2026-10-02 (up from 18): the 20 missing keys were seated by migration <code>20261002_enterprise_top_tier_all_features.sql</code>, which fills gaps only (it never overwrites a grant or a number you set) and gives every <code>limits</code>-category key <code>-1</code>. Free (5) and Pro (17) are untouched. Later the same day the registry itself was flattened from 38 rows to <strong>31</strong> — 7 of them were duplicate names for 5 capabilities — and every grant the retired rows carried was re-pointed onto the surviving name first, so Enterprise reads <strong>31 of 31</strong> with no capability lost.</p>
     <p>When a new feature key is registered later, keep the rule true the same way: open this tab, click the <strong>Enterprise</strong> card and tick the new key's box. There is no "grant everything" button.</p>
   </div>
   <div class="card">
@@ -190,7 +190,7 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
       <li><code>credits_monthly</code>, <code>credits_overdraft</code> — the allowances returned by <code>GET /api/v1/credits/balance</code>.</li>
       <li><code>module_loyalty_program</code> — the loyalty plan check (no row means allowed).</li>
     </ul>
-    <div class="callout info"><strong>Note:</strong> the remaining registered keys — including the <code>surface_*</code> / <code>branding_*</code> / <code>delivery_*</code> duplicates (<code>surface_tablet_mode</code> vs <code>tablet_mode</code>, and so on) — are catalogue-only today: they render here and they are granted, but no code path reads them yet.</div>
+    <div class="callout info"><strong>Note (2026-10-02, kanban t_c307f7a7):</strong> the <code>surface_*</code> / <code>branding_*</code> duplicate rows were <strong>flattened</strong> — this panel now shows ONE name per capability (<code>custom_domains</code>, <code>white_label</code>, <code>tablet_mode</code>, <code>widget_embed</code>, <code>full_page</code>), because one switch per row means a duplicate row was a switch that looked real and moved nothing. Every grant the retired row carried was re-pointed onto the survivor first, so no tier lost a capability (Enterprise 38 &#8594; 31 rows, Free 5, Pro 17 unchanged). Still catalogue-only — they render and they grant, but no code path reads them yet: <code>delivery_webhook</code>, <code>delivery_direct_api</code>, <code>limit_unlimited_campaigns</code>, <code>stripe_credit_topups</code>, and the four surviving surface keys above. Wiring those is a pricing decision, not an oversight.</div>
   </div>
   <div class="card">
     <h3>Deleting Plans</h3>

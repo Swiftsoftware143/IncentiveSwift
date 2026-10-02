@@ -11,6 +11,14 @@ nothing referenced them, which is why a from-zero install came up data-empty (ka
 migration: `migrations/20260925_seed_catalog_rows.sql`. The files are kept as the provenance
 record of how production got those rows.
 
+**Superseded 2026-10-02 (kanban t_c307f7a7):** the registry rows the first two files describe were
+flattened to ONE name per capability by `migrations/20261002_flatten_duplicate_feature_keys.sql` —
+the five `surface_*` rows plus `branding_custom_domain` / `branding_white_label` are retired, and
+`custom_domains` / `tablet_mode` / `widget_embed` / `full_page` / `white_label` survive carrying every
+grant the retired rows held. Hand-running `register_feature_keys.sql` now would re-INSERT the retired
+`surface_*` rows and re-grant them to `enterprise`, undoing that decision — one more reason not to
+run these files.
+
 | file | what it did | still needed? |
 |---|---|---|
 | `insert_surface_features.sql` | inserted 5 `features` rows with the `surface_*` keys (category `surface`) | **No** — absorbed into `20260925_seed_catalog_rows.sql` §1 |
