@@ -123,6 +123,11 @@ let widgetInfo = null;
 let csConnected = false;
 let csLists = [];
 let csListId = '';
+// kanban t_7f2d2995: the campaign picker's own onchange re-renders the editor, and renderEditor
+// re-derives `selected` from campaigns[].iqs_funnel_id — so a user's pick was discarded before Save
+// could read it (measured: value '' after selectOption, and saveAll then skipped the campaign arm
+// entirely). null = "no pick yet, derive from the server row"; a string = what the user chose.
+let pickedCampaignId = null;
 
 function msg(t, cls) {
   const m = document.getElementById('msg');
@@ -199,6 +204,7 @@ async function openEditor(id) {
     await loadRules();
     await loadCampaigns();
     await loadCoreSwiftState(true);
+    pickedCampaignId = null;
     renderEditor();
   } catch (e) { msg(e.message, 'err'); }
 }
@@ -308,7 +314,7 @@ function renderEditor() {
   <h3>📎 Campaign Gate <span class="muted">(ISQ1 — attach to a campaign)</span></h3>
   <div class="row">
     <div class="grow"><label>Attach IQS to Campaign (survey shows before entry)</label>
-      <select class="input" id="setCampaign" onchange="onCampaignChange()"><option value="">— none —</option>${campaigns.map(cp => `<option value="${cp.id}" ${cp.iqs_funnel_id===currentFunnel.id?'selected':''}>${esc(cp.name||cp.title||cp.slug)}${cp.iqs_funnel_id===currentFunnel.id?' ✓ gated':''}</option>`).join('')}</select>
+      <select class="input" id="setCampaign" onchange="onCampaignChange()"><option value="">— none —</option>${campaigns.map(cp => `<option value="${cp.id}" ${(pickedCampaignId !== null ? pickedCampaignId : (cp.iqs_funnel_id===currentFunnel.id ? cp.id : ''))===cp.id?'selected':''}>${esc(cp.name||cp.title||cp.slug)}${cp.iqs_funnel_id===currentFunnel.id?' ✓ gated':''}</option>`).join('')}</select>
     </div>
     <div class="grow">
       <label>Push leads to CoreSwift list</label>
@@ -436,6 +442,7 @@ async function refreshCsLists() {
   renderEditor();
 }
 function onCampaignChange() {
+  pickedCampaignId = document.getElementById('setCampaign').value;
   renderEditor();
 }
 
@@ -500,7 +507,21 @@ async function saveAll() {
     }
     if (state.campaignId && targetCampaign) {
       const csList = document.getElementById('setCsList').value;
-      const deliveryConfig = { coreswift: csList ? { list_id: csList } : {} };
+      // kanban t_7f2d2995: this PUT replaces the WHOLE campaigns.delivery_config column, so build it
+      // as a READ-MERGE-WRITE of the row already in scope — never from scratch. This writer owns
+      // `coreswift.list_id` ONLY: the hub's `delivery` block (on_win/on_lose redirects, email,
+      // webhook targets, autoresponder), `integrations[]` and the legacy `_method`/`api_type`/
+      // `api_key`/`webhook_url` entry-capture vocabulary (handlers::entries::dispatch_integrations)
+      // belong to OTHER writers and are copied through untouched. Deliberately NOT the console's
+      // isdMergeDelivery (www-admin/index.html): that one owns the hub's `delivery` block, so the
+      // two writers own disjoint keys and no shared helper exists today — if they ever converge,
+      // isdMergeDelivery is the home for it.
+      const prev = (targetCampaign.delivery_config && typeof targetCampaign.delivery_config === 'object'
+                    && !Array.isArray(targetCampaign.delivery_config)) ? targetCampaign.delivery_config : {};
+      const prevCs = (prev.coreswift && typeof prev.coreswift === 'object' && !Array.isArray(prev.coreswift)) ? prev.coreswift : {};
+      const coreswift = Object.assign({}, prevCs);
+      if (csList) { coreswift.list_id = csList; } else { delete coreswift.list_id; } // blanked box = explicit clear
+      const deliveryConfig = Object.assign({}, prev, { coreswift: coreswift });
       await api('/campaigns/' + (targetCampaign.slug || targetCampaign.id), 'PUT', { iqs_funnel_id: currentFunnel.id, delivery_config: deliveryConfig });
     }
     // save questions (create new, update existing)
