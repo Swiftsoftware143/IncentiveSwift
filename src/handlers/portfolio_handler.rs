@@ -78,16 +78,34 @@ fn generate_slug(name: &str) -> String {
     }
 }
 
-/// GET /api/v1/portfolio-companies
+/// The caller's account, or a 400 — never silently defaulted (same helper shape as
+/// `integration_target_handler::account_uuid`).
+fn account_uuid(user: &AuthenticatedUser) -> Result<Uuid, AppError> {
+    Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))
+}
+
+/// GET /api/v1/portfolio-companies — the caller's OWN companies.
+///
+/// SECURITY (kanban t_b7f3c191). This statement carried no `WHERE` clause at all: measured live
+/// 2026-10-02, a fresh probe account that owned exactly ONE company received the whole table —
+/// 15 rows belonging to other accounts (their names, slugs, emails, subdomains and domains). Same
+/// class as `integration_targets` (t_305a0549) and `tags` (t_286aead1): the fix is `WHERE
+/// account_id = $1` bound to the caller, unconditional, with no role bypass — every other reader of
+/// this table (the delivery hub, the internal sync route) resolves rows by id or by the internal key,
+/// never through this route, so scoping removes no capability.
 pub async fn list_portfolio_companies(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = account_uuid(&user)?;
     let companies = sqlx::query_as::<_, PortfolioCompany>(
         r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
            FROM portfolio_companies
+           WHERE account_id = $1
            ORDER BY name"#
     )
+    .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
@@ -131,7 +149,10 @@ pub async fn create_portfolio_company(
     Ok(Json(json!({ "company": company })))
 }
 
-/// GET /api/v1/portfolio-companies/{id}
+/// GET /api/v1/portfolio-companies/{id} — the caller's OWN company, or 404.
+///
+/// SECURITY (kanban t_b7f3c191): used to match on the row id alone. Measured live 2026-10-02, a
+/// foreign id answered 200 with the other account's row.
 pub async fn get_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -139,12 +160,14 @@ pub async fn get_portfolio_company(
 ) -> Result<Json<Value>, AppError> {
     let company_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let account_id = account_uuid(&user)?;
 
     let company = sqlx::query_as::<_, PortfolioCompany>(
         r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
-           FROM portfolio_companies WHERE id = $1"#
+           FROM portfolio_companies WHERE id = $1 AND account_id = $2"#
     )
     .bind(company_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Portfolio company not found".to_string()))?;
@@ -152,7 +175,12 @@ pub async fn get_portfolio_company(
     Ok(Json(json!({ "company": company })))
 }
 
-/// PUT /api/v1/portfolio-companies/{id}
+/// PUT /api/v1/portfolio-companies/{id} — the caller's OWN company, or 404.
+///
+/// SECURITY (kanban t_b7f3c191): ownership is on the *read* as well as the *write*. This handler is
+/// read-then-write, so scoping only the UPDATE would 404 on a foreign id and then write the body
+/// back anyway — the exact trap `integration_target_handler::update_integration_target` documents.
+/// 404 (not 403) is this app's convention: a 403 would confirm the id exists somewhere.
 pub async fn update_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -161,6 +189,7 @@ pub async fn update_portfolio_company(
 ) -> Result<Json<Value>, AppError> {
     let company_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let account_id = account_uuid(&user)?;
 
     // The column list used to omit `subdomain`/`domain` while the arms below read them with
     // `Row::get`, which PANICS on ColumnNotFound — and those closures run exactly when the body
@@ -171,9 +200,10 @@ pub async fn update_portfolio_company(
     // (docker RestartCount 1 -> 2). Select every column the arms read.
     let existing = sqlx::query(
         r#"SELECT name, slug, settings, email, description, subdomain, domain
-           FROM portfolio_companies WHERE id = $1"#,
+           FROM portfolio_companies WHERE id = $1 AND account_id = $2"#,
     )
     .bind(company_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Portfolio company not found".to_string()))?;
@@ -186,10 +216,10 @@ pub async fn update_portfolio_company(
     let subdomain: Option<String> = body.subdomain.or_else(|| existing.get("subdomain"));
     let domain: Option<String> = body.domain.or_else(|| existing.get("domain"));
 
-    sqlx::query(
+    let updated = sqlx::query(
         r#"UPDATE portfolio_companies SET
                name = $1, slug = $2, settings = $3, email = $4, description = $5, subdomain = $6, domain = $7, updated_at = now()
-           WHERE id = $8"#
+           WHERE id = $8 AND account_id = $9"#
     )
     .bind(&name)
     .bind(&slug)
@@ -199,14 +229,22 @@ pub async fn update_portfolio_company(
     .bind(&subdomain)
     .bind(&domain)
     .bind(company_id)
+    .bind(account_id)
     .execute(&state.db)
     .await?;
 
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "Portfolio company not found".to_string(),
+        ));
+    }
+
     let company = sqlx::query_as::<_, PortfolioCompany>(
         r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
-           FROM portfolio_companies WHERE id = $1"#
+           FROM portfolio_companies WHERE id = $1 AND account_id = $2"#
     )
     .bind(company_id)
+    .bind(account_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -277,7 +315,11 @@ pub async fn internal_create_portfolio_company(
     Ok(Json(json!({"status": "synced", "id": id.to_string()})))
 }
 
-/// DELETE /api/v1/portfolio-companies/{id}
+/// DELETE /api/v1/portfolio-companies/{id} — the caller's OWN company, or 404.
+///
+/// SECURITY (kanban t_b7f3c191): used to be `DELETE … WHERE id = $1`. Measured live 2026-10-02, a
+/// foreign id answered 200 and the other account's company was gone (its integration_targets going
+/// with it through the CASCADE).
 pub async fn delete_portfolio_company(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -285,9 +327,11 @@ pub async fn delete_portfolio_company(
 ) -> Result<Json<Value>, AppError> {
     let company_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid company ID".to_string()))?;
+    let account_id = account_uuid(&user)?;
 
-    let result = sqlx::query("DELETE FROM portfolio_companies WHERE id = $1")
+    let result = sqlx::query("DELETE FROM portfolio_companies WHERE id = $1 AND account_id = $2")
         .bind(company_id)
+        .bind(account_id)
         .execute(&state.db)
         .await?;
 

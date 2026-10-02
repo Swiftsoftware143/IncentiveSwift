@@ -64,24 +64,34 @@ fn default_true() -> bool {
     true
 }
 
+/// The caller's account, or a 400 — never silently defaulted (same helper shape as
+/// `integration_target_handler::account_uuid`).
+fn caller_account(user: &AuthenticatedUser) -> Result<Uuid, AppError> {
+    Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Upsert conflict: fetch by campaign+integration ID
 async fn get_by_campaign_and_integration(
     db: &sqlx::PgPool,
     campaign_id: &Uuid,
     integration_id: &Uuid,
+    account_id: &Uuid,
 ) -> Result<CampaignIntegrationWithTarget, AppError> {
     sqlx::query_as::<_, CampaignIntegrationWithTarget>(
-        r#"SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
+        r#"-- the target must belong to the campaign's own account (kanban t_b7f3c191)
+           SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
                   ci.enabled, ci.created_at, ci.updated_at,
                   it.name, it.provider, it.webhook_url, it.events as target_events,
                   it.is_active
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
-           WHERE ci.campaign_id = $1 AND ci.integration_id = $2"#,
+           WHERE ci.campaign_id = $1 AND ci.integration_id = $2 AND it.account_id = $3"#,
     )
     .bind(campaign_id)
     .bind(integration_id)
+    .bind(account_id)
     .fetch_one(db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch integration: {}", e)))
@@ -93,23 +103,36 @@ async fn get_by_campaign_and_integration(
 
 /// GET /api/v1/campaigns/{slug}/integrations
 /// List all integrations linked to a campaign.
+///
+/// SECURITY (kanban t_b7f3c191). Two arms were open here, both measured live 2026-10-02:
+///   * the handler took NO caller at all, so the route was reachable with no token (a slug answered
+///     for any account's campaign, and the JOIN returned that account's target `webhook_url`);
+///   * the JOIN on `integration_targets` bound nothing, so another account's target columns came back
+///     inside a campaign listing whenever a cross-account binding row existed.
+/// Both are closed the way this app closes the class: the campaign must belong to the caller (404
+/// otherwise — never 403, so slugs stay unguessable) and the target join is scoped to that account.
 pub async fn list_campaign_integrations(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let account_id = caller_account(&user)?;
+    let campaign =
+        campaigns::get_campaign_by_slug_for_account(&state.db, &slug, &account_id).await?;
 
     let integrations = sqlx::query_as::<_, CampaignIntegrationWithTarget>(
-        r#"SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
+        r#"-- the target must belong to the campaign's own account (kanban t_b7f3c191)
+           SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
                   ci.enabled, ci.created_at, ci.updated_at,
                   it.name, it.provider, it.webhook_url, it.events as target_events,
                   it.is_active
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
-           WHERE ci.campaign_id = $1
+           WHERE ci.campaign_id = $1 AND it.account_id = $2
            ORDER BY it.name"#,
     )
     .bind(campaign.id)
+    .bind(account_id)
     .fetch_all(&state.db)
     .await?;
 
@@ -122,22 +145,33 @@ pub async fn list_campaign_integrations(
 
 /// POST /api/v1/campaigns/{slug}/integrations
 /// Link an integration target to a campaign.
+///
+/// SECURITY (kanban t_b7f3c191): the campaign is resolved for the caller's account (404 otherwise)
+/// and the existence probe on `integration_targets` now binds that account too — it used to be
+/// `WHERE id = $1` alone, so any account could bind a FOREIGN target id to its own campaign and then
+/// read the other account's `name`/`webhook_url` back out through the listing (measured live
+/// 2026-10-02). The target's owner is still required; only the id was ever checked before.
 pub async fn link_campaign_integration(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    user: AuthenticatedUser,
     Json(body): Json<LinkIntegrationInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let account_id = caller_account(&user)?;
+    let campaign =
+        campaigns::get_campaign_by_slug_for_account(&state.db, &slug, &account_id).await?;
 
     let integration_id = Uuid::parse_str(&body.integration_id)
         .map_err(|_| AppError::BadRequest("Invalid integration_id format".to_string()))?;
 
-    // Verify integration target exists
-    let target_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM integration_targets WHERE id = $1)")
-            .bind(integration_id)
-            .fetch_one(&state.db)
-            .await?;
+    // Verify the integration target exists AND belongs to the caller (kanban t_b7f3c191).
+    let target_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM integration_targets WHERE id = $1 AND account_id = $2)",
+    )
+    .bind(integration_id)
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await?;
 
     if !target_exists {
         return Err(AppError::NotFound(
@@ -172,15 +206,17 @@ pub async fn link_campaign_integration(
     // Try fetching by the new id first; on conflict (upsert) the insert id won't match,
     // so fall back to campaign+integration lookup
     let integration = match sqlx::query_as::<_, CampaignIntegrationWithTarget>(
-        r#"SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
+        r#"-- the target must belong to the campaign's own account (kanban t_b7f3c191)
+           SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
                   ci.enabled, ci.created_at, ci.updated_at,
                   it.name, it.provider, it.webhook_url, it.events as target_events,
                   it.is_active
            FROM campaign_integrations ci
            JOIN integration_targets it ON it.id = ci.integration_id
-           WHERE ci.id = $1"#,
+           WHERE ci.id = $1 AND it.account_id = $2"#,
     )
     .bind(id)
+    .bind(account_id)
     .fetch_one(&state.db)
     .await
     {
@@ -188,7 +224,8 @@ pub async fn link_campaign_integration(
         Err(_) => {
             // Upsert conflict — the row is keyed by (campaign_id, integration_id) so the
             // ON CONFLICT DO UPDATE means the inserted id may not match. Fetch the existing link.
-            get_by_campaign_and_integration(&state.db, &campaign.id, &integration_id).await?
+            get_by_campaign_and_integration(&state.db, &campaign.id, &integration_id, &account_id)
+                .await?
         }
     };
 
@@ -197,11 +234,18 @@ pub async fn link_campaign_integration(
 
 /// DELETE /api/v1/campaigns/{slug}/integrations/{integration_id}
 /// Unlink an integration from a campaign.
+///
+/// SECURITY (kanban t_b7f3c191): the campaign is resolved for the caller's account (404 otherwise),
+/// so a foreign slug cannot reach another account's bindings at all. The delete itself is already
+/// keyed on (campaign_id, integration_id) — and the campaign id is now provably the caller's.
 pub async fn unlink_campaign_integration(
     State(state): State<AppState>,
     Path((slug, integration_id)): Path<(String, String)>,
+    user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let account_id = caller_account(&user)?;
+    let campaign =
+        campaigns::get_campaign_by_slug_for_account(&state.db, &slug, &account_id).await?;
 
     let int_id = Uuid::parse_str(&integration_id)
         .map_err(|_| AppError::BadRequest("Invalid integration_id format".to_string()))?;

@@ -141,6 +141,40 @@ pub async fn get_campaign_by_slug(pool: &PgPool, slug: &str) -> Result<Campaign,
     Ok(campaign)
 }
 
+/// Get a campaign by its slug, but ONLY when it belongs to `account_id` — otherwise 404.
+///
+/// SECURITY (kanban t_b7f3c191): `get_campaign_by_slug` above takes no caller, so every route that
+/// resolves a campaign from a path slug alone answers about another account's campaign. This is the
+/// scoped variant; the integration-binding routes use it so a foreign slug cannot reach the
+/// `integration_targets` rows behind it. 404 (never 403) is this app's convention: a 403 would
+/// confirm the slug exists somewhere.
+pub async fn get_campaign_by_slug_for_account(
+    pool: &PgPool,
+    slug: &str,
+    account_id: &Uuid,
+) -> Result<Campaign, AppError> {
+    let campaign = sqlx::query_as::<_, Campaign>(
+        r#"SELECT id, name, slug, type as "type", status,
+                  config, tag_namespace,
+                  outcome_tags,
+                  delivery_method, delivery_config,
+                  created_at,
+                  account_id,
+                  loyalty_program_id,
+                  loyalty_points_per_play,
+                  auto_enroll_loyalty,
+                  iqs_funnel_id
+           FROM campaigns WHERE slug = $1 AND account_id = $2"#,
+    )
+    .bind(slug)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+
+    Ok(campaign)
+}
+
 /// List campaigns scoped to an account.
 pub async fn list_campaigns(pool: &PgPool, account_id: &Uuid) -> Result<Vec<Campaign>, AppError> {
     let campaigns = sqlx::query_as::<_, Campaign>(
