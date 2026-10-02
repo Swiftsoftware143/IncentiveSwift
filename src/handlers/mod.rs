@@ -4,6 +4,7 @@ pub mod campaigns;
 pub mod delivery;
 pub mod entries;
 pub mod health;
+pub mod knowledge_base_handler;
 pub mod loyalty;
 pub mod raffles;
 pub use loyalty::*;

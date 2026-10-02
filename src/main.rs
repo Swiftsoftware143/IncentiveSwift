@@ -1157,6 +1157,32 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/analytics/export",
             get(handlers::analytics_handler::export_csv),
         )
+        // ── KNOWLEDGE BASE (David 2026-10-02: an admin side and a user side, "in line respectively") ──
+        // The user side is public on purpose: the people being walked through the product are often
+        // not signed in (a player on a kiosk, a link follow). The admin side requires a caller, and
+        // the authoring routes sit under /api/v1/admin/* so admin_guard covers them automatically.
+        .route(
+            "/api/v1/knowledge-base",
+            get(handlers::knowledge_base_handler::list_articles),
+        )
+        .route(
+            "/api/v1/knowledge-base/article/:slug",
+            get(handlers::knowledge_base_handler::get_article),
+        )
+        // Authoring sits at /api/v1/knowledge-base (NOT under /api/v1/admin/*): every account holder
+        // signs into this console and owns their own help content, whereas admin_guard would reserve it
+        // for the platform operator alone. Tenancy is enforced in the handler
+        // (owner_for_new / authorise_edit): an operator writes the SHIPPED set, everyone else writes
+        // their own rows, and neither may touch the other's.
+        .route(
+            "/api/v1/knowledge-base",
+            post(handlers::knowledge_base_handler::create_article),
+        )
+        .route(
+            "/api/v1/knowledge-base/:id",
+            put(handlers::knowledge_base_handler::update_article)
+                .delete(handlers::knowledge_base_handler::delete_article),
+        )
         // ------------------------------------------------------------------
         // IQS — Intelligent Qualifying Surveys
         // ------------------------------------------------------------------

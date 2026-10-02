@@ -2687,6 +2687,131 @@ const App = () => {
   if(!API.token) return html`<${LoginView} />`;
 
   const isAdmin = API.user && (API.user.role === 'admin' || API.user.role === 'super_admin');
+
+// ---- KNOWLEDGE BASE (David 2026-10-02: "an admin side and a user side, in line respectively") ----
+//
+// One screen, two tabs. The SIDE is a filter on the same rows, not a second system: same editor, same
+// fields, same ordering. The admin side walks the account holder through running the software; the
+// user side walks their end users through playing it.
+const KnowledgeBase = () => {
+  const st = viewState('kb', { side: 'admin', list: [], loaded: false, err: '', editing: null,
+                               title: '', slug: '', category: '', order: 100, content: '', published: true,
+                               msg: '' });
+
+  const load = async () => {
+    st.err = '';
+    try {
+      const d = await API.get('/knowledge-base?audience=' + st.side);
+      st.list = (d && d.articles) || [];
+      st.loaded = true;
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const pick = (side) => { st.side = side; st.editing = null; st.msg = ''; load(); };
+
+  const openNew = () => {
+    st.editing = 'new'; st.title = ''; st.slug = ''; st.category = ''; st.order = 100;
+    st.content = ''; st.published = true; st.msg = ''; renderApp();
+  };
+  const openEdit = (a) => {
+    st.editing = a; st.title = a.title || ''; st.slug = a.slug || ''; st.category = a.category || '';
+    st.order = a.sort_order == null ? 100 : a.sort_order; st.published = a.is_published !== false;
+    st.msg = ''; st.content = '';
+    // the body only comes from the single-article route, so the list stays cheap
+    API.get('/knowledge-base/article/' + encodeURIComponent(a.slug) + '?audience=' + st.side)
+      .then(full => { st.content = (full && full.content) || ''; renderApp(); })
+      .catch(() => {});
+    renderApp();
+  };
+  const close = () => { st.editing = null; renderApp(); };
+
+  const save = async () => {
+    st.msg = '';
+    const body = { audience: st.side, title: st.title, slug: st.slug || null, content: st.content,
+                   category: st.category || null, sort_order: Number(st.order) || 100,
+                   is_published: !!st.published };
+    try {
+      if (st.editing === 'new') { await API.post('/knowledge-base', body); st.msg = 'Article created.'; }
+      else { await API.put('/knowledge-base/' + st.editing.id, body); st.msg = 'Article saved.'; }
+      st.editing = null; await load();
+    } catch (e) { st.msg = e.message; renderApp(); }
+  };
+  const remove = async (a) => {
+    if (!confirm('Delete "' + a.title + '"? This cannot be undone.')) return;
+    try { await API.del('/knowledge-base/' + a.id); st.msg = 'Article deleted.'; await load(); }
+    catch (e) { st.msg = e.message; renderApp(); }
+  };
+
+  const tab = (id, label) => html`<button onClick=${() => pick(id)}
+    class="px-4 py-2 text-sm rounded-t ${st.side === id ? 'bg-white font-semibold border border-b-0' : 'bg-gray-100 text-gray-600'}">${label}</button>`;
+
+  return html`<div class="p-6">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h1 class="text-2xl font-bold">Knowledge Base</h1>
+        <p class="text-sm text-gray-500 mt-1">
+          The <b>Admin</b> side walks you through running the software; the <b>User</b> side walks your
+          users through playing it. Both sides are the same articles — pick a side, then write.
+        </p>
+      </div>
+      <button onClick=${openNew} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">+ New article</button>
+    </div>
+
+    <div class="flex gap-1 border-b mb-4">${tab('admin', 'Admin guide')}${tab('user', 'User guide')}</div>
+
+    ${st.err ? html`<div class="mb-3 p-3 bg-red-50 text-red-700 rounded text-sm">${st.err}</div>` : ''}
+    ${st.msg ? html`<div class="mb-3 p-3 bg-green-50 text-green-800 rounded text-sm">${st.msg}</div>` : ''}
+
+    ${st.editing ? html`<div class="mb-6 p-4 bg-white border rounded">
+      <div class="font-semibold mb-3">${st.editing === 'new' ? 'New' : 'Edit'} ${st.side} article</div>
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        <label class="text-xs text-gray-600">Title
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.title}
+                 onInput=${e => { st.title = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Slug (blank = from the title)
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.slug}
+                 onInput=${e => { st.slug = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Group (shown as the walkthrough section)
+          <input class="border rounded px-3 py-2 w-full text-sm" value=${st.category}
+                 onInput=${e => { st.category = e.target.value; }} /></label>
+        <label class="text-xs text-gray-600">Walkthrough order (low = first)
+          <input type="number" class="border rounded px-3 py-2 w-full text-sm" value=${st.order}
+                 onInput=${e => { st.order = e.target.value; }} /></label>
+      </div>
+      <label class="text-xs text-gray-600 block mb-3">Body
+        <textarea rows="10" class="border rounded px-3 py-2 w-full text-sm font-mono"
+                  value=${st.content} onInput=${e => { st.content = e.target.value; }}></textarea></label>
+      <label class="text-xs text-gray-600 flex items-center gap-2 mb-3">
+        <input type="checkbox" checked=${st.published} onChange=${e => { st.published = e.target.checked; }} />
+        Published (unpublished drafts never reach the reader)</label>
+      <div class="flex gap-2">
+        <button onClick=${save} class="px-4 py-2 bg-blue-600 text-white rounded text-sm">Save</button>
+        <button onClick=${close} class="px-4 py-2 bg-gray-200 rounded text-sm">Cancel</button>
+      </div>
+    </div>` : ''}
+
+    ${!st.loaded ? html`<div class="text-sm text-gray-500">Loading…</div>` :
+      (st.list.length === 0 ? html`<div class="p-6 bg-gray-50 rounded text-sm text-gray-600">
+        No ${st.side} articles yet. Use <b>+ New article</b> to write the first one — it appears for
+        ${st.side === 'admin' ? 'you and every account holder' : 'your users'} immediately.</div>` :
+      html`<table class="w-full text-sm bg-white border rounded">
+        <thead><tr class="text-left text-gray-500 border-b">
+          <th class="p-3">#</th><th class="p-3">Title</th><th class="p-3">Group</th>
+          <th class="p-3">Updated</th><th class="p-3"></th></tr></thead>
+        <tbody>${st.list.map(a => html`<tr class="border-b">
+          <td class="p-3 text-gray-500">${a.sort_order}</td>
+          <td class="p-3 font-medium">${a.title}<div class="text-xs text-gray-400">/${a.slug}</div></td>
+          <td class="p-3 text-gray-600">${a.category || '—'}</td>
+          <td class="p-3 text-gray-500">${(a.updated_at || '').slice(0, 10)}</td>
+          <td class="p-3 text-right">
+            <button onClick=${() => openEdit(a)} class="text-blue-600 mr-3">Edit</button>
+            <button onClick=${() => remove(a)} class="text-red-600">Delete</button>
+          </td></tr>`)}</tbody></table>`)}
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -2706,9 +2831,10 @@ const App = () => {
     { id: 'support-tickets', label: 'Support Tickets', icon: '🎫' },
     { id: 'reviews', label: 'Reviews & Ratings', icon: '⭐', adminOnly: false },
     { id: 'calendar', label: 'Calendar', icon: '📅' },
+    { id: 'knowledge-base', label: 'Knowledge Base', icon: '📚' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">
