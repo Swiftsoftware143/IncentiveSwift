@@ -134,7 +134,7 @@ const html = htm.bind(h);
 const showUpgradePrompt = (msg) => {
   const div = document.createElement('div');
   div.className = 'upgrade-overlay';
-  div.innerHTML = '<div class="upgrade-box"><h2>🚀 Upgrade Required</h2><p>' + (msg || 'This feature requires a higher plan.') + '</p><button class="btn-upgrade" onclick="this.closest(\'.upgrade-overlay\').remove()">Got it</button></div>';
+  div.innerHTML = '<div class="upgrade-box"><h2>🚀 Upgrade Required</h2><p>' + (msg || 'This feature requires a higher plan.') + '</p><button class="btn-upgrade" onclick="this.closest(\'.upgrade-overlay\').remove()">See plans</button><button class="btn-upgrade" style="background:#64748b;margin-left:8px" onclick="window._goMyPlan();this.closest(\'.upgrade-overlay\').remove()">Got it</button></div>';
   document.body.appendChild(div);
   div.addEventListener('click', (e) => { if (e.target === div) div.remove(); });
 };
@@ -340,6 +340,69 @@ const Plans = () => {
           </div>`; })()}
       </div>
     </div>`}
+  </div>`;
+};
+
+// ---- PLAN & PRICING (tenant-visible, read-only) ---- kanban t_c9182c26
+// The marketing root promises "Upgrades and pricing are managed inside the platform when your
+// program grows" (nginx/www/incentiveswift/index.html), but no TENANT-visible surface showed
+// either: GET /api/v1/auth/me has always served the account's own tier (user.plan) and
+// GET /api/v1/plans is the live PUBLIC catalogue -- nothing rendered them. This is the read-only
+// half: the catalogue WITH prices, plus which one this account is on.
+//
+// Checkout is deliberately NOT wired here. POST /api/v1/checkout/create exists (src/billing/mod.rs)
+// but no shipped surface calls it and no payment provider is configured, and a Buy button that
+// cannot complete is exactly the defect this console was just burned by (t_70b96213 retired the
+// dead /signup.html?plan=pro anchor for the same reason). Carded separately, kanban t_59a1b420.
+// The upgrade path named below is the Support Ticket view, which is real and reachable.
+const MyPlan = () => {
+  const st = viewState('my_plan', { me: null, plans: [], _loaded: false, err: null });
+  if (!st._loaded) { st._loaded = true;
+    API.get('/auth/me').then(d => { st.me = (d && d.user) || null; renderApp(); }).catch(e => { st.err = e.message; renderApp(); });
+    API.get('/plans').then(d => { st.plans = (d && d.plans) ? d.plans : (Array.isArray(d) ? d : []); renderApp(); }).catch(e => { st.err = e.message; renderApp(); });
+  }
+  const plan = (st.me && st.me.plan) || {};
+  const curSlug = String(plan.slug || '').toLowerCase();
+  const pretty = (k) => String(k == null ? '' : k).split('_').join(' ');
+  const money = (v) => (v === null || v === undefined || v === '') ? '\u2014' : ('$' + v);
+  const catalogue = st.plans || [];
+  const cur = catalogue.filter(p => String(p.slug || '').toLowerCase() === curSlug)[0] || null;
+  const featKeys = (plan.features && typeof plan.features === 'object') ? Object.keys(plan.features) : [];
+  const limitBits = [];
+  if (plan.max_campaigns !== undefined && plan.max_campaigns !== null) limitBits.push(plan.max_campaigns < 0 ? 'Unlimited campaigns' : (plan.max_campaigns + ' campaigns'));
+  if (plan.max_entries_per_month !== undefined && plan.max_entries_per_month !== null) limitBits.push(plan.max_entries_per_month < 0 ? 'Unlimited entries per month' : (plan.max_entries_per_month + ' entries per month'));
+  // NOTE (measured, kanban t_c9182c26): htm does NOT decode HTML entities in STATIC template text.
+  // `&amp;` reached the DOM verbatim ("Plan &amp; Pricing") and the Chromium A/B caught it; write the
+  // literal character. Only expressions interpolated as text are affected the same way -- the nav
+  // label is a string interpolation and was always fine.
+  return html`<div>
+    <div class="mb-4"><h2 class="text-xl font-bold">Plan & Pricing</h2>
+      <p class="text-sm text-gray-500">Your plan, and what the other plans cost.</p></div>
+    ${st.err && html`<div class="text-red-600 text-sm bg-red-50 p-2 rounded-lg mb-3">${st.err}</div>`}
+    <div class="card">
+      <div class="text-xs uppercase text-gray-400 font-semibold mb-1">Your current plan</div>
+      ${st.me ? html`<div class="flex items-center gap-3 flex-wrap">
+        <h3 class="text-lg font-bold">${plan.name || 'Free'}</h3>
+        <span class="badge badge-blue">${cur ? money(cur.monthly_price) + ' per month' : 'no charge'}</span>
+      </div>
+      <div class="text-sm text-gray-600 mt-2">${limitBits.length ? limitBits.join(' \u00b7 ') : 'Limits are set on your plan tier.'}</div>
+      <div class="text-sm text-gray-600 mt-1">${featKeys.length ? 'Included: ' + featKeys.map(pretty).join(', ') : ''}</div>` :
+      html`<div class="text-sm text-gray-500">Loading your plan\u2026</div>`}
+    </div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Plan</th><th>Monthly</th><th>Included</th><th></th></tr></thead>
+        <tbody>${catalogue.map(p => html`<tr>
+          <td class="font-medium">${p.name}</td>
+          <td class="text-gray-500">${money(p.monthly_price)}</td>
+          <td class="text-gray-500">${Array.isArray(p.features) ? p.features.map(pretty).join(', ') : '\u2014'}</td>
+          <td>${String(p.slug || '').toLowerCase() === curSlug ? html`<span class="badge badge-green">Current</span>` : ''}</td>
+        </tr>`)}
+        ${catalogue.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">Loading plans\u2026</td></tr>`}
+      </tbody></table>
+    </div>
+    <div class="card text-sm text-gray-600">
+      Ready for a bigger plan? <span class="text-blue-600 cursor-pointer font-medium" onClick=${() => { S.view = 'support-tickets'; renderApp(); }}>Open a Support Ticket</span> and we will switch you over \u2014 billing is arranged with you directly.
+    </div>
   </div>`;
 };
 
@@ -3126,6 +3189,7 @@ const Deals = () => {
     { id: 'api-keys', label: 'API Keys', icon: '🔑' },
     { id: 'site-config', label: 'Site Config', icon: '🌐', adminOnly: true },
     { id: 'settings', label: 'Settings', icon: '⚙' },
+    { id: 'my-plan', label: 'Plan & Pricing', icon: '💳' },
     { id: 'portfolio', label: 'Portfolio', icon: '🏢', adminOnly: true },
     { id: 'plans', label: 'Plans', icon: '💳', adminOnly: true },
     { id: 'plan-tiers', label: 'Plan Tiers', icon: '🥇', adminOnly: true },
@@ -3138,7 +3202,7 @@ const Deals = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">
@@ -3163,6 +3227,10 @@ const Deals = () => {
 };
 
 const renderApp = () => render(html`<${App} />`, document.getElementById('app'));
+// kanban t_c9182c26 -- the 402 upgrade overlay is built with an inline onclick, which a module
+// shell evaluates in GLOBAL scope and cannot see S/renderApp from. One window helper is the fix
+// this console already uses elsewhere (see the nav-audience note on inline module bindings).
+window._goMyPlan = () => { S.view = 'my-plan'; renderApp(); };
 
 /* ── kanban t_8a6160c9 — one console, two origins ───────────────────────────────────────────────
    This file is ALSO served on the customer app host now (app.incentiveswift.com/admin/, an nginx
