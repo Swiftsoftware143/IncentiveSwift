@@ -201,6 +201,54 @@ pub async fn seal_legacy_config_secrets(
     Ok(1)
 }
 
+/// The three TENANT-side mail-config keys `resolve` reads (resolution order 1-3) and the one
+/// tenant route may write (`PUT /api/v1/settings`). Their `api_key` / `smtp_password` fields are
+/// credentials and carry the SAME `enc:v1:` envelope as the admin `admin_settings.email` row
+/// (kanban t_a794cb09) — this was the sibling write path that stored a tenant's provider key in
+/// the clear (kanban t_a65483ff).
+pub const TENANT_CONFIG_KEYS: [&str; 3] = ["email_config", "mailgun_config", "smtp_config"];
+
+/// Seal every credential still sitting in the clear in a TENANT's own mail-config rows
+/// (`tenant_settings` keys [`TENANT_CONFIG_KEYS`]).
+///
+/// The tenant writer seals before it stores, exactly as the admin writer does, but these rows can
+/// also arrive plaintext from a database restored out of an older dump — or from a writer added
+/// later that forgets. This is the boot half that converges them. Idempotent; returns the number
+/// of rows it had to rewrite.
+pub async fn seal_legacy_tenant_config_secrets(
+    pool: &PgPool,
+) -> Result<u64, provider_key_crypto::CryptoError> {
+    let mut sealed = 0u64;
+    for key in TENANT_CONFIG_KEYS {
+        let rows: Vec<(Uuid, Value)> =
+            sqlx::query_as("SELECT tenant_id, value FROM tenant_settings WHERE key = $1")
+                .bind(key)
+                .fetch_all(pool)
+                .await?;
+        for (tenant_id, mut value) in rows {
+            if !value.is_object() {
+                continue;
+            }
+            let before = value.clone();
+            seal_config_secrets(pool, &mut value).await?;
+            if value == before {
+                continue;
+            }
+            sqlx::query(
+                "UPDATE tenant_settings SET value = $1::jsonb, updated_at = NOW()
+                  WHERE tenant_id = $2 AND key = $3",
+            )
+            .bind(&value)
+            .bind(tenant_id)
+            .bind(key)
+            .execute(pool)
+            .await?;
+            sealed += 1;
+        }
+    }
+    Ok(sealed)
+}
+
 async fn row(pool: &PgPool, sql: &str, binds: &[&str]) -> Option<Value> {
     let mut q = sqlx::query_scalar::<_, Value>(sql);
     for b in binds {
