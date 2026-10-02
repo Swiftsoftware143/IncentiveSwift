@@ -54,9 +54,19 @@ if (!token || !user) {
 }
 
 function doLogout() {
-  sessionStorage.removeItem(TOKEN_KEY);
+  // kanban t_f5a8e9cb — Sign Out used to clear only the sessionStorage pair, so it signed nobody
+  // out: this app's own login writes the 24h bearer to localStorage 'ws_fs_token', and the app
+  // shell at '/' re-adopts that key behind GET /api/v1/auth/me, republishes the session and
+  // replaces the location with /dashboard — the tenant landed back on their own dashboard, still
+  // authenticated, with the bearer still stored. Retire every key this app's OTHER sign-out
+  // control retires (integrations.html's TOKEN_KEYS) from BOTH stores, then hand over to the
+  // canonical login URL the vhost serves (location = /login -> login.html).
+  ['ws_fs_token', 'is_token', 'token', 'access_token'].forEach(function (k) {
+    sessionStorage.removeItem(k);
+    localStorage.removeItem(k);
+  });
   sessionStorage.removeItem(USER_KEY);
-  window.location.href = '/';
+  window.location.href = '/login';
 }
 </script>
 </body>
