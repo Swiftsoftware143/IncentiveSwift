@@ -449,3 +449,96 @@ pub async fn admin_list_all_campaigns(
 }
 
 // Note: purchase_pin is auto-generated on account creation. Only read endpoint is exposed.
+
+/// GET /api/v1/admin/email-queue — the OPERATOR's view of the outbound email queue.
+///
+/// WHY THIS ROUTE EXISTS (kanban t_9d711589). `email_queue::process_due_emails` only ever flushes
+/// `status = 'pending'`; a send that failed was recorded in `last_error` alone, so a dead letter was
+/// invisible to every human — no log line, no panel, nothing. 18 rows sat `failed` from 2026-09-20
+/// with nobody able to see it until a card measured the table by hand. This is the missing surface:
+/// counts per status plus the dead letters themselves (`failed` = gave up, `retired` = deliberately
+/// withdrawn), with the row's own stored reason.
+///
+/// READ-ONLY by design. It does not resend, re-queue or retire anything — a resend is a product
+/// decision (see `retire-dead-letters.py` in the ticket's audit dir for how the 18 probe rows were
+/// retired), and an operator control that silently re-sends customer mail is worse than none.
+///
+/// Mounted under `/api/v1/admin/*`, so `security::auth::admin_guard` covers it: anonymous callers
+/// answer 401 and a non-admin session cannot read another tenant's queue.
+pub async fn email_queue(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let counts = sqlx::query("SELECT status, count(*)::bigint AS n FROM pending_emails GROUP BY 1")
+        .fetch_all(&state.db)
+        .await?;
+    let mut by_status = serde_json::Map::new();
+    let mut total: i64 = 0;
+    for row in counts {
+        let status: String = row.get("status");
+        let n: i64 = row.get("n");
+        total += n;
+        by_status.insert(status, json!(n));
+    }
+
+    let dead: Vec<(
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+        i32,
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT id, account_id, to_email, template_type, status, attempts, last_error,
+                created_at, send_at, sent_at
+           FROM pending_emails
+          WHERE status IN ('failed', 'retired')
+          ORDER BY created_at DESC
+          LIMIT 100",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let rows: Vec<Value> = dead
+        .into_iter()
+        .map(
+            |(
+                id,
+                account_id,
+                to_email,
+                template_type,
+                status,
+                attempts,
+                last_error,
+                created_at,
+                send_at,
+                sent_at,
+            )| {
+                json!({
+                    "id": id.to_string(),
+                    "account_id": account_id.to_string(),
+                    "to_email": to_email,
+                    "template_type": template_type,
+                    "status": status,
+                    "attempts": attempts,
+                    "last_error": last_error,
+                    "created_at": created_at.to_rfc3339(),
+                    "send_at": send_at.to_rfc3339(),
+                    "sent_at": sent_at.map(|t| t.to_rfc3339()),
+                })
+            },
+        )
+        .collect();
+
+    Ok(Json(json!({
+        "counts": Value::Object(by_status),
+        "total": total,
+        "dead_letters": rows.len(),
+        "note": "read-only. 'failed' = the ticker gave up (it never retries a failed row); 'retired' = withdrawn on purpose, the reason is in last_error.",
+        "rows": rows,
+    })))
+}

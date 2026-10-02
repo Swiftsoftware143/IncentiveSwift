@@ -890,6 +890,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/credits/adjust",
             post(handlers::credits_handler::admin_adjust_credits),
         )
+        // The email queue's operator surface (kanban t_9d711589). The ticker flushed only
+        // 'pending' and recorded a failure in `last_error` alone, so 18 dead rows sat invisible
+        // from 2026-09-20. READ-ONLY: counts per status + the dead letters with their reason.
+        // The console's "22 · Email queue (dead letters)" panel is its caller.
+        .route(
+            "/api/v1/admin/email-queue",
+            get(handlers::admin_handler::email_queue),
+        )
         // Phase 1: Business account management
         .route(
             "/api/v1/admin/businesses",

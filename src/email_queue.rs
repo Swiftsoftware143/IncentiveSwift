@@ -2,6 +2,20 @@
 //!
 //! `schedule_email` inserts a row into `pending_emails`; a background ticker
 //! (`process_due_emails` loop) flushes due rows via the tenant-aware SMTP sender.
+//!
+//! `status` vocabulary (kanban t_9d711589):
+//!   `pending`  — queued and due to be flushed by the ticker. The ONLY status the ticker reads.
+//!   `sent`     — delivered (`sent_at` set).
+//!   `failed`   — the send raised; recorded with `attempts` + `last_error`. **Terminal**: the
+//!                ticker never re-reads a failed row, so this is a DEAD LETTER. Logged at ERROR and
+//!                listed on `GET /api/v1/admin/email-queue` so a human can see it.
+//!   `retired`  — deliberately withdrawn (never sent, never will be); the reason lives in
+//!                `last_error`. Used to clear probe/fixture residue out of the dead-letter set.
+//!   `cancelled`— reserved; no writer in this tree.
+//!
+//! A failure used to be visible ONLY in `last_error` — no log line, no panel — and 18 dead rows sat
+//! unnoticed for 12 days (measured 2026-10-02, kanban t_9d711589). Hence the ERROR line below and
+//! the admin read route that lists the dead letters.
 
 use crate::delivery::sender;
 use crate::state::AppState;
@@ -67,6 +81,18 @@ pub async fn process_due_emails(state: &AppState) -> usize {
                 sent += 1;
             }
             Err(e) => {
+                // VISIBILITY (kanban t_9d711589). Before this line the row's ONLY record of the
+                // failure was `last_error` — nothing logged, nothing listed — which is how 18 dead
+                // letters sat unnoticed from 2026-09-20. The recipient address is deliberately NOT
+                // logged (this app's convention); the id joins to the row an operator reads on
+                // GET /api/v1/admin/email-queue, which does show it.
+                tracing::error!(
+                    email_id = %id,
+                    account_id = %account_id,
+                    template_type = %template_type,
+                    "queued email could not be sent — DEAD LETTER (status='failed', the ticker never \
+                     retries a failed row); see GET /api/v1/admin/email-queue: {e}"
+                );
                 let _ = sqlx::query(
                     "UPDATE pending_emails SET status = 'failed', attempts = attempts + 1, last_error = $2 WHERE id = $1",
                 )
