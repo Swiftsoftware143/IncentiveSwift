@@ -55,7 +55,13 @@ label{font-size:12px;font-weight:600;color:#475569;display:block;margin:14px 0 4
 <script>
 var PINNED_KEY = 'coreswift';                  // CoreSwift is pinned first (standard R2)
 var CROSS_SELL_URL = 'https://coreswiftcrm.com';
-var UPSELL_URL = '/signup.html?plan=pro';
+// UPSELL_URL ('/signup.html?plan=pro') RETIRED -- kanban t_70b96213. On this origin the app
+// vhost's exact-match `location = /signup.html` answered that path with a 301 to /login, so the
+// link could only ever land a signed-in tenant on the login form (and the ?plan=pro intent was
+// dropped by the redirect). No plans/pricing surface exists on either origin to repoint it at:
+// the marketing /signup page is a free-account signup (it reads no plan parameter), and the
+// served tenant console has no plans/billing view. The CoreSwift cross-sell below is the only
+// real destination this page has, so it is the one that stays.
 var API_BASE = window.location.origin + '/api/v1';
 var TOKEN_KEYS = ['ws_fs_token','is_token','token','access_token'];
 
@@ -127,7 +133,7 @@ function cardHtml(p){
   if (pinned) {
     h += '<div class="xsell">One CRM for every tool you connect — leads captured here land in CoreSwift automatically. '
        + '<a href="'+CROSS_SELL_URL+'" target="_blank" rel="noopener">Open CoreSwift CRM →</a>'
-       + ' &nbsp;·&nbsp; Need more lead volume? <a href="'+UPSELL_URL+'">Compare plans →</a></div>';
+       + '</div>';
   }
   h += '<div class="result muted" style="margin-top:10px"></div>';
   h += '</div>';
