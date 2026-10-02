@@ -18,6 +18,12 @@ pub struct EnterRaffleBody {
     pub contact: super::entries::ContactBody,
     pub consent_gathered: bool,
     pub answers: Option<Value>,
+    /// The referral code this visitor arrived with (`?ref=` on a shared campaign link). The served
+    /// play page already sends it inside its payload; before t_6723eb30 this handler simply
+    /// ignored it, so a raffle participant got no share link and a friend arriving through one was
+    /// never credited.
+    #[serde(rename = "ref", default)]
+    pub referral_code: Option<String>,
 }
 
 /// POST /api/v1/raffles/:slug/enter — public.
@@ -59,10 +65,64 @@ pub async fn enter_raffle(
     // 3. Enter raffle
     let entry_id = raffles::enter_raffle(&state.db, &campaign.id, &contact_id).await?;
 
+    // 4. Campaign referral loop (kanban t_6723eb30).
+    //
+    // The play page has always sent `ref` on the raffle body; this handler used to ignore it, so a
+    // raffle participant got no share link and a friend arriving through one was never credited.
+    // Same two directions the generic `/api/v1/entries` path wires (t_ad98b6ab):
+    //   * an entry that arrived with `?ref=<code>` credits the referrer of that code;
+    //   * every entrant also gets their OWN code + share link for this campaign, which the play
+    //     page renders as the share box from the response below.
+    // Both are best-effort: the referral is a reward on top of the entry, so a referral write must
+    // never turn a valid raffle entry into a 500. A failure is logged, never swallowed silently.
+    if let Some(ref_code) = body.referral_code.as_deref().filter(|c| !c.is_empty()) {
+        if let Err(e) = crate::handlers::viral_handler::handle_referral_credit(
+            &state,
+            &campaign.id,
+            Some(ref_code),
+            &contact_id,
+            "raffle",
+            &campaign.config,
+        )
+        .await
+        {
+            tracing::warn!(
+                "raffle entry {entry_id}: referral credit for code {ref_code:?} failed: {e}"
+            );
+        }
+    }
+    let (referral_code, referral_link) = match crate::db::viral::ensure_campaign_referral(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        "participant",
+    )
+    .await
+    {
+        Ok(r) => (
+            Some(r.referral_code.clone()),
+            Some(format!(
+                "{}/c/{}?ref={}",
+                crate::email::APP_URL,
+                campaign.slug,
+                r.referral_code
+            )),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                "raffle entry {entry_id}: could not mint a campaign referral code for campaign {}: {e}",
+                campaign.slug
+            );
+            (None, None)
+        }
+    };
+
     Ok(Json(json!({
         "entry_id": entry_id,
         "contact_id": contact_id,
-        "message": "Successfully entered raffle"
+        "message": "Successfully entered raffle",
+        "referral_code": referral_code,
+        "referral_link": referral_link
     })))
 }
 

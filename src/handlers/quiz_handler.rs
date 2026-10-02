@@ -110,6 +110,12 @@ pub struct QuizSubmitInput {
     pub contact: QuizContact,
     pub answers: Vec<QuizAnswer>,
     pub source: Option<QuizSource>,
+    /// The referral code this visitor arrived with (`?ref=` on a shared campaign link). The served
+    /// play page forwards it so the referrer is credited on the QUIZ submit — the same two
+    /// directions `POST /api/v1/entries` wires (kanban t_ad98b6ab); before t_6723eb30 a quiz
+    /// participant got no share link and a friend arriving through one was never credited.
+    #[serde(rename = "ref", default)]
+    pub referral_code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -151,6 +157,11 @@ pub struct QuizResult {
     /// one. The spin path returns the same field; absent when no redirect is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect_url: Option<String>,
+    /// This participant's own campaign referral share link (kanban t_6723eb30) — the same
+    /// producer the generic entry path returns, so the served play page renders the share box
+    /// from this response. Null only when minting failed.
+    pub referral_code: Option<String>,
+    pub referral_link: Option<String>,
 }
 
 /// POST /api/v1/quiz/{campaign_id}/submit — submit quiz answers, score, create entry
@@ -578,6 +589,58 @@ pub async fn submit_quiz(
         tracing::warn!("quiz direct integrations for entry {}: {e}", entry_id);
     }
 
+    // Campaign referral loop (kanban t_6723eb30).
+    //
+    // `POST /api/v1/entries` wires both directions (t_ad98b6ab); the quiz's own submit path skipped
+    // them entirely, so a quiz participant got no share link and a friend arriving through one was
+    // never credited. Same two directions, same helpers:
+    //   * a submit that arrived with `?ref=<code>` credits the referrer of that code;
+    //   * every quiz participant also gets their OWN code + share link for this campaign, which the
+    //     play page renders as the share box from the response below.
+    // Both are best-effort: the referral is a reward on top of the scored entry, so a referral write
+    // must never turn a valid submission into a 500. A failure is logged, never swallowed silently.
+    if let Some(ref_code) = input.referral_code.as_deref().filter(|c| !c.is_empty()) {
+        if let Err(e) = crate::handlers::viral_handler::handle_referral_credit(
+            &state,
+            &campaign.id,
+            Some(ref_code),
+            &contact_id,
+            "quiz",
+            &campaign.config,
+        )
+        .await
+        {
+            tracing::warn!(
+                "quiz entry {entry_id}: referral credit for code {ref_code:?} failed: {e}"
+            );
+        }
+    }
+    let (referral_code, referral_link) = match crate::db::viral::ensure_campaign_referral(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        "participant",
+    )
+    .await
+    {
+        Ok(r) => (
+            Some(r.referral_code.clone()),
+            Some(format!(
+                "{}/c/{}?ref={}",
+                crate::email::APP_URL,
+                campaign.slug,
+                r.referral_code
+            )),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                "quiz entry {entry_id}: could not mint a campaign referral code for campaign {}: {e}",
+                campaign.slug
+            );
+            (None, None)
+        }
+    };
+
     let result = QuizResult {
         score,
         max_score,
@@ -588,6 +651,8 @@ pub async fn submit_quiz(
         entry_id,
         crm_fields,
         redirect_url: delivery.redirect_url.clone(),
+        referral_code,
+        referral_link,
     };
 
     Ok(Json(json!(result)))

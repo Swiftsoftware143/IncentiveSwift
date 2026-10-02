@@ -304,8 +304,9 @@ label.opt:hover{border-color:var(--brand)}
       referrer_url: p.get('referrer_url') || document.referrer || null,
       // The referral code this visit arrived with -- /c/<slug>?ref=<code> redirects here carrying
       // it, and a hand-shared /play/<slug>?ref=<code> works the same. Forwarded to the server on
-      // the ENTRY so the referrer is credited on the conversion, not only on an earn-link click
-      // (kanban t_ad98b6ab).
+      // EVERY play body this page posts -- the entry form, the spin wheel, the quiz submit and the
+      // raffle enter -- so the referrer is credited on the conversion, not only on an earn-link
+      // click (kanban t_ad98b6ab; the three mechanic paths added by t_6723eb30).
       ref: p.get('ref') || null
     };
   })();
@@ -453,6 +454,9 @@ label.opt:hover{border-color:var(--brand)}
           email: email
         },
         answers: answers,
+        // The referral code this visit arrived with, forwarded on the QUIZ body too (t_6723eb30):
+        // the server credits the referrer and mints this participant's own share link.
+        ref: tracked.ref,
         source: {
           utm_source: tracked.utm_source,
           utm_medium: tracked.utm_medium,
@@ -470,6 +474,9 @@ label.opt:hover{border-color:var(--brand)}
         email: el('email').value || null,
         first_name: el('firstName').value || null,
         last_name: el('lastName').value || null,
+        // The referral code this visit arrived with, forwarded on the SPIN body too (t_6723eb30):
+        // the server credits the referrer and mints this participant's own share link.
+        ref: tracked.ref,
         utm_source: tracked.utm_source,
         utm_medium: tracked.utm_medium,
         utm_campaign: tracked.utm_campaign,

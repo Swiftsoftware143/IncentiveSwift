@@ -61,6 +61,12 @@ pub struct SpinRequestBody {
     pub utm_campaign: Option<String>,
     pub referrer_url: Option<String>,
     pub page_url: Option<String>,
+    /// The referral code this visitor arrived with (`?ref=` on a shared campaign link). The served
+    /// play page forwards it so the referrer is credited on the SPIN — the same two directions
+    /// `POST /api/v1/entries` wires (kanban t_ad98b6ab); before t_6723eb30 a spin_wheel participant
+    /// got no share link and a friend arriving through one was never credited.
+    #[serde(rename = "ref", default)]
+    pub referral_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +205,61 @@ pub async fn spin(
     .await?;
 
     let contact_id = resolve_contact(&state, &body).await?;
+
+    // Campaign referral loop (kanban t_6723eb30) — placed right after the contact is
+    // resolved/created, before the win arm's `tokio::spawn(async move ...)` takes `state` and part
+    // of `campaign` by value.
+    //
+    // `POST /api/v1/entries` wires both directions (t_ad98b6ab); a spin_wheel campaign is the
+    // majority of the served player surface, so its participants must not be the ones who get no
+    // share link. Same two directions, same helpers:
+    //   * a spin that arrived with `?ref=<code>` credits the referrer of that code;
+    //   * every spinner also gets their OWN code + share link for this campaign, which the play
+    //     page renders as the share box from the response below.
+    // Both are best-effort: the referral is a reward on top of the spin, so a referral write must
+    // never turn a completed spin into a 500. A failure is logged, never swallowed silently.
+    if let Some(ref_code) = body.referral_code.as_deref().filter(|c| !c.is_empty()) {
+        if let Err(e) = crate::handlers::viral_handler::handle_referral_credit(
+            &state,
+            &campaign.id,
+            Some(ref_code),
+            &contact_id,
+            "spin",
+            &campaign.config,
+        )
+        .await
+        {
+            tracing::warn!(
+                "spin campaign {}: referral credit for code {ref_code:?} failed: {e}",
+                campaign.slug
+            );
+        }
+    }
+    let (referral_code, referral_link) = match crate::db::viral::ensure_campaign_referral(
+        &state.db,
+        &campaign.id,
+        &contact_id,
+        "participant",
+    )
+    .await
+    {
+        Ok(r) => (
+            Some(r.referral_code.clone()),
+            Some(format!(
+                "{}/c/{}?ref={}",
+                crate::email::APP_URL,
+                campaign.slug,
+                r.referral_code
+            )),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                "spin campaign {}: could not mint a campaign referral code: {e}",
+                campaign.slug
+            );
+            (None, None)
+        }
+    };
 
     // Extract source tracking from headers
     let user_agent = headers
@@ -540,10 +601,17 @@ pub async fn spin(
     }
 
     // Build response
+    //
+    // `referral_code` / `referral_link` are this participant's own campaign share link
+    // (`{origin}/c/{slug}?ref={code}`), null only if minting failed — the play page renders them as
+    // the "share this campaign" affordance (kanban t_6723eb30). They are minted above, before the
+    // win arm's spawn moves things.
     let mut response = json!({
         "result": result,
         "contact_id": contact_id,
         "campaign_id": campaign.id,
+        "referral_code": referral_code,
+        "referral_link": referral_link,
     });
 
     if let Some(code) = redemption_code {
