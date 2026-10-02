@@ -3,10 +3,34 @@
 //! Endpoints:
 //!   POST /api/v1/checkout/create    — create a checkout session
 //!   GET  /api/v1/checkout/sessions  — list checkout sessions
+//!
+//! ## Why `create` REFUSES (kanban t_59a1b420)
+//!
+//! Until this card, `create_checkout_session` unconditionally INSERTed a `pending`
+//! `checkout_sessions` row and returned a fabricated
+//! `https://checkout.example.com/session/<id>` URL — a provider URL that does not exist and can
+//! never complete. Measured live on 2026-10-02 with a real tenant token: a request for the Pro
+//! plan's $49 answered `200 {"status":"pending","checkout_url":"https://checkout.example.com/…"}`
+//! and left a phantom session row behind. That is a payment surface claiming a purchase started
+//! when nothing can charge — the same defect class as the retired dead upsell anchors
+//! (t_70b96213, t_538505de).
+//!
+//! It now fails LOUDLY, mirroring the fleet's canonical shape (FunnelSwift
+//! `handlers/checkout_handler.rs::create_checkout_session`):
+//!
+//! * no active payment provider row  -> `503 payment_provider_not_configured`
+//! * provider row but not Stripe     -> `501 checkout_not_implemented`
+//! * Stripe row with no usable key   -> `503 payment_provider_not_configured`
+//! * Stripe key present, no call     -> `501 checkout_not_implemented`
+//! * `price_amount <= 0`             -> `400`
+//!
+//! NO arm creates a session, and NO arm invents a URL. When a payment credential is supplied and
+//! the Stripe call is implemented, this is the single place to add it.
 
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
+use axum::http::StatusCode;
 use axum::{extract::State, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,7 +41,8 @@ use uuid::Uuid;
 // Input types
 // ---------------------------------------------------------------------------
 
-/// Input for creating a checkout session.
+/// Input for creating a checkout session. Every field is echoed back in a refusal (see
+/// `requested` below) so a caller can see the whole request that was turned down.
 #[derive(Deserialize)]
 pub struct CreateCheckoutInput {
     pub price_amount: f64,
@@ -35,108 +60,125 @@ pub struct CreateCheckoutInput {
 // ---------------------------------------------------------------------------
 
 /// POST /api/v1/checkout/create
+///
+/// Refuses, honestly and explicitly, unless a payment provider is configured *and* this app
+/// implements that provider's checkout call. See the module docs for the arm table.
 pub async fn create_checkout_session(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Json(body): Json<CreateCheckoutInput>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<(StatusCode, Json<Value>), AppError> {
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    // user_id is a placeholder — incentiveswift maps 1 account : 1 user
-    let user_id = Uuid::new_v4();
-
-    // Determine payment provider — explicit over plan's payment_provider over default (stripe)
-    let mut payment_provider = body
-        .payment_provider
-        .clone()
-        .unwrap_or_else(|| String::from("stripe"));
-    if payment_provider == "stripe" {
-        if let Some(ref pid) = body.plan_id {
-            if let Ok(uuid) = Uuid::parse_str(pid) {
-                if let Ok(pp) = sqlx::query_scalar::<_, Option<String>>(
-                    "SELECT payment_provider FROM plans WHERE id = $1",
-                )
-                .bind(uuid)
-                .fetch_one(&state.db)
-                .await
-                {
-                    if let Some(ref provider) = pp {
-                        payment_provider = provider.clone();
-                    }
-                }
-            }
-        }
-    }
-
-    // Resolve success_url: explicit > plan's thank_you_url > /thank-you.html
-    let success_url = if let Some(ref url) = body.success_url {
-        url.clone()
-    } else if let Some(ref pid) = body.plan_id {
-        if let Ok(uuid) = Uuid::parse_str(pid) {
-            sqlx::query_scalar::<_, Option<String>>("SELECT thank_you_url FROM plans WHERE id = $1")
-                .bind(uuid)
-                .fetch_optional(&state.db)
-                .await?
-                .flatten()
-                .unwrap_or_else(|| "/thank-you.html".to_string())
-        } else {
-            "/thank-you.html".to_string()
-        }
-    } else {
-        "/thank-you.html".to_string()
-    };
-
-    let cancel_url = body.cancel_url.clone().unwrap_or_else(|| "/".to_string());
-
-    // Store the checkout session
-    let row = sqlx::query(
-        r#"
-        INSERT INTO checkout_sessions (account_id, user_id, price_amount, price_currency,
-                                       description, success_url, cancel_url, metadata,
-                                       status, payment_provider)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)
-        RETURNING id, account_id, user_id, price_amount, price_currency, description,
-                  success_url, cancel_url, metadata, status, payment_provider,
-                  created_at, updated_at
-        "#,
-    )
-    .bind(account_id)
-    .bind(user_id)
-    .bind(body.price_amount)
-    .bind(&body.price_currency)
-    .bind(&body.description)
-    .bind(&success_url)
-    .bind(&cancel_url)
-    .bind(&body.metadata)
-    .bind(&payment_provider)
-    .fetch_one(&state.db)
-    .await?;
-
-    // For now, generate a mock/placeholder checkout URL.
-    // Future integration will call the payment provider's API to create a real session.
-    let mock_checkout_url = format!(
-        "https://checkout.example.com/session/{}",
-        row.get::<Uuid, _>("id")
-    );
-
-    let item = json!({
-        "id": row.get::<Uuid, _>("id"),
-        "account_id": row.get::<Uuid, _>("account_id"),
-        "price_amount": row.get::<rust_decimal::Decimal, _>("price_amount"),
-        "price_currency": row.get::<String, _>("price_currency"),
-        "description": row.get::<Option<String>, _>("description"),
-        "success_url": row.get::<Option<String>, _>("success_url"),
-        "cancel_url": row.get::<Option<String>, _>("cancel_url"),
-        "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
-        "status": row.get::<String, _>("status"),
-        "payment_provider": row.get::<String, _>("payment_provider"),
-        "checkout_url": mock_checkout_url,
-        "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-        "updated_at": row.get::<chrono::DateTime<chrono::Utc>, _>("updated_at"),
+    // What was asked for, echoed on every refusal so nothing is silent.
+    let requested = json!({
+        "price_amount": body.price_amount,
+        "price_currency": body.price_currency,
+        "description": body.description,
+        "plan_id": body.plan_id,
+        "success_url": body.success_url,
+        "cancel_url": body.cancel_url,
+        "metadata": body.metadata,
+        "payment_provider": body.payment_provider,
     });
 
-    Ok(Json(json!({ "item": item })))
+    // A zero/negative/non-finite price is not a checkout.
+    if !body.price_amount.is_finite() || body.price_amount <= 0.0 {
+        return Err(AppError::BadRequest(format!(
+            "price_amount must be greater than zero (got {}); there is nothing to check out.",
+            body.price_amount
+        )));
+    }
+
+    // Resolve the account's own ACTIVE payment provider row.
+    let provider: Option<(String, String)> = sqlx::query_as(
+        "SELECT provider_type, api_key FROM payment_providers \
+         WHERE account_id = $1 AND is_active = true ORDER BY created_at LIMIT 1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some((provider_type, stored_key)) = provider else {
+        tracing::error!(
+            %account_id,
+            "checkout/create REFUSED: no active payment provider for account"
+        );
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "payment_provider_not_configured",
+                "message": "No payment provider is configured for this account, so checkout cannot \
+                            work. Add the provider's keys first (Integrations -> Provider Keys). No \
+                            session was created and no charge can occur.",
+                "configured": false,
+                "requested": requested,
+            })),
+        ));
+    };
+
+    if provider_type != "stripe" {
+        return Ok((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "error": "checkout_not_implemented",
+                "message": format!(
+                    "A {provider_type} provider is configured, but only Stripe checkout is \
+                     implemented. No session was created and no charge can occur."
+                ),
+                "configured": true,
+                "provider_type": provider_type,
+                "requested": requested,
+            })),
+        ));
+    }
+
+    // provider_keys / payment_providers store the secret as ciphertext at rest; a row whose key
+    // cannot be decrypted is the same as no key at all.
+    let secret_key =
+        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored_key.trim())
+            .await
+            .ok()
+            .filter(|k| !k.trim().is_empty());
+
+    let Some(_secret_key) = secret_key else {
+        tracing::error!(
+            %account_id,
+            "checkout/create REFUSED: stripe provider row has no usable api_key"
+        );
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "payment_provider_not_configured",
+                "message": "A Stripe provider exists but its secret key is missing or unreadable, \
+                            so no session was created and no charge can occur. Re-enter the key in \
+                            Provider Keys.",
+                "configured": false,
+                "provider_type": provider_type,
+                "requested": requested,
+            })),
+        ));
+    };
+
+    // A usable Stripe key IS configured — but this app has no Stripe checkout call yet. Answer
+    // that truth instead of inventing a session: the only arm that ever existed here fabricated a
+    // `checkout.example.com` URL. Wiring the real call is the next step, blocked on the credential.
+    tracing::error!(
+        %account_id,
+        "checkout/create REFUSED: stripe configured but no Stripe checkout call implemented"
+    );
+    Ok((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "error": "checkout_not_implemented",
+            "message": "A Stripe provider is configured, but this app does not implement the Stripe \
+                        checkout call yet. No session was created and no charge can occur.",
+            "configured": true,
+            "provider_type": provider_type,
+            "requested": requested,
+        })),
+    ))
 }
 
 /// GET /api/v1/checkout/sessions
