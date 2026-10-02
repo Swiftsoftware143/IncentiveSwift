@@ -140,11 +140,14 @@ pub async fn subscribe(
     .ok_or_else(|| AppError::NotFound(format!("Plan '{}' not found", req.plan_slug)))?;
 
     // Check if already has an active plan
+    // `fetch_optional` makes the ANNOTATION the carrier, so sqlx decodes `O` here: the
+    // `flatten()` forces `O = Option<String>`, so a NULL status is `None`, not a 500.
     let existing: Option<String> =
         sqlx::query_scalar("SELECT loyalty_plan_status FROM accounts WHERE id = $1")
             .bind(&account_id)
             .fetch_optional(&s.db)
-            .await?;
+            .await?
+            .flatten();
 
     if existing.as_deref() == Some("active") {
         return Ok(Json(SubscribeResponse {

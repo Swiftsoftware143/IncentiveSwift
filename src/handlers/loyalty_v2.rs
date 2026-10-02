@@ -1019,12 +1019,17 @@ pub async fn external_tag_contact(
 
     // Apply tags as notes2 (comma-separated, deduplicated)
     if !tags.is_empty() {
+        // notes2 is NULL for every contact `upsert_contact` creates (its INSERT omits the
+        // column, which has no DEFAULT), so decode it as `Option<String>`: the second
+        // `flatten()` forces `O = Option<String>` and a NULL reads as "no tags" instead of
+        // a decode error the `.ok()` swallows.
         let existing_notes: Option<String> =
             sqlx::query_scalar("SELECT notes2 FROM contacts WHERE id = $1")
                 .bind(contact_id)
                 .fetch_optional(&s.db)
                 .await
                 .ok()
+                .flatten()
                 .flatten();
 
         let mut all_tags: Vec<String> = existing_notes
