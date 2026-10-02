@@ -66,6 +66,36 @@
 //! the deadline**, which is the CoreSwift arm's behaviour and the fleet's contract. What is not
 //! reproduced is only the incidental pre-buffering.
 
+//! ## A body nobody reads is not a stalled body (kanban t_10206d81)
+//!
+//! `arrived` alone was not enough. A route whose handler takes NO body extractor never polls the
+//! body, so the layer's "has it arrived?" bit can never be set — and reading that bit as "the body
+//! has not arrived" produced a `408 {"error":"Request body was not received in time"}` for a request
+//! whose body had been delivered, whenever the handler worked past the bound for its OWN reasons (a
+//! DB pool wait, a mail-server dial). Measured live 2026-10-02 on the shipped console: the
+//! Settings → Email pane's own `POST /api/v1/settings/email/test` (a body-blind handler; the pane
+//! sent a 2-byte `{}` nothing reads) was answered `408 body_deadline_seconds: 30` after ~30 s, over
+//! and over, while nginx had long since buffered the body — and the user saw the false diagnosis
+//! instead of the answer.
+//!
+//! A body nobody has polled cannot be what holds a request up: with no body extractor the handler
+//! answers with the body still unread — measured at the origin at t+0.0 s with the body never sent
+//! at all — so there is nothing for this layer to bound on such a route. The layer therefore
+//! requires EVIDENCE that someone is waiting for the body before it answers `408`:
+//!
+//! * `arrived` → the body stopped arriving inside the bound: wait for the handler (`inner.await`).
+//! * `!polled` → nobody has read the body: log it (a handler passed the bound — an operator wants to
+//!   know) and wait for the handler. Answering `408` here would be a false diagnosis *and* would
+//!   drop work that was legitimately in progress.
+//! * `polled && !arrived` → a handler is waiting for a body that has stopped arriving: `408`.
+//!
+//! The last arm is the case this bound exists for, and it is unchanged. The residual is documented
+//! rather than hidden: a handler that does ≥ the bound of work BEFORE its body extractor, on a route
+//! whose sender then stalls the body, is again left to wait for its body (the pre-refactor
+//! behaviour) instead of being `408`ed — but `408`-ing it was wrong in exactly the same way for the
+//! body-blind case, and the fleet's contract is that a handler's own work is not this layer's
+//! business to time out.
+
 use axum::{
     body::{Body, Bytes},
     extract::{Request, State},
@@ -140,15 +170,33 @@ fn body_deadline_response(deadline: std::time::Duration) -> Response {
         })
 }
 
-/// A request body that records whether it ever reached its end.
+/// What the layer can observe about a request body without consuming it.
 ///
-/// The layer needs exactly one bit out of the body — has it finished arriving? — and the only way to
-/// observe that without consuming it is to sit in the poll path. Consuming it is what this module
-/// deliberately avoids (see the module docs), so the layer wraps the body and watches it being read
-/// by whoever actually wants it: the handler's own extractor.
+/// Two bits, and both are needed (kanban t_10206d81). `arrived` alone cannot tell a STALLED SENDER
+/// from a body NOBODY WANTED: a handler that takes no body extractor never polls the body, so its
+/// `arrived` bit stays false for ever — and a layer that reads that bit as "the body has not
+/// arrived" then answers `408 {"error":"Request body was not received in time"}` for a request whose
+/// body arrived instantly, and drops the handler's work on top of the false diagnosis. `polled` is
+/// the bit that separates the two, and it is free: this layer is already in the poll path.
+#[derive(Default)]
+struct BodyWatch {
+    /// Set the first time ANYONE polls the body: the handler's own extractor (or a drain). A body
+    /// nobody has polled cannot be what is holding a request up.
+    polled: AtomicBool,
+    /// Set when the body's last frame — or a read error — has been observed: it has stopped
+    /// arriving, so whatever is still running is the handler's own work.
+    arrived: AtomicBool,
+}
+
+/// A request body that records whether it was ever polled, and whether it ever reached its end.
+///
+/// The layer needs exactly two bits out of the body — has anyone asked for it, and has it finished
+/// arriving — and the only way to observe either without consuming it is to sit in the poll path.
+/// Consuming it is what this module deliberately avoids (see the module docs), so the layer wraps
+/// the body and watches it being read by whoever actually wants it: the handler's own extractor.
 struct ArrivalTrackingBody {
     inner: Body,
-    arrived: Arc<AtomicBool>,
+    watch: Arc<BodyWatch>,
 }
 
 impl HttpBody for ArrivalTrackingBody {
@@ -160,15 +208,19 @@ impl HttpBody for ArrivalTrackingBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
+        // Someone wants this body. Recorded before the poll so that a handler which polls and is left
+        // pending (a stalled sender) is distinguishable from one that never polls at all (a handler
+        // that takes no body extractor).
+        this.watch.polled.store(true, Ordering::SeqCst);
         match Pin::new(&mut this.inner).poll_frame(cx) {
             // The last frame, or a read error: either way the body is no longer something a client
             // is still holding us open for, so the deadline must stand down.
             Poll::Ready(None) => {
-                this.arrived.store(true, Ordering::SeqCst);
+                this.watch.arrived.store(true, Ordering::SeqCst);
                 Poll::Ready(None)
             }
             Poll::Ready(Some(Err(err))) => {
-                this.arrived.store(true, Ordering::SeqCst);
+                this.watch.arrived.store(true, Ordering::SeqCst);
                 Poll::Ready(Some(Err(err)))
             }
             other => other,
@@ -235,10 +287,10 @@ pub async fn body_read_deadline_middleware(
     let uri = request.uri().clone();
 
     let (parts, body) = request.into_parts();
-    let arrived = Arc::new(AtomicBool::new(false));
+    let watch = Arc::new(BodyWatch::default());
     let tracked = Body::new(ArrivalTrackingBody {
         inner: body,
-        arrived: arrived.clone(),
+        watch: watch.clone(),
     });
 
     let inner = next.run(Request::from_parts(parts, tracked));
@@ -250,14 +302,31 @@ pub async fn body_read_deadline_middleware(
         biased;
         response = &mut inner => response,
         _ = tokio::time::sleep(deadline) => {
-            if arrived.load(Ordering::SeqCst) {
+            if watch.arrived.load(Ordering::SeqCst) {
                 // The body finished arriving inside the bound. Whatever is still running is the
                 // handler's own work — not an unarrived body — so it is not this layer's business to
                 // cut it off: wait for it. (Before this module, a request in exactly this position
                 // was answered `408` at t+30 s by the app's accidental whole-request `TimeoutLayer`
                 // and its work was dropped.)
                 inner.await
+            } else if !watch.polled.load(Ordering::SeqCst) {
+                // NOBODY has read the body by the bound, so the body cannot be what is holding this
+                // request up: the handler is not waiting for it (it never asked), and a handler that
+                // takes no body extractor answers with the body still unread — measured on this app
+                // at t+0.0 s with the body never sent at all (kanban t_10206d81). Answering `408`
+                // here would be a false diagnosis — the body DID arrive; nothing wanted it — and it
+                // would drop work that was legitimately in progress. Log it (an operator wants to
+                // know a handler passed the bound) and let the handler finish: on a route whose
+                // handler ignores the body there is nothing for this layer to bound.
+                warn!(
+                    "request body never read within {:?} — no one is waiting for it, so the handler \
+                     is not being held up by the body; not answering 408 for {} {}",
+                    deadline, method, uri
+                );
+                inner.await
             } else {
+                // Polled and still unfinished: a handler is waiting for a body that has stopped
+                // arriving. That is the case this bound exists for.
                 warn!(
                     "request body not received within {:?} (stalled body) — answered 408 for {} {}",
                     deadline, method, uri
@@ -328,6 +397,16 @@ mod tests {
             .route(
                 "/slow",
                 post(|_body: Bytes| async {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    "done"
+                }),
+            )
+            // Body-blind AND slow (kanban t_10206d81): the handler takes no body extractor at all —
+            // the shape this app's `Settings → Email → Send test email` route has — and it works past
+            // the bound for its own reasons.
+            .route(
+                "/blind-slow",
+                post(|| async {
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     "done"
                 }),
@@ -551,6 +630,49 @@ mod tests {
         assert!(
             text.starts_with("HTTP/1.1 200"),
             "work in progress past the body deadline must not be cut off: {}",
+            text
+        );
+        assert!(
+            first_byte >= Duration::from_millis(350),
+            "the handler's own 400 ms must actually have run, took {first_byte:?}"
+        );
+    }
+
+    /// The body-blind leg (kanban t_10206d81), and the defect this change closes.
+    ///
+    /// The handler takes NO body extractor at all — the exact shape of this app's
+    /// `POST /api/v1/settings/email/test` — so nothing ever polls the body, and the layer's
+    /// `arrived` bit can never be set. If the handler then works past the bound for its own reasons
+    /// (a DB pool wait, a mail-server dial), the old rule read `arrived == false` as "the body has
+    /// not arrived" and answered `408 {"error":"Request body was not received in time"}` — a FALSE
+    /// diagnosis for a request whose 2-byte body was delivered, plus dropped work on top of it.
+    /// Measured live 2026-10-02 on the shipped console: the pane's own Test button POST was answered
+    /// `408 body_deadline_seconds: 30` after ~30 s, repeatedly, with the body already at the origin.
+    ///
+    /// The body here IS sent in full (the live shape): delivered, unread, and slow for its own
+    /// reasons. The answer must be the handler's own `200`, not a `408`.
+    #[tokio::test]
+    async fn body_nobody_reads_is_not_reported_as_a_stalled_body() {
+        let addr = serve(app(Duration::from_millis(150))).await;
+        let payload = "{}";
+        let (first_byte, text) = raw(
+            addr,
+            &format!(
+                "POST /blind-slow HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                payload.len(),
+                payload
+            ),
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 200"),
+            "a body nobody reads must never be reported as a stalled body: {}",
+            text
+        );
+        assert!(
+            !text.contains("body_deadline_seconds"),
+            "the false diagnosis must be gone: {}",
             text
         );
         assert!(

@@ -149,7 +149,11 @@ const API = (() => {
   const handle = async (r) => { const d = await r.json(); if (!r.ok) throw new Error(d.error || d.message || 'Request failed'); return d; };
   const login = (e, p) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:e,password:p}) }).then(handle);
   const get = (p) => fetch(base + p, {headers:headers()}).then(handle).catch(e => { console.error(e); throw e; });
-  const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), body:JSON.stringify(b)}).then(handle);
+  // kanban t_10206d81 — `b` is optional on purpose: a route whose handler takes NO body must not be
+  // sent one. A body nobody reads is not free: it puts the request inside the app's body-read
+  // deadline's scope for a body no handler ever polls, and the Arm then reads its own "not arrived"
+  // bit as a stalled sender. `API.post(p)` with no second argument sends no body at all.
+  const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), ...(b === undefined ? {} : {body:JSON.stringify(b)})}).then(handle);
   const put = (p, b) => fetch(base + p, {method:'PUT', headers:headers(), body:JSON.stringify(b)}).then(handle);
   const del = (p) => fetch(base + p, {method:'DELETE', headers:headers()}).then(handle);
   return {
@@ -649,7 +653,10 @@ const Campaigns = () => {
   const closeEmbed = () => { st.embedItem = null; st.embed = null; st.embedErr = ''; st.embedCopied = ''; renderApp(); };
   const createWidget = async () => {
     try {
-      const d = await API.post('/campaigns/' + st.embedItem.slug + '/widget-snippet', {});
+      // No body: POST /api/v1/campaigns/:slug/widget-snippet is a bodyless action route
+      // (`create_widget_snippet` takes State + Path + credential + headers and no extractor that
+      // reads a body) — kanban t_10206d81.
+      const d = await API.post('/campaigns/' + st.embedItem.slug + '/widget-snippet');
       st.embed = Object.assign({}, st.embed, { widget_snippet: d.embed_code, widget_snippet_hash: d.snippet_hash, widget_snippet_available: true });
       st.embedCopied = ''; renderApp();
     } catch (e) { st.embedErr = e.message; renderApp(); }
@@ -1892,7 +1899,7 @@ const SettingsView = () => {
   };
   const testSend = async () => {
     st.testing = true; st.test = null; renderApp();
-    try { st.test = await API.post('/settings/email/test', {}); }
+    try { st.test = await API.post('/settings/email/test'); }
     catch (e) { st.test = { success: false, detail: e.message }; }
     st.testing = false; renderApp();
   };
