@@ -8,7 +8,8 @@
 //! issued API key) whose `sub`/`user_id` names an `accounts` row that no longer exists, e.g. after
 //! the account is deleted or a dump is restored without it — used to reach every writer that binds
 //! `claims.sub` into a column carrying an FK to `accounts(id)` (`tenant_settings.tenant_id`,
-//! `tags.account_id`, `provider_keys.account_id`, …: 34 such columns live). There it surfaced as
+//! `tags.account_id`, `provider_keys.account_id`, …: 33 such columns live, measured 2026-10-02). There
+//! it surfaced as
 //! `500 {"error":"Internal server error"}`, with `insert or update on table "…" violates foreign
 //! key constraint "…"` in the log, and read exactly like a product defect. The id names WHICH
 //! account is unknown, so the refusal belongs at the boundary where the request enters: this
