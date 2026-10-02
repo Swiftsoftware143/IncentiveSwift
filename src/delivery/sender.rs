@@ -1,7 +1,9 @@
 //! SMTP email sender — tenant-aware, reads SMTP config from tenant_settings
 //!
 //! Each tenant can configure their own SMTP server (host, port, username, password, from address).
-//! This falls back to system-wide Mailgun SMTP if no tenant config is set.
+//! An account with NO mail server of its own rides the PLATFORM mail service — the app's ONE
+//! system-mail path, `email_provider` (`admin_settings.email`, the row the admin Email panel and
+//! its test-send use) — so "removed" really means "back on platform mail" (kanban t_2e9117a5).
 //!
 //! The `smtp_password` scalar is a CREDENTIAL and is stored under this app's `enc:v1:` envelope
 //! (kanban t_123b886b): the tenant settings writer seals it, [`open_smtp_password`] is the read
@@ -23,6 +25,12 @@ use uuid::Uuid;
 /// object, which is why the seal that covers `email_config`/`mailgun_config`/`smtp_config` never
 /// covered it.
 pub const SMTP_PASSWORD_KEY: &str = "smtp_password";
+
+/// The `tenant_settings` key prefix of the tenant's own mail-server family: exactly the rows
+/// [`load_smtp_config`] reads. "Remove my mail server" is therefore "delete my OWN rows under
+/// this prefix" (kanban t_2e9117a5) — a purpose-scoped arm, so a removal can never touch an
+/// unrelated setting and can never leave half a mail server behind.
+pub const MAIL_KEY_PREFIX: &str = "smtp_";
 
 /// SMTP configuration for a tenant
 #[derive(Debug, Clone)]
@@ -100,7 +108,17 @@ pub async fn load_smtp_config(pool: &PgPool, account_id: Uuid) -> Option<SmtpCon
         config.insert(key, value);
     }
 
-    let host = config.get("smtp_host")?.as_str()?.to_string();
+    let host = config.get("smtp_host")?.as_str()?.trim().to_string();
+    if host.is_empty() {
+        // A BLANK host is not a mail server (kanban t_2e9117a5). The write gate allows an empty
+        // value, so a blank host could be STORED as a PRESENT config (`as_str()` succeeds) and
+        // lettre then failed on it: the tenant's mail silently stopped instead of falling back to
+        // the platform mailer. Treated as "no tenant mail server of its own" here so such a row
+        // can never park a send; the writer refuses to store one in the first place.
+        tracing::warn!(%account_id,
+            "tenant smtp_host is blank — this send uses the platform mail service");
+        return None;
+    }
     let username = config.get("smtp_username")?.as_str()?.to_string();
     let stored_password = config.get(SMTP_PASSWORD_KEY)?.as_str()?.to_string();
     let password = match open_smtp_password(pool, &stored_password).await {
@@ -135,32 +153,12 @@ pub async fn load_smtp_config(pool: &PgPool, account_id: Uuid) -> Option<SmtpCon
     })
 }
 
-/// Try to load system-level Mailgun SMTP fallback from provider_keys
-pub async fn load_system_smtp_fallback(pool: &PgPool) -> Option<SmtpConfig> {
-    let row = sqlx::query_as::<_, (String,)>(
-        "SELECT api_key FROM provider_keys WHERE provider = 'mailgun' AND (account_id IS NULL OR scope = 'account') AND is_active = true LIMIT 1"
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()?;
-
-    let (key,) = row?;
-    // Stored as ciphertext at rest: a key that cannot be decrypted must never be handed to
-    // the SMTP transport as if it were the credential.
-    let key = crate::security::provider_key_crypto::decrypt_from_storage(pool, key.trim())
-        .await
-        .ok()?;
-
-    // Mailgun SMTP: username = 'postmaster@domain', password = API key, host = smtp.mailgun.org
-    Some(SmtpConfig {
-        host: "smtp.mailgun.org".to_string(),
-        port: 587,
-        username: "postmaster@mail.incentiveswift.com".to_string(),
-        password: key,
-        from_email: "notifications@mail.incentiveswift.com".to_string(),
-        from_name: Some("IncentiveSwift".to_string()),
-    })
-}
+// The `provider_keys`-based Mailgun SMTP fallback that used to live here was RETIRED (kanban
+// t_2e9117a5): it read a row that does not exist on this app (0 `provider_keys` rows with
+// provider='mailgun', measured 2026-10-02) and hardcoded this app's identity, while the LIVE
+// system-mail row is `admin_settings.email`. An account with no mail server now rides the
+// platform mail service through the app's ONE system-mail path (`email_provider`) instead of
+// failing behind a dead source.
 
 /// The transport half of a tenant send: gate the host, build the message, hand it to lettre.
 ///
@@ -220,7 +218,17 @@ async fn deliver_via(
     Ok(())
 }
 
-/// Send an email using the tenant's SMTP config, falling back to system Mailgun
+/// Send an email through the account's OWN mail server, or — when it has none — through the
+/// PLATFORM mail service (kanban t_2e9117a5).
+///
+/// The platform arm is [`crate::email::send_email_request`], the app's ONE system-mail path: the
+/// `admin_settings.email` row the admin Email settings panel edits and tests. Before this, the
+/// fallback read `provider_keys` (`provider = 'mailgun'`) — a row that has never existed on this
+/// app (0 rows, measured 2026-10-02) — so "no tenant mail server" did not mean platform mail, it
+/// meant `No SMTP configuration found` and a failed send. That is why the panel could not offer a
+/// removal (there was nothing to return the account TO) and why queued lifecycle mail was
+/// failing. A tenant's own server is still preferred, and is still the only thing this app hands
+/// a tenant credential to.
 pub async fn send_email(
     pool: &PgPool,
     account_id: Uuid,
@@ -228,18 +236,10 @@ pub async fn send_email(
     subject: &str,
     body_html: &str,
 ) -> Result<(), String> {
-    // Try tenant SMTP config first, fallback to system Mailgun SMTP
-    let config = match load_smtp_config(pool, account_id).await {
-        Some(c) => Some(c),
-        None => load_system_smtp_fallback(pool).await,
-    };
-
-    let config = config.ok_or_else(|| {
-        "No SMTP configuration found. Configure SMTP in Settings or add Mailgun API key."
-            .to_string()
-    })?;
-
-    deliver_via(pool, &config, to, subject, body_html).await
+    if let Some(config) = load_smtp_config(pool, account_id).await {
+        return deliver_via(pool, &config, to, subject, body_html).await;
+    }
+    crate::email::send_email_request(pool, to, subject, body_html, body_html).await
 }
 
 /// The answer a tenant test-send gives when the account has no mail server of its own. It names

@@ -154,7 +154,9 @@ pub async fn get_settings(
 /// The `smtp_password` write half.
 ///
 /// * a masked (or empty) incoming value keeps the STORED credential — the shape `get_settings`
-///   just handed the caller, so a panel round-trip cannot store the mask as the password;
+///   just handed the caller, so a panel round-trip cannot store the mask as the password, and an
+///   emptied box cannot destroy it either; when there is nothing stored to keep it is REFUSED
+///   (kanban t_2e9117a5) instead of storing a credential-shaped blank no reader can use;
 /// * anything else is SEALED before it reaches the database;
 /// * a non-string is refused: `load_smtp_config` would ignore it, leaving a credential-shaped
 ///   value in the column that no reader can use.
@@ -167,10 +169,11 @@ async fn seal_smtp_password(
     let Some(raw) = value.as_str() else {
         return Err(AppError::BadRequest(format!("{} must be a string", key)));
     };
-    if raw.is_empty() {
-        return Ok(value);
-    }
-    if is_masked(raw) {
+    if raw.is_empty() || is_masked(raw) {
+        // An empty box means exactly what the mask means: KEEP the stored credential. Storing
+        // the empty string instead (the pre-t_2e9117a5 behaviour) replaced a working credential
+        // with a value no reader can use — silently, because `is_masked` already answers true
+        // for "". With nothing stored there is nothing to keep, so the write is refused.
         let stored: Option<Value> = sqlx::query_scalar(
             "SELECT value FROM tenant_settings WHERE tenant_id = $1 AND key = $2",
         )
@@ -179,7 +182,13 @@ async fn seal_smtp_password(
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
-        return Ok(stored.unwrap_or_else(|| json!("")));
+        return stored.ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "{} is empty and no password is saved yet — type the mail server password, or \
+                 press Remove mail server in Settings → Email",
+                key
+            ))
+        });
     }
     if crate::security::provider_key_crypto::is_encrypted(raw) {
         // Already sealed — a caller carrying the STORED ciphertext back (an older client that read
@@ -239,6 +248,13 @@ pub async fn update_settings(
             )));
         }
 
+        // A BLANK scalar in the mail family is refused where it would be STORED (kanban
+        // t_2e9117a5): a stored `""` is a PRESENT config that lettre fails on, so the tenant's
+        // mail stopped silently instead of falling back to the platform mail service.
+        if let Some(reason) = mail_blank_refusal(&entry.key, &value) {
+            return Err(AppError::BadRequest(reason));
+        }
+
         if entry.key == "smtp_host" {
             // The host is the socket target `delivery::sender::send_email` will open, so it is
             // gate-checked where it is stored — a private destination is refused here instead of
@@ -271,6 +287,63 @@ pub async fn update_settings(
     }
 
     Ok(Json(json!({ "message": "Settings updated" })))
+}
+
+/// Why a value may not be STORED for a key in the tenant mail family (kanban t_2e9117a5).
+///
+/// The pane requires host/username/from/password to be non-empty, but the API did not: a stored
+/// `""` is a PRESENT config (`load_smtp_config` needs the key and an `as_str()`-able value), the
+/// `smtp_host` write gate explicitly ALLOWS an empty value, and lettre then fails on it — the
+/// tenant's mail silently stopped instead of falling back to the platform mailer. Refusing the
+/// blank where it would be stored, and naming the control that really means "I have no mail
+/// server", is what keeps that from ever being reachable again. Optional keys (from-name) and
+/// the numeric port are deliberately not covered: a blank from-name is legitimate and a blank
+/// port falls back to 587 in the reader.
+fn mail_blank_refusal(key: &str, value: &Value) -> Option<String> {
+    let raw = value.as_str()?;
+    if !raw.trim().is_empty() {
+        return None;
+    }
+    match key {
+        "smtp_host" | "smtp_username" | "smtp_from_email" => Some(format!(
+            "{} cannot be blank — press Remove mail server in Settings → Email (DELETE \
+             /api/v1/settings/email) to go back to the platform mail service",
+            key
+        )),
+        _ => None,
+    }
+}
+
+/// DELETE /api/v1/settings/email — remove THIS account's own mail server.
+///
+/// The console could configure and UPDATE a tenant mail server but never take one away (kanban
+/// t_2e9117a5): `PUT` had no delete arm and a blank host is refused, so an account that had ever
+/// saved a server was stuck with it. This deletes exactly the caller's OWN rows under
+/// [`crate::delivery::sender::MAIL_KEY_PREFIX`] — the family `load_smtp_config` reads and nothing
+/// else — which is what "go back to the platform mail service" means. The prefix is bound as a
+/// parameter and the tenant id comes from the token, so the arm cannot touch another account or
+/// an unrelated setting. Idempotent: an account with no mail server answers 200 with an empty
+/// list, so the panel's button is safe to press twice.
+pub async fn delete_settings_mail(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    let removed: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM tenant_settings\n          WHERE tenant_id = $1 AND left(key, length($2)) = $2\n      RETURNING key",
+    )
+    .bind(account_id)
+    .bind(crate::delivery::sender::MAIL_KEY_PREFIX)
+    .fetch_all(&state.db)
+    .await
+    .map_err(write_err)?;
+
+    Ok(Json(json!({
+        "message": "Mail server removed — this account now uses the platform mail service.",
+        "removed": removed,
+    })))
 }
 
 #[cfg(test)]
@@ -396,5 +469,40 @@ mod tests {
             None,
             Some("tenant_settings_tenant_id_fkey")
         ));
+    }
+
+    /// A blank scalar in the mail family is refused, and the refusal must name the control that
+    /// really means "no mail server" — while the optional keys and every ordinary setting stay
+    /// accepted (kanban t_2e9117a5).
+    #[test]
+    fn a_blank_mail_scalar_is_refused_and_names_the_remove_control() {
+        use super::mail_blank_refusal;
+        use serde_json::json;
+        for k in ["smtp_host", "smtp_username", "smtp_from_email"] {
+            let reason = mail_blank_refusal(k, &json!("")).expect("a blank must be refused");
+            assert!(reason.contains("Remove mail server"), "{k}: {reason}");
+            assert!(reason.contains("/api/v1/settings/email"), "{k}: {reason}");
+            assert!(mail_blank_refusal(k, &json!("smtp.acme.example")).is_none());
+            // whitespace is blank too — it is exactly the value lettre would sign in with
+            assert!(
+                mail_blank_refusal(k, &json!("   ")).is_some(),
+                "{k} whitespace"
+            );
+            assert!(
+                mail_blank_refusal(k, &json!(587)).is_none(),
+                "{k} non-string"
+            );
+        }
+        for k in [
+            "smtp_from_name",
+            "smtp_port",
+            "company_name",
+            "support_email",
+        ] {
+            assert!(
+                mail_blank_refusal(k, &json!("")).is_none(),
+                "{k} must stay accepted"
+            );
+        }
     }
 }

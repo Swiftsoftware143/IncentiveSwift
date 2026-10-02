@@ -1209,6 +1209,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/settings/email/test",
             post(handlers::settings_handler::test_settings_email),
         )
+        // REMOVE the caller's own mail server, so the account goes back to the platform mail
+        // service (kanban t_2e9117a5). Same pane, same family: the DELETE arm the PUT writer and
+        // the blank-value refusal leave as the only way out of a saved server.
+        .route(
+            "/api/v1/settings/email",
+            delete(handlers::settings_handler::delete_settings_mail),
+        )
         // Analytics routes
         .route(
             "/api/v1/analytics/overview",

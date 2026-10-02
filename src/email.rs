@@ -205,8 +205,9 @@ pub async fn send_reset_email(
 /// come from the database (`admin_settings.email`, the fleet-wide system row). Nothing is read from
 /// the process environment. The per-tenant override this used to fall back on is RETIRED (kanban
 /// t_123b886b, see `email_provider`); a tenant's own server is the `smtp_*` family in
-/// `delivery::sender`.
-async fn send_email_request(
+/// `delivery::sender`. This is also the arm an account with NO mail server of its own rides
+/// (`delivery::sender::send_email`, kanban t_2e9117a5): one system-mail path, not two.
+pub(crate) async fn send_email_request(
     pool: &sqlx::PgPool,
     to: &str,
     subject: &str,
