@@ -1,6 +1,7 @@
 //! Phase 2: Admin handlers for Campaign Milestones CRUD
 
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::mechanics::milestone_engine;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -17,7 +18,7 @@ pub async fn list_milestones(
     user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     let milestones = milestone_engine::list_milestones(&state.db, &campaign.id).await?;
 
@@ -34,7 +35,7 @@ pub async fn create_milestone(
     Path(slug): Path<String>,
     Json(body): Json<milestone_engine::CreateMilestoneInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     let milestone = milestone_engine::create_milestone(&state.db, &campaign.id, &body).await?;
 
@@ -48,7 +49,7 @@ pub async fn update_milestone(
     Path((slug, milestone_id)): Path<(String, Uuid)>,
     Json(body): Json<milestone_engine::UpdateMilestoneInput>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     let milestone = milestone_engine::update_milestone(&state.db, &milestone_id, &body).await?;
 
@@ -61,7 +62,7 @@ pub async fn delete_milestone(
     user: AuthenticatedUser,
     Path((slug, milestone_id)): Path<(String, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     milestone_engine::delete_milestone(&state.db, &milestone_id).await?;
 
@@ -74,7 +75,7 @@ pub async fn list_achieved_milestones(
     user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     let achieved = sqlx::query_as::<_, milestone_engine::MilestoneAchieved>(
         r#"SELECT ma.id, ma.milestone_id, ma.campaign_id, ma.contact_id,

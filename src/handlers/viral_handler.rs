@@ -11,6 +11,7 @@
 
 use crate::db::{campaigns, contacts, viral};
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -462,7 +463,8 @@ pub async fn get_referral_stats(
     user: AuthenticatedUser,
     Query(query): Query<ReferralStatsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    // Scoped to the caller's own campaign (kanban t_734f1f94).
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0);
 
@@ -501,7 +503,7 @@ pub async fn list_earn_channels(
     Path(slug): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let channels = viral::list_campaign_earn_channels(&state.db, &campaign.id).await?;
     Ok(Json(json!({ "earn_channels": channels })))
 }
@@ -517,7 +519,7 @@ pub async fn create_earn_channel(
     user: AuthenticatedUser,
     Json(body): Json<CreateEarnChannelBody>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
@@ -578,7 +580,7 @@ pub async fn update_earn_channel(
     user: AuthenticatedUser,
     Json(body): Json<CreateEarnChannelBody>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let ch_id = Uuid::parse_str(&channel_id)
         .map_err(|_| AppError::BadRequest("Invalid channel ID".to_string()))?;
 
@@ -592,7 +594,7 @@ pub async fn update_earn_channel(
                verification_type = $7, expected_answer = $8, verification_label = $9,
                approval_notes = $10,
                updated_at = now()
-           WHERE id = $11"#,
+           WHERE id = $11 AND campaign_id = $12"#,
     )
     .bind(&code)
     .bind(&body.label)
@@ -609,6 +611,7 @@ pub async fn update_earn_channel(
     .bind(body.verification_label.as_deref().unwrap_or(""))
     .bind(body.approval_notes.as_deref().unwrap_or(""))
     .bind(ch_id)
+    .bind(campaign.id)
     .execute(&state.db)
     .await?;
 
@@ -731,14 +734,18 @@ pub async fn verify_earn_action(
 
 pub async fn delete_earn_channel(
     State(state): State<AppState>,
-    Path((_slug, channel_id)): Path<(String, String)>,
+    Path((slug, channel_id)): Path<(String, String)>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
+    // This handler used to take the slug and never look at it, deleting by channel id alone
+    // (kanban t_734f1f94). Resolve the caller's own campaign and bind it into the DELETE.
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let ch_id = Uuid::parse_str(&channel_id)
         .map_err(|_| AppError::BadRequest("Invalid channel ID".to_string()))?;
 
-    sqlx::query("DELETE FROM earn_channels WHERE id = $1")
+    sqlx::query("DELETE FROM earn_channels WHERE id = $1 AND campaign_id = $2")
         .bind(ch_id)
+        .bind(campaign.id)
         .execute(&state.db)
         .await?;
 

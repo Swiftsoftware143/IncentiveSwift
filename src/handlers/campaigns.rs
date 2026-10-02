@@ -1,7 +1,7 @@
 //! Campaign handlers — list, get by slug, create.
 
 use crate::access::feature_gate;
-use crate::db::campaigns::{self, IqsGate};
+use crate::db::campaigns::{self, Campaign, IqsGate};
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -104,6 +104,41 @@ async fn resolve_iqs_gate(
     Ok(IqsGate::Set(funnel_id))
 }
 
+/// Does this caller act ACROSS accounts? (kanban t_734f1f94)
+///
+/// The operator audience is `admin`/`super_admin` — the same pair `security::auth::admin_guard`
+/// admits. The role comes from a signed JWT claim or an `api_keys` row (`security::auth`), so a
+/// tenant cannot mint it; an API-key caller carries the role `api_key` and is scoped like any tenant.
+pub(crate) fn is_operator(user: &AuthenticatedUser) -> bool {
+    user.role == "admin" || user.role == "super_admin"
+}
+
+/// Resolve the campaign named in the path for THIS caller (kanban t_734f1f94).
+///
+/// A tenant is scoped to its own `account_id`; a foreign slug/uuid is a 404. The operator audience
+/// keeps acting across accounts, which is what the console's operator catalogue and the pre-existing
+/// behaviour rely on. The scope value is the caller's RAW `account_id` — the value `list_campaigns`
+/// filters on and `create_campaign` writes into the row — deliberately NOT
+/// `resolve_owner_account_id`, which maps the multi-account tenants to their `accounts.tenant_id`
+/// and would 404 a tenant on its own campaign (measured: `Zaarhub@gmail.com`'s
+/// `campaigns.account_id` is its own id while its `accounts.tenant_id` names another row).
+pub(crate) async fn campaign_for_caller(
+    state: &AppState,
+    ident: &str,
+    user: &AuthenticatedUser,
+) -> Result<Campaign, AppError> {
+    if is_operator(user) {
+        return if let Ok(id) = uuid::Uuid::parse_str(ident) {
+            campaigns::get_campaign_by_id(&state.db, &id).await
+        } else {
+            campaigns::get_campaign_by_slug(&state.db, ident).await
+        };
+    }
+    let account_id = uuid::Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    campaigns::resolve_campaign_for_account(&state.db, ident, &account_id).await
+}
+
 /// GET /api/v1/campaigns — list campaigns scoped to authenticated user's account.
 pub async fn list_campaigns(
     State(state): State<AppState>,
@@ -115,12 +150,19 @@ pub async fn list_campaigns(
     Ok(Json(json!({ "campaigns": campaigns })))
 }
 
-/// GET /api/v1/campaigns/:slug — public, cacheable.
+/// GET /api/v1/campaigns/:slug — the caller's OWN campaign (kanban t_734f1f94).
+///
+/// This route used to be registered without an `AuthenticatedUser` extractor, so it answered
+/// ANONYMOUSLY about any campaign (`GET /campaigns/<slug>` -> 200 with the whole row, measured live
+/// on the pre-fix binary) — the widest arm of the class. It is a console read: the served shells
+/// read the public per-campaign contracts instead (`/api/v1/embed/campaign/:slug`, `/api/v1/play/:id`),
+/// which are untouched and still answer anonymous callers.
 pub async fn get_campaign(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     Ok(Json(json!({ "campaign": campaign })))
 }
 
@@ -262,13 +304,9 @@ pub async fn update_campaign(
     Path(slug): Path<String>,
     Json(body): Json<UpdateCampaignBody>,
 ) -> Result<Json<Value>, AppError> {
-    // Resolve campaign by slug or UUID
-    let campaign = if let Ok(id) = uuid::Uuid::parse_str(&slug) {
-        campaigns::get_campaign_by_id(&state.db, &id).await
-    } else {
-        campaigns::get_campaign_by_slug(&state.db, &slug).await
-    };
-    let campaign = campaign?;
+    // Resolve the campaign by slug or UUID, scoped to the caller (kanban t_734f1f94): a tenant may
+    // only write its own row, the operator audience still acts across accounts.
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     // A rename to "" (or to whitespace) left the row exactly as blank as an empty create did:
     // measured live 2026-10-02 (binary f03d7fe8) `PUT /api/v1/campaigns/:slug {"name":""}` -> 200
@@ -339,14 +377,9 @@ pub async fn delete_campaign_by_id(
     user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    // Try as UUID first, then as slug
-    let campaign = if let Ok(id) = uuid::Uuid::parse_str(&slug) {
-        campaigns::get_campaign_by_id(&state.db, &id).await
-    } else {
-        campaigns::get_campaign_by_slug(&state.db, &slug).await
-    };
-
-    let campaign = campaign?;
+    // Slug or UUID, scoped to the caller (kanban t_734f1f94) — a foreign campaign is a 404, so a
+    // guessed slug can no longer delete another tenant's row.
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let deleted = campaigns::delete_campaign(&state.db, &campaign.id).await?;
     if !deleted {
         return Err(AppError::NotFound("Campaign not found".to_string()));
@@ -361,7 +394,11 @@ pub async fn clone_campaign(
     user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let original = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    // The SOURCE must be the caller's own campaign (kanban t_734f1f94): before this check any
+    // tenant could clone another tenant's campaign — config, delivery_config, theme and all — into
+    // its own account (measured live: a foreign slug cloned -> 200, the copy landed under the
+    // caller's account_id).
+    let original = campaign_for_caller(&state, &slug, &user).await?;
     let new_name = format!("{} (Copy)", original.name);
     let new_slug = campaigns::generate_clone_slug(&original.name);
     let account_id = uuid::Uuid::parse_str(&user.account_id)

@@ -6,6 +6,7 @@ use crate::db::campaigns;
 use crate::db::contacts;
 use crate::error::AppError;
 use crate::handlers::campaign_integrations;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::mechanics::prize_draw;
 use crate::state::AppState;
 use axum::{
@@ -613,10 +614,13 @@ pub async fn spin_status(
 /// List all wins for a campaign (admin).
 pub async fn list_wins(
     State(state): State<AppState>,
+    user: crate::security::auth::AuthenticatedUser,
     Path(slug): Path<String>,
     query: axum::extract::Query<WinsQuery>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    // Scoped (kanban t_734f1f94): this authoring read used to hand any caller every win of any
+    // campaign, redemption codes included.
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0);
@@ -671,10 +675,13 @@ pub async fn list_wins(
 /// Mark a win as redeemed.
 pub async fn redeem_win(
     State(state): State<AppState>,
+    user: crate::security::auth::AuthenticatedUser,
     Path((slug, win_id)): Path<(String, String)>,
     Json(_body): Json<RedeemBody>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    // Scoped (kanban t_734f1f94): this route had no authenticated caller at all, so anyone could
+    // mark another tenant's win redeemed.
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let win_uuid = Uuid::parse_str(&win_id)
         .map_err(|_| AppError::BadRequest("Invalid win ID format".to_string()))?;
 

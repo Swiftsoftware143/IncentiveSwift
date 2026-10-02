@@ -8,6 +8,7 @@
 
 use crate::db::campaigns;
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -324,7 +325,7 @@ pub async fn set_marketing_boost(
     user: AuthenticatedUser,
     Json(body): Json<SetMarketingBoostInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     // Build the marketing_boost block
     let boost = if body.enabled {
@@ -415,7 +416,7 @@ pub async fn get_marketing_boost(
     Path(slug): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let boost = campaign.config.get("marketing_boost");
     match boost {
         Some(Value::Object(_)) => Ok(Json(json!({

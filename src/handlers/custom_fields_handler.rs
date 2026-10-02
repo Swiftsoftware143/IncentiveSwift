@@ -1,6 +1,7 @@
 //! Campaign custom fields — CRUD for per-campaign entry form fields
 
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
@@ -46,9 +47,10 @@ pub struct UpdateFieldInput {
 /// GET /api/v1/campaigns/:slug/custom-fields
 pub async fn list_custom_fields(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let fields = sqlx::query_as::<_, CustomField>(
         r#"SELECT id, campaign_id, field_key, field_label, field_type, sort_order, required, options, created_at
            FROM campaign_custom_fields WHERE campaign_id = $1
@@ -67,7 +69,7 @@ pub async fn create_custom_field(
     Path(slug): Path<String>,
     Json(body): Json<CreateFieldInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let id = Uuid::new_v4();
     let field_type = body.field_type.unwrap_or_else(|| "text".to_string());
     let sort_order = body.sort_order.unwrap_or(0);
@@ -107,7 +109,7 @@ pub async fn update_custom_field(
     Path((slug, field_id)): Path<(String, String)>,
     Json(body): Json<UpdateFieldInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let fid = Uuid::parse_str(&field_id)
         .map_err(|_| AppError::BadRequest("Invalid field ID".to_string()))?;
 
@@ -157,7 +159,7 @@ pub async fn delete_custom_field(
     user: AuthenticatedUser,
     Path((slug, field_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let fid = Uuid::parse_str(&field_id)
         .map_err(|_| AppError::BadRequest("Invalid field ID".to_string()))?;
 
@@ -177,7 +179,7 @@ pub async fn reorder_custom_fields(
     Path(slug): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
     if let Some(ids) = body.get("field_ids").and_then(|v| v.as_array()) {
         for (i, id_val) in ids.iter().enumerate() {

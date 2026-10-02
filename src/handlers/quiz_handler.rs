@@ -2,6 +2,8 @@
 
 use crate::db::{campaigns, contacts, questions_answers};
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
+use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
@@ -11,12 +13,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-/// GET /api/v1/campaigns/{slug}/questions — admin view (includes correct_answer)
+/// GET /api/v1/campaigns/{slug}/questions — authoring view (includes `correct_answer`).
+///
+/// SECURITY (kanban t_734f1f94): this route had NO `AuthenticatedUser` extractor and resolved the
+/// campaign by slug alone, so it answered ANONYMOUSLY (measured live: `GET` with no credential ->
+/// 200) and, for a tenant, about any account's campaign. Scoped now; the player's own feed is the
+/// public `/api/v1/play/{campaign_id}/questions`, which never carries `correct_answer`.
 pub async fn list_campaign_questions(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let questions = questions_answers::get_campaign_questions(&state.db, &campaign.id).await?;
     Ok(Json(
         json!({ "questions": questions, "campaign_id": campaign.id }),
@@ -46,10 +54,11 @@ pub async fn play_campaign_questions(
 /// POST /api/v1/campaigns/{slug}/questions — create a question
 pub async fn create_question(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path(slug): Path<String>,
     Json(input): Json<questions_answers::CreateQuestionInput>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
     let id = questions_answers::create_question(&state.db, &campaign.id, &input).await?;
     Ok(Json(
         json!({ "id": id, "question_key": input.question_key }),
@@ -59,10 +68,11 @@ pub async fn create_question(
 /// PUT /api/v1/campaigns/{slug}/questions/{question_id} — update a question
 pub async fn update_question(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path((slug, question_id)): Path<(String, Uuid)>,
     Json(input): Json<questions_answers::UpdateQuestionInput>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
     questions_answers::update_question(&state.db, &question_id, &input).await?;
     Ok(Json(json!({ "status": "updated" })))
 }
@@ -70,9 +80,10 @@ pub async fn update_question(
 /// DELETE /api/v1/campaigns/{slug}/questions/{question_id}
 pub async fn delete_question(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Path((slug, question_id)): Path<(String, Uuid)>,
 ) -> Result<Json<Value>, AppError> {
-    let _campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let _campaign = campaign_for_caller(&state, &slug, &user).await?;
     questions_answers::delete_question(&state.db, &question_id).await?;
     Ok(Json(json!({ "status": "deleted" })))
 }

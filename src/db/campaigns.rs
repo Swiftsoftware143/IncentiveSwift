@@ -179,6 +179,45 @@ pub async fn get_campaign_by_slug_for_account(
     Ok(campaign)
 }
 
+/// Resolve a campaign a caller named by slug OR uuid, but only when `account_id` owns it —
+/// otherwise 404.
+///
+/// SECURITY (kanban t_734f1f94): every console authoring route takes the campaign in its path, and
+/// the sibling resolvers (`get_campaign_by_slug`, `get_campaign_by_id`) take no caller — so each of
+/// them answered about ANOTHER account's campaign. Measured live on the pre-fix binary
+/// (86725ea0…, two real tenants): a `company_admin` PUT a foreign slug -> 200 and the row's
+/// `surface_config` moved, GET read the foreign row back, and the same slug could even be CLONED
+/// into the caller's account. This is the resolver every authoring arm must use for a tenant
+/// caller; a miss is a 404, never a 403, because an ownership failure must not leak existence.
+/// The operator audience (`admin`/`super_admin`) is resolved on the handler side, in
+/// `handlers::campaigns::campaign_for_caller`.
+pub async fn resolve_campaign_for_account(
+    pool: &PgPool,
+    ident: &str,
+    account_id: &Uuid,
+) -> Result<Campaign, AppError> {
+    let campaign = sqlx::query_as::<_, Campaign>(
+        r#"SELECT id, name, slug, type as "type", status,
+                  config, tag_namespace,
+                  outcome_tags,
+                  delivery_method, delivery_config,
+                  created_at,
+                  account_id,
+                  loyalty_program_id,
+                  loyalty_points_per_play,
+                  auto_enroll_loyalty,
+                  iqs_funnel_id
+           FROM campaigns WHERE (slug = $1 OR id::text = $1) AND account_id = $2"#,
+    )
+    .bind(ident)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Campaign not found".to_string()))?;
+
+    Ok(campaign)
+}
+
 /// List campaigns scoped to an account.
 pub async fn list_campaigns(pool: &PgPool, account_id: &Uuid) -> Result<Vec<Campaign>, AppError> {
     let campaigns = sqlx::query_as::<_, Campaign>(
