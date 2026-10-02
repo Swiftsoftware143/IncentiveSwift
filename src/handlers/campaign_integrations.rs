@@ -816,6 +816,18 @@ pub struct PrizeInfo {
 }
 
 /// Fire all enabled integrations for a campaign on a trigger event.
+///
+/// SECURITY (kanban t_2c1b961a). The card's scope note said the hub never reads
+/// `campaign_integrations` so a hostile binding "does not itself cause a webhook delivery" — true of
+/// `delivery/integration_hub.rs`, false here: this is the second reader of the binding table and the
+/// one that fires on `on_win`. It bound `ci.campaign_id` and nothing else, so a binding row whose
+/// target belonged to ANOTHER account (exactly what the pre-fix anonymous POST created) delivered the
+/// campaign's contact payload to that account's `webhook_url` — measured live 2026-10-02 with a
+/// receiver on the box's public address: the foreign URL got the lead, `entry.captured`, email and all.
+/// `it.account_id = $3` is the campaign's OWN account (the `account_id` parameter, which the single
+/// caller — `spin_handler::spin` — passes from the campaign row and which the outbound-webhook gate
+/// below already uses), so the delivery arm is per-account by construction, the same way
+/// `integration_hub::deliver_to_integration_target` was scoped by t_305a0549.
 pub async fn fire_campaign_integrations(
     state: &AppState,
     campaign_slug: &str,
@@ -837,7 +849,9 @@ pub async fn fire_campaign_integrations(
     // outbound-webhook gate (`security::webhook_security`) before it is contacted.
     account_id: &Uuid,
 ) {
-    // Look up all enabled campaign integrations matching this event
+    // Look up all enabled campaign integrations matching this event, restricted to
+    // targets of THIS campaign's account (kanban t_2c1b961a): a binding whose target
+    // belongs to another account must never receive this campaign's payload.
     let integrations = sqlx::query_as::<_, CampaignIntegrationWithTarget>(
         r#"SELECT ci.id, ci.campaign_id, ci.integration_id, ci.trigger_events,
                   ci.enabled, ci.created_at, ci.updated_at,
@@ -848,10 +862,12 @@ pub async fn fire_campaign_integrations(
            WHERE ci.campaign_id = $1
              AND ci.enabled = true
              AND it.is_active = true
+             AND it.account_id = $3
              AND $2 = ANY(ci.trigger_events)"#,
     )
     .bind(campaign_id)
     .bind(event_type)
+    .bind(account_id)
     .fetch_all(&state.db)
     .await;
 
