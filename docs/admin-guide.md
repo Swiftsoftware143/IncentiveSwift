@@ -153,12 +153,73 @@ Plan tiers (`plan_tiers`) define **feature access** through the `tier_features` 
 
 At play time, `enforce_mechanic_feature` returns **402 Upgrade Required** when the account's tier lacks the mechanic. Every game mechanic (spin wheel, scratch card, mystery, countdown, poll, chat, long-form qualifier, leaderboard, personality, calculator, raffle, score reveal, quiz) is gated this way.
 
-### Admin UI (Plan Tiers Tab)
+### Admin UI — the Plan Tiers tab (the Features & Plans panel)
 
-The admin SPA **Plan Tiers** tab (wired to `tier_features` CRUD endpoints) lets admins:
-- Create/rename tiers, set pricing and numeric limits
-- Toggle per-tier features (`mechanic_*`, `all_mechanics`, modules, surfaces) on/off
-- Set `limit_value` for numeric features
+`admin.incentiveswift.com` → **🥇 Plan Tiers**. This tab is the ONLY place plan entitlements are read
+or written. The **💳 Plans** tab beside it edits only the marketing/checkout rows (Name, Monthly
+price, Yearly price) and has no feature fields at all.
+
+What the screen renders, exactly:
+
+* Left column — one card per `plan_tiers` row: name, slug, `$<price_monthly>/mo`, an
+  `Active`/`Off` badge, and **Edit tier** (name, slug, monthly/annual price, active,
+  `max_campaigns`, `max_entries_per_month`).
+* Right column — `<Tier> — Features` with that tier's own Campaigns / Entries&nbsp;per&nbsp;month /
+  Annual numbers, then **one card per `features.category`**, in the order
+  `mechanic, delivery, branding, surface, module, loyalty, limits, billing`.
+* One row per registry key inside its category: a **checkbox** (`tier_features.enabled`, with a
+  green `ADDED` or red `REMOVED` badge), the bold label, the monospace key, and a **number box**
+  (`tier_features.limit_value`).
+* **Every registry key is listed for every tier** — the endpoint LEFT JOINs `features`, so a key the
+  tier has no row for still renders (unticked / `REMOVED`). Nothing is hidden.
+
+Saving (the panel's own behaviour, unchanged):
+
+* Ticking/unticking the checkbox saves immediately (`PUT /api/v1/admin/tiers/<tier>/features/<key>`)
+  and the list reloads — "Changes hit the live runtime gate immediately."
+* The number box saves when you click away from it, and it sends the checkbox state **as it is at
+  that moment**. On a key with no row yet, **tick the box first, then type the number**: typing a
+  number into an unticked row saves `enabled = false` alongside that number.
+
+`limit_value` semantics (identical in every reader — `src/features.rs`):
+
+| value | meaning |
+|---|---|
+| `-1` | unlimited |
+| `0` | not included on this tier |
+| `N > 0` | cap of N |
+| blank | no number configured (a plain capability flag) |
+
+### The top tier grants everything (2026-10-02)
+
+David's rule: **the top tier plan gets everything.** The top tier — highest `price_monthly`, then
+highest `sort_order`: **Enterprise**, $199/mo — now carries a row for **every** key in `features`:
+**38 of 38**, up from 18. The 20 missing keys were seated by
+`migrations/20261002_enterprise_top_tier_all_features.sql`, which fills gaps only (it never
+overwrites a grant or a number the operator set) and gives every `limits`-category key `-1`. Free (5)
+and Pro (17) are untouched.
+
+To keep the rule true when a NEW key is registered later: open this tab, click the **Enterprise**
+card and tick the new key's box. That is the same write the migration makes, and it is the only step
+needed. There is no "grant everything" button.
+
+### Which keys the runtime actually reads
+
+The panel lists a key whether or not any code reads it, so a full grid is not the same thing as a
+fully enforced product:
+
+* `all_mechanics` + `mechanic_<type>` → **402** at play time (`access::feature_gate`).
+* `max_leads`, `max_tags` → **402** on the create path (`features::enforce_feature_limit`).
+* `max_campaigns`, `max_entries_per_month` → the tier's own columns, set with **Edit tier**.
+* `industry_limit` → the industry-dashboard cap (`PUT /api/v1/auth/profile`; **402** when the value
+  is `0`, a 400 "maximum N industries" when the cap is N).
+* `custom_domains` → the plan verdict on `GET /api/v1/admin/plans/:id/domains`.
+* `credits_monthly`, `credits_overdraft` → the allowances on `GET /api/v1/credits/balance`.
+* `module_loyalty_program` → the loyalty plan check (absent row means allowed).
+
+Every other registered key — including the `surface_*` / `branding_*` / `delivery_*` duplicates
+(`surface_tablet_mode` vs `tablet_mode`, etc.) — is catalogue-only today: it renders and it grants,
+but no code path reads it yet.
 
 This replaced the previous `plan_tier_features`/`feature_limits` tables (removed — see reconciliation note in `src/features.rs`).
 

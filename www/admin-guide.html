@@ -143,30 +143,54 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
 <section id="plans">
   <h2 class="sec-title"><span class="sec-num">3</span> Plan Management</h2>
   <div class="card">
-    <h3>Creating Plans</h3>
-    <p>From the Plan Management page, click <strong>+ New Plan</strong> to create a subscription plan. Each plan has:</p>
+    <h3>Two separate surfaces</h3>
+    <p>The console keeps the <strong>marketing catalogue</strong> and <strong>entitlements</strong> apart, and so should you:</p>
     <ul>
-      <li><strong>Name</strong> — Display name (e.g. "Professional", "Enterprise")</li>
-      <li><strong>Price</strong> — Monthly and yearly pricing (USD)</li>
-      <li><strong>Features</strong> — JSON object of feature flags and limits</li>
-      <li><strong>Sort Order</strong> — Display order in dropdowns</li>
+      <li><strong>💳 Plans</strong> — the subscription rows the marketing site and checkout read. The panel edits only <em>Name</em>, <em>Monthly price</em> and <em>Yearly price</em>. It has no feature fields; whatever a customer is allowed to <em>do</em> is not set here.</li>
+      <li><strong>🥇 Plan Tiers</strong> — the Features &amp; Plans panel. The entitlement model (<code>plan_tiers</code> &rarr; <code>tier_features</code> &rarr; <code>features</code>), and the only thing every runtime gate reads.</li>
     </ul>
   </div>
   <div class="card">
-    <h3>Feature Flags</h3>
-    <p>Plan features are defined as a JSON object. Each feature key maps to a boolean or numeric limit:</p>
-    <pre>{
-  "campaigns": true,           // Can create campaigns
-  "iqs_surveys": true,         // Can use IQS surveys
-  "integrations": 3,           // Max integration targets
-  "provider_keys": true,       // Can add own API keys
-  "widget": true,              // Popup widget access
-  "analytics_export": true,    // CSV export from analytics
-  "webhook_security": true,    // Domain allowlist + daily limits
-  "embed": true,               // Campaign embedding
-  "mobile_app": true,          // Mobile app access
-  "credits": 1000              // Monthly OpenClaw credit allocation
-}</pre>
+    <h3>Plan Tiers — reading the screen</h3>
+    <ul>
+      <li><strong>Left column</strong> — one card per tier: name, slug, <code>$&lt;price&gt;/mo</code>, an <code>Active</code>/<code>Off</code> badge, and <strong>Edit tier</strong> (name, slug, monthly/annual price, active, <code>max_campaigns</code>, <code>max_entries_per_month</code>).</li>
+      <li><strong>Right column</strong> — <code>&lt;Tier&gt; — Features</code> with that tier's Campaigns / Entries&#47;month / Annual numbers, then <strong>one card per feature category</strong>, in the order mechanic, delivery, branding, surface, module, loyalty, limits, billing.</li>
+      <li><strong>One row per registry key</strong> — a checkbox (<code>tier_features.enabled</code>) with a green <code>ADDED</code> or red <code>REMOVED</code> badge, the bold label, the monospace key, and a number box (<code>tier_features.limit_value</code>).</li>
+      <li><strong>Every registry key is listed on every tier</strong> — a key the tier has no row for still renders (unticked, <code>REMOVED</code>). Nothing is hidden from you.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Plan Tiers — saving</h3>
+    <ul>
+      <li>Ticking or unticking the checkbox saves immediately and the list reloads: <em>"Changes hit the live runtime gate immediately."</em></li>
+      <li>The number box saves when you click away from it, and it sends the checkbox state <strong>as it is right then</strong>. On a key that has no row yet: <strong>tick the box first, then type the number</strong> — typing a number into an unticked row saves <code>enabled = false</code> alongside that number.</li>
+    </ul>
+    <p><code>limit_value</code> means the same thing in every reader:</p>
+    <table><thead><tr><th>Value</th><th>Meaning</th></tr></thead><tbody>
+      <tr><td><code>-1</code></td><td>Unlimited</td></tr>
+      <tr><td><code>0</code></td><td>Not included on this tier</td></tr>
+      <tr><td><code>N &gt; 0</code></td><td>Cap of N</td></tr>
+      <tr><td>blank</td><td>No number configured (a plain capability flag)</td></tr>
+    </tbody></table>
+  </div>
+  <div class="card">
+    <h3>The top tier gets everything (2026-10-02)</h3>
+    <p>The top tier — highest price, then highest sort order: <strong>Enterprise</strong>, $199&#47;mo — now carries a row for <strong>every</strong> key in the <code>features</code> registry: <strong>38 of 38</strong>, up from 18. The 20 missing keys were seated by migration <code>20261002_enterprise_top_tier_all_features.sql</code>, which fills gaps only (it never overwrites a grant or a number you set) and gives every <code>limits</code>-category key <code>-1</code>. Free (5) and Pro (17) are untouched.</p>
+    <p>When a new feature key is registered later, keep the rule true the same way: open this tab, click the <strong>Enterprise</strong> card and tick the new key's box. There is no "grant everything" button.</p>
+  </div>
+  <div class="card">
+    <h3>Which keys the runtime actually reads</h3>
+    <p>The panel lists a key whether or not any code reads it, so a full grid is not the same thing as a fully enforced product:</p>
+    <ul>
+      <li><code>all_mechanics</code> and each <code>mechanic_&lt;type&gt;</code> — <strong>402</strong> at play time.</li>
+      <li><code>max_leads</code>, <code>max_tags</code> — <strong>402</strong> on the create path.</li>
+      <li><code>max_campaigns</code>, <code>max_entries_per_month</code> — the tier's own columns, set with <strong>Edit tier</strong>.</li>
+      <li><code>industry_limit</code> — the industry-dashboard cap (402 when the value is 0; a "maximum N industries" refusal when the cap is N).</li>
+      <li><code>custom_domains</code> — the plan verdict on <code>GET /api/v1/admin/plans/:id/domains</code>.</li>
+      <li><code>credits_monthly</code>, <code>credits_overdraft</code> — the allowances returned by <code>GET /api/v1/credits/balance</code>.</li>
+      <li><code>module_loyalty_program</code> — the loyalty plan check (no row means allowed).</li>
+    </ul>
+    <div class="callout info"><strong>Note:</strong> the remaining registered keys — including the <code>surface_*</code> / <code>branding_*</code> / <code>delivery_*</code> duplicates (<code>surface_tablet_mode</code> vs <code>tablet_mode</code>, and so on) — are catalogue-only today: they render here and they are granted, but no code path reads them yet.</div>
   </div>
   <div class="card">
     <h3>Deleting Plans</h3>
@@ -252,7 +276,7 @@ POST /api/v1/portfolio-companies      — Create company</pre>
   <h2 class="sec-title"><span class="sec-num">7</span> Credits &amp; Billing</h2>
   <div class="card">
     <h3>Plan-Based Credit System</h3>
-    <p>Credits are held per account (<code>accounts.credits_balance</code>). A plan tier can grant a monthly allowance and an overdraft entitlement (<code>tier_features</code> &rarr; <code>credits_monthly</code> / <code>credits_overdraft</code>, assignable per plan in Plans &amp; billing); with no limit assigned, the allowance reads <strong>0 (none included)</strong>. Credits are <strong>earned</strong>, not burned: purchase verification credits the account at that tenant's own credit rate ($1 = 10 credits by default), and the loyalty win and offer flows move them. No platform action deducts credits today.</p>
+    <p>Credits are held per account (<code>accounts.credits_balance</code>). A plan tier can grant a monthly allowance and an overdraft entitlement (<code>tier_features</code> &rarr; <code>credits_monthly</code> / <code>credits_overdraft</code>, set per tier on the <strong>Plan Tiers</strong> tab — <code>-1</code> = unlimited, <code>0</code> or no limit assigned = none included); with no limit assigned, the allowance reads <strong>0 (none included)</strong>. Credits are <strong>earned</strong>, not burned: purchase verification credits the account at that tenant's own credit rate ($1 = 10 credits by default), and the loyalty win and offer flows move them. No platform action deducts credits today.</p>
   </div>
   <div class="card">
     <h3>Admin Credit Management</h3>
