@@ -662,7 +662,9 @@ pub async fn scan_member(
                     } => {
                         // The hold is recorded under EVERY behaviour, not only 'hold': the money still has
                         // to be accounted for, and what differs is what the business is told. 'hold' is
-                        // the default, so an unconfigured programme is the safe one.
+                        // the default, so an unconfigured programme is the safe one. The record describes
+                        // what the app DID — a stored setting the enforcement does not perform is named as
+                        // such, never quoted as the rule in force (kanban t_d5754642).
                         let hold_id = Uuid::new_v4();
                         sqlx::query(
                             "INSERT INTO treasury_holds (id, campaign_id, contact_id, business_id, business_name, points, amount, shortfall, status, reason)
@@ -676,8 +678,10 @@ pub async fn scan_member(
                         .bind(reimbursement)
                         .bind(shortfall)
                         .bind(format!(
-                            "Float would fall below the safety balance: available {} vs required {}. Rule in force: {}. The redemption is parked, nothing is paid, and the business is asked to top up.",
-                            available, shortfall, behaviour
+                            "Float would fall below the safety balance: available {} vs required {}. {}. The redemption is parked, nothing is paid, and the business is asked to top up.",
+                            available,
+                            shortfall,
+                            crate::handlers::treasury_engine_handler::on_breach_applied_note(&behaviour)
                         ))
                         .execute(&state.db)
                         .await?;

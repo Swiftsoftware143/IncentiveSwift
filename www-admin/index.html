@@ -1134,8 +1134,22 @@ const LoyaltyPrograms = () => {
   }
 
   async function saveTreasuryRule() {
-    const behaviour = prompt('When paying a reward would take the programme below its safety balance:\n  hold            — park it and ask the business to top up (default)\n  allow_and_bill  — pay it and bill the shortfall\n  suspend         — stop paying rewards until they top up', st.tFloat?.on_float_breach || 'hold');
+    // The console offers ONLY what the app performs. The API refuses an unimplemented behaviour (a
+    // setting the enforcement does not act on must never be saveable), so the prompt never proposes one
+    // — and the choices come from the server, so console copy and API vocabulary cannot drift.
+    const choices = (Array.isArray(st.tFloat?.on_float_breach_choices) && st.tFloat.on_float_breach_choices.length)
+      ? st.tFloat.on_float_breach_choices : ['hold'];
+    const notImplemented = st.tFloat?.on_float_breach_not_implemented || [];
+    const current = choices.includes(st.tFloat?.on_float_breach) ? st.tFloat.on_float_breach : choices[0];
+    const behaviour = prompt('When paying a reward would take the programme below its safety balance:\n' +
+      choices.map(c => '  ' + c + (c === 'hold' ? '  — park it and ask the business to top up (default)' : '')).join('\n') +
+      (notImplemented.length ? '\nNot available yet (not implemented, and refused by the API if saved): ' + notImplemented.join(', ') : ''),
+      current);
     if (!behaviour) return;
+    if (!choices.includes(behaviour)) {
+      alert(behaviour + ' is not implemented yet, so the programme does not act on it. Nothing was saved — the rule is still: ' + current + '.');
+      return;
+    }
     const minimum = prompt('Safety balance the programme must never go below (e.g. 100)', String(st.tFloat?.minimum_float ?? 100));
     try {
       await API.put('/admin/treasury/rule', { on_float_breach: behaviour, minimum_float: minimum });

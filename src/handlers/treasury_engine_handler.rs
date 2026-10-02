@@ -31,6 +31,86 @@ use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 
+/// ── THE BREACH BEHAVIOURS — the ONE source of truth every surface reads ───────────────────────────
+///
+/// The DB CHECK admits `hold | allow_and_bill | suspend` so an unknown behaviour can never be
+/// configured. Measured 2026-10-02 (kanban t_d5754642): the constraint worked and the behaviour behind
+/// it did not exist. `allow_and_bill` and `suspend` appeared in exactly four places — the CHECK, this
+/// vocabulary, and two published sentences — and the breach arm branched on NOTHING, so both behaved
+/// exactly like `hold` while the console and the page the businesses read promised "it is paid and the
+/// shortfall is billed to the business" / "the programme stops redeeming". Copy promising an outcome
+/// the system does not perform is a lie in writing.
+///
+/// ARM CHOSEN: REFUSE what is not built. A behaviour the enforcement does not perform is not saved
+/// (400 naming it), not offered by the console, and never described on the published rules — until the
+/// arm exists. `allow_and_bill` needs a product decision before it can be implemented (who the bill
+/// goes to, on what cycle, where the receivable lives) and `suspend` needs the customer-facing story
+/// (what the person standing at the counter is told), so neither was invented here.
+pub const IMPLEMENTED_ON_FLOAT_BREACH: [&str; 1] = ["hold"];
+pub const UNIMPLEMENTED_ON_FLOAT_BREACH: [&str; 2] = ["allow_and_bill", "suspend"];
+
+/// Is this a behaviour the enforcement actually performs? ONE gate for every surface — the writer, the
+/// console payload, the published rules and the hold record all ask this, so they cannot drift.
+pub fn on_breach_is_implemented(behaviour: &str) -> bool {
+    IMPLEMENTED_ON_FLOAT_BREACH.contains(&behaviour)
+}
+
+/// The rule the app APPLIES, given what the row stores.
+///
+/// The breach arm holds under every setting, so `hold` is what is in force whatever the column says.
+/// An unimplemented stored value (only reachable by writing the DB outside this API, which refuses it)
+/// is reported separately and never as the rule in force.
+pub fn effective_rule(stored: &str) -> &str {
+    if on_breach_is_implemented(stored) {
+        stored
+    } else {
+        IMPLEMENTED_ON_FLOAT_BREACH[0]
+    }
+}
+
+/// The ONE plain-English sentence for the rule in force — read by the businesses' rules page AND the
+/// operator console, generated from the rule the app APPLIES so the published copy cannot disagree
+/// with the enforcement.
+///
+/// `stored` is what the ROW says, which is what the sentence has to speak about: when the app performs
+/// it the sentence is the promise, and when it does not the sentence refuses to promise and names the
+/// stored value as not applied alongside the hold that really happens. Callers publish
+/// `effective_rule(stored)` as the rule IN FORCE, so a stored value the app cannot perform is never
+/// presented as an outcome (kanban t_d5754642).
+pub fn on_breach_sentence(minimum: Decimal, stored: &str) -> String {
+    let base = format!(
+        "If paying a reward would take the programme below ${minimum}, the reward is held and the business is asked to top up before it is paid."
+    );
+    if on_breach_is_implemented(stored) {
+        base
+    } else {
+        format!(
+            "{base} Note: this programme's stored float rule ('{stored}') is not supported by the software and is not applied."
+        )
+    }
+}
+
+/// What a hold record should say the rule WAS. The record describes what the app DID, so an
+/// unimplemented stored setting is named as such instead of being quoted as the rule in force.
+pub fn on_breach_applied_note(behaviour: &str) -> String {
+    if on_breach_is_implemented(behaviour) {
+        format!("Rule in force: {behaviour}")
+    } else {
+        format!("Rule applied: hold (the stored setting '{behaviour}' is not implemented)")
+    }
+}
+
+/// The full vocabulary the DB CHECK admits, for refusal messages — so a caller who sends nonsense is
+/// told what IS implemented instead of only what is not.
+pub fn on_breach_vocabulary() -> String {
+    IMPLEMENTED_ON_FLOAT_BREACH
+        .iter()
+        .chain(UNIMPLEMENTED_ON_FLOAT_BREACH.iter())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The whole float position, as one object — so a UI can never show a stale half of it.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct TreasuryState {
@@ -111,6 +191,12 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
     .fetch_one(&s.db)
     .await?;
 
+    // The rule the app APPLIES, never a stored value the enforcement does not perform. The breach arm
+    // holds under every setting, so a column written outside this API cannot make the console claim a
+    // behaviour the code does not have.
+    let stored_behaviour = t.on_float_breach.clone().unwrap_or_else(|| "hold".into());
+    let behaviour = effective_rule(&stored_behaviour);
+
     Ok(Json(json!({
         "configured": true,
         "collected": collected,
@@ -119,20 +205,22 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
         "minimum_float": minimum,
         "headroom": available - minimum,
         "is_safe": available >= minimum,
-        "on_float_breach": t.on_float_breach,
+        "on_float_breach": behaviour,
+        // What the row stores. Equals `on_float_breach` unless the column was written outside this API
+        // (which refuses an unimplemented value) — kept so a divergence is visible, not silent.
+        "stored_on_float_breach": stored_behaviour,
+        // The console offers ONLY these, so it can never propose a setting the API would refuse.
+        "on_float_breach_choices": IMPLEMENTED_ON_FLOAT_BREACH,
+        "on_float_breach_not_implemented": UNIMPLEMENTED_ON_FLOAT_BREACH,
         "float_breaches": t.float_breaches,
         "points_issued": t.total_points_issued,
         "points_redeemed": t.total_points_redeemed,
         "outstanding_liability": t.outstanding_liability,
         "pending_holds": pending_holds,
         "pending_hold_amount": pending_amount,
-        // The plain-English sentence the businesses read. It is generated from the rule in force so the
-        // business-facing rules and the enforcement can never disagree.
-        "rule_plain_english": match t.on_float_breach.as_deref().unwrap_or("hold") {
-            "allow_and_bill" => "If a reward would take the programme below its safety balance, it is paid and the shortfall is billed to the business.",
-            "suspend" => "If a reward would take the programme below its safety balance, the programme stops redeeming until the business tops up.",
-            _ => "If a reward would take the programme below its safety balance, it is held for confirmation and the business is asked to top up.",
-        },
+        // The plain-English sentence — the SAME function the businesses' rules page reads, spoken about
+        // the STORED value so an unimplemented one is named as not applied rather than silently dropped.
+        "rule_plain_english": on_breach_sentence(minimum, &stored_behaviour),
     })))
 }
 
@@ -266,17 +354,33 @@ pub struct RuleBody {
 
 /// PUT /api/v1/admin/treasury/rule — set the rule. Constrained in the DB too, so an unknown behaviour
 /// cannot be configured and then silently ignored by the enforcement.
+///
+/// ARM (a), decided 2026-10-02 (kanban t_d5754642): a behaviour the enforcement does NOT perform is
+/// REFUSED (400 naming it) instead of stored-and-ignored. The DB CHECK still admits the intended space,
+/// so this handler is the only door that could save such a value — and it no longer can. Nothing is
+/// written when the behaviour is refused, not even a valid `minimum_float` sent alongside it.
 pub async fn set_rule(
     State(s): State<AppState>,
     Json(body): Json<RuleBody>,
 ) -> Result<Json<Value>, AppError> {
     if let Some(behaviour) = body.on_float_breach.as_deref() {
-        const CHOICES: [&str; 3] = ["hold", "allow_and_bill", "suspend"];
-        if !CHOICES.contains(&behaviour) {
-            return Err(AppError::BadRequest(format!(
-                "on_float_breach must be one of {}",
-                CHOICES.join(", ")
-            )));
+        if !on_breach_is_implemented(behaviour) {
+            return Err(AppError::BadRequest(
+                if UNIMPLEMENTED_ON_FLOAT_BREACH.contains(&behaviour) {
+                    format!(
+                        "on_float_breach '{}' is not implemented: the app can only hold a redemption that would breach the safety balance. Implemented: {}. Not implemented: {}. Nothing was saved.",
+                        behaviour,
+                        IMPLEMENTED_ON_FLOAT_BREACH.join(", "),
+                        UNIMPLEMENTED_ON_FLOAT_BREACH.join(", ")
+                    )
+                } else {
+                    format!(
+                        "on_float_breach must be one of {} (implemented: {})",
+                        on_breach_vocabulary(),
+                        IMPLEMENTED_ON_FLOAT_BREACH.join(", ")
+                    )
+                },
+            ));
         }
         sqlx::query("UPDATE point_treasury SET on_float_breach = $1, updated_at = now()")
             .bind(behaviour)
@@ -429,23 +533,19 @@ pub async fn get_business_rules(State(s): State<AppState>) -> Result<Json<Value>
             .await?;
     let (minimum, behaviour) = row.unwrap_or((None, None));
     let minimum = minimum.unwrap_or(Decimal::ZERO);
-    let behaviour = behaviour.unwrap_or_else(|| "hold".into());
-
-    let on_breach = match behaviour.as_str() {
-        "allow_and_bill" => format!(
-            "If paying a reward would take the programme below ${minimum}, the reward is paid and the shortfall is billed to the business."
-        ),
-        "suspend" => format!(
-            "If paying a reward would take the programme below ${minimum}, the programme stops paying rewards until the business tops up."
-        ),
-        _ => format!(
-            "If paying a reward would take the programme below ${minimum}, the reward is held and the business is asked to top up before it is paid."
-        ),
-    };
+    let stored = behaviour.unwrap_or_else(|| "hold".into());
+    // The rule the app APPLIES — never a stored setting the enforcement does not perform. This page is
+    // published to businesses, so it describes what the software DOES; a value it cannot perform never
+    // gets a promise here.
+    let applied = effective_rule(&stored);
+    let on_breach = on_breach_sentence(minimum, &stored);
 
     Ok(Json(json!({
         "safety_balance": minimum,
-        "rule_in_force": behaviour,
+        "rule_in_force": applied,
+        // What the row stores. Equals `rule_in_force` unless the column was written outside this API
+        // (which refuses an unimplemented value) — surfaced so a divergence is visible, not silent.
+        "stored_setting": stored,
         "rules": [
             "Businesses fund the rewards their customers earn.",
             format!("The programme keeps a safety balance of ${minimum} so it never runs out of money."),
