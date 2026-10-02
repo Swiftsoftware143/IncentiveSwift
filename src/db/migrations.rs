@@ -9,11 +9,21 @@
 //! `_migrations` regardless. Two silent failure modes followed from that: a semicolon
 //! inside a comment or a string literal truncated the file, and a genuinely failing
 //! statement was swallowed while the file was recorded as applied, so no later deploy
-//! ever retried it. Measured in this app (card t_1c8e06d1): `000001_password_resets.sql`
-//! is recorded as applied while the table does not exist, so
-//! `POST /api/v1/auth/forgot-password` answers HTTP 500 in production (repair card
-//! t_47c00655), and `00001_full_schema.sql`'s `loyalty_checkins_daily_cap` unique index
-//! never ran because its expression is not IMMUTABLE.
+//! ever retried it. Measured in this app (card t_1c8e06d1), the worked example:
+//! `000001_password_resets.sql` sorts before `00001_full_schema.sql`, so the inline
+//! `REFERENCES accounts(id)` it used to carry aborted the whole file on an empty database
+//! (there is no `accounts` yet); the pre-fix runner swallowed that and recorded the
+//! filename anyway, so the table was never created and `POST /api/v1/auth/forgot-password`
+//! answered HTTP 500 (`relation "password_resets" does not exist`) for as long as it was
+//! missing. A recorded filename is never retried, so the repair had to be a NEW file —
+//! `20260921_password_resets_table.sql` (repair card t_47c00655) — which is exactly why a
+//! swallowed error is unrecoverable without a human. Re-measured 2026-10-02 with the
+//! deployed binary (card t_c8304774): the table exists, the route answers 200, the INSERT
+//! writes its row and the reset mail goes out; the same probe against a schema where the
+//! table is absent again answers 500. The 500 was always a SCHEMA state, never an input
+//! shape — an unknown address short-circuits to 200 and a malformed one is a 400 either
+//! way. `00001_full_schema.sql`'s `loyalty_checkins_daily_cap` unique index is the other
+//! swallowed failure: it never ran because its expression is not IMMUTABLE.
 //!
 //! A file that fails is NOT recorded, so the next start retries it, and the failure is
 //! reported at `error!` level. By default the process then exits non-zero, so a schema
