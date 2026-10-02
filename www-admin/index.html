@@ -474,7 +474,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '' });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -483,10 +483,24 @@ const Campaigns = () => {
     st.theme = null;
     st.campaignFormSeeded = false;   // the form draft seeds ON OPEN, never per render
 
-    if (item && item.id) {
-      API.get('/admin/campaigns/' + item.id + '/surface')
-        .then(d => { st.theme = d.theme || THEME_DEFAULTS; renderApp(); })
-        .catch(() => { st.theme = { ...THEME_DEFAULTS }; renderApp(); });
+    st.themeErr = ''; st.themeSaved = '';
+    if (item && item.slug) {
+      // kanban t_f4bd1f6c -- the theme READ used to be GET /api/v1/admin/campaigns/{id}/surface.
+      // That route is operator-only: the fleet's admin_guard (security::auth::admin_guard) checks the
+      // role on EVERY /api/v1/admin/* path and answers 403 {"code":403,"error":"Admin role required"}
+      // for the company_admin this console's own form signs in -- and the .catch() that used to sit
+      // here rendered THEME_DEFAULTS, so the editor showed defaults as if they were the campaign's
+      // theme. The public embed contract (GET /api/v1/embed/campaign/:slug, the route the Embed panel
+      // below already calls) returns the SAME resolve_theme(surface_config) the admin GET returned;
+      // the theme is public data either way (it is inlined into /play/{slug} and the widget CSS).
+      // A read failure is now VISIBLE: st.themeErr is rendered, never a silent fallback.
+      API.get('/embed/campaign/' + item.slug)
+        .then(d => {
+          if (d && d.theme) { st.theme = d.theme; st.themeErr = ''; }
+          else { st.theme = null; st.themeErr = 'the server returned no theme for this campaign'; }
+          renderApp();
+        })
+        .catch(e => { st.theme = null; st.themeErr = e.message; renderApp(); });
     }
     st.showModal = true;
     renderApp();
@@ -685,11 +699,25 @@ const Campaigns = () => {
             return { ...s, questions: cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k] };
           }));
           // Theme editor (surface_config.theme) — edit-only (needs an existing campaign id).
+          // kanban t_f4bd1f6c -- the WRITE used to be PUT /api/v1/admin/campaigns/{id}/surface, which
+          // answered 403 for the company_admin this console serves, so "Save Theme" could never
+          // succeed for a tenant. It now goes through the campaign's own PUT -- the same route the
+          // Delivery panel below writes delivery_config with. The server deep-merges { theme } into
+          // surface_config (campaigns::merge_campaign_theme), so the unrelated surface keys
+          // (tablet / widget / full_page) survive, and the stored theme is read back out of the
+          // tenant-visible route, so the editor can only report what the server really holds.
           const theme = st.theme || { ...THEME_DEFAULTS };
-          const setTheme = (k, v) => { st.theme = { ...(st.theme || THEME_DEFAULTS), [k]: v }; renderApp(); };
+          const setTheme = (k, v) => { st.theme = { ...(st.theme || THEME_DEFAULTS), [k]: v }; st.themeSaved = ''; renderApp(); };
           const saveTheme = async () => {
-            try { await API.put('/admin/campaigns/' + st.editItem.id + '/surface', { surface_config: { theme: st.theme || THEME_DEFAULTS } }); alert('Theme saved'); }
-            catch(e) { alert('Theme save failed: ' + e.message); }
+            st.themeErr = ''; st.themeSaved = '';
+            const slug = st.editItem.slug || st.editItem.id;
+            try {
+              await API.put('/campaigns/' + slug, { theme: st.theme || THEME_DEFAULTS });
+              const d = await API.get('/embed/campaign/' + slug);
+              if (d && d.theme) st.theme = d.theme;
+              st.themeSaved = 'Theme saved';
+            } catch(e) { st.themeErr = 'Theme save failed: ' + e.message; }
+            renderApp();
           };
           const resetTheme = () => { st.theme = { ...THEME_DEFAULTS }; renderApp(); };
           const radiusPx = parseInt(theme.border_radius, 10) || 12;
@@ -729,6 +757,8 @@ const Campaigns = () => {
                   <button class="btn btn-sm btn-blue" onClick=${saveTheme}>Save Theme</button>
                 </div>
               </div>
+              ${st.themeErr && html`<div id="themeNotice" class="text-xs mb-2" style="color:#b91c1c">&#9888; ${st.themeErr}${st.theme ? '' : ' \u2014 the fields below hold DEFAULTS, not the stored theme'}</div>`}
+              ${st.themeSaved && html`<div id="themeSaved" class="text-xs mb-2" style="color:#15803d">&#10003; ${st.themeSaved}</div>`}
               <div class="grid grid-cols-5 gap-2">
                 ${colorField('primary_color', 'Primary')}
                 ${colorField('accent_color', 'Accent')}
