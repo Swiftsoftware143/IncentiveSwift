@@ -941,7 +941,11 @@ mod entry_probe_tests {
     /// `src/` trips gate 5a (hardcoded UUID literal), and these ids must be stable
     /// run to run so the sweep can find what a crashed run left behind.
     fn probe_uuid(tail: u128) -> Uuid {
-        Uuid::from_u128(0x6e53a1af_0000_4000_8000_0000_0000_0000u128 | tail)
+        // Digit grouping only: 0x6e53a1af_0000_... mixes an 8-wide group with 4-wide ones, which clippy
+        // rejects ("digits of hex, binary or octal literal not in groups of equal size"). The VALUE is
+        // unchanged — same 32 hex digits, regrouped — and this warning blocked every deploy of this app
+        // once the deferral card t_563a3f10 expired and enforcement became armed.
+        Uuid::from_u128(0x6e53_a1af_0000_4000_8000_0000_0000_0000u128 | tail)
     }
 
     fn sqlstate(e: &sqlx::Error) -> Option<String> {
