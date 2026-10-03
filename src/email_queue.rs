@@ -178,6 +178,74 @@
 //! change stay terminal, and `failed` is NOT added to the ticker's predicate. The live table holds
 //! 0 such rows (measured 2026-10-02), so nothing is stranded by that choice.
 //!
+//! # THE FLUSH WINDOW (kanban t_a14d2866)
+//!
+//! DECISION: **arm A — the window is allocated to ACCOUNTS, not rows.** [`DUE_WINDOW_SQL`] ranks every
+//! due row inside its own account (`row_number() OVER (PARTITION BY account_id ORDER BY send_at, id)`)
+//! and orders the window by that rank BEFORE `send_at`, so **every due account's OLDEST row takes a
+//! slot ahead of any account's SECOND row**. A sender family whose backlog is deeper than the LIMIT
+//! can no longer own the head of the window and starve the families behind it; a family with nothing
+//! to compete with still receives ranks 1..100, i.e. the whole window — the old behaviour exactly.
+//!
+//! THE DEFECT THIS CLOSES: the window was `ORDER BY send_at ASC LIMIT 100`, and the FAIRNESS rule
+//! above leaves an account's later due rows UNTOUCHED once its first dial fails, so those rows stay
+//! `pending`, stay due, and stay OLDER than everything behind them. A family with more due rows than
+//! the window therefore owned the whole window on every tick, and each tick advanced exactly ONE of
+//! its rows — every other account's mail was not even RETURNED by the query.
+//!
+//! MEASURED (this card's own probe, `/opt/swift/audits/t_a14d2866/probe.py`, run against the deployed
+//! binary on both sides of the change; three throwaway accounts, created and deleted by the script:
+//! D1 = a dead tenant mail server with 110 due rows, D2 = a SECOND dead sender with 1 due row, and C1
+//! = a control row whose template exists nowhere, so it fails BEFORE any transport and its ATTEMPT
+//! time is a pure reading of "was this row returned by the window at all"):
+//!
+//!   BEFORE (06b9c71ce6f344ec): the window returned 100 rows, ALL of account D1 — read straight from
+//!   the DB, C1's and D2's rows are ABSENT from it. The tick line says `due=100 accounts=1` and says
+//!   `accounts=1` for the next 12 ticks while D1 advanced exactly one row per 30 s tick (its attempt
+//!   times, measured: 22.5 / 52.2 / 82.1 / … / 352.3 s after the insert). C1 and D2 were ATTEMPTED
+//!   only 372.5 s after the insert — 6.2 min of delay for mail with nothing wrong with it, and C1's
+//!   cost when it finally ran was a fraction of a second.
+//!
+//!   AFTER (e31ffd98b32e68c6), three runs, identical reading: the first tick's window returns D1, D2
+//!   and C1 (D1 = 98 rows from its ranks, D2 and C1 one slot each — `by_account: a…a=98, …0b=1, …0c=1`)
+//!   and the tick line says `accounts=3`. C1 is attempted ~0.1 s after that tick starts — 5.1 s after
+//!   the insert in one run and 26.0 s in another, the difference being only WHERE on the ticker's 30 s
+//!   grid the insert landed — and D2 ~10 s later, when its own dial bound expires (15.5 s / 35.8 s).
+//!   The absolute figure is therefore the grid phase, not the delay: what moved is that the row is
+//!   attempted in the FIRST tick at all, against 374.0 s (12 ticks) BEFORE. D1's family still advances
+//!   exactly one row per tick, which is the point: the fix is fairness, not a throughput trade.
+//!
+//! WHAT IT COSTS: the window function must read the whole due set to rank it (the `LIMIT` bounds the
+//! ROWS returned, not the scan), so the flush pays one sort of the due set per tick. At this fleet's
+//! depth that is free; on a 100k-row backlog it is a sort per tick. Stated, not hidden.
+//!
+//! SKIPPED ROWS: **nothing is written.** A row the window did not return — another account's rows, or
+//! a family's ranks beyond the slots left — stays `pending` with its `attempts` and `send_at` exactly
+//! as they were; the next tick (30 s) reads the window again. `attempts = 0` and no `last_error` is
+//! the truth: it was not attempted.
+//!
+//! ARMS REJECTED:
+//!   * the HARD one-slot-per-account window (`SELECT DISTINCT ON (account_id) … LIMIT 100`): it caps
+//!     every account at ONE row per tick, so mail that has NOTHING wrong with it — a healthy campaign
+//!     to 100 recipients — goes from one tick to 100 ticks (50 min at the 30 s cadence). That trades
+//!     the starvation for a 100x slowdown of healthy mail. The rank ordering gets the same fairness
+//!     (no account's second row can outrank any account's oldest row) while every due family still
+//!     shares the whole window, so a healthy backlog drains in one tick.
+//!   * the two-query account set (`SELECT account_id … GROUP BY account_id ORDER BY MIN(send_at)
+//!     LIMIT 100`, then all due rows of those accounts): fairness at the account level, but the tick's
+//!     work stops being bounded by the LIMIT — one account's ENTIRE backlog has to be fetched and
+//!     dialled, so a 10k-row account turns a bounded flush into a 10k-row read per tick. The single
+//!     ranked window keeps it at 100 rows.
+//!   * quarantine-by-backoff (order an account's rows last for a backoff, or exclude them): the
+//!     row-level re-arm of t_44a990da ALREADY removes a dialled row from the window for 5 min, so the
+//!     only rows such a rule would demote are rows whose backoff has elapsed — i.e. mail that is due
+//!     for its RETRY, which is not what starves anything. It would buy nothing the rank ordering does
+//!     not, and it would need new state to persist the quarantine.
+//!
+//! `GET /api/v1/admin/email-queue` needs NO change for this arm: it adds no status, no column and no
+//! row — a row the window skipped is plain `pending`, which is the truth, and the tick's own line
+//! (`accounts=`) is what names how many families the window served.
+//!
 //! # An undeliverable recipient (kanban t_f56f4a79)
 //!
 //! A row whose recipient provably cannot receive mail is NOT special-cased in this loop. The
@@ -483,6 +551,26 @@ pub async fn schedule_email(
     Ok(id)
 }
 
+/// THE FLUSH WINDOW (kanban t_a14d2866) — the query the tick reads its due rows with, verbatim, so
+/// the fairness rule it encodes is asserted by a test instead of read by eye.
+///
+/// The window is shared out by ACCOUNT, not by row: `account_rank` is a row's position inside its own
+/// account's due backlog (oldest first) and the window is ordered by that rank BEFORE `send_at`, so
+/// every due account's OLDEST row takes a slot ahead of any account's SECOND row. A sender family
+/// whose backlog is deeper than the LIMIT can no longer own the head of the window and starve the
+/// families behind it, while a family with nothing to compete with still receives ranks 1..100 — the
+/// whole window, exactly as before. See the module's WINDOW block for the measurement and for the
+/// arms that were rejected.
+pub const DUE_WINDOW_SQL: &str = "\
+SELECT id, account_id, to_email, template_type, vars, attempts FROM (\
+SELECT id, account_id, to_email, template_type, vars, attempts, send_at, \
+row_number() OVER (PARTITION BY account_id ORDER BY send_at ASC, id) AS account_rank \
+FROM pending_emails \
+WHERE status = 'pending' AND send_at <= NOW()\
+) fair \
+ORDER BY account_rank ASC, send_at ASC, id ASC \
+LIMIT 100";
+
 /// Flush all due pending emails. Called by the background ticker.
 ///
 /// The predicate reads `status = 'pending'` ONLY, and is UNCHANGED by the retry policy: a row that
@@ -490,18 +578,14 @@ pub async fn schedule_email(
 /// this same query when its backoff elapses. `attempts` rides along so the failure arm can decide
 /// retry-vs-dead-letter without a second read.
 pub async fn process_due_emails(state: &AppState) -> usize {
-    let due: Vec<DueRow> = sqlx::query_as(
-        "SELECT id, account_id, to_email, template_type, vars, attempts FROM pending_emails
-         WHERE status = 'pending' AND send_at <= NOW()
-         ORDER BY send_at ASC
-         LIMIT 100",
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_else(|e| {
-        tracing::error!(error = %e, "pending_emails fetch failed — skipping this run");
-        Default::default()
-    });
+    // WINDOW (kanban t_a14d2866): the window is shared out by ACCOUNT — see DUE_WINDOW_SQL.
+    let due: Vec<DueRow> = sqlx::query_as(DUE_WINDOW_SQL)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pending_emails fetch failed — skipping this run");
+            Default::default()
+        });
 
     let due_count = due.len();
     let started = std::time::Instant::now();
@@ -824,6 +908,56 @@ mod tick_fairness_tests {
                 deferred: 3,
                 stalled: true
             }
+        );
+    }
+
+    /// THE window rule (kanban t_a14d2866): the window is shared out by ACCOUNT, not by row, so a
+    /// sender family whose backlog is deeper than the LIMIT cannot own the head of the window and
+    /// starve every other account's mail — the reading that found this was a control row ATTEMPTED
+    /// 372.5 s after it was queued, while the tick line said `accounts=1` for 12 ticks in a row (see
+    /// the module's WINDOW block). This goes RED the moment the window is ordered by `send_at` alone
+    /// again (the mutation used in the guard-can-fail drill): then one family's later rows outrank
+    /// every other account's first row, which IS the starvation.
+    ///
+    /// This is a SHAPE assertion on the query (the only thing that can be asserted without a live
+    /// Postgres in the gate, which has no DATABASE_URL); the BEHAVIOURAL proof is the live probe in
+    /// `/opt/swift/audits/t_a14d2866/probe.py`, measured in both directions.
+    #[test]
+    fn the_window_is_shared_out_by_account_not_by_row() {
+        assert!(
+            DUE_WINDOW_SQL.contains("row_number() OVER (PARTITION BY account_id"),
+            "the window must rank each row inside its own account: {DUE_WINDOW_SQL}"
+        );
+        assert!(
+            DUE_WINDOW_SQL.contains("ORDER BY account_rank ASC, send_at ASC"),
+            "the window must put every account's OLDEST row ahead of any account's SECOND row, or a \
+             deep backlog owns the head again: {DUE_WINDOW_SQL}"
+        );
+        assert!(
+            !DUE_WINDOW_SQL.to_uppercase().contains("DISTINCT ON")
+                && !DUE_WINDOW_SQL.contains("account_rank <= 1")
+                && !DUE_WINDOW_SQL.contains("account_rank = 1"),
+            "a one-row-per-account window was REJECTED (it divides a healthy family's throughput by \
+             the LIMIT — see the module's WINDOW block); the rank ordering is the fix: {DUE_WINDOW_SQL}"
+        );
+    }
+
+    /// The other half of the same decision: fairness must NOT be bought with throughput. The window
+    /// keeps its LIMIT ceiling and hands a family with nothing to compete with its ranks 1..100 — the
+    /// whole window, which is the behaviour every existing caller already depends on.
+    #[test]
+    fn the_window_still_hands_a_lone_family_the_whole_window() {
+        assert!(
+            DUE_WINDOW_SQL.contains("LIMIT 100"),
+            "the window's ceiling is part of the fairness rule — it must stay: {DUE_WINDOW_SQL}"
+        );
+        assert!(
+            DUE_WINDOW_SQL
+                .to_uppercase()
+                .contains("WHERE STATUS = 'PENDING'")
+                && DUE_WINDOW_SQL.contains("send_at <= NOW()"),
+            "the window reads only due `pending` rows (the retry policy is what re-arms them): \
+             {DUE_WINDOW_SQL}"
         );
     }
 }
