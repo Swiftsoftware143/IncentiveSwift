@@ -264,7 +264,11 @@ pub const TENANT_SMTP_DEADLINE: Duration = Duration::from_secs(10);
 /// Hand the message to lettre under `deadline`, so a server that never answers cannot park the
 /// caller. `label` is `host:port`, named in the refusal so an operator — and the ticker's
 /// `last_error`, and the console's "Not sent. …" line — reads WHICH server was abandoned.
-async fn send_with_deadline(
+///
+/// Shared by BOTH mail arms — the tenant's own server ([`deliver_via`]) and the PLATFORM
+/// `provider = smtp` arm ([`crate::smtp::send_via_smtp`], kanban t_578a587b) — so the two arms
+/// cannot drift in wording or in behaviour: one helper, one refusal shape.
+pub(crate) async fn send_with_deadline(
     mailer: AsyncSmtpTransport<Tokio1Executor>,
     email: Message,
     label: &str,
