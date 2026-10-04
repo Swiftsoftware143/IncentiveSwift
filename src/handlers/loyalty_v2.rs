@@ -287,8 +287,19 @@ pub async fn issue_voucher(
 /// GET /api/v1/loyalty/my-vouchers — list active vouchers for a contact
 pub async fn list_my_vouchers(
     State(s): State<AppState>,
+    auth: AuthenticatedUser,
     Path(contact_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
+    // SECURITY (kanban t_f08d32e7): this arm took no `AuthenticatedUser`, so any caller who named
+    // a contact id got that contact's vouchers - redemption codes included. The caller must now be
+    // linked to the contact through the `contact_tenants` boundary (kanban t_369cb159); anything
+    // else answers the same 404 an absent contact does.
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    if !crate::db::contacts::contact_visible_to(&s.db, &contact_id, &account_id).await? {
+        return Err(AppError::NotFound("Contact not found".into()));
+    }
+
     let vouchers = sqlx::query_as::<
         _,
         (
@@ -920,8 +931,20 @@ pub async fn redeem_reward(
 /// GET /api/v1/loyalty/rewards-earned/:contact_id — list rewards earned by a contact
 pub async fn list_rewards_earned(
     State(s): State<AppState>,
+    auth: AuthenticatedUser,
     Path(contact_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    // SECURITY (kanban t_f08d32e7): this arm took no `AuthenticatedUser` at all, so any anonymous
+    // caller who named a contact id got that contact's reward history. It is now scoped to the
+    // caller: the caller is linked to the contact through the `contact_tenants` boundary
+    // (kanban t_369cb159), or owns the loyalty programme the rewards were earned in
+    // (`loyalty_programs -> campaigns.account_id`). No role bypass is invented.
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    if !caller_may_read_contact_rewards(&s.db, &contact_id, &account_id).await? {
+        return Err(AppError::NotFound("Contact not found".into()));
+    }
+
     let rewards = sqlx::query_as::<
         _,
         (
@@ -956,6 +979,32 @@ pub async fn list_rewards_earned(
         .collect();
 
     Ok(Json(json!({"rewards": result})))
+}
+
+/// May `account_id` read `contact_id`'s reward history? True when the account is linked to the
+/// contact (the `contact_tenants` visibility boundary, kanban t_369cb159) or owns a loyalty
+/// programme the contact is a member of (programme -> campaign -> account). The second arm keeps
+/// the programme owner's own console working even when a member was enrolled by a path that did
+/// not write a link row.
+async fn caller_may_read_contact_rewards(
+    pool: &sqlx::PgPool,
+    contact_id: &Uuid,
+    account_id: &Uuid,
+) -> Result<bool, AppError> {
+    if crate::db::contacts::contact_visible_to(pool, contact_id, account_id).await? {
+        return Ok(true);
+    }
+    let owns: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM loyalty_members lm \
+           JOIN loyalty_programs lp ON lp.id = lm.program_id \
+           JOIN campaigns c ON c.id = lp.campaign_id \
+          WHERE lm.contact_id = $1 AND c.account_id = $2)",
+    )
+    .bind(contact_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(owns)
 }
 
 // ── Purchase Verify (business-scanner auto-credit) ────────────────────────

@@ -14,7 +14,33 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
+
+/// The caller's account owns the loyalty programme this member belongs to
+/// (`loyalty_members -> loyalty_programs -> campaigns.account_id`)? A caller who does not own it
+/// gets the same 404 an absent member gets - the refusal invents no role bypass (kanban
+/// t_f08d32e7: this file's member QR / scan / dashboard arms took no `AuthenticatedUser` at all).
+async fn ensure_member_in_caller_programme(
+    pool: &sqlx::PgPool,
+    member_id: &Uuid,
+    account_id: &Uuid,
+) -> Result<(), AppError> {
+    let owns: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM loyalty_members lm \
+           JOIN loyalty_programs lp ON lp.id = lm.program_id \
+           JOIN campaigns c ON c.id = lp.campaign_id \
+          WHERE lm.id = $1 AND c.account_id = $2)",
+    )
+    .bind(member_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    if !owns {
+        return Err(AppError::NotFound("Loyalty member not found".into()));
+    }
+    Ok(())
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 1: Badge Endpoints
@@ -404,9 +430,13 @@ pub async fn unenroll_entity(
 /// The embedding app renders this as the scannable loyalty card.
 pub async fn get_member_qr(
     State(state): State<AppState>,
+    auth: AuthenticatedUser,
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
-    // Fetch member with program info
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    // Fetch member with program info - scoped to the caller's own programme, so a member that
+    // belongs to another account is indistinguishable from an absent one (404).
     let member = sqlx::query_as::<
         _,
         (
@@ -420,9 +450,11 @@ pub async fn get_member_qr(
         r#"SELECT lm.id, lm.program_id, lm.qr_code, lp.name, lm.qr_code_generated_at
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           WHERE lm.id = $1"#,
+           JOIN campaigns c ON c.id = lp.campaign_id
+           WHERE lm.id = $1 AND c.account_id = $2"#,
     )
     .bind(member_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty member not found".into()))?;
@@ -479,8 +511,15 @@ pub async fn get_member_qr(
 /// Force-regenerate a member's QR code (e.g. if compromised).
 pub async fn regenerate_member_qr(
     State(state): State<AppState>,
+    auth: AuthenticatedUser,
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    // Ownership FIRST: the clear below is destructive and must never run for a member the caller
+    // does not own (kanban t_f08d32e7).
+    ensure_member_in_caller_programme(&state.db, &member_id, &account_id).await?;
+
     // Clear existing QR first
     sqlx::query(
         "UPDATE loyalty_members SET qr_code = NULL, qr_code_generated_at = NULL WHERE id = $1",
@@ -490,7 +529,7 @@ pub async fn regenerate_member_qr(
     .await?;
 
     // Reuse the generation logic
-    get_member_qr(State(state), Path(member_id)).await
+    get_member_qr(State(state), auth, Path(member_id)).await
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -846,8 +885,13 @@ pub async fn scan_member(
 /// GET /api/v1/loyalty/scans/member/:member_id
 pub async fn get_member_scans(
     State(state): State<AppState>,
+    auth: AuthenticatedUser,
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    ensure_member_in_caller_programme(&state.db, &member_id, &account_id).await?;
+
     #[derive(sqlx::FromRow)]
     #[allow(dead_code)]
     struct ScanRow {
@@ -950,8 +994,12 @@ pub async fn get_business_scans(
 /// Full member dashboard — points, recent activity, enrolled programs, QR status.
 pub async fn member_dashboard(
     State(state): State<AppState>,
+    auth: AuthenticatedUser,
     Path(member_id): Path<Uuid>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
     #[derive(sqlx::FromRow)]
     struct MemberInfo {
         id: Uuid,
@@ -981,9 +1029,11 @@ pub async fn member_dashboard(
                   lp.slug AS program_slug, lp.currency_name, lp.currency_icon
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           WHERE lm.id = $1"#,
+           JOIN campaigns c ON c.id = lp.campaign_id
+           WHERE lm.id = $1 AND c.account_id = $2"#,
     )
     .bind(member_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Member not found".into()))?;
@@ -1031,12 +1081,21 @@ pub async fn member_dashboard(
 /// Admin dashboard — all members, total points, business participation, scans.
 pub async fn admin_dashboard(
     State(state): State<AppState>,
+    auth: AuthenticatedUser,
     Path(program_slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    // SECURITY (kanban t_f08d32e7): this arm took no `AuthenticatedUser`, so any caller who named
+    // a programme slug got its members, points and scans. Scoped to the programme's own account
+    // (`loyalty_programs.campaign_id -> campaigns.account_id`) - no role bypass.
     let program = sqlx::query_as::<_, (Uuid, String, bool)>(
-        "SELECT id, name, is_active FROM loyalty_programs WHERE slug = $1 LIMIT 1",
+        "SELECT lp.id, lp.name, lp.is_active FROM loyalty_programs lp \
+           JOIN campaigns c ON c.id = lp.campaign_id \
+          WHERE lp.slug = $1 AND c.account_id = $2 LIMIT 1",
     )
     .bind(&program_slug)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Program not found".into()))?;
