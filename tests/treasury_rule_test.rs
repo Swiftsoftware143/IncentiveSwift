@@ -12,6 +12,7 @@
 //! truth every surface reads, so a future edit cannot reintroduce a published promise the enforcement
 //! does not keep.
 
+use incentiveswift_api::handlers::float_rule::{rule_from_settings, FloatRule};
 use incentiveswift_api::handlers::treasury_engine_handler::{
     effective_rule, on_breach_applied_note, on_breach_is_implemented, on_breach_sentence,
     on_breach_vocabulary, IMPLEMENTED_ON_FLOAT_BREACH, UNIMPLEMENTED_ON_FLOAT_BREACH,
@@ -25,6 +26,12 @@ const DB_CHECK_VOCABULARY: [&str; 3] = ["hold", "allow_and_bill", "suspend"];
 
 fn hundred() -> Decimal {
     Decimal::new(10000, 2)
+}
+
+/// The rule in force for these tests: 100% cover, 1 month of burn, $100 floor — the best-practice
+/// defaults, so the sentence assertions read the same figures the shipped configuration produces.
+fn rule() -> FloatRule {
+    rule_from_settings(Some("100"), Some("1"), hundred())
 }
 
 #[test]
@@ -62,7 +69,7 @@ fn an_unimplemented_setting_is_never_reported_as_the_rule_in_force() {
 #[test]
 fn the_published_sentence_never_promises_billing_or_suspension() {
     for v in UNIMPLEMENTED_ON_FLOAT_BREACH {
-        let s = on_breach_sentence(hundred(), v);
+        let s = on_breach_sentence(&rule(), v);
         assert!(!s.contains("billed"), "{v} must not promise billing: {s}");
         assert!(!s.contains("paid and"), "{v} must not promise payment: {s}");
         assert!(!s.contains("stops"), "{v} must not promise suspension: {s}");
@@ -79,15 +86,18 @@ fn the_published_sentence_never_promises_billing_or_suspension() {
 
 #[test]
 fn the_hold_sentence_is_the_one_promise_and_names_the_balance() {
-    let s = on_breach_sentence(hundred(), "hold");
+    let s = on_breach_sentence(&rule(), "hold");
     assert!(s.contains("$100.00"), "{s}");
     assert!(s.contains("held") && s.contains("top up"), "{s}");
     assert!(!s.contains("billed") && !s.contains("not applied"), "{s}");
     // The console and the businesses' rules page read the SAME function, so the live (hold) case is one
     // sentence, not two that can drift.
     assert!(s.starts_with(
-        "If paying a reward would take the programme below $100.00, the reward is held"
+        "If paying a reward would leave the programme short on any of its three float conditions"
     ));
+    // The three conditions are named in the published sentence, so a business is told what the float
+    // has to hold — not only that a hold happened.
+    assert!(s.contains("100%") && s.contains("1 month(s)"), "{s}");
 }
 
 #[test]

@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::handlers::float_rule;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 
@@ -77,9 +78,12 @@ pub fn effective_rule(stored: &str) -> &str {
 /// stored value as not applied alongside the hold that really happens. Callers publish
 /// `effective_rule(stored)` as the rule IN FORCE, so a stored value the app cannot perform is never
 /// presented as an outcome (kanban t_d5754642).
-pub fn on_breach_sentence(minimum: Decimal, stored: &str) -> String {
+pub fn on_breach_sentence(rule: &float_rule::FloatRule, stored: &str) -> String {
     let base = format!(
-        "If paying a reward would take the programme below ${minimum}, the reward is held and the business is asked to top up before it is paid."
+        "If paying a reward would leave the programme short on any of its three float conditions — cover {}% of the value of the points members are holding, hold {} month(s) of recent redemptions, or stay at or above the {} safety balance — the payment to the business for that reward is held and the business is asked to top up before it is paid out. The customer has already been given their reward at the counter; nothing is taken back.",
+        float_rule::plain_number(rule.coverage_pct),
+        float_rule::plain_number(rule.burn_months),
+        float_rule::money(rule.floor)
     );
     if on_breach_is_implemented(stored) {
         base
@@ -120,6 +124,8 @@ pub struct TreasuryState {
     pub total_reimbursements_paid: Option<Decimal>,
     pub outstanding_liability: Option<Decimal>,
     pub minimum_float: Option<Decimal>,
+    pub float_coverage_pct: Option<Decimal>,
+    pub float_burn_months: Option<Decimal>,
     pub on_float_breach: Option<String>,
     pub float_breaches: Option<i32>,
 }
@@ -159,12 +165,62 @@ async fn ledger(
     Ok(())
 }
 
+/// The rule in force + the position it judges. Read in ONE place so the console, the business rules
+/// page and the enforcement can never judge different numbers.
+pub(crate) struct FloatPosition {
+    pub available: Decimal,
+    pub outstanding_liability: Decimal,
+    pub monthly_burn: Decimal,
+    pub rule: float_rule::FloatRule,
+    pub stored_behaviour: String,
+}
+
+/// The trailing-30-day redemption volume, in money — what "one month" means to the burn condition.
+/// `point_redemption_log` is written by the redemption path (`loyalty_badges.rs`), so this is measured
+/// from the same rows the programme actually paid, never assumed.
+pub(crate) async fn monthly_burn(s: &AppState) -> Result<Decimal, AppError> {
+    let burn: Decimal = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(total_reimbursement),0) FROM point_redemption_log
+          WHERE created_at >= now() - interval '30 days'",
+    )
+    .fetch_one(&s.db)
+    .await?;
+    Ok(burn.max(Decimal::ZERO))
+}
+
+/// Load the position and the rule together (one query for the row, one for the burn).
+pub(crate) async fn load_position(s: &AppState) -> Result<Option<FloatPosition>, AppError> {
+    let row: Option<TreasuryState> = sqlx::query_as::<_, TreasuryState>(
+        r#"SELECT total_points_issued, total_points_redeemed, total_revenue_collected,
+                  total_reimbursements_paid, outstanding_liability, minimum_float,
+                  float_coverage_pct, float_burn_months, on_float_breach, float_breaches
+             FROM point_treasury LIMIT 1"#,
+    )
+    .fetch_optional(&s.db)
+    .await?;
+    let Some(t) = row else { return Ok(None) };
+    let available = t.total_revenue_collected.unwrap_or(Decimal::ZERO)
+        - t.total_reimbursements_paid.unwrap_or(Decimal::ZERO);
+    let rule = float_rule::rule_from_columns(
+        t.float_coverage_pct,
+        t.float_burn_months,
+        t.minimum_float.unwrap_or(Decimal::ZERO),
+    );
+    Ok(Some(FloatPosition {
+        available,
+        outstanding_liability: t.outstanding_liability.unwrap_or(Decimal::ZERO),
+        monthly_burn: monthly_burn(s).await?,
+        rule,
+        stored_behaviour: t.on_float_breach.clone().unwrap_or_else(|| "hold".into()),
+    }))
+}
+
 /// GET /api/v1/admin/treasury/state — the float, whether it is safe, and the rule in force.
 pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppError> {
     let row: Option<TreasuryState> = sqlx::query_as::<_, TreasuryState>(
         r#"SELECT total_points_issued, total_points_redeemed, total_revenue_collected,
                   total_reimbursements_paid, outstanding_liability, minimum_float,
-                  on_float_breach, float_breaches
+                  float_coverage_pct, float_burn_months, on_float_breach, float_breaches
              FROM point_treasury LIMIT 1"#,
     )
     .fetch_optional(&s.db)
@@ -182,6 +238,22 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
     let reimbursed = t.total_reimbursements_paid.unwrap_or(Decimal::ZERO);
     let minimum = t.minimum_float.unwrap_or(Decimal::ZERO);
     let available = collected - reimbursed;
+
+    // The three-condition rule in force, judged against the LIVE position by the SAME function the
+    // enforcement calls (`float_rule::evaluate`), so the console can never show a verdict the guard
+    // does not act on.
+    let rule = float_rule::rule_from_columns(t.float_coverage_pct, t.float_burn_months, minimum);
+    let burn = monthly_burn(&s).await?;
+    let verdict = float_rule::evaluate(available, t.outstanding_liability, Some(burn), &rule);
+    let failed_rules = verdict.failed_keys();
+    let verdict_sentence = verdict.sentence();
+    let shortfall = verdict.shortfall();
+    let binding_required = verdict
+        .outcomes
+        .iter()
+        .map(|o| o.required)
+        .max()
+        .unwrap_or(Decimal::ZERO);
 
     // The pending holds are part of the position: they are money the platform has been asked for but has
     // not paid, and hiding them would make the float look healthier than it is.
@@ -203,8 +275,19 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
         "reimbursed": reimbursed,
         "available": available,
         "minimum_float": minimum,
-        "headroom": available - minimum,
-        "is_safe": available >= minimum,
+        "float_coverage_pct": rule.coverage_pct,
+        "float_burn_months": rule.burn_months,
+        "monthly_burn": burn,
+        // The three independent conditions, each carrying the numbers that decided it. `is_safe` is
+        // true only when ALL THREE pass; `failed_rules` names the short ones and
+        // `float_rule_plain_english` says which and by how much.
+        "rules": verdict.outcomes,
+        "failed_rules": failed_rules,
+        "float_rule_plain_english": verdict_sentence,
+        "shortfall": shortfall,
+        // Headroom against the BINDING condition (the largest requirement), not just the floor.
+        "headroom": available - binding_required,
+        "is_safe": verdict.safe,
         "on_float_breach": behaviour,
         // What the row stores. Equals `on_float_breach` unless the column was written outside this API
         // (which refuses an unimplemented value) — kept so a divergence is visible, not silent.
@@ -220,7 +303,7 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
         "pending_hold_amount": pending_amount,
         // The plain-English sentence — the SAME function the businesses' rules page reads, spoken about
         // the STORED value so an unimplemented one is named as not applied rather than silently dropped.
-        "rule_plain_english": on_breach_sentence(minimum, &stored_behaviour),
+        "rule_plain_english": on_breach_sentence(&rule, &stored_behaviour),
     })))
 }
 
@@ -350,6 +433,10 @@ pub async fn list_funding(State(s): State<AppState>) -> Result<Json<Value>, AppE
 pub struct RuleBody {
     pub on_float_breach: Option<String>,
     pub minimum_float: Option<Decimal>,
+    /// Coverage condition: the float must cover this percentage of the points members hold.
+    pub float_coverage_pct: Option<Decimal>,
+    /// Burn condition: the float must hold this many months of recent redemptions.
+    pub float_burn_months: Option<Decimal>,
 }
 
 /// PUT /api/v1/admin/treasury/rule — set the rule. Constrained in the DB too, so an unknown behaviour
@@ -395,6 +482,26 @@ pub async fn set_rule(
         }
         sqlx::query("UPDATE point_treasury SET minimum_float = $1, updated_at = now()")
             .bind(minimum)
+            .execute(&s.db)
+            .await?;
+    }
+    // The two adaptive conditions. Zero would mean "protect nothing", so it is refused the same way an
+    // unimplemented breach behaviour is: nothing is saved and the caller is told why.
+    if let Some(coverage) = body.float_coverage_pct {
+        if let Some(why) = float_rule::setting_refusal("float_coverage_pct", coverage) {
+            return Err(AppError::BadRequest(why));
+        }
+        sqlx::query("UPDATE point_treasury SET float_coverage_pct = $1, updated_at = now()")
+            .bind(coverage)
+            .execute(&s.db)
+            .await?;
+    }
+    if let Some(burn) = body.float_burn_months {
+        if let Some(why) = float_rule::setting_refusal("float_burn_months", burn) {
+            return Err(AppError::BadRequest(why));
+        }
+        sqlx::query("UPDATE point_treasury SET float_burn_months = $1, updated_at = now()")
+            .bind(burn)
             .execute(&s.db)
             .await?;
     }
@@ -527,30 +634,52 @@ pub async fn resolve_hold(
 /// David: *"those rules need to be added into it so the businesses understand"*. Generated from the rule
 /// actually in force, so the published rules and the enforcement cannot drift apart.
 pub async fn get_business_rules(State(s): State<AppState>) -> Result<Json<Value>, AppError> {
-    let row: Option<(Option<Decimal>, Option<String>)> =
-        sqlx::query_as("SELECT minimum_float, on_float_breach FROM point_treasury LIMIT 1")
-            .fetch_optional(&s.db)
-            .await?;
-    let (minimum, behaviour) = row.unwrap_or((None, None));
+    let row: Option<(
+        Option<Decimal>,
+        Option<String>,
+        Option<Decimal>,
+        Option<Decimal>,
+    )> = sqlx::query_as(
+        "SELECT minimum_float, on_float_breach, float_coverage_pct, float_burn_months
+           FROM point_treasury LIMIT 1",
+    )
+    .fetch_optional(&s.db)
+    .await?;
+    let (minimum, behaviour, coverage_col, burn_col) = row.unwrap_or((None, None, None, None));
     let minimum = minimum.unwrap_or(Decimal::ZERO);
     let stored = behaviour.unwrap_or_else(|| "hold".into());
-    // The rule the app APPLIES — never a stored setting the enforcement does not perform. This page is
-    // published to businesses, so it describes what the software DOES; a value it cannot perform never
-    // gets a promise here.
+    let rule = float_rule::rule_from_columns(coverage_col, burn_col, minimum);
+    // The conditions are stated as TEXT (thresholds), never as the live position: this page is public,
+    // and publishing the programme's real balance would hand every reader the treasury. The rule the app
+    // APPLIES is published — never a stored setting the enforcement does not perform — so this page
+    // describes what the software DOES and a value it cannot perform never gets a promise here.
     let applied = effective_rule(&stored);
-    let on_breach = on_breach_sentence(minimum, &stored);
+    let on_breach = on_breach_sentence(&rule, &stored);
 
+    let conditions = float_rule::rule_conditions_plain_english(&rule);
     Ok(Json(json!({
         "safety_balance": minimum,
+        "float_coverage_pct": rule.coverage_pct,
+        "float_burn_months": rule.burn_months,
+        "conditions": conditions,
         "rule_in_force": applied,
         // What the row stores. Equals `rule_in_force` unless the column was written outside this API
         // (which refuses an unimplemented value) — surfaced so a divergence is visible, not silent.
         "stored_setting": stored,
         "rules": [
-            "Businesses fund the rewards their customers earn.",
-            format!("The programme keeps a safety balance of ${minimum} so it never runs out of money."),
+            "Businesses fund the rewards their customers earn before they are earned.",
+            conditions[0].clone(),
+            conditions[1].clone(),
+            conditions[2].clone(),
             on_breach,
             "Every payment in and every reward paid out is recorded, and businesses can see both.",
+        ],
+        // WHAT IS EXPECTED OF THE BUSINESS — the same three conditions, said as a duty.
+        "what_is_expected_of_you": [
+            "Fund your programme before you launch it: rewards are paid out of money you have put in.",
+            "Top up BEFORE you grow. A promotion raises redemptions immediately, so the float has to be ahead of it.",
+            "If any condition is short, the payment to you for each new redemption is held — it does not vanish. You are reimbursed once the float is back above all three conditions; the customer has already been given their reward.",
+            "You are always told which condition is short and by how much, in plain numbers.",
         ],
     })))
 }
@@ -562,48 +691,67 @@ pub async fn get_business_rules(State(s): State<AppState>) -> Result<Json<Value>
 /// treasury row (issued=110, redeemed=200, collected=1.10, reimbursed=1.60, min_float=100.00) is what
 /// that looks like after the fact.
 ///
+/// The guard applies the SAME three-condition rule the console shows (`float_rule::evaluate`) — coverage
+/// against the outstanding liability, burn against trailing-30-day redemptions, and the floor — to the
+/// position the payout would LEAVE BEHIND. That is the same "after this payment" test the single floor
+/// rule always used, extended to all three: a verdict the display would call unsafe can never be paid
+/// here, and the reason names WHICH condition is short.
+///
 /// Returns whether `amount` may leave the treasury right now. It never silently refuses and never
 /// silently pays: the caller gets a verdict, and a breach is counted.
 pub enum FloatCheck {
-    /// There is room above the safety balance. Pay it.
+    /// Every condition still holds after the payment. Pay it.
     Allowed { available: Decimal },
-    /// The payment would breach the safety balance. The caller records a hold.
+    /// The payment would leave a condition short. The caller records a hold.
     Breached {
         available: Decimal,
+        /// How much more the float needs to pass EVERY condition (0 when only one is short and it is
+        /// the binding one).
         shortfall: Decimal,
+        /// Machine keys of the short conditions, e.g. `["coverage"]`.
+        failed_rules: Vec<&'static str>,
+        /// The short condition's human label, for the hold record.
+        failed_label: String,
+        /// One plain sentence naming the condition and the numbers.
+        reason: String,
         behaviour: String,
     },
 }
 
 pub async fn check_float(s: &AppState, amount: Decimal) -> Result<FloatCheck, AppError> {
-    let row: Option<(
-        Option<Decimal>,
-        Option<Decimal>,
-        Option<Decimal>,
-        Option<String>,
-    )> = sqlx::query_as(
-        "SELECT total_revenue_collected, total_reimbursements_paid, minimum_float, on_float_breach
-           FROM point_treasury LIMIT 1",
-    )
-    .fetch_optional(&s.db)
-    .await?;
-
     // No treasury row = nothing is funding redemptions. Treat it as breached rather than as "no limit",
     // because the safe default is to stop paying out of a pot that does not exist.
-    let Some((collected, reimbursed, minimum, behaviour)) = row else {
+    let Some(p) = load_position(s).await? else {
         return Ok(FloatCheck::Breached {
             available: Decimal::ZERO,
-            shortfall: amount,
+            shortfall: amount.max(Decimal::ZERO),
+            failed_rules: vec!["floor"],
+            failed_label: "Floor".into(),
+            reason: "There is no treasury row, so nothing is funding redemptions.".into(),
             behaviour: "hold".into(),
         });
     };
 
-    let available = collected.unwrap_or(Decimal::ZERO) - reimbursed.unwrap_or(Decimal::ZERO);
-    let minimum = minimum.unwrap_or(Decimal::ZERO);
-    let behaviour = behaviour.unwrap_or_else(|| "hold".into());
+    let behaviour = effective_rule(&p.stored_behaviour).to_string();
 
-    if amount <= Decimal::ZERO || available - amount >= minimum {
-        return Ok(FloatCheck::Allowed { available });
+    if amount <= Decimal::ZERO {
+        return Ok(FloatCheck::Allowed {
+            available: p.available,
+        });
+    }
+
+    let available_after = p.available - amount;
+    let verdict = float_rule::evaluate(
+        available_after,
+        Some(p.outstanding_liability),
+        Some(p.monthly_burn),
+        &p.rule,
+    );
+
+    if verdict.safe {
+        return Ok(FloatCheck::Allowed {
+            available: p.available,
+        });
     }
 
     // A breach is a fact worth counting even when the configured behaviour is to pay anyway.
@@ -615,8 +763,15 @@ pub async fn check_float(s: &AppState, amount: Decimal) -> Result<FloatCheck, Ap
     .await?;
 
     Ok(FloatCheck::Breached {
-        available,
-        shortfall: minimum - (available - amount),
+        available: p.available,
+        shortfall: verdict.shortfall(),
+        failed_rules: verdict.failed_keys(),
+        failed_label: verdict
+            .failures()
+            .first()
+            .map(|o| o.label.to_string())
+            .unwrap_or_else(|| "Float".into()),
+        reason: verdict.sentence(),
         behaviour,
     })
 }

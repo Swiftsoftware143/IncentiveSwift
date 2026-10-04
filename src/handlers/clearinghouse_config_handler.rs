@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::error::AppError;
+use crate::handlers::float_rule;
 use crate::state::AppState;
 
 // ── Treasury Config ──
@@ -22,23 +23,40 @@ pub struct TreasuryConfig {
     pub default_monthly_expiry_months: i32,
 }
 
+/// The three float-rule thresholds, so the Settings screen can render them beside the safety balance.
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct FloatRuleConfig {
+    pub float_coverage_pct: Decimal,
+    pub float_burn_months: Decimal,
+}
+
 /// GET /api/v1/admin/clearinghouse/config
 pub async fn get_treasury_config(State(s): State<AppState>) -> Result<Json<Value>, AppError> {
-    let row = sqlx::query_as::<_, (Decimal, Decimal, Decimal)>(
-        "SELECT COALESCE(total_revenue_collected / NULLIF(total_points_issued,0) * 100, 1.00) as rate,
-                COALESCE(total_reimbursements_paid / NULLIF(total_points_redeemed,0) * 100, 0.80) as redeem_rate,
-                COALESCE(minimum_float, 100.00) as min_float
-         FROM point_treasury LIMIT 1"
+    let row = sqlx::query_as::<_, FloatRuleConfig>(
+        "SELECT COALESCE(float_coverage_pct, 100.00) as float_coverage_pct,
+                COALESCE(float_burn_months, 1.00) as float_burn_months
+         FROM point_treasury LIMIT 1",
     )
     .fetch_optional(&s.db)
     .await?
-    .unwrap_or((Decimal::new(100, 2), Decimal::new(80, 2), Decimal::new(10000, 2)));
+    .unwrap_or(FloatRuleConfig {
+        float_coverage_pct: Decimal::new(10000, 2),
+        float_burn_months: Decimal::new(100, 2),
+    });
+
+    let min_float: Decimal =
+        sqlx::query_scalar("SELECT COALESCE(minimum_float, 100.00) FROM point_treasury LIMIT 1")
+            .fetch_optional(&s.db)
+            .await?
+            .unwrap_or(Decimal::new(10000, 2));
 
     Ok(Json(json!({
         "issuance_rate": 0.01,
         "redemption_rate": 0.008,
         "platform_spread_percent": 20.0,
-        "minimum_float": row.2,
+        "minimum_float": min_float,
+        "float_coverage_pct": row.float_coverage_pct,
+        "float_burn_months": row.float_burn_months,
         "default_monthly_expiry_months": 12
     })))
 }
@@ -47,6 +65,10 @@ pub async fn get_treasury_config(State(s): State<AppState>) -> Result<Json<Value
 #[derive(Debug, Deserialize)]
 pub struct UpdateTreasuryConfig {
     pub minimum_float: Option<Decimal>,
+    /// Coverage condition (percentage of the outstanding liability the float must cover).
+    pub float_coverage_pct: Option<Decimal>,
+    /// Burn condition (months of recent redemptions the float must hold).
+    pub float_burn_months: Option<Decimal>,
 }
 
 pub async fn update_treasury_config(
@@ -54,8 +76,33 @@ pub async fn update_treasury_config(
     Json(req): Json<UpdateTreasuryConfig>,
 ) -> Result<Json<Value>, AppError> {
     if let Some(min_float) = req.minimum_float {
+        if min_float < Decimal::ZERO {
+            return Err(AppError::BadRequest(
+                "minimum_float cannot be negative".into(),
+            ));
+        }
         sqlx::query("UPDATE point_treasury SET minimum_float = $1, updated_at = NOW()")
             .bind(min_float)
+            .execute(&s.db)
+            .await?;
+    }
+    // Zero would mean "protect nothing", and a value past the column's range would 500, so both are
+    // refused rather than saved and ignored — the SAME rule `PUT /admin/treasury/rule` applies.
+    if let Some(coverage) = req.float_coverage_pct {
+        if let Some(why) = float_rule::setting_refusal("float_coverage_pct", coverage) {
+            return Err(AppError::BadRequest(why));
+        }
+        sqlx::query("UPDATE point_treasury SET float_coverage_pct = $1, updated_at = NOW()")
+            .bind(coverage)
+            .execute(&s.db)
+            .await?;
+    }
+    if let Some(burn) = req.float_burn_months {
+        if let Some(why) = float_rule::setting_refusal("float_burn_months", burn) {
+            return Err(AppError::BadRequest(why));
+        }
+        sqlx::query("UPDATE point_treasury SET float_burn_months = $1, updated_at = NOW()")
+            .bind(burn)
             .execute(&s.db)
             .await?;
     }

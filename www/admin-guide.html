@@ -78,6 +78,7 @@
     <a href="#security">Webhook Security</a>
     <a href="#credits">Credits</a>
     <a href="#loyalty">Loyalty</a>
+    <a href="#loyalty-float-rule">Float Rule</a>
     <a href="#points-expiry">Points Expiry</a>
     <a href="#form-sections">Form Sections</a>
   </div>
@@ -350,6 +351,32 @@ GET  /api/v1/admin/credits    — View all tenant credits (admin)</pre>
     <p>If a voucher has expired before the customer could use it, an admin can <strong>re-issue</strong> it with a new expiration date. This requires admin approval and is logged in the audit trail. Re-issued vouchers get a new voucher ID linked to the original in the audit record.</p>
     <div class="callout tip"><strong>Best practice:</strong> Set voucher expiration to a reasonable window (30–90 days) to encourage timely redemption while giving customers adequate time to use their rewards.</div>
   </div>
+  <div class="card">
+    <h3 id="loyalty-float-rule">The float rule &mdash; the three conditions the guard enforces</h3>
+    <p>IncentiveSwift&rsquo;s loyalty programme has its <strong>own float</strong>: the businesses fund the rewards their members earn, and the platform holds a redemption that would leave the float short. The rule is <strong>three independent conditions</strong>, and a redemption is held if <em>any</em> of them fails. The console shows all three with the numbers that decided each one, and the hold record names the condition that was short.</p>
+    <ul>
+      <li><strong>Coverage</strong> &mdash; the float covers at least <code>float_coverage_pct</code>% of the value of the points members are holding. Default <strong>100</strong>. Accounting view: never redeem points nobody funded.</li>
+      <li><strong>Burn</strong> &mdash; the float holds at least <code>float_burn_months</code> months of trailing-30-day redemptions (measured from <code>point_redemption_log</code>, the same rows the programme actually paid). Default <strong>1</strong>. Operational view: a fully covered programme can still run dry when several members redeem at once.</li>
+      <li><strong>Floor</strong> &mdash; the float never falls below <code>minimum_float</code>, the safety balance. A new programme has near-zero liability <em>and</em> near-zero burn, so the floor is what stops an empty programme paying out.</li>
+    </ul>
+    <p>On breach the programme <strong>holds the payment to the business</strong> for that redemption: the customer has already been given their reward at the counter, nothing is confiscated, and the held payment waits in the Ledger tab until the float is back above all three conditions. The hold record names the condition that was short.</p>
+
+    <h3>Where the knobs live</h3>
+    <p>Admin console &rarr; <strong>Ledger</strong> tab &rarr; <strong>Change the rule</strong>. It prompts for the breach behaviour, the floor (safety balance), the <strong>coverage %</strong> and the <strong>burn months</strong>. The same three thresholds are readable on <strong>Settings</strong> (Min Treasury Float / Float Coverage / Float Burn) and through <code>GET /api/v1/admin/treasury/state</code>, <code>GET /api/v1/admin/clearinghouse/config</code> and <code>PUT /api/v1/admin/treasury/rule</code> (fields <code>minimum_float</code>, <code>float_coverage_pct</code>, <code>float_burn_months</code>). A zero or negative coverage/burn is refused with 400 rather than saved and ignored &mdash; a programme protecting 0% is not protected at all, and a malformed stored value falls back to the safe default (100% / 1 month).</p>
+
+    <h3>Best-practice values</h3>
+    <ul>
+      <li><strong>Coverage 100%.</strong> Lower it only when deliberately extending credit to a business, and record the decision.</li>
+      <li><strong>Burn 1 month</strong>, raised toward <strong>2&ndash;3</strong> for seasonal programmes (holiday/event-driven redemption).</li>
+      <li><strong>Floor:</strong> a real number for the smallest business onboarded.</li>
+      <li>Review after every large campaign &mdash; coverage self-corrects as points are redeemed; burn does not, because a campaign raises redemptions immediately.</li>
+    </ul>
+
+    <h3>What to tell a business</h3>
+    <p>They fund before launch and top up before growing; a held payment is not a loss (the customer keeps their reward; the business is reimbursed after topping up); and they will always be told which condition is short and by how much. The businesses&rsquo; own guide (User Guide &rarr; Loyalty Program &rarr; &ldquo;How the programme stays funded&rdquo;) and the generated rules page (<code>GET /api/v1/treasury/rules</code>) carry the same conditions, written from the settings actually in force.</p>
+    <div class="callout tip"><strong>Tip:</strong> The published rules are GENERATED from the rule in force, so a business can never read a rule the software is not applying &mdash; change a knob and the sentence they read changes with it.</div>
+  </div>
+
 </section>
 
 <section id="points-expiry">

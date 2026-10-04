@@ -92,6 +92,35 @@ Account-level credits, earned and adjusted by the API; nothing deducts them toda
 
 Credits are tracked at the account level with `credits_balance` and `credits_lifetime_used` columns. Plan tiers carry `credits_monthly` and `credits_overdraft` as `tier_features` rows on the account's own tier (no limit assigned = 0 = none included). There is **no credit top-up / purchase flow**: credits are not sold, and the live payments path is the loyalty plan subscription (`POST /api/v1/loyalty/plans/subscribe` + `POST /api/v1/loyalty/webhook/stripe`).
 
+### The float rule — the three conditions the guard enforces (2026-10-04, kanban t_69e6598e)
+
+The loyalty programme has its **own float**: businesses fund the rewards their members earn, and the
+platform HOLDS the payment to the business for a redemption that would leave the float short (the
+customer has already been given their reward; nothing is confiscated and the business is reimbursed once
+the float is back above every condition). The rule is three independent conditions, and a redemption is held if
+**any** fails:
+
+| condition | test | default | why |
+|---|---|---|---|
+| coverage | `available >= float_coverage_pct% x outstanding_liability` | 100 | accounting — never redeem points nobody funded |
+| burn | `available >= float_burn_months x trailing-30-day redemptions` | 1 | operational — several members can redeem at once |
+| floor | `available >= minimum_float` | 100.00 | risk — a new programme has ~zero liability AND ~zero burn |
+
+- The guard applies the SAME rule the console shows (`handlers/float_rule.rs::evaluate`) to the position a
+  payout would LEAVE BEHIND, and the hold record names WHICH condition was short (machine keys
+  `coverage` / `burn` / `floor` in `get_state.failed_rules`).
+- Burn is measured from `point_redemption_log.total_reimbursement` over the last 30 days — the same rows
+  the programme actually paid. No redemption history means the burn condition cannot fail.
+- A malformed / absent / zero setting falls back to the conservative default (100% / 1 month) and a
+  zero-or-negative coverage/burn is refused 400 by both writers (`PUT /api/v1/admin/treasury/rule` and
+  `PUT /api/v1/admin/clearinghouse/config`) — a bad value fails safe, never open.
+- Knobs live in the console: Ledger tab → "Change the rule" (behaviour, floor, coverage %, burn months);
+  Settings shows Min Treasury Float / Float Coverage / Float Burn. Read them at
+  `GET /api/v1/admin/treasury/state` and `GET /api/v1/admin/clearinghouse/config`.
+- The businesses' published rules (`GET /api/v1/treasury/rules`, `www-app/rules.html`) are GENERATED from
+  the rule in force, so copy and enforcement cannot drift. Both guides carry the same conditions and say
+  what is expected of a business: fund before launch, top up before growing, a pause is not a loss.
+
 ### CORS Configuration
 IncentiveSwift uses predicate-based CORS — allowed origins are loaded at startup from the `ALLOWED_ORIGINS` environment variable (comma-separated list). Requests from non-matching origins are rejected. Default allowed origins include:
 - `funnelswift.net`, `www.funnelswift.net`

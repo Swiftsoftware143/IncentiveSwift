@@ -150,6 +150,7 @@
       <div class="section-title">Campaigns</div>
       <a href="#campaign-types" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎮</span> Campaign Types</a>
       <a href="#loyalty-overview" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🏪</span> Loyalty Program</a>
+      <a href="#loyalty-float" class="nav-item" onclick="closeMobile()"><span class="nav-icon">💵</span> Float rule</a>
       <a href="#creating-campaigns" class="nav-item" onclick="closeMobile()"><span class="nav-icon">➕</span> Creating Campaigns</a>
       <a href="#prize-delivery" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🎁</span> Prize Delivery</a>
       <a href="#embedding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🔌</span> Embedding Campaigns</a>
@@ -385,6 +386,39 @@
       <div class="alert alert-info">
         <strong>API authentication:</strong> All loyalty API endpoints require a valid tenant API key passed in the <code>Authorization</code> header. See the API documentation for full request/response schemas.
       </div>
+
+            <h3 id="loyalty-float">&#128181; How the programme stays funded &mdash; the float rule</h3>
+            <p>The loyalty programme pays real money out of a <strong>float</strong> that the businesses fund. Three independent conditions protect that float, and if <em>any</em> one of them is short the programme <strong>holds the payment to you (the business) for that redemption</strong>. The customer still gets their reward at the counter; you are reimbursed as soon as the float is back above all three conditions. Nothing is confiscated and no reward is taken back.</p>
+
+            <div class="feature-grid">
+              <div class="feature-card">
+                <div class="fc-icon">&#129518;</div>
+                <h4>1. Coverage</h4>
+                <p>The float must always cover at least the value of the points your members are holding (100% by default). This is the accounting view: points nobody funded are never redeemable.</p>
+              </div>
+              <div class="feature-card">
+                <div class="fc-icon">&#128293;</div>
+                <h4>2. Burn</h4>
+                <p>The float must always hold at least one month of recent redemptions. This is the operational view: a fully covered programme can still run dry when several customers redeem at once.</p>
+              </div>
+              <div class="feature-card">
+                <div class="fc-icon">&#128674;</div>
+                <h4>3. Floor</h4>
+                <p>The float must never fall below the safety balance configured for the programme. A brand-new programme has almost no points outstanding and almost no redemptions yet, so this is what stops an empty programme paying out.</p>
+              </div>
+            </div>
+
+            <h4>What is expected of you (the business)</h4>
+            <ul>
+              <li><strong>Fund before you launch.</strong> Rewards are paid out of money you have put in &mdash; by default the programme does not extend credit.</li>
+              <li><strong>Top up before you grow.</strong> A promotion raises redemptions immediately, so the float has to be ahead of the campaign, not behind it.</li>
+              <li><strong>A pause is not a loss.</strong> When a condition is short, the payment to you for each new redemption is held until you top up. The customer still gets their reward; you are reimbursed once the float is back above all three conditions. Nothing is taken away.</li>
+              <li><strong>You will always be told why.</strong> The console names the exact condition that is short and the amount needed to clear it &mdash; never just &ldquo;breach&rdquo;.</li>
+            </ul>
+
+            <div class="callout tip" style="background:rgba(34,197,94,0.08);border-color:var(--success);padding:1rem 1.25rem;border-radius:10px;margin:1rem 0;border-left:4px solid;"><strong>Tip:</strong> Review the float after every large campaign. Coverage corrects itself as points are redeemed; burn does not, because a campaign raises redemptions straight away. Programmes that run seasonal promotions usually raise the burn setting to 2&ndash;3 months.</div>
+
+            <p>Your programme&rsquo;s live rules are generated from the settings the platform is actually enforcing, so the rules you read can never describe a rule the system is not applying. The three thresholds (coverage %, burn months, safety balance) are set per programme in the admin console.</p>
 
       <h2 id="creating-campaigns">➕ Creating Campaigns</h2>
 

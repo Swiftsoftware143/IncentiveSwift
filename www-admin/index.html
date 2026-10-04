@@ -1150,10 +1150,18 @@ const LoyaltyPrograms = () => {
       alert(behaviour + ' is not implemented yet, so the programme does not act on it. Nothing was saved — the rule is still: ' + current + '.');
       return;
     }
-    const minimum = prompt('Safety balance the programme must never go below (e.g. 100)', String(st.tFloat?.minimum_float ?? 100));
+    // ALL THREE float conditions are the operator's to set — the same three the guard enforces and the
+    // businesses' rules page publishes. Cancelling any prompt leaves that condition unchanged.
+    const minimum = prompt('Floor condition — the safety balance the programme must never go below (e.g. 100)', String(st.tFloat?.minimum_float ?? 100));
+    const coverage = prompt('Coverage condition — the float must cover at least this % of the value of the points members are holding. Best practice: 100 (fully covered).', String(st.tFloat?.float_coverage_pct ?? 100));
+    const burn = prompt('Burn condition — how many months of recent redemptions the float must hold. Best practice: 1; raise to 2-3 for seasonal programmes.', String(st.tFloat?.float_burn_months ?? 1));
+    const payload = { on_float_breach: behaviour };
+    if (minimum !== null) payload.minimum_float = minimum;
+    if (coverage !== null) payload.float_coverage_pct = coverage;
+    if (burn !== null) payload.float_burn_months = burn;
     try {
-      await API.put('/admin/treasury/rule', { on_float_breach: behaviour, minimum_float: minimum });
-      alert('Saved. The rules your businesses read change with it.');
+      await API.put('/admin/treasury/rule', payload);
+      alert('Saved. The guard and the rules your businesses read now apply all three conditions.');
       await loadLedger();
     } catch (e) { alert('Could not save the rule: ' + (e.message || e)); }
   }
@@ -1497,7 +1505,9 @@ const settingsTab = html`<div>
       <div class="stat-card"><div class="stat-value">$${(st.chConfig?.issuance_rate||0.01).toFixed(3)}</div><div class="stat-label">Issue Rate / Point</div></div>
       <div class="stat-card"><div class="stat-value">$${(st.chConfig?.redemption_rate||0.008).toFixed(3)}</div><div class="stat-label">Redeem Rate / Point</div></div>
       <div class="stat-card"><div class="stat-value">${(st.chConfig?.platform_spread_percent||20).toFixed(1)}%</div><div class="stat-label">Platform Spread</div></div>
-      <div class="stat-card"><div class="stat-value">$${(st.chConfig?.minimum_float||100).toFixed(2)}</div><div class="stat-label">Min Treasury Float</div></div>
+      <div class="stat-card"><div class="stat-value">$${(st.chConfig?.minimum_float||100).toFixed(2)}</div><div class="stat-label">Min Treasury Float (floor)</div></div>
+      <div class="stat-card"><div class="stat-value">${Number(st.chConfig?.float_coverage_pct ?? 100)}%</div><div class="stat-label">Float Coverage</div></div>
+      <div class="stat-card"><div class="stat-value">${Number(st.chConfig?.float_burn_months ?? 1)} mo</div><div class="stat-label">Float Burn</div></div>
     </div>
 
     <h3 class="text-lg font-bold mb-3">Category Redemption Caps</h3>
@@ -1544,6 +1554,13 @@ const ledgerTab = html`<div>
             headroom $${Number(st.tFloat.headroom||0).toFixed(2)}
           </div>
           <div class="text-xs text-gray-500 mt-1">Rule in force: <strong>${st.tFloat.on_float_breach||'hold'}</strong> · breaches counted: ${st.tFloat.float_breaches||0}</div>
+          <!-- THE THREE CONDITIONS, each with the numbers that decided it. One flat comparison cannot
+               adapt; the guard holds a redemption when ANY of these three fails. -->
+          ${(Array.isArray(st.tFloat.rules) && st.tFloat.rules.length) ? html`
+            <div class="mt-2 text-xs">
+              ${st.tFloat.rules.map(r => html`<div style="color:${r.passed ? '#067647' : '#b42318'}">${r.passed ? '✓' : '✕'} ${r.sentence}</div>`)}
+              <div class="text-gray-500 mt-1">${st.tFloat.float_rule_plain_english || ''}</div>
+            </div>` : ''}
         </div>
         <div class="flex gap-2">
           <button class="btn btn-primary" onClick=${() => submitTreasuryFunding()}>Record a payment in</button>

@@ -658,6 +658,9 @@ pub async fn scan_member(
                     crate::handlers::treasury_engine_handler::FloatCheck::Breached {
                         available,
                         shortfall,
+                        failed_rules,
+                        failed_label,
+                        reason,
                         behaviour,
                     } => {
                         // The hold is recorded under EVERY behaviour, not only 'hold': the money still has
@@ -678,7 +681,10 @@ pub async fn scan_member(
                         .bind(reimbursement)
                         .bind(shortfall)
                         .bind(format!(
-                            "Float would fall below the safety balance: available {} vs required {}. {}. The redemption is parked, nothing is paid, and the business is asked to top up.",
+                            "{} Failing condition(s): {} ({}). Available {}; short by {}. {}. The redemption is parked, nothing is paid, and the business is asked to top up until every condition passes.",
+                            reason,
+                            failed_label,
+                            failed_rules.join(", "),
                             available,
                             shortfall,
                             crate::handlers::treasury_engine_handler::on_breach_applied_note(&behaviour)
