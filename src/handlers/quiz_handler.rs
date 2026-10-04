@@ -263,6 +263,8 @@ pub async fn submit_quiz(
             business_name: input.contact.company.clone(),
             website: None,
         },
+        Some(campaign.account_id),
+        "quiz",
     )
     .await
     .map_err(|e| AppError::Database(format!("Contact upsert failed: {}", e)))?;

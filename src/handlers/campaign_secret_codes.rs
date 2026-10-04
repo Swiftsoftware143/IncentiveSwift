@@ -332,9 +332,21 @@ pub async fn redeem_secret_code(
     // loyalty sibling (secret_codes_handler::verify_secret_code). Resolved only AFTER the code
     // matched, so a wrong code never writes a contacts row (measured: the contacts count does not
     // move on a guess).
+    //
+    // The campaign's OWNER is whose contact this is (contact_tenants, kanban t_369cb159): the id
+    // handed over must already be visible to them, and a contact created from email/phone is linked
+    // to them so the lead shows up on their Contacts screen.
+    let campaign_account: Option<Uuid> =
+        sqlx::query_scalar("SELECT account_id FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(&app.db)
+            .await?;
+    let campaign_account = campaign_account
+        .ok_or_else(|| crate::error::AppError::NotFound("Campaign not found".into()))?;
     let contact_id = if let Some(cid) = body.contact_id {
-        // Verify the id exists, exactly as spin_handler::resolve_contact does.
-        crate::db::contacts::get_contact(&app.db, &cid).await?;
+        // Verify the campaign owner may already see this contact, exactly as
+        // spin_handler::resolve_contact does.
+        crate::db::contacts::get_contact(&app.db, &campaign_account, &cid).await?;
         cid
     } else if body.email.is_some() || body.phone.is_some() {
         let input = crate::db::contacts::ContactInput {
@@ -345,7 +357,8 @@ pub async fn redeem_secret_code(
             website: None,
             business_name: None,
         };
-        crate::db::contacts::upsert_contact(&app.db, &input).await?
+        crate::db::contacts::upsert_contact(&app.db, &input, Some(campaign_account), "secret_code")
+            .await?
     } else {
         return Err(crate::error::AppError::BadRequest(
             "Either contact_id, or email/phone to identify the customer, is required".into(),

@@ -69,7 +69,7 @@ pub async fn poll_vote(
         }
     }
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
 
     // Unique-voter dedup.
     let existing: Option<uuid::Uuid> = sqlx::query_scalar(

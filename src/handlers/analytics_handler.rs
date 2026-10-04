@@ -905,7 +905,7 @@ pub async fn import_csv(
     Json(body): Json<ImportBody>,
 ) -> Result<Json<Value>, AppError> {
     // Same account guard as `export_csv`: an unusable account id is a 400, not a silent no-op.
-    let _account_id = Uuid::parse_str(&user.account_id)
+    let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
     let kind = body.r#type.as_deref().unwrap_or("contacts");
@@ -983,7 +983,10 @@ pub async fn import_csv(
                 .await?
                 .is_some()
         };
-        match contacts::create_contact(&state.db, &input).await {
+        // Every row the import writes is LINKED to the importer's account (contact_tenants,
+        // kanban t_369cb159) — that is what makes an imported contact appear on their Contacts
+        // screen, and what the sibling Export button's file has to agree with.
+        match contacts::create_contact(&state.db, &account_id, &input, "import").await {
             Ok(_) => {
                 if existed {
                     updated += 1;

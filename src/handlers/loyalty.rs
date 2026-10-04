@@ -29,7 +29,13 @@ pub async fn checkin(
     State(state): State<AppState>,
     Json(body): Json<CheckinBody>,
 ) -> Result<Json<Value>, AppError> {
-    // 1. Upsert contact
+    // 1. Resolve the campaign FIRST — the contact captured at check-in belongs to the campaign's
+    //    owner, and the `contact_tenants` link the upsert writes below is what makes them visible
+    //    to that owner (kanban t_369cb159).
+    let campaign =
+        crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
+
+    // 2. Upsert contact (shared identity row) and link it to the campaign's account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),
         last_name: body.contact.last_name.clone(),
@@ -38,16 +44,20 @@ pub async fn checkin(
         website: body.contact.website.clone(),
         business_name: body.contact.business_name.clone(),
     };
-    let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
+    let contact_id = contacts::upsert_contact(
+        &state.db,
+        &contact_input,
+        Some(campaign.account_id),
+        "checkin",
+    )
+    .await?;
 
-    // 2. Resolve the loyalty program wired to this campaign. `program_slug` is
+    // 3. Resolve the loyalty program wired to this campaign. `program_slug` is
     //    a *campaign* slug: the campaigns row carries the canonical forward
     //    link (loyalty_program_id), and loyalty_programs.campaign_id is the
     //    reverse pointer, which create_program can also set. Accept either —
     //    passing the campaign id straight to get_program() (which looks up by
     //    program id) could never resolve.
-    let campaign =
-        crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
     let program = match campaign.loyalty_program_id {
         Some(program_id) => loyalty::get_program(&state.db, &program_id).await?,
         None => loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,

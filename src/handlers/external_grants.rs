@@ -321,6 +321,16 @@ pub async fn register_member(
         }
     };
 
+    // Whose contact is this? The programme's campaign owner (contact_tenants, kanban t_369cb159):
+    // the lead is linked to that account so it shows up on their Contacts screen.
+    let program_account: Option<Uuid> = sqlx::query_scalar(
+        "SELECT c.account_id FROM loyalty_programs p JOIN campaigns c ON c.id = p.campaign_id \
+         WHERE p.id = $1",
+    )
+    .bind(program_id)
+    .fetch_optional(&state.db)
+    .await?;
+
     // 5. Upsert contact (dedup by email)
     let contact_id = crate::db::contacts::upsert_contact(
         &state.db,
@@ -332,6 +342,8 @@ pub async fn register_member(
             business_name: None,
             website: None,
         },
+        program_account,
+        "external_enroll",
     )
     .await?;
 

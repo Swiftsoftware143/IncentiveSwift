@@ -82,7 +82,7 @@ pub async fn long_form_qualifier(
 
     gate_mechanic(&state, &campaign.account_id, "long_form_qualifier").await?;
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
 
     let rules = campaign
         .config

@@ -194,7 +194,7 @@ pub async fn chat(
 
     gate_mechanic(&state, &campaign.account_id, "chat").await?;
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
     let flow = chat_flow(&campaign.config);
 
     let step = body.step.unwrap_or(0);

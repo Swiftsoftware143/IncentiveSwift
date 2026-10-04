@@ -111,7 +111,7 @@ pub async fn countdown_post(
     let mut contact_id: Option<uuid::Uuid> = None;
     if let Some(contact) = body.contact.as_ref() {
         if contact.contact_id.is_some() || contact.email.is_some() || contact.phone.is_some() {
-            let cid = resolve_contact(&state, contact).await?;
+            let cid = resolve_contact(&state, contact, &campaign.account_id).await?;
             let (user_agent, ip_address) = extract_source(&headers);
             let eid = entries::create_entry(
                 &state.db,

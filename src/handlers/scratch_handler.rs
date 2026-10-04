@@ -62,7 +62,7 @@ pub async fn scratch(
 
     gate_mechanic(&state, &campaign.account_id, "scratch_card").await?;
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
 
     // Deterministic RNG seeded by (contact, campaign).
     let mut rng = StdRng::seed_from_u64(seeded_key(&contact_id, &campaign.id));

@@ -86,6 +86,22 @@ pub async fn handle_tag_provision(
         .trim()
         .to_string();
 
+    // Whose lead is this? The campaign named in the tag (contact_tenants, kanban t_369cb159).
+    // FunnelSwift carries the campaign id; without it there is no derivable owner and the contact
+    // stays invisible until a tenant imports or captures them (the migration's deliberate
+    // direction) — a silent guess at an owner would be the leak this card removes.
+    let campaign_account: Option<Uuid> = match req.tag.campaign_id.as_deref() {
+        Some(cid) => match Uuid::parse_str(cid) {
+            Ok(id) => sqlx::query_scalar("SELECT account_id FROM campaigns WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| AppError::Database(e.to_string()))?,
+            Err(_) => None,
+        },
+        None => None,
+    };
+
     if !email.is_empty() {
         let existing: Option<(Uuid,)> =
             sqlx::query_as(r#"SELECT id FROM contacts WHERE email = $1 LIMIT 1"#)
@@ -95,6 +111,18 @@ pub async fn handle_tag_provision(
                 .map_err(|e| AppError::Database(e.to_string()))?;
 
         if let Some((contact_id,)) = existing {
+            // An already-known contact becomes visible to the campaign's owner too — the same
+            // shared identity, now linked (two businesses may share one person by design).
+            if let Some(account) = campaign_account {
+                crate::db::contacts::link_contact(
+                    &state.db,
+                    &contact_id,
+                    &account,
+                    "funnelswift_tag",
+                )
+                .await
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            }
             return Ok((
                 axum::http::StatusCode::OK,
                 Json(json!({
@@ -122,6 +150,12 @@ pub async fn handle_tag_provision(
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
+
+    if let Some(account) = campaign_account {
+        crate::db::contacts::link_contact(&state.db, &contact_id, &account, "funnelswift_tag")
+            .await
+            .map_err(|e| AppError::Database(e.to_string()))?;
+    }
 
     tracing::info!(
         "tag_provision: created contact {} ({})",

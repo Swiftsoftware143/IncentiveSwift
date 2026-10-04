@@ -109,10 +109,17 @@ pub struct RedeemBody {
 // Helper: resolve contact by id, email, or phone
 // ---------------------------------------------------------------------------
 
-async fn resolve_contact(state: &AppState, body: &SpinRequestBody) -> Result<Uuid, AppError> {
+/// Resolve (or create) the spinner's contact and link it to the campaign's account
+/// (`contact_tenants`, kanban t_369cb159): a caller-supplied `contact_id` is only accepted when the
+/// campaign owner may ALREADY see it, so a stranger's id cannot be adopted by naming it.
+async fn resolve_contact(
+    state: &AppState,
+    body: &SpinRequestBody,
+    account_id: &Uuid,
+) -> Result<Uuid, AppError> {
     if let Some(cid) = body.contact_id {
-        // Verify contact exists
-        contacts::get_contact(&state.db, &cid).await?;
+        // Verify the campaign owner may already see this contact
+        contacts::get_contact(&state.db, account_id, &cid).await?;
         return Ok(cid);
     }
 
@@ -135,7 +142,7 @@ async fn resolve_contact(state: &AppState, body: &SpinRequestBody) -> Result<Uui
         business_name: None,
     };
 
-    let contact_id = contacts::upsert_contact(&state.db, &input).await?;
+    let contact_id = contacts::upsert_contact(&state.db, &input, Some(*account_id), "spin").await?;
     Ok(contact_id)
 }
 
@@ -204,7 +211,7 @@ pub async fn spin(
     )
     .await?;
 
-    let contact_id = resolve_contact(&state, &body).await?;
+    let contact_id = resolve_contact(&state, &body, &campaign.account_id).await?;
 
     // Campaign referral loop (kanban t_6723eb30) — placed right after the contact is
     // resolved/created, before the win arm's `tokio::spawn(async move ...)` takes `state` and part
@@ -280,7 +287,7 @@ pub async fn spin(
     let page_url = body.page_url.clone();
 
     // Get contact info for delivery
-    let contact = contacts::get_contact(&state.db, &contact_id).await?;
+    let contact = contacts::get_contact(&state.db, &campaign.account_id, &contact_id).await?;
 
     // Build contact JSON for entry webhook (used after prize draw)
     let contact_val = json!({
@@ -640,7 +647,7 @@ pub async fn spin_status(
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
 
     let contact_id = if let Some(cid) = query.contact_id {
-        contacts::get_contact(&state.db, &cid).await?;
+        contacts::get_contact(&state.db, &campaign.account_id, &cid).await?;
         cid
     } else if let Some(ref email) = query.email {
         let input = contacts::ContactInput {
@@ -651,7 +658,8 @@ pub async fn spin_status(
             website: None,
             business_name: None,
         };
-        contacts::upsert_contact(&state.db, &input).await?
+        contacts::upsert_contact(&state.db, &input, Some(campaign.account_id), "spin_status")
+            .await?
     } else if let Some(ref phone) = query.phone {
         let input = contacts::ContactInput {
             first_name: None,
@@ -661,7 +669,8 @@ pub async fn spin_status(
             website: None,
             business_name: None,
         };
-        contacts::upsert_contact(&state.db, &input).await?
+        contacts::upsert_contact(&state.db, &input, Some(campaign.account_id), "spin_status")
+            .await?
     } else {
         return Err(AppError::BadRequest(
             "Either contact_id, email, or phone query parameter is required".to_string(),

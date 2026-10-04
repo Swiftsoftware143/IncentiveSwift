@@ -83,7 +83,7 @@ pub async fn score_reveal(
 
     gate_mechanic(&state, &campaign.account_id, "score_reveal").await?;
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
 
     // Derive score: explicit override, else compute from answers.
     let answers = body.answers.clone().unwrap_or_else(|| json!({}));

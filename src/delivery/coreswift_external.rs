@@ -246,9 +246,15 @@ async fn do_push(
             Option<String>,
         ),
     >(
-        "SELECT first_name, last_name, email, phone, business_name FROM contacts WHERE id = $1",
+        // Only push a contact this account actually owns (contact_tenants, kanban t_369cb159):
+        // the push leaves the building to a third party, so a foreign row must not ride along.
+        "SELECT first_name, last_name, email, phone, business_name FROM contacts \
+         WHERE id = $1 \
+           AND EXISTS (SELECT 1 FROM contact_tenants ct \
+                       WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
     )
     .bind(contact_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| {

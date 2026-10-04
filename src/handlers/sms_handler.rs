@@ -588,6 +588,16 @@ async fn complete_chat_funnel(
 ) {
     let pool = &state.db;
 
+    // Whose lead is this? The campaign the inbound SMS belongs to (contact_tenants, kanban
+    // t_369cb159). The contact is linked to that account below so its owner sees the lead.
+    let campaign_account: Option<Uuid> =
+        sqlx::query_scalar("SELECT account_id FROM campaigns WHERE id = $1")
+            .bind(campaign_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
     let name = collected_data
         .get("name")
         .and_then(|v| v.as_str())
@@ -652,6 +662,21 @@ async fn complete_chat_funnel(
         .await;
         new_id
     };
+
+    // Link the lead to the campaign's account, so the owner's Contacts screen shows it. Best
+    // effort: the inbound SMS has already been answered, and a link failure must not turn a
+    // captured lead into an error — but it is logged, never silent.
+    if let Some(account) = campaign_account {
+        if let Err(e) =
+            crate::db::contacts::link_contact(pool, &contact_id, &account, "sms_chat").await
+        {
+            tracing::warn!(
+                contact_id = %contact_id,
+                campaign_id = %campaign_id,
+                "chat funnel lead could not be linked to the campaign account: {e}"
+            );
+        }
+    }
 
     // Create entry
     // Lead allowance: the campaign owner has to be under its plan's cap (kanban t_8dfcd0a2). This

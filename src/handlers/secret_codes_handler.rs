@@ -279,7 +279,15 @@ pub async fn verify_secret_code(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
     };
-    let contact_id = crate::db::contacts::upsert_contact(&state.db, &contact_input).await?;
+    // The contact is linked to the loyalty programme's campaign owner (contact_tenants, kanban
+    // t_369cb159): the code was redeemed against THIS campaign, so its owner owns the lead.
+    let contact_id = crate::db::contacts::upsert_contact(
+        &state.db,
+        &contact_input,
+        Some(campaign.account_id),
+        "secret_code",
+    )
+    .await?;
 
     // Find or create loyalty member
     let member_id =

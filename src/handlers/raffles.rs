@@ -40,7 +40,12 @@ pub async fn enter_raffle(
         ));
     }
 
-    // 1. Upsert contact
+    // 1. Find the campaign FIRST — the entrant's contact belongs to the campaign's owner, and the
+    //    `contact_tenants` link the upsert writes below is what makes the lead visible to that
+    //    owner (kanban t_369cb159).
+    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+
+    // 2. Upsert contact (shared identity row) and link it to the campaign's account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),
         last_name: body.contact.last_name.clone(),
@@ -49,10 +54,13 @@ pub async fn enter_raffle(
         website: body.contact.website.clone(),
         business_name: body.contact.business_name.clone(),
     };
-    let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
-
-    // 2. Find campaign by slug
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
+    let contact_id = contacts::upsert_contact(
+        &state.db,
+        &contact_input,
+        Some(campaign.account_id),
+        "raffle",
+    )
+    .await?;
 
     // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
     // (402 before any entry is created for free/subtracted tiers).

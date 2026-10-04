@@ -25,12 +25,18 @@ pub struct MechanicContact {
 
 /// Resolve (or create) a contact from the request body.
 /// Prefers an explicit `contact_id`, then upserts by email, then phone.
+///
+/// `account_id` is the campaign owner's account (contact_tenants, kanban t_369cb159): a
+/// caller-supplied `contact_id` is only accepted when that account may ALREADY see it — a stranger's
+/// id must not be adoptable by naming it — and any contact created here is linked to the account so
+/// the owner sees the lead.
 pub async fn resolve_contact(
     state: &AppState,
     contact: &MechanicContact,
+    account_id: &Uuid,
 ) -> Result<Uuid, AppError> {
     if let Some(cid) = contact.contact_id {
-        contacts::get_contact(&state.db, &cid).await?;
+        contacts::get_contact(&state.db, account_id, &cid).await?;
         return Ok(cid);
     }
 
@@ -48,7 +54,7 @@ pub async fn resolve_contact(
         website: contact.website.clone(),
         business_name: contact.business_name.clone(),
     };
-    contacts::upsert_contact(&state.db, &input).await
+    contacts::upsert_contact(&state.db, &input, Some(*account_id), "mechanic").await
 }
 
 /// Extract (user_agent, ip_address) from request headers for source tracking.

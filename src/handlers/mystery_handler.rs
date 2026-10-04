@@ -50,7 +50,7 @@ pub async fn mystery(
 
     gate_mechanic(&state, &campaign.account_id, "mystery").await?;
 
-    let contact_id = resolve_contact(&state, &body.contact).await?;
+    let contact_id = resolve_contact(&state, &body.contact, &campaign.account_id).await?;
 
     // One-time reveal: reject if this contact already redeemed.
     let already: Option<Uuid> = sqlx::query_scalar(

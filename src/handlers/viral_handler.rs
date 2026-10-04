@@ -101,12 +101,15 @@ fn extract_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {
 }
 
 /// Resolve or create a contact from earn query params.
+/// `account_id` is the campaign owner's account; the contact is linked to it (contact_tenants,
+/// kanban t_369cb159) and a caller-supplied `contact_id` must already be visible to it.
 async fn resolve_earn_contact(
     state: &AppState,
     query: &EarnQuery,
+    account_id: &Uuid,
 ) -> Result<Option<Uuid>, AppError> {
     if let Some(cid) = query.contact_id {
-        contacts::get_contact(&state.db, &cid).await?;
+        contacts::get_contact(&state.db, account_id, &cid).await?;
         return Ok(Some(cid));
     }
     if let Some(ref email) = query.email {
@@ -118,7 +121,7 @@ async fn resolve_earn_contact(
             website: None,
             business_name: None,
         };
-        let id = contacts::upsert_contact(&state.db, &input).await?;
+        let id = contacts::upsert_contact(&state.db, &input, Some(*account_id), "earn").await?;
         return Ok(Some(id));
     }
     if let Some(ref phone) = query.phone {
@@ -130,7 +133,7 @@ async fn resolve_earn_contact(
             website: None,
             business_name: None,
         };
-        let id = contacts::upsert_contact(&state.db, &input).await?;
+        let id = contacts::upsert_contact(&state.db, &input, Some(*account_id), "earn").await?;
         return Ok(Some(id));
     }
     Ok(None)
@@ -239,7 +242,7 @@ pub async fn earn_click_through(
     let (ip, ua) = extract_headers(&headers);
 
     // Try to resolve contact
-    let contact_id = resolve_earn_contact(&state, &query).await?;
+    let contact_id = resolve_earn_contact(&state, &query, &campaign.account_id).await?;
 
     match contact_id {
         None => {
@@ -769,7 +772,9 @@ pub async fn campaign_leaderboard(
 
     let mut entries = Vec::new();
     for (contact_id, campaign_id, lifetime_points, balance) in &leaderboard {
-        let contact = contacts::get_contact(&state.db, contact_id).await.ok();
+        let contact = contacts::get_contact(&state.db, &campaign.account_id, contact_id)
+            .await
+            .ok();
         let name = contact
             .as_ref()
             .map(|c| {

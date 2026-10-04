@@ -1,4 +1,7 @@
 //! Contacts handlers — list and get contacts.
+//!
+//! Every arm here passes the caller's `account_id` down to `db::contacts`, which is the one place
+//! that decides visibility (a `contact_tenants` link row). kanban t_369cb159.
 
 use crate::db::{contacts, entries, questions_answers};
 use crate::error::AppError;
@@ -20,17 +23,26 @@ pub struct ListContactsQuery {
     pub search: Option<String>,
 }
 
+/// Parse the authenticated account id once, per arm.
+fn caller_account(user: &AuthenticatedUser) -> Result<Uuid, AppError> {
+    Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))
+}
+
 /// GET /api/v1/contacts — authenticated, paginated with search.
+/// Only contacts linked to the calling account are returned.
 pub async fn list_contacts(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Query(query): Query<ListContactsQuery>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = caller_account(&user)?;
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
     let search = query.search.as_deref();
 
-    let contact_list = contacts::list_contacts(&state.db, limit, offset, search).await?;
+    let contact_list =
+        contacts::list_contacts(&state.db, &account_id, limit, offset, search).await?;
 
     Ok(Json(json!({
         "contacts": contact_list,
@@ -41,16 +53,18 @@ pub async fn list_contacts(
 }
 
 /// GET /api/v1/contacts/:id — authenticated, returns full contact with entry history + Q&A.
+/// A contact the caller cannot see answers 404, the same as one that does not exist.
 pub async fn get_contact(
     State(state): State<AppState>,
     Path(id): Path<String>,
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = caller_account(&user)?;
     let contact_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
-    // Get contact
-    let contact = contacts::get_contact(&state.db, &contact_id).await?;
+    // Get contact (scoped to the caller's account)
+    let contact = contacts::get_contact(&state.db, &account_id, &contact_id).await?;
 
     // Get entry history
     let entry_history = entries::get_entries_for_contact(&state.db, &contact_id).await?;
@@ -110,31 +124,36 @@ fn body_to_input(body: ContactBody) -> contacts::ContactInput {
 }
 
 /// POST /api/v1/contacts — create contact (authenticated).
+/// Creates the shared identity row if new and always links it to the calling account, so the
+/// account sees it immediately (this is the console's "new contact" and a CSV import row).
 pub async fn create_contact(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Json(body): Json<ContactBody>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = caller_account(&user)?;
     let input = body_to_input(body);
-    let contact = contacts::create_contact(&state.db, &input).await?;
+    let contact = contacts::create_contact(&state.db, &account_id, &input, "console").await?;
     Ok(Json(json!({
         "contact": contact,
         "created": true
     })))
 }
 
-/// PUT /api/v1/contacts/:id — update contact (authenticated).
+/// PUT /api/v1/contacts/:id — update contact (authenticated). 404 on a contact the caller does
+/// not own; the write itself carries the tenancy predicate.
 pub async fn update_contact(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(id): Path<String>,
     Json(body): Json<ContactBody>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = caller_account(&user)?;
     let contact_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
     let input = body_to_input(body);
-    let contact = contacts::update_contact(&state.db, &contact_id, &input).await?;
+    let contact = contacts::update_contact(&state.db, &account_id, &contact_id, &input).await?;
     Ok(Json(json!({
         "contact": contact,
         "updated": true
@@ -142,15 +161,18 @@ pub async fn update_contact(
 }
 
 /// DELETE /api/v1/contacts/:id — delete contact (authenticated).
+/// Unlinks the contact from the calling account and drops the shared identity row only when no
+/// other account is linked to it any more.
 pub async fn delete_contact(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    let account_id = caller_account(&user)?;
     let contact_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
 
-    let deleted = contacts::delete_contact(&state.db, &contact_id).await?;
+    let deleted = contacts::delete_contact(&state.db, &account_id, &contact_id).await?;
     if !deleted {
         return Err(AppError::NotFound("Contact not found".to_string()));
     }

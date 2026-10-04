@@ -93,13 +93,10 @@ pub async fn verify_purchase(
     .await?
     .ok_or_else(|| AppError::NotFound("Invalid or expired PIN".into()))?;
 
-    // Check if contact exists before linking
+    // The contact must already be visible to the calling business (contact_tenants, kanban
+    // t_369cb159): a caller cannot adopt a stranger's contact by naming its id here.
     let contact_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)")
-            .bind(req.contact_id)
-            .fetch_one(&s.db)
-            .await
-            .unwrap_or(false);
+        crate::db::contacts::contact_visible_to(&s.db, &req.contact_id, &account_id).await?;
 
     if contact_exists {
         sqlx::query(
@@ -210,13 +207,15 @@ pub async fn issue_voucher(
     State(s): State<AppState>,
     Json(req): Json<IssueVoucherRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
+    let campaign = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT id, account_id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
     )
     .bind(&req.campaign_slug)
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
+    // The campaign's owner is whose contact this is (contact_tenants, t_369cb159).
+    let campaign_account = campaign.1;
 
     let code: String = rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
@@ -247,9 +246,12 @@ pub async fn issue_voucher(
 
     // Look up contact info for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT email, first_name, last_name FROM contacts WHERE id = $1",
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1 \
+         AND EXISTS (SELECT 1 FROM contact_tenants ct \
+                     WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
     )
     .bind(req.contact_id)
+    .bind(campaign_account)
     .fetch_optional(&s.db)
     .await
     .ok()
@@ -781,6 +783,8 @@ pub async fn redeem_reward(
     .fetch_optional(&s.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Reward tier not found".into()))?;
+    // The campaign's owner is whose contact this is (contact_tenants, t_369cb159).
+    let campaign_account = campaign.5;
 
     // Check points balance
     let balance = sqlx::query_scalar::<_, i32>(
@@ -871,9 +875,12 @@ pub async fn redeem_reward(
 
     // Look up contact info for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT email, first_name, last_name FROM contacts WHERE id = $1",
+        "SELECT email, first_name, last_name FROM contacts WHERE id = $1 \
+         AND EXISTS (SELECT 1 FROM contact_tenants ct \
+                     WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
     )
     .bind(req.contact_id)
+    .bind(campaign_account)
     .fetch_optional(&s.db)
     .await
     .ok()
@@ -987,7 +994,13 @@ pub async fn external_tag_contact(
         ));
     }
 
-    // Upsert the contact — find by email first, then by phone, or create
+    // Upsert the contact — find by email first, then by phone, or create.
+    //
+    // `None` owner on purpose (kanban t_369cb159): this route carries NO account — no
+    // AuthenticatedUser and no caller-named programme — and the body is not authenticated, so an
+    // `account_id` taken from it would let anyone inject a contact into another tenant's list. The
+    // shared identity row is written and simply stays invisible (migration zz_is10's deliberate
+    // direction) until a tenant imports or captures that person, which links them.
     let contact_id = crate::db::contacts::upsert_contact(
         &s.db,
         &crate::db::contacts::ContactInput {
@@ -1014,6 +1027,8 @@ pub async fn external_tag_contact(
             business_name: None,
             website: None,
         },
+        None,
+        "external_tag",
     )
     .await?;
 
@@ -1158,13 +1173,10 @@ pub async fn purchase_verify(
         1 // default: 1 credit per $1
     };
 
-    // Verify contact exists
+    // Verify the contact belongs to the calling business (contact_tenants, kanban t_369cb159).
     let contact_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM contacts WHERE id = $1)")
-            .bind(req.contact_id)
-            .fetch_one(&s.db)
-            .await
-            .unwrap_or(false);
+        crate::db::contacts::contact_visible_to(&s.db, &req.contact_id, &business_account_id)
+            .await?;
 
     if !contact_exists {
         return Err(AppError::NotFound("Customer contact not found".into()));
@@ -1625,8 +1637,8 @@ pub async fn survey_response(
     let campaign_slug = format!("directory-{}", payload.directory_slug);
 
     // Find the campaign
-    let campaign = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, name FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
+    let campaign = sqlx::query_as::<_, (Uuid, String, Uuid)>(
+        "SELECT id, name, account_id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
     )
     .bind(&campaign_slug)
     .fetch_optional(&s.db)
@@ -1635,6 +1647,8 @@ pub async fn survey_response(
 
     let campaign_id = campaign.0;
     let campaign_name = campaign.1;
+    // The directory campaign's owner is whose lead this visitor is (contact_tenants, t_369cb159).
+    let campaign_account = campaign.2;
 
     // If we have a visitor email, find or create the contact
     let contact_id = if let Some(ref email) = payload.visitor_email {
@@ -1645,7 +1659,7 @@ pub async fn survey_response(
                 .fetch_optional(&s.db)
                 .await?;
 
-        match existing {
+        let cid = match existing {
             Some(cid) => cid,
             None => {
                 // Create new contact
@@ -1658,7 +1672,9 @@ pub async fn survey_response(
                     .await?;
                 new_id
             }
-        }
+        };
+        crate::db::contacts::link_contact(&s.db, &cid, &campaign_account, "survey").await?;
+        cid
     } else {
         return Err(AppError::BadRequest("Visitor email is required".into()));
     };
@@ -1748,9 +1764,12 @@ pub async fn survey_response(
 
     // Look up contact name for Marketing Boost payload
     let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT first_name, last_name FROM contacts WHERE id = $1",
+        "SELECT first_name, last_name FROM contacts WHERE id = $1 \
+         AND EXISTS (SELECT 1 FROM contact_tenants ct \
+                     WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
     )
     .bind(contact_id)
+    .bind(campaign_account)
     .fetch_optional(&s.db)
     .await
     .ok()

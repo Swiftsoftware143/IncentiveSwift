@@ -1,4 +1,16 @@
 //! Contact database operations — dedup by email/phone, upsert, list, get.
+//!
+//! TENANCY (kanban t_369cb159): `contacts` is a SHARED identity pool — one row per human — and
+//! `contact_tenants` is the many-to-many boundary that decides which accounts may see it.
+//! David, 2026-10-04: "contacts should always be tenant scoped. Tenants should not see other
+//! tenants contacts" and "there may be tenants that share leads".
+//!
+//! The rule, applied by every reader in this module:
+//!     an account sees a contact IFF a `contact_tenants` row links them.
+//! And by every writer that captures or imports a contact ON BEHALF OF an account:
+//!     write that link row, or the lead the tenant just captured is invisible to them.
+//! A contact with no link row is visible to nobody — that is the deliberate resting state of the
+//! 126 historical rows the backfill could not attribute (see migrations/zz_is10_contact_tenants.sql).
 
 use crate::error::AppError;
 use sqlx::PgPool;
@@ -33,11 +45,55 @@ pub struct Contact {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Link a contact to an account (idempotent).
+///
+/// This is the write that makes a shared contact visible to the tenant that captured or imported
+/// it. `source` is a short provenance label ('entry', 'import', 'checkin', ...).
+pub async fn link_contact(
+    pool: &PgPool,
+    contact_id: &Uuid,
+    account_id: &Uuid,
+    source: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO contact_tenants (contact_id, account_id, source) VALUES ($1, $2, $3) \
+         ON CONFLICT (contact_id, account_id) DO NOTHING",
+    )
+    .bind(contact_id)
+    .bind(account_id)
+    .bind(source)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Does `account_id` see `contact_id`? One query for the callers that only need the verdict.
+pub async fn contact_visible_to(
+    pool: &PgPool,
+    contact_id: &Uuid,
+    account_id: &Uuid,
+) -> Result<bool, AppError> {
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM contact_tenants WHERE contact_id = $1 AND account_id = $2)",
+    )
+    .bind(contact_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(visible)
+}
+
 /// Upsert a contact by email (case-insensitive), then phone as fallback.
 /// If found, update last_seen_at and increment total_entries.
 /// If not found, insert a new record.
+/// When `account_id` is Some, the contact is linked to that account (see the module note).
 /// Returns the contact id.
-pub async fn upsert_contact(pool: &PgPool, input: &ContactInput) -> Result<Uuid, AppError> {
+pub async fn upsert_contact(
+    pool: &PgPool,
+    input: &ContactInput,
+    account_id: Option<Uuid>,
+    source: &str,
+) -> Result<Uuid, AppError> {
     // First try to find by email (case-insensitive)
     if let Some(ref email) = input.email {
         let existing: Option<Uuid> =
@@ -54,6 +110,9 @@ pub async fn upsert_contact(pool: &PgPool, input: &ContactInput) -> Result<Uuid,
             .bind(id)
             .execute(pool)
             .await?;
+            if let Some(account_id) = account_id {
+                link_contact(pool, &id, &account_id, source).await?;
+            }
             return Ok(id);
         }
     }
@@ -72,6 +131,9 @@ pub async fn upsert_contact(pool: &PgPool, input: &ContactInput) -> Result<Uuid,
             .bind(id)
             .execute(pool)
             .await?;
+            if let Some(account_id) = account_id {
+                link_contact(pool, &id, &account_id, source).await?;
+            }
             return Ok(id);
         }
     }
@@ -92,12 +154,17 @@ pub async fn upsert_contact(pool: &PgPool, input: &ContactInput) -> Result<Uuid,
     .execute(pool)
     .await?;
 
+    if let Some(account_id) = account_id {
+        link_contact(pool, &id, &account_id, source).await?;
+    }
+
     Ok(id)
 }
 
-/// List contacts with pagination and optional search.
+/// List the contacts THIS account may see, with pagination and optional search.
 pub async fn list_contacts(
     pool: &PgPool,
+    account_id: &Uuid,
     limit: i64,
     offset: i64,
     search: Option<&str>,
@@ -105,13 +172,18 @@ pub async fn list_contacts(
     let contacts = if let Some(query) = search {
         let pattern = format!("%{}%", query);
         sqlx::query_as::<_, Contact>(
-            r#"SELECT id, first_name, last_name, email, phone, business_name, website,
+            r#"-- contact_tenants is the visibility boundary (t_369cb159): a caller only ever
+               -- sees rows linked to its own account, whatever it searches for.
+               SELECT id, first_name, last_name, email, phone, business_name, website,
                       first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
                FROM contacts
-               WHERE first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1
+               WHERE EXISTS (SELECT 1 FROM contact_tenants ct
+                             WHERE ct.contact_id = contacts.id AND ct.account_id = $1)
+                 AND (first_name ILIKE $2 OR last_name ILIKE $2 OR email ILIKE $2 OR phone ILIKE $2)
                ORDER BY last_seen_at DESC
-               LIMIT $2 OFFSET $3"#,
+               LIMIT $3 OFFSET $4"#,
         )
+        .bind(account_id)
         .bind(pattern)
         .bind(limit as i32)
         .bind(offset as i32)
@@ -122,9 +194,12 @@ pub async fn list_contacts(
             r#"SELECT id, first_name, last_name, email, phone, business_name, website,
                       first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
                FROM contacts
+               WHERE EXISTS (SELECT 1 FROM contact_tenants ct
+                             WHERE ct.contact_id = contacts.id AND ct.account_id = $1)
                ORDER BY last_seen_at DESC
-               LIMIT $1 OFFSET $2"#,
+               LIMIT $2 OFFSET $3"#,
         )
+        .bind(account_id)
         .bind(limit as i32)
         .bind(offset as i32)
         .fetch_all(pool)
@@ -134,13 +209,23 @@ pub async fn list_contacts(
     Ok(contacts)
 }
 
-/// Get a single contact by ID with entry history.
-pub async fn get_contact(pool: &PgPool, contact_id: &uuid::Uuid) -> Result<Contact, AppError> {
+/// Get a single contact by ID, but ONLY if this account may see it.
+/// A foreign id and an absent id are the same answer (404) — never a re-read of a row the
+/// caller does not own.
+pub async fn get_contact(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_id: &uuid::Uuid,
+) -> Result<Contact, AppError> {
     let contact = sqlx::query_as::<_, Contact>(
         r#"SELECT id, first_name, last_name, email, phone, business_name, website,
                   first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
-           FROM contacts WHERE id = $1"#,
+           FROM contacts
+           WHERE id = $2
+             AND EXISTS (SELECT 1 FROM contact_tenants ct
+                         WHERE ct.contact_id = contacts.id AND ct.account_id = $1)"#,
     )
+    .bind(account_id)
     .bind(contact_id)
     .fetch_optional(pool)
     .await?
@@ -149,23 +234,30 @@ pub async fn get_contact(pool: &PgPool, contact_id: &uuid::Uuid) -> Result<Conta
     Ok(contact)
 }
 
-/// Create a standalone contact (not via entry).
-/// Checks for existing contact by email first to avoid unique constraint violations.
-pub async fn create_contact(pool: &PgPool, input: &ContactInput) -> Result<Contact, AppError> {
+/// Create (or adopt) a standalone contact for the calling account — the CSV import path and the
+/// console's "new contact".
+///
+/// If a row with this email already exists in the shared pool it is LINKED to the caller and
+/// updated in place: two tenants sharing one person is the point of the many-to-many model, and an
+/// import must make an existing shared contact visible to the importer. Otherwise a fresh row is
+/// inserted and linked.
+pub async fn create_contact(
+    pool: &PgPool,
+    account_id: &Uuid,
+    input: &ContactInput,
+    source: &str,
+) -> Result<Contact, AppError> {
     // Check for existing contact by email (case-insensitive)
     if let Some(ref email) = input.email {
-        let existing: Option<Contact> = sqlx::query_as::<_, Contact>(
-            r#"SELECT id, first_name, last_name, email, phone, business_name, website,
-                      first_seen_at, last_seen_at, total_entries, notes, notes2, created_at
-               FROM contacts WHERE lower(email) = lower($1)"#,
-        )
-        .bind(email)
-        .fetch_optional(pool)
-        .await?;
+        let existing: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM contacts WHERE lower(email) = lower($1)")
+                .bind(email)
+                .fetch_optional(pool)
+                .await?;
 
-        if let Some(contact) = existing {
-            // Update fields if provided
-            return update_contact(pool, &contact.id, input).await;
+        if let Some(id) = existing {
+            link_contact(pool, &id, account_id, source).await?;
+            return update_contact(pool, account_id, &id, input).await;
         }
     }
 
@@ -184,16 +276,20 @@ pub async fn create_contact(pool: &PgPool, input: &ContactInput) -> Result<Conta
     .execute(pool)
     .await?;
 
-    get_contact(pool, &id).await
+    link_contact(pool, &id, account_id, source).await?;
+
+    get_contact(pool, account_id, &id).await
 }
 
-/// Update an existing contact.
+/// Update an existing contact THIS account may see. A contact it cannot see answers 404 and is
+/// never written.
 pub async fn update_contact(
     pool: &PgPool,
+    account_id: &Uuid,
     contact_id: &Uuid,
     input: &ContactInput,
 ) -> Result<Contact, AppError> {
-    let existing = get_contact(pool, contact_id).await?;
+    let existing = get_contact(pool, account_id, contact_id).await?;
 
     // Use input values where provided, fall back to existing values
     let new_first_name = input
@@ -212,10 +308,14 @@ pub async fn update_contact(
         .or_else(|| existing.business_name.clone());
     let new_website = input.website.clone().or_else(|| existing.website.clone());
 
-    sqlx::query(
+    // The tenancy check is repeated on the write itself: the row must still be linked to the
+    // caller at the moment of the UPDATE (belt and braces — the read above already proved it).
+    let result = sqlx::query(
         r#"UPDATE contacts
            SET first_name = $1, last_name = $2, email = $3, phone = $4, business_name = $5, website = $6
-           WHERE id = $7"#
+           WHERE id = $7
+             AND EXISTS (SELECT 1 FROM contact_tenants ct
+                         WHERE ct.contact_id = contacts.id AND ct.account_id = $8)"#,
     )
     .bind(new_first_name)
     .bind(new_last_name)
@@ -224,18 +324,47 @@ pub async fn update_contact(
     .bind(new_business_name)
     .bind(new_website)
     .bind(contact_id)
+    .bind(account_id)
     .execute(pool)
     .await?;
 
-    get_contact(pool, contact_id).await
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Contact not found".to_string()));
+    }
+
+    get_contact(pool, account_id, contact_id).await
 }
 
-/// Delete a contact by id.
-pub async fn delete_contact(pool: &PgPool, contact_id: &Uuid) -> Result<bool, AppError> {
-    let result = sqlx::query("DELETE FROM contacts WHERE id = $1")
-        .bind(contact_id)
-        .execute(pool)
-        .await?;
+/// Delete a contact, tenant-correctly.
+///
+/// `contacts` is shared, so deleting the row outright would destroy another tenant's view of a
+/// person they still own. The caller's own link is what goes; the identity row is only removed
+/// once NO account is linked to it any more (then it is truly orphaned).
+/// Returns false when the caller had no link (nothing to delete, or already gone).
+pub async fn delete_contact(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_id: &Uuid,
+) -> Result<bool, AppError> {
+    let unlinked =
+        sqlx::query("DELETE FROM contact_tenants WHERE contact_id = $1 AND account_id = $2")
+            .bind(contact_id)
+            .bind(account_id)
+            .execute(pool)
+            .await?;
 
-    Ok(result.rows_affected() > 0)
+    if unlinked.rows_affected() == 0 {
+        return Ok(false);
+    }
+
+    // Only when the row is now linked to nobody at all is it safe to drop the shared identity.
+    sqlx::query(
+        "DELETE FROM contacts WHERE id = $1 \
+         AND NOT EXISTS (SELECT 1 FROM contact_tenants WHERE contact_id = $1)",
+    )
+    .bind(contact_id)
+    .execute(pool)
+    .await?;
+
+    Ok(true)
 }

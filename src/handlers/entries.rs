@@ -42,7 +42,7 @@ pub struct ContactBody {
 
 /// POST /api/v1/entries — create entry (public). Bounded by the campaign's daily entry cap
 /// (`check_daily_limit` below) and, at the edge, by nginx's per-visitor `limit_req` on `/api/`.
-/// Flow: upsert contact -> find campaign -> check daily limit -> apply pity timer -> create entry -> build payload -> trigger delivery -> return.
+/// Flow: find campaign -> upsert contact -> check daily limit -> apply pity timer -> create entry -> build payload -> trigger delivery -> return.
 /// Extract user agent and IP from request headers.
 fn extract_source_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {
     let user_agent = headers
@@ -62,7 +62,12 @@ pub async fn create_entry(
     headers: HeaderMap,
     Json(body): Json<CreateEntryBody>,
 ) -> Result<Json<Value>, AppError> {
-    // 1. Upsert contact
+    // 1. Find the campaign FIRST: the contact captured here belongs to the campaign's owner, and
+    //    the `contact_tenants` link the upsert writes below is what makes the lead visible to
+    //    that owner (kanban t_369cb159). A bad slug therefore no longer side-effects the pool.
+    let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
+
+    // 2. Upsert contact (shared identity row) and link it to the campaign's account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),
         last_name: body.contact.last_name.clone(),
@@ -71,10 +76,13 @@ pub async fn create_entry(
         website: body.contact.website.clone(),
         business_name: body.contact.business_name.clone(),
     };
-    let contact_id = contacts::upsert_contact(&state.db, &contact_input).await?;
-
-    // 2. Find campaign by slug
-    let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
+    let contact_id = contacts::upsert_contact(
+        &state.db,
+        &contact_input,
+        Some(campaign.account_id),
+        "entry",
+    )
+    .await?;
 
     // Play-time gate for the calculator mechanic. Calculator has no dedicated
     // handler — it plays through this generic entry-capture endpoint, which derives its score
