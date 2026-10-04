@@ -1249,6 +1249,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/analytics/export",
             get(handlers::analytics_handler::export_csv),
         )
+        .route(
+            "/api/v1/analytics/import",
+            post(handlers::analytics_handler::import_csv),
+        )
         // ── KNOWLEDGE BASE (David 2026-10-02: an admin side and a user side, "in line respectively") ──
         // The user side is public on purpose: the people being walked through the product are often
         // not signed in (a player on a kiosk, a link follow). The admin side requires a caller, and

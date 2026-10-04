@@ -2,6 +2,7 @@
 //! Provides endpoints for overview KPIs, per-campaign drill-down, source tracking,
 //! loyalty metrics, contact analytics, and CSV export.
 
+use crate::db::contacts::{self, ContactInput};
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -823,6 +824,227 @@ pub async fn export_csv(
         .map_err(|e| AppError::Internal(format!("Failed to build CSV response: {}", e)))?;
 
     Ok(response)
+}
+
+/// Request body for `POST /analytics/import`.
+#[derive(Deserialize)]
+pub struct ImportBody {
+    /// Import kind. Only `contacts` is supported (the counterpart to the CSV export).
+    pub r#type: Option<String>,
+    /// The CSV document itself (a header row plus data rows).
+    pub csv: Option<String>,
+}
+
+/// Parse a CSV document into rows of fields, honouring RFC 4180 quoting: a field wrapped in `"`
+/// may contain commas, newlines and doubled quotes (`""` -> `"`). Rows with no non-empty field are
+/// dropped, so a trailing newline does not produce a phantom row.
+fn parse_csv(input: &str) -> Vec<Vec<String>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                field.push(c);
+            }
+            continue;
+        }
+        match c {
+            '"' => in_quotes = true,
+            ',' => row.push(std::mem::take(&mut field)),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+            }
+            '\n' => {
+                row.push(std::mem::take(&mut field));
+                rows.push(std::mem::take(&mut row));
+            }
+            _ => field.push(c),
+        }
+    }
+    if !field.is_empty() || !row.is_empty() {
+        row.push(field);
+        rows.push(row);
+    }
+    rows.retain(|r| r.iter().any(|f| !f.trim().is_empty()));
+    rows
+}
+
+/// Normalise a CSV header cell so `First Name`, `first_name` and `FIRST NAME` all match.
+fn norm_header(h: &str) -> String {
+    h.trim()
+        .trim_start_matches('\u{feff}')
+        .to_lowercase()
+        .split(|c: char| c == '_' || c == '-' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `POST /api/v1/analytics/import` — CSV import, the counterpart to `GET /analytics/export`.
+///
+/// Only `type=contacts` is supported. Each data row upserts one contact through the SAME
+/// `contacts::create_contact` path the rest of the app uses (dedup by email, case-insensitive, then
+/// by phone), so an import cannot mint a contact shape no other code path produces.
+pub async fn import_csv(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<ImportBody>,
+) -> Result<Json<Value>, AppError> {
+    // Same account guard as `export_csv`: an unusable account id is a 400, not a silent no-op.
+    let _account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    let kind = body.r#type.as_deref().unwrap_or("contacts");
+    if kind != "contacts" {
+        return Err(AppError::BadRequest(format!(
+            "import type '{}' is not supported — only 'contacts'",
+            kind
+        )));
+    }
+
+    let csv = body.csv.unwrap_or_default();
+    let rows = parse_csv(&csv);
+    if rows.is_empty() {
+        return Err(AppError::BadRequest("CSV is empty".into()));
+    }
+    if rows.len() < 2 {
+        return Err(AppError::BadRequest(
+            "CSV needs a header row and at least one data row".into(),
+        ));
+    }
+
+    let header: Vec<String> = rows[0].iter().map(|h| norm_header(h.as_str())).collect();
+    let col = |names: &[&str]| header.iter().position(|h| names.contains(&h.as_str()));
+    let i_first = col(&["first name", "firstname", "first"]);
+    let i_last = col(&["last name", "lastname", "last"]);
+    let i_email = col(&["email", "email address", "e mail"]);
+    let i_phone = col(&["phone", "phone number", "mobile"]);
+
+    if i_email.is_none() && i_phone.is_none() {
+        return Err(AppError::BadRequest(
+            "CSV needs an 'Email' or 'Phone' column — that is how a contact is matched".into(),
+        ));
+    }
+
+    let cell = |row: &[String], i: Option<usize>| -> Option<String> {
+        i.and_then(|i| row.get(i))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+
+    let mut created = 0u32;
+    let mut updated = 0u32;
+    let mut skipped = 0u32;
+    let mut errors: Vec<String> = Vec::new();
+
+    for (n, row) in rows.iter().enumerate().skip(1) {
+        let input = ContactInput {
+            first_name: cell(row, i_first),
+            last_name: cell(row, i_last),
+            email: cell(row, i_email),
+            phone: cell(row, i_phone),
+            business_name: None,
+            website: None,
+        };
+        if input.email.is_none() && input.phone.is_none() {
+            skipped += 1;
+            if errors.len() < 20 {
+                errors.push(format!("row {}: no email or phone", n + 1));
+            }
+            continue;
+        }
+        // Existence is measured BEFORE the upsert so the report can tell a new contact from a
+        // touched one — `create_contact` returns the same row either way.
+        let existed = if let Some(ref email) = input.email {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM contacts WHERE lower(email) = lower($1)")
+                .bind(email)
+                .fetch_optional(&state.db)
+                .await?
+                .is_some()
+        } else {
+            let phone = input.phone.clone().unwrap_or_default();
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM contacts WHERE phone = $1")
+                .bind(phone)
+                .fetch_optional(&state.db)
+                .await?
+                .is_some()
+        };
+        match contacts::create_contact(&state.db, &input).await {
+            Ok(_) => {
+                if existed {
+                    updated += 1;
+                } else {
+                    created += 1;
+                }
+            }
+            Err(e) => {
+                skipped += 1;
+                if errors.len() < 20 {
+                    errors.push(format!("row {}: {}", n + 1, e));
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "type": "contacts",
+        "rows": rows.len() - 1,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+    })))
+}
+
+#[cfg(test)]
+mod import_csv_tests {
+    use super::{norm_header, parse_csv};
+
+    #[test]
+    fn parses_quoted_fields_with_commas_and_newlines() {
+        let rows = parse_csv(
+            "First Name,Last Name,Email\n\"Smith, Jr\",Bob,bob@example.com\n\"line1\nline2\",X,y@z.com\n",
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1][0], "Smith, Jr");
+        assert_eq!(rows[1][1], "Bob");
+        assert_eq!(rows[2][0], "line1\nline2");
+    }
+
+    #[test]
+    fn drops_the_trailing_blank_row() {
+        let rows = parse_csv("A,B\n1,2\n\n");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn handles_crlf_and_escaped_quotes() {
+        let rows = parse_csv("Name,Note\r\nDoe,\"say \"\"hi\"\"\"\r\n");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1][1], "say \"hi\"");
+    }
+
+    #[test]
+    fn normalises_headers() {
+        assert_eq!(norm_header("First Name"), "first name");
+        assert_eq!(norm_header("first_name"), "first name");
+        assert_eq!(norm_header("  EMAIL "), "email");
+        assert_eq!(norm_header("\u{feff}Email"), "email");
+    }
 }
 
 fn esc_csv(s: &str) -> String {

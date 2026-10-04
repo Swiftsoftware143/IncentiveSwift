@@ -1801,6 +1801,88 @@ const LeadsView = () => {
   </div>`;
 };
 
+// ---- CONTACTS ----
+// The app's contact pool (public.contacts — one row per person, deduped by email then phone) had
+// no screen and no import. The CSV export existed (GET /analytics/export?type=contacts) with no
+// counterpart and no reader; this is both — the reader for the pool and the import that mirrors it.
+const ContactsView = () => {
+  const st = viewState('contacts', { list: [], search: '', impOpen: false, impText: '', impBusy: false, impMsg: '', loaded: false });
+  const load = async () => {
+    try { const d = await API.get('/contacts?limit=100'); st.list = (d && d.contacts) || (Array.isArray(d) ? d : []); }
+    catch (e) { console.error(e); st.list = []; }
+    st.loaded = true; renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; load(); }
+  const q = st.search.toLowerCase();
+  const filtered = st.list.filter(c => !q || [c.first_name, c.last_name, c.email, c.phone, c.business_name].some(v => String(v || '').toLowerCase().includes(q)));
+  const runImport = async () => {
+    if (!st.impText.trim()) { st.impMsg = 'Paste CSV rows or choose a .csv file first.'; renderApp(); return; }
+    st.impBusy = true; st.impMsg = ''; renderApp();
+    try {
+      const r = await API.post('/analytics/import', { type: 'contacts', csv: st.impText });
+      st.impMsg = 'Imported ' + (r.rows || 0) + ' row(s): ' + (r.created || 0) + ' new, ' + (r.updated || 0) + ' updated' + (r.skipped ? ', ' + r.skipped + ' skipped' : '') + '.';
+      st.impText = ''; st.impOpen = false;
+      st.impBusy = false; await load(); return;
+    } catch (e) { st.impMsg = 'Import failed: ' + e.message; }
+    st.impBusy = false; renderApp();
+  };
+  const exportCsv = async () => {
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/analytics/export?type=contacts', { headers: { 'Authorization': ['Bearer', API.token].join(' ') } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const b = await r.blob();
+      const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'contacts.csv';
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+    } catch (e) { alert('Export failed: ' + e.message); }
+  };
+  const pickFile = (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { st.impText = String(rd.result || ''); renderApp(); };
+    rd.readAsText(f);
+  };
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Contacts</h2><p class="text-sm text-gray-500">Every person in the contact pool — deduped by email, then phone.</p></div>
+      <div class="flex items-center gap-2">
+        <input class="border rounded px-3 py-1.5 text-sm w-44" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
+        <button class="border rounded px-3 py-1.5 text-sm" onClick=${exportCsv}>Export CSV</button>
+        <button class="bg-blue-600 text-white rounded px-4 py-1.5 text-sm" onClick=${() => { st.impOpen = true; st.impMsg = ''; renderApp(); }}>Import CSV</button>
+      </div>
+    </div>
+    ${st.impMsg ? html`<div class="mb-3 text-sm text-gray-700 bg-gray-50 border rounded px-3 py-2">${st.impMsg}</div>` : null}
+    <div class="card overflow-hidden">
+      <table class="table w-full">
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Business</th><th>Entries</th><th>Last seen</th></tr></thead>
+        <tbody>
+          ${filtered.map(c => html`<tr>
+            <td class="font-medium text-sm">${[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
+            <td class="text-sm">${c.email || '—'}</td>
+            <td class="text-sm">${c.phone || '—'}</td>
+            <td class="text-sm">${c.business_name || '—'}</td>
+            <td class="text-sm">${c.total_entries == null ? '—' : c.total_entries}</td>
+            <td class="text-sm text-gray-500">${c.last_seen_at ? new Date(c.last_seen_at).toLocaleDateString() : '—'}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+      ${!filtered.length ? html`<div class="text-center text-gray-400 py-8">${st.loaded ? 'No contacts yet' : 'Loading...'}</div>` : null}
+    </div>
+    ${st.impOpen ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.impOpen = false; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 shadow-xl" style="width:640px;max-width:92vw" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-1">Import contacts from CSV</h3>
+        <p class="text-xs text-gray-500 mb-3">A header row is required. Recognised columns: First Name, Last Name, Email, Phone. A contact is matched by email (then phone), so re-importing updates instead of duplicating.</p>
+        <input type="file" accept=".csv,text/csv" onChange=${pickFile} class="text-sm mb-2" />
+        <textarea class="border rounded w-full text-sm font-mono p-2" style="height:180px" placeholder="First Name,Last Name,Email" value=${st.impText} onInput=${e => { st.impText = e.target.value; }}></textarea>
+        <div class="flex justify-end gap-2 mt-3">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.impOpen = false; renderApp(); }}>Cancel</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white disabled:opacity-50" disabled=${st.impBusy} onClick=${runImport}>${st.impBusy ? 'Importing...' : 'Import'}</button>
+        </div>
+      </div>
+    </div>` : null}
+  </div>`;
+};
+
 // ---- API KEYS ----
 const ApiKeysView = () => {
   const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '' });
@@ -3350,6 +3432,7 @@ const Deals = () => {
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
     { id: 'tags', label: 'Tags', icon: '🏷' },
     { id: 'leads', label: 'Leads', icon: '📋' },
+    { id: 'contacts', label: 'Contacts', icon: '👥' },
     { id: 'api-keys', label: 'API Keys', icon: '🔑' },
     { id: 'site-config', label: 'Site Config', icon: '🌐', adminOnly: true },
     { id: 'settings', label: 'Settings', icon: '⚙' },
@@ -3366,7 +3449,7 @@ const Deals = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">
