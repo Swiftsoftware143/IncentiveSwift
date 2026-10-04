@@ -335,25 +335,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/rewards-earned/:contact_id",
             get(handlers::loyalty_v2::list_rewards_earned),
         )
-        // Cross-platform tag sync (MultiDirectory → IncentiveSwift)
-        .route(
-            "/api/v1/loyalty/external/tag-contact",
-            post(handlers::loyalty_v2::external_tag_contact),
-        )
-        // External grant-credits (used by MultiDirectory referral system)
-        .route(
-            "/api/v1/loyalty/external/grant-credits",
-            post(handlers::external_grants::grant_credits),
-        )
-        // External register-member (opt-in loyalty enrollment from directory)
-        .route(
-            "/api/v1/loyalty/external/register-member",
-            post(handlers::external_grants::register_member),
-        )
-        .route(
-            "/api/v1/loyalty/external/program/:id",
-            get(handlers::external_grants::get_external_program),
-        )
+        // The external loyalty surface (tag-contact / grant-credits / register-member /
+        // external program lookup) was RETIRED here (kanban t_f76c9950): measured on the live app,
+        // nothing called it, two of its four arms carried NO credential at all (an anonymous
+        // caller could mint a `company_admin` account and enrol members), and its only issuance
+        // path let any tenant mint a GLOBAL system_api_key. IncentiveSwift's host-to-host seam is
+        // the `x-internal-key` /api/v1/internal/* family; MultiDirectory's loyalty is native.
         // Public program lookup for the QR landing page. The customer who scans
         // the QR has no account, so this one carries no auth and no API key.
         .route(

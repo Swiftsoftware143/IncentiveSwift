@@ -56,12 +56,10 @@ pub mod viral_handler;
 
 pub mod sms_handler;
 
-pub mod credits_handler;
-pub mod external_grants;
-pub use external_grants::*;
 pub mod business_handler;
 pub mod calendar_events;
 pub mod clearinghouse_config_handler;
+pub mod credits_handler;
 pub mod loyalty_badges;
 pub mod loyalty_plans;
 pub mod offers_handler;

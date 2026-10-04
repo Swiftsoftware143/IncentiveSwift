@@ -53,18 +53,17 @@ When a purchase is verified at Business A, the system auto-issues a voucher for 
 - Leaderboard for top referrers
 - Supports anonymous clicks (logged, no points) and identified clicks (points awarded)
 
-#### MultiDirectory Referral Integration
+#### MultiDirectory Referral Integration — RETIRED
 
-MultiDirectory's referral system (see its Admin Guide → Referral System) integrates with IncentiveSwift for Zaarcash payouts:
+The external loyalty API this section documented (`POST /api/v1/loyalty/external/grant-credits`,
+`tag-contact`, `register-member` and the external program lookup) was **RETIRED** (kanban
+t_f76c9950). Measured on the live app: nothing in the fleet called it — MultiDirectory's referral
+system credits Zaarcash natively in its own database (`referrals.zaarcash_earned`) — and two of its
+four arms carried no credential at all. Every `/api/v1/loyalty/external/*` path now answers `404`;
+IncentiveSwift's host-to-host seam is the `x-internal-key` `/api/v1/internal/*` family.
 
-1. Visitor/business generates referral link in MultiDirectory
-2. New user signs up via referral link (status: `pending`)
-3. Admin verifies the referral in MultiDirectory admin panel
-4. MultiDirectory calls `POST /api/v1/loyalty/external/grant-credits` with:
-   `{"email": "referrer@email.com", "amount": <points>, "reason": "referral", "program": "default"}`
-5. IncentiveSwift grants credits; balance visible in MultiDirectory dashboards
-
-**Zaarcash amounts by direction:** visitor→visitor: 50, business→business: 200, business→visitor: 50, visitor→business: 100.
+**Zaarcash amounts by direction** (MultiDirectory's native referral rewards): visitor→visitor: 50,
+business→business: 200, business→visitor: 50, visitor→business: 100.
 
 ## Affiliate Products — FunnelSwift-Owned, No Plan Sync
 

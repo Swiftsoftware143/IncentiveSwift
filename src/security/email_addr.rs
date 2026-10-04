@@ -10,8 +10,8 @@
 //!
 //! Five writers need the same answer, and they must not drift apart:
 //!   * the public signup path (`handlers::auth_handler::register`),
-//!   * the referral/credit path (`handlers::external_grants::{grant_credits,register_member}`,
-//!     both funnelling through `find_or_create_account`),
+//!   * (the referral/credit path — `handlers::external_grants::{grant_credits,register_member}` —
+//!     was RETIRED with the external loyalty surface, kanban t_f76c9950; no such writer remains),
 //!   * the internal business-create path (`handlers::business_handler::register_business`),
 //!   * the paid-checkout path (`billing::webhooks::deliver_credentials`),
 //!   * plus the read-only `login` / `forgot-password` lookups, which must refuse the same input the

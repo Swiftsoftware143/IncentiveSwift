@@ -1,0 +1,13 @@
+-- t_f76c9950 — retire the external loyalty surface, part B: remove its catalogue credential.
+--
+-- The four /api/v1/loyalty/external/* routes and the only reader of
+-- provider_keys.provider = 'system_api_key' (external_grants::validate_system_api_key) were deleted
+-- with the surface. `available_providers` is the allow-list POST /api/v1/provider-keys validates
+-- against, so leaving this row keeps advertising a credential that any tenant could mint — measured
+-- live: a plain `company_admin` tenant minted one and then read ANOTHER tenant's loyalty programme
+-- with it, because the validator was never account-scoped. No console screen ever offered this
+-- provider (0 hits in www-app/ and www-admin/), so nothing loses an option it could use.
+--
+-- Measured before this migration: provider_keys rows = 0 (the credential was never issued).
+-- Idempotent: a plain DELETE, safe to re-run.
+DELETE FROM available_providers WHERE key = 'system_api_key';
