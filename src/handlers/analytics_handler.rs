@@ -690,15 +690,27 @@ pub async fn export_csv(
                 "Contact ID,First Name,Last Name,Email,Total Entries,First Seen,Last Seen\n",
             );
             let rows = sqlx::query(
-                "SELECT DISTINCT e.contact_id, ct.first_name, ct.last_name, ct.email,
-                        COUNT(*) OVER (PARTITION BY e.contact_id) as total_entries,
-                        MIN(e.created_at) OVER (PARTITION BY e.contact_id) as first_seen,
-                        MAX(e.created_at) OVER (PARTITION BY e.contact_id) as last_seen
-                 FROM entries e
-                 JOIN campaigns c ON c.id = e.campaign_id
-                 JOIN contacts ct ON ct.id = e.contact_id
-                 WHERE c.account_id = $1
-                 ORDER BY total_entries DESC",
+                "-- The Contacts screen shows BOTH buttons, so Export must emit what Import
+                 -- wrote (kanban t_4bc97720). The visibility boundary is the contact_tenants
+                 -- link (t_369cb159), NOT a campaign entry: a contact this account imported
+                 -- and has not played yet is exported with 0 entries instead of being dropped.
+                 -- Entry counts stay scoped to THIS account's campaigns, so the numbers never
+                 -- mix in another tenant's plays and the pool is never widened.
+                 SELECT ct.id AS contact_id, ct.first_name, ct.last_name, ct.email,
+                        COALESCE(x.total_entries, 0) AS total_entries,
+                        COALESCE(x.first_seen, ct.first_seen_at) AS first_seen,
+                        COALESCE(x.last_seen, ct.last_seen_at) AS last_seen
+                 FROM contacts ct
+                 JOIN contact_tenants l ON l.contact_id = ct.id AND l.account_id = $1
+                 LEFT JOIN LATERAL (
+                     SELECT COUNT(*) AS total_entries,
+                            MIN(e.created_at) AS first_seen,
+                            MAX(e.created_at) AS last_seen
+                     FROM entries e
+                     JOIN campaigns c ON c.id = e.campaign_id
+                     WHERE e.contact_id = ct.id AND c.account_id = $1
+                 ) x ON TRUE
+                 ORDER BY total_entries DESC, ct.email ASC",
             )
             .bind(uuid)
             .fetch_all(&state.db)
@@ -710,8 +722,17 @@ pub async fn export_csv(
                 let ln = r.get::<Option<String>, _>("last_name").unwrap_or_default();
                 let em = r.get::<Option<String>, _>("email").unwrap_or_default();
                 let te: i64 = r.get("total_entries");
-                let fs: chrono::DateTime<chrono::Utc> = r.get("first_seen");
-                let ls: chrono::DateTime<chrono::Utc> = r.get("last_seen");
+                // Contacts.first_seen_at/last_seen_at are nullable, and an imported contact with
+                // no plays yet falls back to them (kanban t_4bc97720) - decode as Option so a
+                // NULL date renders as an empty cell instead of failing the whole export.
+                let fs = r
+                    .get::<Option<chrono::DateTime<chrono::Utc>>, _>("first_seen")
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_default();
+                let ls = r
+                    .get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_seen")
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_default();
                 csv.push_str(&format!(
                     "{},{},{},{},{},{},{}\n",
                     id,
@@ -719,8 +740,8 @@ pub async fn export_csv(
                     esc_csv(&ln),
                     esc_csv(&em),
                     te,
-                    fs.format("%Y-%m-%d %H:%M"),
-                    ls.format("%Y-%m-%d %H:%M")
+                    fs,
+                    ls
                 ));
             }
         }
