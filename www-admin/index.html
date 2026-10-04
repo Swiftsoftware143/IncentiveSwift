@@ -1819,9 +1819,11 @@ const LeadsView = () => {
 };
 
 // ---- CONTACTS ----
-// The app's contact pool (public.contacts — one row per person, deduped by email then phone) had
-// no screen and no import. The CSV export existed (GET /analytics/export?type=contacts) with no
-// counterpart and no reader; this is both — the reader for the pool and the import that mirrors it.
+// Contacts are per-account (kanban t_369cb159, deployed 2026-10-04): GET /contacts returns only the
+// people LINKED to the calling account (contact_tenants), and the CSV import LINKS every row it
+// writes to the importer, so an import shows up here immediately. The identity row itself is shared
+// — public.contacts is still one row per person, deduped by email then phone — so a person captured
+// by two businesses is one contact with two links, and each business sees them.
 const ContactsView = () => {
   const st = viewState('contacts', { list: [], search: '', impOpen: false, impText: '', impBusy: false, impMsg: '', loaded: false });
   const load = async () => {
@@ -1861,7 +1863,7 @@ const ContactsView = () => {
   };
   return html`<div>
     <div class="flex items-center justify-between mb-4">
-      <div><h2 class="text-xl font-bold">Contacts</h2><p class="text-sm text-gray-500">Every person in the contact pool — deduped by email, then phone.</p></div>
+      <div><h2 class="text-xl font-bold">Contacts</h2><p class="text-sm text-gray-500">Everyone your business has captured or imported. One row per person — the same person can belong to more than one business.</p></div>
       <div class="flex items-center gap-2">
         <input class="border rounded px-3 py-1.5 text-sm w-44" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
         <button class="border rounded px-3 py-1.5 text-sm" onClick=${exportCsv}>Export CSV</button>
