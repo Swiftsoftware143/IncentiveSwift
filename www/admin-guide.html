@@ -123,19 +123,19 @@
       <li><strong>Status</strong> — Active (<span style="color:var(--green)">●</span>) or Suspended (<span style="color:var(--red)">●</span>)</li>
       <li><strong>Users</strong> — Number of user accounts under this tenant</li>
       <li><strong>Created</strong> — Account creation date</li>
-      <li><strong>Actions</strong> — View details, Assign Plan, Impersonate</li>
+      <li><strong>Actions</strong> — View details (<code>GET /admin/tenants/:id</code>), read/write the credits rate, read a purchase PIN, adjust credits, and delete the tenant</li>
     </ul>
     <pre>GET /api/v1/admin/tenants          — List all tenants
 GET /api/v1/admin/tenants/:id      — Tenant details</pre>
   </div>
   <div class="card">
     <h3>Assigning Plans</h3>
-    <p>Click <strong>Assign Plan</strong> on any tenant to open a dropdown of all available plans. The plan change takes effect immediately — no confirmation from the tenant required.</p>
-    <pre>PATCH /api/v1/admin/tenants/:id/plan   — Assign plan</pre>
+    <p>Plan assignment is an operator control in the console's <strong>Plans</strong> section — <strong>Assign plan to account</strong>. It takes the target plan id and the account id and applies the change immediately; no confirmation from the tenant is required. There is no per-tenant "Assign Plan" button on the Tenants table.</p>
+    <pre>POST /api/v1/admin/plans/assign   — Assign plan (fields: plan_id, account_id)</pre>
   </div>
   <div class="card">
     <h3>Impersonating Tenants</h3>
-    <p>Admins can log in as any tenant for troubleshooting. Click the <strong>🔀 Impersonate</strong> button on the tenant detail view. The page reloads showing the tenant's dashboard with an orange banner. Click <strong>← Back to Admin</strong> to exit impersonation.</p>
+    <p>Admins can impersonate a tenant for troubleshooting. In the console, the <strong>Portfolio Companies</strong> table carries a <strong>🔑 Impersonate</strong> button per row, and the <strong>Support impersonation</strong> section has <strong>Impersonate user</strong> (<code>POST /api/v1/admin/impersonate</code>) and <strong>Stop impersonation</strong> (<code>POST /api/v1/admin/stop-impersonation</code>).</p>
     <div class="callout warn"><strong>Security:</strong> All impersonation actions are logged in the audit trail with admin identity and timestamp.</div>
   </div>
 </section>
