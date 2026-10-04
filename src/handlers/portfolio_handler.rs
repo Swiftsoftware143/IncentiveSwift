@@ -299,12 +299,25 @@ pub async fn internal_create_portfolio_company(
         .to_string();
     let id = Uuid::new_v4();
 
+    // The parent `accounts` row must exist BEFORE this INSERT (kanban t_b5784899). `account_id`
+    // carries the caller's FunnelSwift tenant id, and `portfolio_companies_account_id_fkey`
+    // REFERENCES `accounts(id)` — so the raw insert raised `23503` on every portfolio sync and this
+    // leg answered 500 while the other four legs answered 200 (measured live 2026-10-04:
+    // `portfolio_companies` held 0 rows). `ensure_account` is the resolver the app's sibling
+    // receiver `/api/v1/internal/portfolio-sync` has used since t_47315540; it also returns the
+    // account the row must point at (an existing account with this caller tenant or this email is
+    // reused, so a re-sync cannot mint a twin or a duplicate email).
+    let parent_account_id = crate::handlers::portfolio_sync_handler::ensure_account(
+        &state.db, account_id, &name, &email,
+    )
+    .await?;
+
     sqlx::query(
         r#"INSERT INTO portfolio_companies (id, account_id, name, slug, email, description, settings, subdomain, domain)
            VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb, NULL, NULL) ON CONFLICT (id) DO NOTHING"#
     )
     .bind(id)
-    .bind(account_id)
+    .bind(parent_account_id)
     .bind(&name)
     .bind(&slug)
     .bind(&email)

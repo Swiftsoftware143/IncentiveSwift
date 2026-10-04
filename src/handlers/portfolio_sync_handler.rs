@@ -7,7 +7,8 @@ use axum::{extract::State, http::HeaderMap, Json};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-/// The parent `accounts` row a mirrored portfolio must have (kanban t_47315540).
+/// The parent `accounts` row a mirrored portfolio must have (kanban t_47315540), and the account id
+/// the mirrored `portfolio_companies` row must point at.
 ///
 /// This used to be `INSERT INTO accounts (id, name) ... .await.ok()`. `accounts.email` is
 /// NOT NULL with no default, so that statement could never succeed: measured live 2026-10-02 it
@@ -17,12 +18,42 @@ use uuid::Uuid;
 /// top of this handler and then never bound. Bind it; when it is empty use a non-routable
 /// per-account placeholder so NOT NULL and the UNIQUE index are both satisfied without inventing
 /// a deliverable mailbox.
-async fn ensure_account(
+///
+/// It now RESOLVES instead of blindly minting (kanban t_b5784899). `portfolio_companies.account_id`
+/// is `REFERENCES accounts(id)` and the incoming `tenant_id` is a *caller* tenant id, not an account
+/// here — the sibling receiver `/api/v1/internal/portfolio-companies` inserted it raw, so every
+/// portfolio sync from FunnelSwift raised `23503 portfolio_companies_account_id_fkey` and answered
+/// 500 while the other four legs answered 200. Two live cases have to work against the same unique
+/// index, so resolve in order and return the id the caller must bind:
+///   1. an account already carries this caller tenant (id or tenant_id) — a re-sync, reuse it;
+///   2. an account already carries this email — the same business lives here (David's sister
+///      companies hold an account in every app), so attach the mirror to it rather than mint a twin
+///      whose INSERT would raise `23505` on `accounts_email_key` and re-break the leg;
+///   3. otherwise mint the mirror, id = the caller tenant id, so step 1 finds it next time.
+pub(crate) async fn ensure_account(
     db: &sqlx::PgPool,
     aid: Uuid,
     name: &str,
     email: &str,
-) -> Result<(), AppError> {
+) -> Result<Uuid, AppError> {
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 OR tenant_id = $1 LIMIT 1")
+            .bind(aid)
+            .fetch_optional(db)
+            .await?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    if !email.is_empty() {
+        let by_email: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = lower($1) LIMIT 1")
+                .bind(email)
+                .fetch_optional(db)
+                .await?;
+        if let Some(id) = by_email {
+            return Ok(id);
+        }
+    }
     let addr = if email.is_empty() {
         format!("portfolio-sync+{aid}@sync.invalid")
     } else {
@@ -36,7 +67,7 @@ async fn ensure_account(
     .bind(&addr)
     .execute(db)
     .await?;
-    Ok(())
+    Ok(aid)
 }
 
 /// POST /api/v1/internal/portfolio-sync
@@ -88,9 +119,9 @@ pub async fn portfolio_sync_internal(
     match action {
         "create" => {
             if let (Some(pid), Some(aid)) = (portfolio_id, account_id) {
-                ensure_account(&state.db, aid, &name, &email).await?;
+                let parent_id = ensure_account(&state.db, aid, &name, &email).await?;
                 sqlx::query("INSERT INTO portfolio_companies (id, account_id, name, slug, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug, email = EXCLUDED.email, updated_at = NOW()")
-                    .bind(pid).bind(aid).bind(&name).bind(&slug).bind(&email)
+                    .bind(pid).bind(parent_id).bind(&name).bind(&slug).bind(&email)
                     .execute(&state.db).await?;
             }
         }
@@ -101,9 +132,9 @@ pub async fn portfolio_sync_internal(
                     .execute(&state.db).await?;
                 if rows.rows_affected() == 0 {
                     if let Some(aid) = account_id {
-                        ensure_account(&state.db, aid, &name, &email).await?;
+                        let parent_id = ensure_account(&state.db, aid, &name, &email).await?;
                         sqlx::query("INSERT INTO portfolio_companies (id, account_id, name, slug, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug, email = EXCLUDED.email, updated_at = NOW()")
-                            .bind(pid).bind(aid).bind(&name).bind(&slug).bind(&email)
+                            .bind(pid).bind(parent_id).bind(&name).bind(&slug).bind(&email)
                             .execute(&state.db).await?;
                     }
                 }
