@@ -351,7 +351,7 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::external_grants::register_member),
         )
         .route(
-            "/api/v1/loyalty/external/program/{id}",
+            "/api/v1/loyalty/external/program/:id",
             get(handlers::external_grants::get_external_program),
         )
         // Public program lookup for the QR landing page. The customer who scans

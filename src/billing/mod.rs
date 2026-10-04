@@ -31,7 +31,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(providers::list_payment_providers).post(providers::upsert_payment_provider),
         )
         .route(
-            "/api/v1/payment-providers/{provider_type}",
+            "/api/v1/payment-providers/:provider_type",
             delete(providers::delete_payment_provider),
         )
         // Checkout Sessions
