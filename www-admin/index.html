@@ -1095,11 +1095,11 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
   if (!st._loaded) { st._loaded = true; loadPrograms(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
-  async function loadTiers(progId) { try { const data = await API.get('/loyalty/tiers?program_id='+progId); st.tiers = data.tiers||[]; renderApp(); } catch(e){ st.tiers=[]; } }
+  async function loadTiers(progId) { if (!progId) { st.tiers = []; st.tierErr = ''; renderApp(); return; } try { const data = await API.get('/loyalty/tiers?program_id='+encodeURIComponent(progId)); st.tiers = data.tiers||[]; st.tierErr=''; renderApp(); } catch(e){ st.tiers=[]; st.tierErr=(e && e.message) || String(e); renderApp(); } }
   async function loadRewards() { try { const data = await API.get('/loyalty/rewards'); st.rewards = data.rewards||[]; renderApp(); } catch(e){ st.rewards=[]; } }
   async function loadVouchers() { try { const data = await API.get('/loyalty/vouchers'); st.vouchers = data.vouchers||[]; renderApp(); } catch(e){ st.vouchers=[]; } }
   async function loadPledges() { try { const data = await API.get('/admin/pledges'); st.pledges = data.pending_pledges||[]; renderApp(); } catch(e){ st.pledges=[]; } }
@@ -1182,10 +1182,43 @@ const LoyaltyPrograms = () => {
   };
   const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/loyalty/programs/'+id); loadPrograms(); };
 
+  /* ── Tier editor (kanban t_cef93ccb) ────────────────────────────────────────────────────────────
+     The Tiers tab used to advertise tier authoring with no tier editor: `+ Add Tier` set
+     `st.editItem = {_type:'tier'}` and the only modal in the view was the PROGRAMME form, so the
+     button created a loyalty PROGRAMME, not a tier — and no served root ever called the tier write
+     API. All three write arms (POST /loyalty/tiers, PUT|DELETE /loyalty/tiers/:id) and the read
+     (GET /loyalty/tiers?program_id=) exist, are mounted and are scoped by the CALLER's ownership of
+     the programme (t_3bc758b5); this console is their front end. The tab also used to read the
+     ladder of `st.list[0]` — the FIRST programme only — so a tenant with two programmes could not
+     reach the second one's tiers; the selector below is what fixes that. */
+  const tierProg = () => {
+    const found = (st.list||[]).find(p => p.id === st.tierProgId);
+    return found || (st.list && st.list.length ? st.list[0] : null);
+  };
+  const refreshTiers = () => { const p = tierProg(); if (p) loadTiers(p.id); else { st.tiers = []; st.tierErr = ''; renderApp(); } };
+  const selectTierProg = (id) => { st.tierProgId = id; st.tiers = []; refreshTiers(); };
+  const showTier = (t) => {
+    const prog = tierProg();
+    if (!prog) { alert('Create a loyalty program first — every reward tier belongs to one.'); return; }
+    st.editItem = t ? Object.assign({}, t, {_type:'tier'}) : {_type:'tier', program_id: prog.id};
+    st.showModal = true; renderApp();
+  };
+  const saveTier = async (data) => {
+    try {
+      if (st.editItem && st.editItem.id) await API.put('/loyalty/tiers/' + st.editItem.id, data);
+      else await API.post('/loyalty/tiers', Object.assign({ program_id: st.editItem.program_id }, data));
+      st.showModal = false; refreshTiers();
+    } catch(e){ alert(e.message); }
+  };
+  const removeTier = async (id) => {
+    if (!confirm('Delete this reward tier? The ladder loses it; members already awarded it keep the reward.')) return;
+    try { await API.del('/loyalty/tiers/' + id); refreshTiers(); } catch(e){ alert(e.message); }
+  };
+
   const tabs = ['Plans','Programs','Tiers','Rewards','Vouchers','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
-    if (t==='Tiers'&&st.list.length>0) loadTiers(st.list[0].id);
+    if (t==='Tiers') refreshTiers();
     if (t==='Rewards') loadRewards();
     if (t==='Vouchers') loadVouchers();
     if (t==='Pledges') loadPledges();
@@ -1261,15 +1294,22 @@ const LoyaltyPrograms = () => {
 
   // ── Tiers Tab ──
   const tiersTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Reward Tiers</h2><button class="btn btn-sm btn-green" onClick=${() => { show({_type:'tier'}); }}>+ Add Tier</button></div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Reward Tiers</h2>
+      <div class="flex gap-2 items-center">
+        ${(st.list && st.list.length > 0) ? html`<select id="tier-prog-select" class="input" style="width:240px" value=${tierProg() ? tierProg().id : ''} onChange=${e => selectTierProg(e.target.value)}>${st.list.map(p => html`<option value=${p.id}>${p.name}</option>`)}</select>` : ''}
+        <button id="tier-add-btn" class="btn btn-sm btn-green" onClick=${() => showTier(null)}>+ Add Tier</button>
+      </div>
+    </div>
+    ${tierProg() ? html`<div class="text-xs text-gray-500 mb-2">Tiers of <b>${tierProg().name}</b>. <b>Points required</b> is the balance a member must hold to reach the tier; <b>reward tag</b> is what the member is tagged with when the reward is approved.</div>` : html`<div class="text-xs text-gray-500 mb-2">Create a loyalty program first — every reward tier belongs to one.</div>`}
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      ${st.tiers.map(t => html`<div class="card" style="border-left:4px solid ${t.color||'#cbd5e1'}">
-        <h3 class="font-bold text-lg">${t.name}</h3>
-        <p class="text-sm text-gray-500">${t.points_required||0} points required</p>
-        <p class="text-xs text-gray-400">${t.requires_approval?'Requires approval':'Auto-approved'}</p>
-        <div class="mt-2"><span class="badge badge-blue">${t.reward_tag||''}</span></div>
+      ${st.tiers.map(t => html`<div class="card" data-tier-id=${t.id} style="border-left:4px solid ${t.color||'#cbd5e1'}">
+        <h3 class="font-bold text-lg" data-tier-name>${t.name}</h3>
+        <p class="text-sm text-gray-500"><span data-tier-points>${t.points_required||0}</span> points required</p>
+        <p class="text-xs text-gray-400">${t.requires_approval?'Requires approval':'Auto-approved'} · order ${t.sort_order||0}</p>
+        <div class="mt-2"><span class="badge badge-blue" data-tier-tag>${t.reward_tag||''}</span></div>
+        <div class="mt-3 flex gap-2"><button class="btn btn-sm btn-outline" data-tier-edit onClick=${() => showTier(t)}>Edit</button><button class="btn btn-sm btn-red" data-tier-del onClick=${() => removeTier(t.id)}>Delete</button></div>
       </div>`)}
-      ${st.tiers.length===0 && html`<div class="card col-span-full text-center text-gray-400 py-8">No reward tiers configured. Select a program and add tiers.</div>`}
+      ${st.tiers.length===0 && html`<div class="card col-span-full text-center text-gray-400 py-8">${st.tierErr ? html`Could not load this program's tiers: ${st.tierErr}` : html`No reward tiers configured for this program. Add one with "+ Add Tier".`}</div>`}
     </div>
   </div>`;
 
@@ -1386,9 +1426,41 @@ const LoyaltyPrograms = () => {
 
   // ── Program Edit Modal ──
   const editModal = st.showModal ? html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
-    <div class="modal-content" style="max-width:560px"><h3 class="text-lg font-bold mb-4">${st.editItem&&st.editItem.id ? 'Edit' : 'Add'} Loyalty Program</h3>
+    <div class="modal-content" style="max-width:560px"><h3 class="text-lg font-bold mb-4">${st.editItem&&st.editItem.id ? 'Edit' : 'Add'} ${st.editItem&&st.editItem._type==='tier' ? 'Reward Tier' : 'Loyalty Program'}</h3>
       ${st.editItem && st.editItem.slug ? html`<div class="text-xs text-gray-500 mb-3">Counter check-in link: <a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(st.editItem)} target="_blank" rel="noopener">${checkinUrl(st.editItem)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(st.editItem)}>Copy</button></div>` : ''}
-      ${(() => { 
+      ${st.editItem && st.editItem._type === 'tier' ? (() => {
+        const t0 = st.editItem || {};
+        const prog = (st.list||[]).find(p => p.id === (st.editItem && st.editItem.program_id)) || tierProg();
+        let name = t0.name || '';
+        let pts = (t0.points_required != null) ? t0.points_required : 0;
+        let tag = t0.reward_tag || '';
+        let appr = t0.requires_approval === true;
+        let sort = (t0.sort_order != null) ? t0.sort_order : 0;
+        let boost = t0.marketing_boost ? JSON.stringify(t0.marketing_boost) : '';
+        return html`<div class="space-y-3">
+          <div class="text-xs text-gray-500">Program: <b>${prog ? prog.name : '—'}</b></div>
+          <div><label class="text-sm font-medium block mb-1">Tier Name</label><input id="tier-field-name" class="input" placeholder="Gold Status" value=${name} onInput=${e => name=e.target.value} /></div>
+          <div class="grid grid-cols-3 gap-2">
+            <div><label class="text-sm font-medium block mb-1">Points Required</label><input id="tier-field-points" class="input" type="number" min="0" value=${pts} onInput=${e => pts=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Sort Order</label><input id="tier-field-sort" class="input" type="number" value=${sort} onInput=${e => sort=parseInt(e.target.value)||0} /></div>
+            <div class="flex items-end"><label class="flex items-center gap-1 text-sm"><input id="tier-field-approval" type="checkbox" checked=${appr} onChange=${e=>appr=e.target.checked} /> Requires approval</label></div>
+          </div>
+          <div><label class="text-sm font-medium block mb-1">Reward Tag</label><input id="tier-field-tag" class="input" placeholder="gold_badge" value=${tag} onInput=${e => tag=e.target.value} /></div>
+          <div><label class="text-sm font-medium block mb-1">Marketing Boost override <span class="text-gray-400">(optional JSON)</span></label><textarea id="tier-field-boost" class="input" rows="3" style="font-family:ui-monospace,monospace" placeholder='{"destinations":[]}' onInput=${e => boost=e.target.value}>${boost}</textarea></div>
+          <div class="flex gap-2 justify-end mt-4">
+            <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
+            <button id="tier-field-save" class="btn" onClick=${() => {
+              if (!name.trim()) { alert('A reward tier needs a name.'); return; }
+              if (!tag.trim()) { alert('A reward tier needs a reward tag — that is what the member is tagged with when the reward is approved.'); return; }
+              let mb = null;
+              if (boost && boost.trim()) { try { mb = JSON.parse(boost); } catch (e) { alert('Marketing Boost override is not valid JSON — fix it before saving: ' + e.message); return; } }
+              const payload = { name: name.trim(), points_required: pts, reward_tag: tag.trim(), requires_approval: appr, sort_order: sort };
+              if (mb !== null) payload.marketing_boost = mb;
+              saveTier(payload);
+            }}>${t0.id ? 'Save' : 'Create'}</button>
+          </div>
+        </div>`;
+      })() : (() => { 
         let p = st.editItem||{};
         let name = p.name||''; let currency = p.currency_name||''; let icon = p.currency_icon||''; 
         let color = p.currency_color||'#10B981'; let cpi = p.points_per_checkin||10; let mx = p.max_checkins_per_day||5;
