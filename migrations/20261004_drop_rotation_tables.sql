@@ -1,0 +1,59 @@
+-- 20261004_drop_rotation_tables.sql  (kanban t_ff68a6ba)
+--
+-- DROP the ORPHANED `rotation_configs` and `rotation_group_members` tables.
+--
+-- WHY THEY ARE SAFE TO DROP (measured, not inferred)
+--   * 0 writers in `src/` -- the LAST five were the /api/v1/admin/rotation-{configs,members}
+--     CRUD arms (create_rotation_config / add_rotation_member / remove_rotation_member +
+--     their list/get siblings), retired in t_8e9d3a52. `grep -rn` for an INSERT/UPDATE/DELETE
+--     against either table now hits only retirement NOTES in comments.
+--   * 0 readers in `src/` -- the only reader with a route was list_rotation_configs /
+--     list_rotation_members (removed in t_8e9d3a52); the only internal reader was
+--     `loyalty_v2::issue_rotation_voucher`, retired in t_7a16bf0b.
+--   * 0 rows EVER -- `SELECT count(*)` -> 0 for BOTH tables at setup, at every proof phase of
+--     t_8e9d3a52 and of this card, and at sweep. Neither is a seed:
+--     `grep -n "rotation_configs\|rotation_group_members" migrations/*seed*` is empty.
+--   * 0 inbound foreign keys -- pg_constraint shows ONLY the two pkeys
+--     (`rotation_configs_pkey`, `rotation_group_members_pkey`): there is no FK BETWEEN them and
+--     none pointing at them from any other table.
+--   * 0 views / 0 routines / 0 triggers referencing either (pg_views / pg_proc / pg_trigger).
+--   * 0 fleet callers, 0 served-root references, 0 nginx hits over 692,285 access-log lines.
+--
+-- WHAT THIS REMOVES FROM THE SCHEMA (the drift arithmetic a reader needs)
+--   2 tables + 18 columns (rotation_configs 10, rotation_group_members 8) + 2 constraints
+--   (the two pkeys) + 2 indexes (the same two pkeys; each counts in BOTH classes, exactly as
+--   purchase_verifications' pkey did in t_85a2b736).
+--   The deploy's step-0b from-zero COUNTS line therefore DROPS by exactly those amounts --
+--   2 tables, 18 columns, 2 constraints, 2 indexes -- and that is the EXPECTED arithmetic, NOT a
+--   regression. `RESULT: PASS ... 0 missing/extra in every class` must still hold after the
+--   deploy, because BOTH sides (migrations-built and live) lose the same objects.
+--
+-- CREATED BY (all APPLIED, all left untouched)
+--   migrations/000000_baseline_core_tables.sql (CREATE at :273 / :285, pkeys at :689-702)
+--   migrations/00001_full_schema.sql
+--   migrations/20260923_rotation_configs_drift.sql (ADD COLUMN is_active /
+--     max_vouchers_per_rotation)
+--   This is a NEW file, per the house rule "never edit an APPLIED migration".
+--
+-- ORDER: child first (`rotation_group_members` then `rotation_configs`). There is no FK to order
+-- by, so the order is cosmetic -- `IF EXISTS` makes the whole file idempotent either way.
+--
+-- DO NOT DROP `vouchers`
+--   `vouchers` is a different question with its own card (t_30dfc98c, the reader surface); its
+--   last writer (`survey_response`) was retired in t_3bde2e27. Nothing here touches it.
+--
+-- BACKUP
+--   Pre-drop dumps (both tables empty, taken anyway and recorded) at
+--   /opt/swift/backups/t_ff68a6ba/rotation_configs.pre-drop.sql
+--   /opt/swift/backups/t_ff68a6ba/rotation_group_members.pre-drop.sql
+--   with their sha256 sums in /opt/swift/backups/t_ff68a6ba/SHA256SUMS.
+--
+-- MARKER DIRECTION
+--   This header quotes both identifiers, and the runner stages migration files into the image at
+--   /app/migrations (read_dir at runtime -- NOT `include_str!`), so the identifier count rises in
+--   `/app/migrations/` and stays 0 in the ELF itself: the migration runner embeds no migration
+--   text. The clean ELF marker remains the already-0 retired route literal
+--   `loyalty/verify-purchase`.
+
+DROP TABLE IF EXISTS rotation_group_members;
+DROP TABLE IF EXISTS rotation_configs;
