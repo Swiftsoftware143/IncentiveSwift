@@ -572,6 +572,34 @@ pub async fn delete_program(
     })))
 }
 
+/// The caller's own programme, or `None` when the id names a programme the caller owns by none of
+/// the three arms the read family uses (kanban t_1fe72bf8): the explicit owner column, the campaign
+/// this programme points at (the reverse pointer), or a campaign that points FORWARD at this
+/// programme. Never a role bypass — the read has none either — so a foreign id and an absent id
+/// answer the same 404 and no caller can enumerate another tenant's programmes.
+///
+/// A reward tier carries no owner column of its own, so every tier arm below is scoped by the
+/// ownership of the PROGRAMME it hangs off (kanban t_3bc758b5).
+async fn program_for_caller(
+    pool: &sqlx::PgPool,
+    program_id: Uuid,
+    account_id: Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        r#"SELECT lp.id FROM loyalty_programs lp
+           WHERE lp.id = $1
+             AND (lp.account_id = $2
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $2)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))"#,
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// POST /api/v1/loyalty/tiers — create reward tier.
 pub async fn create_tier(
     State(state): State<AppState>,
@@ -580,6 +608,19 @@ pub async fn create_tier(
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&body.program_id)
         .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // Ownership gate on the PARENT (kanban t_3bc758b5). `RewardTierInput` takes the programme id
+    // from the BODY, so without this probe any authenticated account could insert a tier —
+    // `points_required` (what a member earns) and `reward_tag` (the tag applied on approval) —
+    // into ANY tenant's programme by naming its id. A foreign id and an absent id both 404.
+    if program_for_caller(&state.db, program_id, account_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Loyalty program not found".to_string()));
+    }
 
     let id = Uuid::new_v4();
     sqlx::query(
@@ -618,16 +659,31 @@ pub async fn update_tier(
 ) -> Result<Json<Value>, AppError> {
     let tier_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    sqlx::query(
-        r#"UPDATE loyalty_reward_tiers
-           SET name = COALESCE($1, name),
-               points_required = COALESCE($2, points_required),
-               reward_tag = COALESCE($3, reward_tag),
-               requires_approval = COALESCE($4, requires_approval),
-               sort_order = COALESCE($5, sort_order),
-               marketing_boost = COALESCE($6, marketing_boost)
-           WHERE id = $7"#,
+    // The predicate is bound ON the statement too (kanban t_3bc758b5), and deliberately as a single
+    // statement: a scoped probe followed by an unscoped UPDATE would still write the foreign row.
+    // A tier is writable only while its own programme is one the caller owns by one of the three
+    // arms; `rows_affected() == 0` below turns a foreign (or absent) tier id into the same 404.
+    let updated = sqlx::query(
+        r#"UPDATE loyalty_reward_tiers AS rt
+           SET name = COALESCE($1, rt.name),
+               points_required = COALESCE($2, rt.points_required),
+               reward_tag = COALESCE($3, rt.reward_tag),
+               requires_approval = COALESCE($4, rt.requires_approval),
+               sort_order = COALESCE($5, rt.sort_order),
+               marketing_boost = COALESCE($6, rt.marketing_boost)
+           WHERE rt.id = $7
+             AND EXISTS (SELECT 1 FROM loyalty_programs lp
+                          WHERE lp.id = rt.program_id
+                            AND (lp.account_id = $8
+                                 OR EXISTS (SELECT 1 FROM campaigns c
+                                             WHERE c.id = lp.campaign_id
+                                               AND c.account_id = $8)
+                                 OR EXISTS (SELECT 1 FROM campaigns fwd
+                                             WHERE fwd.loyalty_program_id = lp.id
+                                               AND fwd.account_id = $8)))"#,
     )
     .bind(&body.name)
     .bind(body.points_required)
@@ -636,8 +692,13 @@ pub async fn update_tier(
     .bind(body.sort_order)
     .bind(&body.marketing_boost)
     .bind(tier_id)
+    .bind(account_id)
     .execute(&state.db)
     .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound("Reward tier not found".to_string()));
+    }
 
     let tier = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
@@ -659,11 +720,31 @@ pub async fn delete_tier(
 ) -> Result<Json<Value>, AppError> {
     let tier_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid tier ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM loyalty_reward_tiers WHERE id = $1")
-        .bind(tier_id)
-        .execute(&state.db)
-        .await?;
+    // Ownership predicate ON the DELETE (kanban t_3bc758b5): a foreign tier id deletes nothing and
+    // answers the same 404 an absent id gets. `loyalty_rewards_earned.tier_id` is a plain FK (no
+    // ON DELETE action) but only ever points at a tier of the same programme, and
+    // `loyalty_milestones.bonus_reward_id` is ON DELETE SET NULL, so removing an owned tier is
+    // already safe — the predicate is what keeps it to the owner's own programme.
+    let result = sqlx::query(
+        r#"DELETE FROM loyalty_reward_tiers AS rt
+           WHERE rt.id = $1
+             AND EXISTS (SELECT 1 FROM loyalty_programs lp
+                          WHERE lp.id = rt.program_id
+                            AND (lp.account_id = $2
+                                 OR EXISTS (SELECT 1 FROM campaigns c
+                                             WHERE c.id = lp.campaign_id
+                                               AND c.account_id = $2)
+                                 OR EXISTS (SELECT 1 FROM campaigns fwd
+                                             WHERE fwd.loyalty_program_id = lp.id
+                                               AND fwd.account_id = $2)))"#,
+    )
+    .bind(tier_id)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Reward tier not found".to_string()));
@@ -683,6 +764,19 @@ pub async fn list_tiers(
 ) -> Result<Json<Value>, AppError> {
     let program_id = Uuid::parse_str(&query.program_id)
         .map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // The PARENT gate (kanban t_3bc758b5): this route was `AuthenticatedUser` + `WHERE program_id =
+    // $1`, so it disclosed any tenant's tier ladder (name / points_required / reward_tag) to any
+    // authenticated account that named the programme id. A foreign or absent programme id answers
+    // the same 404 the write arms answer, instead of an empty 200 or another tenant's rows.
+    if program_for_caller(&state.db, program_id, account_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Loyalty program not found".to_string()));
+    }
 
     let tiers = sqlx::query_as::<_, crate::db::loyalty::RewardTier>(
         r#"SELECT id, program_id, name, points_required, requires_approval,
