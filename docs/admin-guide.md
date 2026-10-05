@@ -338,10 +338,9 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/admin/pledges` | GET | List pending pledges for review |
 | `/api/v1/admin/pledges/:id/review` | POST | Approve or reject a pledge |
 
-### Loyalty — Reward Redemption
+### Loyalty — Rewards
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/loyalty/redeem-reward` | POST | Redeem points for a reward |
 | `/api/v1/loyalty/rewards-earned/:contact_id` | GET | List rewards earned by a contact |
 
 ### Credit System

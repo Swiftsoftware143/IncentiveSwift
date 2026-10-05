@@ -253,9 +253,8 @@ pub async fn apply_reward_tag(pool: &PgPool, contact_id: &Uuid, tag: &str) -> Re
 pub struct RewardEarned {
     pub id: uuid::Uuid,
     /// NULLABLE **by design**, hence Option (kanban t_d6e55678): `loyalty_rewards_earned.member_id`
-    /// is nullable and `handlers::loyalty_v2::redeem_reward` binds an `Option<Uuid>` on purpose —
-    /// "a contact that earned campaign points without ever enrolling has no member row, and member_id
-    /// is nullable, so the redemption is still recorded". As a non-Option field, ONE such row failed
+    /// is nullable because a contact that earned campaign points without ever enrolling has no member
+    /// row, and its redemption is still recorded. As a non-Option field, ONE such row failed
     /// the WHOLE-ROW decode of `get_reward`, so `POST /api/v1/loyalty/rewards/:id/{approve,deny}`
     /// answered 500 for it. The column stays nullable (SET NOT NULL would 23502 that live redemption);
     /// the decode is what had to change. `approve_reward` handles the None explicitly.

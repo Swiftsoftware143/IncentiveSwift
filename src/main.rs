@@ -322,11 +322,16 @@ async fn main() -> anyhow::Result<()> {
         // integration - 0 callers, 0 nginx hits, `business_pledges` 0 rows, and `business_id` is a
         // directory entity, so no account owner is derivable in this app. The live pledge flow is
         // the admin-guarded /api/v1/admin/pledges family the admin console already uses.
-        // Reward redemption
-        .route(
-            "/api/v1/loyalty/redeem-reward",
-            post(handlers::loyalty_v2::redeem_reward),
-        )
+        // POST /api/v1/loyalty/redeem-reward was RETIRED here (kanban t_32c87f33): an anonymous,
+        // unscoped mutation that took campaign_slug + reward_tier_id + contact_id, three ids the
+        // caller does not own, then deducted that contact's points and wrote a reward row with NO
+        // credential and NO treasury/float check. 0 callers in the 8-app fleet, 0 nginx hits ever,
+        // no served page calls it, and it is the last remnant of a dead redemption family (its
+        // sibling redemption path in loyalty_badges.rs went in t_5e244255, which was also the ONLY
+        // writer of point_redemption_log — the rows the float/burn rule measures). A contact cannot
+        // authenticate in this app at all, so there is no customer to scope it to; the live
+        // redemption flow is the AuthenticatedUser-guarded /loyalty/rewards/:id/{approve,deny} the
+        // admin console's Rewards/Ledger tabs already use.
         .route(
             "/api/v1/loyalty/rewards-earned/:contact_id",
             get(handlers::loyalty_v2::list_rewards_earned),
