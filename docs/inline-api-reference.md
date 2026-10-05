@@ -124,9 +124,14 @@ carried no credential at all (an anonymous caller could mint a `company_admin` a
 paths now answer `404`. IncentiveSwift's host-to-host seam is the `x-internal-key` `/api/v1/internal/*`
 family.
 
+> `POST /campaigns/external/survey-response` was **RETIRED** (kanban t_3bde2e27): an anonymous,
+> unscoped value mint — any uncredentialed caller who named a live `directory-*` campaign slug
+> minted an active $50 voucher, injected a contact from the caller-supplied email and awarded 100
+> Zaarcash, repeatably. Its only named caller (MultiDirectory, onboarding completion) retired the
+> IncentiveSwift integration on 2026-09-23.
+
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/campaigns/external/survey-response` | Service | `loyalty_v2::survey_response` | Survey response from MD |
 | GET | `/credits/balance` | Service* | `credits_handler::get_balance` | Check Zaarcash balance (filtered by program) |
 
 *Service-level auth — called by a sister app's backend, not a user JWT.

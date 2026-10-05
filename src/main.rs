@@ -358,11 +358,17 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/public/program/:slug",
             get(handlers::loyalty::public_program),
         )
-        // Survey response from MultiDirectory (onboarding completion)
-        .route(
-            "/api/v1/campaigns/external/survey-response",
-            post(handlers::loyalty_v2::survey_response),
-        )
+        // POST /api/v1/campaigns/external/survey-response was RETIRED here (kanban t_3bde2e27).
+        // Measured on the deployed binary 98ab2c0012ed4396: the arm took NO credential, and an
+        // anonymous caller who named a live `directory-*` campaign slug minted an ACTIVE $50
+        // `restaurant_card` voucher, injected a `contacts` row from the caller-supplied email,
+        // awarded 100 Zaarcash and fired the voucher webhook — repeat calls minted again
+        // (unbounded). Same class as t_b209d263. Its only named caller (MultiDirectory, on
+        // onboarding completion) retired the IncentiveSwift loyalty integration on 2026-09-23
+        // (`service="incentiveswift"` answers 400; MD credits rewards natively now). Census:
+        // 0 nginx hits over 692,556 access-log lines, 0 fleet callers, 0 served-root call sites.
+        // This was also `vouchers`' LAST writer — but `vouchers` still has three mounted readers
+        // (see loyalty_v2.rs), so it is NOT a bare drop candidate.
         // Business accounts (Phase 1: directory business integration)
         .route(
             "/api/v1/business/register",

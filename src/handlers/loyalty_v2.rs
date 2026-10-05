@@ -5,7 +5,8 @@
 //! anonymous and unscoped), then `verify_purchase` and `issue_rotation_voucher` (kanban
 //! t_7a16bf0b — the guarded reader of `purchase_verifications` and its private voucher
 //! issuer, left writer-less by t_b209d263), then the rotation-group CRUD family (kanban
-//! t_8e9d3a52 — the last writers of `rotation_configs` / `rotation_group_members`).
+//! t_8e9d3a52 — the last writers of `rotation_configs` / `rotation_group_members`), then the
+//! anonymous `survey_response` $50 voucher mint (kanban t_3bde2e27 — `vouchers`' last writer).
 //! See the retirement notes at each section.
 
 use axum::{
@@ -50,11 +51,12 @@ use crate::state::AppState;
 // IncentiveSwift loyalty integration on 2026-09-23: `service="incentiveswift"` answers 400;
 // `tag_rules` has 0 rows ever and the MD console's tag-rule form does not offer the action).
 // `verify_purchase` and its private issuer `issue_rotation_voucher` were RETIRED in kanban
-// t_7a16bf0b (see the notes above). The voucher lifecycle that remains is `claim_voucher`
-// (keyed by a claim code, a bearer secret) and the AuthenticatedUser-scoped
-// `list_my_vouchers`. NOTE (measured, t_7a16bf0b): `vouchers` is NOT orphaned —
-// `survey_response` below still INSERTs a live `$50` restaurant-card voucher, anonymously.
-// That arm is its own card.
+// t_7a16bf0b (see the notes above). The voucher lifecycle that REMAINS is `claim_voucher`
+// (keyed by a claim code, a bearer secret), the AuthenticatedUser-scoped `list_my_vouchers`
+// and `get_vouchers`. NOTE (measured, t_3bde2e27): `vouchers` now has NO writer at all —
+// its last one, `survey_response`, was RETIRED (see the note at the foot of this module).
+// Those three READERS stay mounted and are advertised in the served guides, so the table is
+// not a bare drop candidate; the reader/table decision is a separate card.
 /// GET /api/v1/loyalty/my-vouchers — list active vouchers for a contact
 pub async fn list_my_vouchers(
     State(s): State<AppState>,
@@ -203,8 +205,9 @@ pub async fn list_pending_pledges(
 // caller was `verify_purchase` (retired in the same pass) and it had no route of its own, so it was
 // live code with no way in.
 //
-// Its INSERT was one of `vouchers`'s two writers. The other, `survey_response` below, is STILL
-// LIVE and anonymous, so `vouchers` is NOT orphaned — contrary to the card's premise (carded).
+// Its INSERT was one of `vouchers`'s two writers. The other, `survey_response`, was itself
+// RETIRED in kanban t_3bde2e27 (see the note at the foot of this module) — `vouchers` now has
+// three mounted readers and no writer.
 //
 // The rotation-group CRUD below was RETIRED in kanban t_8e9d3a52 (the five /admin/rotation-configs
 // and /admin/rotation-members arms + `CreateRotationConfigRequest` / `AddToRotationRequest`). They
@@ -823,197 +826,31 @@ pub async fn get_vouchers(
     })))
 }
 
-/// POST /api/v1/campaigns/external/survey-response
-/// Called by MultiDirectory when a visitor completes the onboarding survey.
-/// Awards 100 Zaarcash + issues $50 restaurant card voucher.
-#[derive(Debug, Deserialize)]
-pub struct SurveyResponsePayload {
-    pub directory_slug: String,
-    pub visitor_account_id: Option<Uuid>,
-    pub visitor_email: Option<String>,
-    pub survey_id: Option<Uuid>,
-    pub answers: Option<Value>,
-    pub applied_tags: Option<Vec<String>>,
-}
-
-pub async fn survey_response(
-    State(s): State<AppState>,
-    Json(payload): Json<SurveyResponsePayload>,
-) -> Result<impl IntoResponse, AppError> {
-    // Build campaign slug from directory slug
-    // Directory slug format: "palm-coast" -> campaign slug: "directory-palm-coast"
-    let campaign_slug = format!("directory-{}", payload.directory_slug);
-
-    // Find the campaign
-    let campaign = sqlx::query_as::<_, (Uuid, String, Uuid)>(
-        "SELECT id, name, account_id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
-    )
-    .bind(&campaign_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound(format!("Campaign not found for slug: {}", campaign_slug)))?;
-
-    let campaign_id = campaign.0;
-    let campaign_name = campaign.1;
-    // The directory campaign's owner is whose lead this visitor is (contact_tenants, t_369cb159).
-    let campaign_account = campaign.2;
-
-    // If we have a visitor email, find or create the contact
-    let contact_id = if let Some(ref email) = payload.visitor_email {
-        // Try to find existing contact
-        let existing =
-            sqlx::query_scalar::<_, Uuid>("SELECT id FROM contacts WHERE email = $1 LIMIT 1")
-                .bind(email)
-                .fetch_optional(&s.db)
-                .await?;
-
-        let cid = match existing {
-            Some(cid) => cid,
-            None => {
-                // Create new contact
-                let new_id = Uuid::new_v4();
-                sqlx::query("INSERT INTO contacts (id, email, notes2) VALUES ($1, $2, $3)")
-                    .bind(new_id)
-                    .bind(email)
-                    .bind(payload.applied_tags.as_ref().map(|t| t.join(", ")))
-                    .execute(&s.db)
-                    .await?;
-                new_id
-            }
-        };
-        crate::db::contacts::link_contact(&s.db, &cid, &campaign_account, "survey").await?;
-        cid
-    } else {
-        return Err(AppError::BadRequest("Visitor email is required".into()));
-    };
-
-    // Enrol in the programme for THIS directory, resolved from the payload rather than from a name
-    // baked into the engine. There used to be an extra hardcoded enrolment above this one, pointing at
-    // a single directory's programme; it is gone. Whose points a visitor earns is the caller's answer,
-    // which is why the slug is built from `directory_slug` and not from a literal.
-    let city_program_slug = format!("directory-{}", payload.directory_slug);
-    let city_program: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM loyalty_programs WHERE slug = $1 LIMIT 1")
-            .bind(&city_program_slug)
-            .fetch_optional(&s.db)
-            .await?;
-
-    if let Some(program_id) = city_program {
-        let _ = crate::db::loyalty::find_or_create_member(&s.db, &program_id, &contact_id).await;
-    }
-
-    // Award 100 Zaarcash — upsert campaign_points_balance
-    let existing_balance = sqlx::query_scalar::<_, i32>(
-        "SELECT points_balance FROM campaign_points_balance 
-         WHERE campaign_id = $1 AND contact_id = $2",
-    )
-    .bind(campaign_id)
-    .bind(contact_id)
-    .fetch_optional(&s.db)
-    .await?
-    .unwrap_or(0);
-
-    if existing_balance == 0 {
-        // First time — insert
-        sqlx::query(
-            "INSERT INTO campaign_points_balance (campaign_id, contact_id, points_balance, lifetime_points)
-             VALUES ($1, $2, 100, 100)"
-        )
-        .bind(campaign_id)
-        .bind(contact_id)
-        .execute(&s.db)
-        .await?;
-    } else {
-        // Existing — add 100 points
-        sqlx::query(
-            "UPDATE campaign_points_balance 
-             SET points_balance = points_balance + 100, 
-                 lifetime_points = lifetime_points + 100,
-                 updated_at = NOW()
-             WHERE campaign_id = $1 AND contact_id = $2",
-        )
-        .bind(campaign_id)
-        .bind(contact_id)
-        .execute(&s.db)
-        .await?;
-    }
-
-    // No loyalty_transactions table exists — skipping history record
-
-    // Issue $50 restaurant card voucher
-    let voucher_id = Uuid::new_v4();
-    let code: String = {
-        use rand::Rng;
-        const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-        let mut rng = rand::thread_rng();
-        (0..8)
-            .map(|_| {
-                let idx = rng.gen_range(0..CHARSET.len());
-                CHARSET[idx] as char
-            })
-            .collect()
-    };
-
-    let thirty_days = chrono::Duration::days(30);
-    let expires_at = chrono::Utc::now() + thirty_days;
-
-    sqlx::query(
-        "INSERT INTO vouchers (id, campaign_id, issued_to_contact_id, voucher_type, 
-         discount_value, redemption_code, expires_at, status)
-         VALUES ($1, $2, $3, 'restaurant_card', '$50.00', $4, $5, 'active')",
-    )
-    .bind(voucher_id)
-    .bind(campaign_id)
-    .bind(contact_id)
-    .bind(&code)
-    .bind(expires_at)
-    .execute(&s.db)
-    .await?;
-
-    // Look up contact name for Marketing Boost payload
-    let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-        "SELECT first_name, last_name FROM contacts WHERE id = $1 \
-         AND EXISTS (SELECT 1 FROM contact_tenants ct \
-                     WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
-    )
-    .bind(contact_id)
-    .bind(campaign_account)
-    .fetch_optional(&s.db)
-    .await
-    .ok()
-    .flatten();
-
-    let (mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None));
-
-    // Fire Marketing Boost webhook for the voucher (handles the $50 card fulfillment)
-    let mb_payload = serde_json::json!({
-        "voucher_id": voucher_id,
-        "code": code,
-        "discount_value": "$50.00",
-        "voucher_type": "restaurant_card",
-        "contact_id": contact_id,
-        "email": payload.visitor_email,
-        "first_name": mb_first_name,
-        "last_name": mb_last_name,
-        "campaign_name": campaign_name,
-        "campaign_slug": campaign_slug,
-        "source": "onboarding_survey",
-    });
-    crate::handlers::campaign_integrations::fire_marketing_boost(
-        &s,
-        &campaign_id,
-        "voucher_issued",
-        &mb_payload,
-    )
-    .await;
-
-    Ok(Json(json!({
-        "status": "ok",
-        "contact_id": contact_id,
-        "voucher_id": voucher_id,
-        "code": code,
-        "zaarcash_awarded": 100,
-        "voucher_type": "restaurant_card",
-        "campaign": campaign_name,
-    })))
-}
+// ── External survey-response mint (retired) ──
+//
+// `survey_response` + `SurveyResponsePayload` (POST /api/v1/campaigns/external/survey-response)
+// were RETIRED here (kanban t_3bde2e27). Measured on the deployed binary 98ab2c0012ed4396, the
+// handler took NO credential, and an ANONYMOUS caller who named a live `directory-*` campaign
+// slug minted an ACTIVE $50 `restaurant_card` voucher (30-day expiry, its own 8-char code),
+// find-or-created a `contacts` row from the caller-supplied `visitor_email`, linked it into the
+// campaign owner's account via `contact_tenants`, awarded 100 Zaarcash into
+// `campaign_points_balance`, and fired the `voucher_issued` Marketing Boost webhook. Repeat calls
+// minted again — unbounded. Same class as t_b209d263 (anonymous, unscoped value mint with a
+// caller-chosen recipient).
+//
+// Its only named caller was MultiDirectory ("when a visitor completes the onboarding survey"),
+// and MultiDirectory RETIRED the IncentiveSwift loyalty integration on 2026-09-23
+// (`service="incentiveswift"` answers 400; its `onboarding_survey.rs` states "There is NO
+// IncentiveSwift call here any more" — rewards are credited by MD's native engine). Census:
+// 0 nginx hits over 692,556 access-log lines (instrument validated — 2,975 `/api/v1/health` hits
+// in the same window), 0 fleet callers, 0 served-root call sites.
+//
+// Not scoped instead: there is no caller to scope to, and a contact cannot authenticate in this
+// app, so there is no credential to bind. The app's host-to-host seam (`x-internal-key`
+// /api/v1/internal/*) was not invented onto a route nothing calls.
+//
+// This was `vouchers`' LAST writer. `vouchers` still has three mounted READERS
+// (`get_vouchers`, `list_my_vouchers`, `claim_voucher`), and the served guides advertise them, so
+// the table is NOT a bare drop candidate — the reader/table decision is carded separately.
+//
+// Proof: /opt/swift/audits/t_3bde2e27/proof.py (before 11/11, after 12/12, residue 0).
