@@ -1201,6 +1201,23 @@ const LoyaltyPrograms = () => {
   const filtered = st.list.filter(p => !st.search || (p.name||'').toLowerCase().includes(st.search.toLowerCase()));
   const activeProg = st.list.length>0 ? st.list[0] : null;
 
+  // The counter check-in link (kanban t_e8faac56). `p.slug` is the tenant's own programme slug,
+  // returned by the authenticated /loyalty/programs — the identifier the printed QR encodes
+  // (kanban t_25e9f950). The landing page /loyalty-checkin/<slug> is served on the APP host, and
+  // this console is served on BOTH app. and admin.incentiveswift.com, so the link is built from the
+  // host the console is on, swapping an admin host for the app host.
+  const checkinOrigin = () => {
+    const h = window.location.hostname;
+    return window.location.protocol + '//' + (h.startsWith('admin.') ? 'app.' + h.slice(6) : h);
+  };
+  const checkinUrl = (p) => checkinOrigin() + '/loyalty-checkin/' + encodeURIComponent(p.slug);
+  const copyCheckin = (p) => {
+    const u = checkinUrl(p);
+    const done = () => alert('Check-in link copied — this is the link your counter QR must encode for ' + (p.name||'this programme') + ':\n\n' + u);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(done, () => prompt('Copy the check-in link for ' + (p.name||'this programme'), u));
+    else prompt('Copy the check-in link for ' + (p.name||'this programme'), u);
+  };
+
     async function loadLoyaltyPlans() { try { const data = await API.get('/loyalty/plans'); st.loyaltyPlans = Array.isArray(data) ? data : []; renderApp(); } catch(e){ st.loyaltyPlans=[]; } }
   
   // ── Plans Tab ──
@@ -1225,17 +1242,19 @@ const LoyaltyPrograms = () => {
   // ── Programs Tab ──
   const programsTab = html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Programs</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button></div></div>
+    <div class="text-xs text-gray-500 mb-2">The check-in link is what your counter QR encodes — scanning it opens the customer check-in page for that programme. Copy it into your QR or print tool. It starts working once the programme is linked to a campaign (link it from the campaign).</div>
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Name</th><th>Currency</th><th>Points/Checkin</th><th>Streaks</th><th>Active</th><th>Actions</th></tr></thead>
+      <table class="table"><thead><tr><th>Name</th><th>Currency</th><th>Points/Checkin</th><th>Streaks</th><th>Active</th><th>Check-in link</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(p => html`<tr>
           <td class="font-medium">${p.name}</td>
           <td><span style="color:${p.currency_color||'#000'}">${p.currency_icon||''} ${p.currency_name||'Points'}</span></td>
           <td>${p.points_per_checkin||0}</td>
           <td>${p.streak_enabled ? html`<span class="badge badge-green">${p.streak_bonus||0} bonus / ${p.streak_days||0}d</span>` : html`<span class="badge badge-yellow">Off</span>`}</td>
           <td><span class="badge ${p.is_active ? 'badge-green' : 'badge-red'}">${p.is_active?'Active':'Inactive'}</span></td>
+          <td>${p.slug ? html`<a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(p)} target="_blank" rel="noopener">${checkinUrl(p)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(p)}>Copy</button>` : html`<span class="text-gray-400" title="This programme has no slug, so it has no check-in link.">—</span>`}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(p.id)}>Delete</button></td>
         </tr>`)}
-        ${filtered.length === 0 && html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No loyalty programs yet. Create one to start.</td></tr>`}
+        ${filtered.length === 0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No loyalty programs yet. Create one to start.</td></tr>`}
       </tbody></table>
     </div>
   </div>`;
@@ -1368,6 +1387,7 @@ const LoyaltyPrograms = () => {
   // ── Program Edit Modal ──
   const editModal = st.showModal ? html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
     <div class="modal-content" style="max-width:560px"><h3 class="text-lg font-bold mb-4">${st.editItem&&st.editItem.id ? 'Edit' : 'Add'} Loyalty Program</h3>
+      ${st.editItem && st.editItem.slug ? html`<div class="text-xs text-gray-500 mb-3">Counter check-in link: <a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(st.editItem)} target="_blank" rel="noopener">${checkinUrl(st.editItem)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(st.editItem)}>Copy</button></div>` : ''}
       ${(() => { 
         let p = st.editItem||{};
         let name = p.name||''; let currency = p.currency_name||''; let icon = p.currency_icon||''; 

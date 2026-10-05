@@ -204,7 +204,7 @@ pub async fn register(
         if let Some(program_member) = referrer {
             // Get program for referral_bonus amount
             let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-                r#"SELECT id, campaign_id, name, recognition_method,
+                r#"SELECT id, campaign_id, name, slug, recognition_method,
                           points_per_checkin, max_checkins_per_day,
                           point_decay_days, is_active, created_at,
                           tiers_enabled, milestones_enabled, streak_enabled,

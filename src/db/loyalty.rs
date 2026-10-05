@@ -97,6 +97,12 @@ pub struct LoyaltyProgram {
     pub id: uuid::Uuid,
     pub campaign_id: Option<uuid::Uuid>,
     pub name: String,
+    /// The identifier a printed counter QR carries (`/loyalty-checkin/<slug>`, kanban t_25e9f950)
+    /// and the UNIQUE key the public lookup resolves FIRST. Nullable in the database — a row that
+    /// predates migration 20261004_loyalty_program_slug_unique.sql and was never re-saved has none
+    /// (Postgres treats NULLs as distinct, so it cannot break the index) — hence Option, and hence
+    /// the tenant console renders a link only when there is a slug to encode (kanban t_e8faac56).
+    pub slug: Option<String>,
     pub recognition_method: String,
     pub points_per_checkin: i32,
     pub max_checkins_per_day: i32,
@@ -121,7 +127,7 @@ pub struct LoyaltyProgram {
 /// Get a loyalty program by ID or slug.
 pub async fn get_program(pool: &PgPool, program_id: &Uuid) -> Result<LoyaltyProgram, AppError> {
     let program = sqlx::query_as::<_, LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
@@ -148,7 +154,7 @@ pub async fn get_program_by_campaign(
     campaign_id: &Uuid,
 ) -> Result<LoyaltyProgram, AppError> {
     let program = sqlx::query_as::<_, LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,

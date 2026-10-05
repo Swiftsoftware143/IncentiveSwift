@@ -170,6 +170,19 @@ pub async fn approve_reward(
 }
 
 /// GET /api/v1/loyalty/programs — list all loyalty programs for the authenticated user's account.
+///
+/// What changed (kanban t_e8faac56): the response now carries each programme's `slug` — the
+/// identifier its printed counter QR encodes (`https://app.incentiveswift.com/loyalty-checkin/<slug>`,
+/// kanban t_25e9f950) — so a tenant can actually obtain/reprint the link. Because the slug is the
+/// tenant's own key, the list must be scoped to that tenant: the old
+/// `WHERE c.account_id = $1 OR lp.campaign_id IS NULL` arm handed EVERY authenticated account every
+/// campaign-less programme (measured on the live app: the ZaarHub programme, campaign_id NULL, was
+/// listed for all 16 accounts). Ownership is now explicit — `loyalty_programs.account_id`, written
+/// by `create_program` and backfilled by migration 20261005_loyalty_program_account_owner.sql — so
+/// a programme the console creates (no campaign_id) is still listed for its creator and for nobody
+/// else. The two campaign pointers stay as well, because that is how a programme is wired for its
+/// check-in link (`campaigns.loyalty_program_id` first, the canonical one every loyalty path reads)
+/// and because a row predating the owner column can still be matched through them.
 pub async fn list_programs(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -178,7 +191,7 @@ pub async fn list_programs(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
     let programs = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT lp.id, lp.campaign_id, lp.name, lp.recognition_method,
+        r#"SELECT lp.id, lp.campaign_id, lp.name, lp.slug, lp.recognition_method,
                   lp.points_per_checkin, lp.max_checkins_per_day,
                   lp.point_decay_days, lp.is_active, lp.created_at,
                   lp.tiers_enabled, lp.milestones_enabled, lp.streak_enabled,
@@ -187,7 +200,10 @@ pub async fn list_programs(
                   lp.currency_name, lp.currency_icon, lp.currency_color
            FROM loyalty_programs lp
            LEFT JOIN campaigns c ON c.id = lp.campaign_id
-           WHERE c.account_id = $1 OR lp.campaign_id IS NULL
+           WHERE lp.account_id = $1
+              OR c.account_id = $1
+              OR EXISTS (SELECT 1 FROM campaigns fwd
+                          WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $1)
            ORDER BY lp.name"#,
     )
     .bind(account_id)
@@ -365,14 +381,19 @@ pub async fn create_program(
     let currency_icon = body.currency_icon.unwrap_or_else(|| "⭐".to_string());
     let currency_color = body.currency_color.unwrap_or_else(|| "#0d9488".to_string());
 
+    // The OWNER (migration 20261005_loyalty_program_account_owner.sql). `loyalty_programs` had no
+    // account column, so a campaign-less programme — which is every programme the console creates,
+    // its "+ Add Program" modal sends no campaign_id — had no tenant at all, and `list_programs`
+    // covered that shape with an `OR lp.campaign_id IS NULL` arm that listed it for EVERY
+    // authenticated account. The authenticated caller is the owner, and the read is scoped by it.
     let mut slug = base.clone();
     let mut attempt = 1u32;
     loop {
         match sqlx::query(
             r#"INSERT INTO loyalty_programs (id, campaign_id, name, slug, recognition_method,
                 points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
-                currency_name, currency_icon, currency_color)
-               VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11)"#,
+                currency_name, currency_icon, currency_color, account_id)
+               VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11, $12)"#,
         )
         .bind(id)
         .bind(campaign_id)
@@ -385,6 +406,7 @@ pub async fn create_program(
         .bind(&currency_name)
         .bind(&currency_icon)
         .bind(&currency_color)
+        .bind(account_id)
         .execute(&state.db)
         .await
         {
@@ -400,7 +422,7 @@ pub async fn create_program(
     }
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
@@ -464,7 +486,7 @@ pub async fn update_program(
     .await?;
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
@@ -675,7 +697,7 @@ pub async fn online_visit(
 
     // 2. Get program config for points_per_visit
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
@@ -841,7 +863,7 @@ pub async fn online_share(
 
     // 2. Get program config for social_share_points
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
                   point_decay_days, is_active, created_at,
                   tiers_enabled, milestones_enabled, streak_enabled,
