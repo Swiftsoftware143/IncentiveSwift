@@ -314,6 +314,24 @@ pub struct RewardTierUpdateInput {
     pub marketing_boost: Option<serde_json::Value>,
 }
 
+/// The identifier a printed counter QR carries for a programme: the programme's name,
+/// slugified. UNIQUE by migration (`loyalty_programs_slug_uidx`) and STABLE — written once by
+/// `create_program` and never changed by `update_program`, because a QR already on a counter
+/// encodes this exact string (see `public_program`, kanban t_25e9f950). Non-alphanumeric runs
+/// collapse to a single `-`, so "Bob's Bar" and "Bob  Bar" both derive `bob-s-bar` and the
+/// second programme takes the next free suffixed candidate.
+fn slugify_program_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.trim().chars() {
+        if ch.is_alphanumeric() {
+            out.extend(ch.to_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
 /// POST /api/v1/loyalty/programs — create program.
 pub async fn create_program(
     State(state): State<AppState>,
@@ -326,24 +344,60 @@ pub async fn create_program(
     let id = Uuid::new_v4();
     let campaign_id = body.campaign_id.and_then(|s| Uuid::parse_str(&s).ok());
 
-    sqlx::query(
-        r#"INSERT INTO loyalty_programs (id, campaign_id, name, recognition_method,
-            points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
-            currency_name, currency_icon, currency_color)
-           VALUES ($1, $2, $3, 'both', $4, $5, $6, $7, $8, $9, $10)"#,
-    )
-    .bind(id)
-    .bind(campaign_id)
-    .bind(&body.name)
-    .bind(body.points_per_checkin.unwrap_or(10))
-    .bind(body.max_checkins_per_day.unwrap_or(1))
-    .bind(body.point_decay_days)
-    .bind(body.is_active.unwrap_or(true))
-    .bind(body.currency_name.unwrap_or_else(|| "Points".to_string()))
-    .bind(body.currency_icon.unwrap_or_else(|| "⭐".to_string()))
-    .bind(body.currency_color.unwrap_or_else(|| "#0d9488".to_string()))
-    .execute(&state.db)
-    .await?;
+    // The QR identifier (see slugify_program_name). The UNIQUE index — not the conflict retry
+    // below — is the guarantee, and the retry is why a legitimate name clash is not a 500: a
+    // concurrent create of the same name can win the bare form between the attempt and the
+    // INSERT, which raises 23505 on `loyalty_programs_slug_uidx`; take the next suffixed
+    // candidate instead.
+    let base = {
+        let s = slugify_program_name(&body.name);
+        if s.is_empty() {
+            "program".to_string()
+        } else {
+            s
+        }
+    };
+    let points_per_checkin = body.points_per_checkin.unwrap_or(10);
+    let max_checkins_per_day = body.max_checkins_per_day.unwrap_or(1);
+    let point_decay_days = body.point_decay_days;
+    let is_active = body.is_active.unwrap_or(true);
+    let currency_name = body.currency_name.unwrap_or_else(|| "Points".to_string());
+    let currency_icon = body.currency_icon.unwrap_or_else(|| "⭐".to_string());
+    let currency_color = body.currency_color.unwrap_or_else(|| "#0d9488".to_string());
+
+    let mut slug = base.clone();
+    let mut attempt = 1u32;
+    loop {
+        match sqlx::query(
+            r#"INSERT INTO loyalty_programs (id, campaign_id, name, slug, recognition_method,
+                points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
+                currency_name, currency_icon, currency_color)
+               VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11)"#,
+        )
+        .bind(id)
+        .bind(campaign_id)
+        .bind(&body.name)
+        .bind(&slug)
+        .bind(points_per_checkin)
+        .bind(max_checkins_per_day)
+        .bind(point_decay_days)
+        .bind(is_active)
+        .bind(&currency_name)
+        .bind(&currency_icon)
+        .bind(&currency_color)
+        .execute(&state.db)
+        .await
+        {
+            Ok(_) => break,
+            Err(sqlx::Error::Database(ref d))
+                if d.constraint() == Some("loyalty_programs_slug_uidx") && attempt < 50 =>
+            {
+                attempt += 1;
+                slug = format!("{}-{}", base, attempt);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, recognition_method,
@@ -381,6 +435,10 @@ pub async fn update_program(
 
     let _ = existing;
 
+    // NOTE: `slug` is deliberately NOT updated here. It is the identifier a printed counter QR
+    // carries (kanban t_25e9f950), so a rename must not silently invalidate a QR already on a
+    // business's counter; the lookup resolves the printed slug first and only falls back to the
+    // name-derived form when that is unambiguous.
     sqlx::query(
         r#"UPDATE loyalty_programs
            SET name = COALESCE($1, name),
@@ -1160,12 +1218,22 @@ pub async fn set_secret_code(
 /// answers with only what that page renders — never a member balance, a contact
 /// or a secret — and returns 404 for anything unknown.
 ///
-/// `slug` is accepted in BOTH forms the app itself produces, because the two
-/// disagree: `program_qr` writes the *program name* slug into the QR
-/// (`name.to_lowercase().replace(' ', "-")`), while the check-in endpoint
-/// resolves `program_slug` through `get_campaign_by_slug`. The response always
-/// carries the campaign slug, so a page loaded from either form can still
-/// complete a check-in.
+/// `slug` is accepted in BOTH forms the app itself produces:
+///   1. a CAMPAIGN slug (`campaigns.slug`, globally unique) — what the
+///      check-in endpoint itself resolves; and
+///   2. a PROGRAMME slug (`loyalty_programs.slug`, UNIQUE since migration
+///      `20261004_loyalty_program_slug_unique.sql` and written by
+///      `create_program`) — the identifier the printed QR carries.
+/// The response always carries the campaign slug, so a page loaded from either
+/// form can still complete a check-in.
+///
+/// A third, LEGACY form is still honoured: the name-derived slug old QRs carry
+/// (`name.to_lowercase().replace(' ', "-")`, the way the retired `program_qr`
+/// built them). It resolves only when it identifies EXACTLY ONE programme —
+/// an ambiguous string carries no tenant, so it must resolve to nothing rather
+/// than guess a winner (kanban t_25e9f950: it used to pick the OLDEST row
+/// across all tenants, so one tenant's QR rendered and credited another
+/// tenant's programme).
 pub async fn public_program(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -1173,19 +1241,62 @@ pub async fn public_program(
     let campaign = match crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await {
         Ok(c) => c,
         Err(AppError::NotFound(_)) => {
-            // Program-name slug, spelled exactly the way program_qr derived it.
-            let program_id: Option<Uuid> = sqlx::query_scalar(
-                r#"SELECT id FROM loyalty_programs
-                    WHERE lower(replace(name, ' ', '-')) = lower($1)
-                    ORDER BY created_at ASC
-                    LIMIT 1"#,
-            )
-            .bind(&slug)
-            .fetch_optional(&state.db)
-            .await?;
-            let program_id = program_id.ok_or_else(|| {
-                AppError::NotFound("No loyalty program or campaign for that link".to_string())
-            })?;
+            // 1. The identifier the printed QR carries for a programme: `loyalty_programs.slug`,
+            //    UNIQUE since migration 20261004_loyalty_program_slug_unique.sql and written by
+            //    create_program below. One programme = one account, so this arm is tenant-scoped
+            //    by construction.
+            let by_slug: Option<Uuid> =
+                sqlx::query_scalar("SELECT id FROM loyalty_programs WHERE slug = $1")
+                    .bind(&slug)
+                    .fetch_optional(&state.db)
+                    .await?;
+
+            let program_id = match by_slug {
+                Some(id) => id,
+                None => {
+                    // 2. LEGACY form: the programme-name slug older QRs carry, spelled exactly
+                    //    the way the retired program_qr derived it. Resolve it ONLY when it
+                    //    identifies exactly ONE programme.
+                    //
+                    //    This arm used to be `... ORDER BY created_at ASC LIMIT 1` with no
+                    //    account predicate, so two tenants with the same programme name BOTH
+                    //    resolved to the OLDER tenant's programme — measured live (kanban
+                    //    t_25e9f950): tenant B's QR rendered business_name=ProbeCollideA and
+                    //    currency_name=AAA-CURRENCY, then POSTed the returned campaign slug to
+                    //    /loyalty/checkin, crediting tenant A's campaign. A string that matches
+                    //    more than one programme is genuinely ambiguous — the QR itself carries
+                    //    no tenant — so it must resolve to NOTHING. Refusing beats guessing
+                    //    wrong; the business reprints a QR carrying its own unique slug.
+                    let matches: i64 = sqlx::query_scalar(
+                        r#"SELECT count(*) FROM loyalty_programs
+                            WHERE lower(replace(name, ' ', '-')) = lower($1)"#,
+                    )
+                    .bind(&slug)
+                    .fetch_one(&state.db)
+                    .await?;
+
+                    if matches > 1 {
+                        return Err(AppError::NotFound(
+                            "That check-in link matches more than one business — ask the business to reprint its QR code."
+                                .to_string(),
+                        ));
+                    }
+
+                    sqlx::query_scalar(
+                        r#"SELECT id FROM loyalty_programs
+                            WHERE lower(replace(name, ' ', '-')) = lower($1)
+                            LIMIT 1"#,
+                    )
+                    .bind(&slug)
+                    .fetch_optional(&state.db)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::NotFound(
+                            "No loyalty program or campaign for that link".to_string(),
+                        )
+                    })?
+                }
+            };
             // Which campaign serves this programme? Resolve it the way EVERY other loyalty
             // path already does — the canonical forward link `campaigns.loyalty_program_id`
             // first, and only then the historical reverse pointer `loyalty_programs.campaign_id`
