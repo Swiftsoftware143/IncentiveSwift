@@ -326,11 +326,12 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 ### Loyalty — PIN Purchase Verification
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/loyalty/generate-pin` | POST | Business generates PIN for customer |
 | `/api/v1/loyalty/verify-purchase` | POST | Consumer enters PIN to verify purchase |
-| `/api/v1/loyalty/issue-voucher` | POST | Issue a cross-promo voucher |
 | `/api/v1/loyalty/my-vouchers/:contact_id` | GET | List active vouchers for a contact |
 | `/api/v1/loyalty/claim-voucher` | POST | Redeem a voucher by code |
+
+`/api/v1/loyalty/generate-pin` and `/api/v1/loyalty/issue-voucher` were retired (kanban
+t_b209d263): both were anonymous and unscoped, and neither had a live caller.
 
 ### Loyalty — Pledges (admin review)
 | Endpoint | Method | Description |

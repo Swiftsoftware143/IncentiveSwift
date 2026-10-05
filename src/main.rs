@@ -271,17 +271,24 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::portfolio_sync_handler::portfolio_sync_internal),
         )
         // Loyalty V2 — Purchase Verification & Vouchers (public)
-        .route(
-            "/api/v1/loyalty/generate-pin",
-            post(handlers::loyalty_v2::generate_pin),
-        )
+        // POST /api/v1/loyalty/generate-pin and POST /api/v1/loyalty/issue-voucher were RETIRED
+        // here (kanban t_b209d263). Neither took an `AuthenticatedUser` and neither carried an
+        // account predicate, so an uncredentialed caller could mint a live voucher (with a
+        // caller-chosen `discount_value`) or a pending `purchase_verifications` row against ANY
+        // active campaign, for ANY contact id, subject to no role check.
+        //   * issue-voucher had exactly ONE caller in the 8-app fleet — MultiDirectory's
+        //     `src/handlers/tag_automation.rs::execute_voucher_action` — and that call path is
+        //     retired: MD retired the IncentiveSwift loyalty integration on 2026-09-23
+        //     (`service="incentiveswift"` is refused with 400), its `tag_rules` table has 0 rows
+        //     ever, and the MD console's tag-rule form does not even offer `issue_voucher` as an
+        //     action. Nothing was left to predicate against, and no role bypass was invented.
+        //   * generate-pin had 0 callers anywhere and was the sole writer of
+        //     `purchase_verifications` (0 rows ever).
+        // 0 nginx hits for either path over 718k log lines. Both tables were empty before and
+        // after (proof: /opt/swift/audits/t_b209d263/proof.py).
         .route(
             "/api/v1/loyalty/verify-purchase",
             post(handlers::loyalty_v2::verify_purchase),
-        )
-        .route(
-            "/api/v1/loyalty/issue-voucher",
-            post(handlers::loyalty_v2::issue_voucher),
         )
         // Account-level loyalty routes (via auth)
         .route(

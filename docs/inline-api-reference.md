@@ -67,12 +67,18 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/loyalty/generate-pin` | None | `loyalty_v2::generate_pin` | Business generates 4-digit PIN |
-| POST | `/loyalty/verify-purchase` | None | `loyalty_v2::verify_purchase` | Consumer verifies purchase with PIN |
-| POST | `/loyalty/issue-voucher` | None | `loyalty_v2::issue_voucher` | Issue cross-promo voucher |
-| GET | `/loyalty/my-vouchers/:contact_id` | None | `loyalty_v2::list_my_vouchers` | List active vouchers |
+| POST | `/loyalty/verify-purchase` | JWT | `loyalty_v2::verify_purchase` | Consumer verifies purchase with PIN |
+| GET | `/loyalty/my-vouchers/:contact_id` | JWT | `loyalty_v2::list_my_vouchers` | List active vouchers |
 | POST | `/loyalty/claim-voucher` | None | `loyalty_v2::claim_voucher` | Redeem voucher by code |
-| GET | `/loyalty/rewards-earned/:contact_id` | None | `loyalty_v2::list_rewards_earned` | List earned rewards |
+| GET | `/loyalty/rewards-earned/:contact_id` | JWT | `loyalty_v2::list_rewards_earned` | List earned rewards |
+
+> `POST /loyalty/generate-pin` and `POST /loyalty/issue-voucher` were RETIRED in kanban
+> t_b209d263 (both anonymous and unscoped — any caller could mint a live voucher with a
+> caller-chosen discount, or a pending purchase verification, against any active campaign for
+> any contact id). Both now answer a bare 404. The Auth column above was measured live in the
+> same pass: `verify-purchase`, `my-vouchers` and `rewards-earned` answer 401 to an anonymous
+> caller (JWT); `claim-voucher` is keyed by a claim code (a bearer secret) and answers its own
+> JSON 404 for a bad code — it takes no credential by design.
 
 ## Admin — Pledges
 

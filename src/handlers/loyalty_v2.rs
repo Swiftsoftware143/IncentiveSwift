@@ -1,5 +1,8 @@
 //! Loyalty verification & voucher handlers
-//! PIN generation, receipt verification, rotating vouchers, business pledges
+//! Receipt verification (AuthenticatedUser), rotating vouchers, business pledges
+//!
+//! `generate_pin` and `issue_voucher` were RETIRED (kanban t_b209d263): both were anonymous and
+//! carried no account predicate. See the notes at each section.
 
 use axum::{
     extract::{Path, State},
@@ -12,60 +15,18 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::handlers::campaign_integrations;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 
 // ── Purchase Verification ──
-
-#[derive(Debug, Deserialize)]
-pub struct GeneratePinRequest {
-    pub campaign_slug: String,
-    pub business_id: Uuid,
-    pub business_name: Option<String>,
-    pub purchase_amount: Option<rust_decimal::Decimal>,
-}
-
-/// POST /api/v1/loyalty/generate-pin — business generates a 4-digit PIN for a customer purchase
-pub async fn generate_pin(
-    State(s): State<AppState>,
-    Json(req): Json<GeneratePinRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
-    )
-    .bind(&req.campaign_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
-
-    let pin: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(4)
-        .map(char::from)
-        .collect::<String>()
-        .to_uppercase();
-
-    let verification_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO purchase_verifications (id, campaign_id, business_id, business_name, verification_type, pin_code, purchase_amount, status)
-         VALUES ($1, $2, $3, $4, 'pin', $5, $6, 'pending')"
-    )
-    .bind(verification_id)
-    .bind(campaign.0)
-    .bind(req.business_id)
-    .bind(&req.business_name)
-    .bind(&pin)
-    .bind(req.purchase_amount)
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(json!({
-        "pin": pin,
-        "expires_in": "30 minutes",
-        "verification_id": verification_id
-    })))
-}
+//
+// `generate_pin` was RETIRED here (kanban t_b209d263): an anonymous 4-character PIN minter that
+// inserted a pending row into `purchase_verifications` for ANY active campaign with a
+// caller-chosen `business_id`/`business_name`/`purchase_amount`, and the sole writer of that
+// table (0 rows ever). Its partner `verify_purchase` below DOES take `AuthenticatedUser` and is
+// kept. The live purchase-verification flow is `purchase_verify` (below), which validates the
+// caller's OWN `accounts.purchase_pin` — that is what the tenant console and the served guide
+// describe, and what `generate_pin` never did.
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyPurchaseRequest {
@@ -190,100 +151,17 @@ pub async fn verify_purchase(
 }
 
 // ── Voucher Engine ──
-
-#[derive(Debug, Deserialize)]
-pub struct IssueVoucherRequest {
-    pub campaign_slug: String,
-    pub contact_id: Uuid,
-    pub source_business_id: Uuid,
-    pub target_business_id: Uuid,
-    pub discount_value: String,
-    pub voucher_type: Option<String>,
-    pub expires_in_days: Option<i32>,
-}
-
-/// POST /api/v1/loyalty/issue-voucher (internal, called after purchase verification)
-pub async fn issue_voucher(
-    State(s): State<AppState>,
-    Json(req): Json<IssueVoucherRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid, Uuid)>(
-        "SELECT id, account_id FROM campaigns WHERE slug = $1 AND status = 'active' LIMIT 1",
-    )
-    .bind(&req.campaign_slug)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
-    // The campaign's owner is whose contact this is (contact_tenants, t_369cb159).
-    let campaign_account = campaign.1;
-
-    let code: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(8)
-        .map(char::from)
-        .collect::<String>()
-        .to_uppercase();
-
-    let days = req.expires_in_days.unwrap_or(30);
-    let voucher_id = Uuid::new_v4();
-
-    sqlx::query(
-        "INSERT INTO vouchers (id, campaign_id, issued_to_contact_id, source_business_id, target_business_id,
-         voucher_type, discount_value, redemption_code, expires_at, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + make_interval(days => $9), 'active')"
-    )
-    .bind(voucher_id)
-    .bind(campaign.0)
-    .bind(req.contact_id)
-    .bind(req.source_business_id)
-    .bind(req.target_business_id)
-    .bind(req.voucher_type.clone().unwrap_or_else(|| "discount".to_string()))
-    .bind(&req.discount_value)
-    .bind(&code)
-    .bind(days)
-    .execute(&s.db)
-    .await?;
-
-    // Look up contact info for Marketing Boost payload
-    let mb_contact_lookup = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-        "SELECT email, first_name, last_name FROM contacts WHERE id = $1 \
-         AND EXISTS (SELECT 1 FROM contact_tenants ct \
-                     WHERE ct.contact_id = contacts.id AND ct.account_id = $2)",
-    )
-    .bind(req.contact_id)
-    .bind(campaign_account)
-    .fetch_optional(&s.db)
-    .await
-    .ok()
-    .flatten();
-
-    let (mb_email, mb_first_name, mb_last_name) = mb_contact_lookup.unwrap_or((None, None, None));
-
-    // Fire Marketing Boost webhook if configured
-    let mb_payload = json!({
-        "voucher_id": voucher_id,
-        "code": code,
-        "discount_value": req.discount_value,
-        "voucher_type": req.voucher_type,
-        "contact_id": req.contact_id,
-        "source_business_id": req.source_business_id,
-        "target_business_id": req.target_business_id,
-        "expires_in_days": days,
-        "email": mb_email,
-        "first_name": mb_first_name,
-        "last_name": mb_last_name,
-    });
-    campaign_integrations::fire_marketing_boost(&s, &campaign.0, "voucher_issued", &mb_payload)
-        .await;
-
-    Ok(Json(json!({
-        "voucher_id": voucher_id,
-        "code": code,
-        "discount": req.discount_value,
-        "expires_at": format!("{} days", days)
-    })))
-}
-
+//
+// `issue_voucher` (and the `IssueVoucherRequest` it took) was RETIRED here (kanban
+// t_b209d263): an anonymous, unscoped value-mint — the caller chose the campaign slug, the
+// recipient contact AND the discount value, and an uncredentialed request inserted a live
+// `vouchers` row. Its only fleet caller was MultiDirectory's
+// `tag_automation.rs::execute_voucher_action`, and that call path is retired (MD retired the
+// IncentiveSwift loyalty integration on 2026-09-23: `service="incentiveswift"` answers 400;
+// `tag_rules` has 0 rows ever and the MD console's tag-rule form does not offer the action).
+// The voucher lifecycle that remains is the guarded one: `issue_rotation_voucher` (called by
+// the AuthenticatedUser-guarded `verify_purchase`), `claim_voucher` (keyed by a claim code,
+// a bearer secret) and the AuthenticatedUser-scoped `list_my_vouchers`.
 /// GET /api/v1/loyalty/my-vouchers — list active vouchers for a contact
 pub async fn list_my_vouchers(
     State(s): State<AppState>,

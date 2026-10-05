@@ -156,13 +156,14 @@ POST /api/v1/channels/inbound          — Telnyx SMS/WhatsApp inbound (sms_hand
 
 **Loyalty V2 (purchase verification & vouchers):**
 ```
-POST /api/v1/loyalty/generate-pin      — Business generates PIN
-POST /api/v1/loyalty/verify-purchase   — Consumer verifies purchase
-POST /api/v1/loyalty/issue-voucher     — Issue cross-promo voucher
+POST /api/v1/loyalty/verify-purchase   — Consumer verifies purchase (JWT)
 GET  /api/v1/loyalty/my-vouchers/:id   — List active vouchers
 POST /api/v1/loyalty/claim-voucher     — Redeem voucher
-POST /api/v1/loyalty/redeem-reward     — Points for reward
 ```
+
+Retired here: `POST /api/v1/loyalty/generate-pin` and `POST /api/v1/loyalty/issue-voucher`
+(kanban t_b209d263 — both anonymous and unscoped); `POST /api/v1/loyalty/redeem-reward`
+(kanban t_32c87f33). All three now answer a bare 404.
 
 **Referral Engine:**
 ```
