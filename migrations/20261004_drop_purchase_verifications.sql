@@ -1,0 +1,49 @@
+-- 20261004_drop_purchase_verifications.sql  (kanban t_85a2b736)
+--
+-- DROP the ORPHANED `purchase_verifications` table.
+--
+-- WHY IT IS SAFE TO DROP (measured, not inferred)
+--   * 0 writers in `src/` — the last one (`generate_pin`) was retired in t_b209d263; the last
+--     writer of any kind (`verify_purchase`'s two UPDATEs) was retired in t_7a16bf0b.
+--   * 0 readers in `src/` — `verify_purchase`, the last reader, was retired in t_7a16bf0b and
+--     `loyalty_v2::issue_rotation_voucher` (its only caller) went with it.
+--   * 0 rows EVER — `SELECT count(*) FROM purchase_verifications` -> 0, and 0 at every point in
+--     t_b209d263's, t_7a16bf0b's and this card's proofs.
+--   * 0 inbound foreign keys, 0 views / routines / triggers referencing it (checked before the
+--     drop), 0 fleet callers, 0 nginx hits over 719k access-log lines.
+--   * NOT a seed table: no `*seed*` migration inserts it
+--     (`grep -n "purchase_verifications" migrations/*seed*` is empty).
+--
+-- WHAT THIS REMOVES FROM THE SCHEMA (the drift arithmetic a reader needs)
+--   1 table + 14 columns + 3 constraints (pkey + 2 FKs: campaign_id -> campaigns(id) ON DELETE
+--   SET NULL, contact_id -> contacts(id) ON DELETE SET NULL) + 3 indexes (pkey +
+--   idx_purchase_verifications_contact_created + idx_purchase_verifications_pending_pin).
+--   The deploy's step-0b from-zero COUNTS line therefore DROPS by exactly those amounts —
+--   1 table, 14 columns, 3 constraints, 3 indexes — and that is the EXPECTED arithmetic, NOT a
+--   regression. `RESULT: PASS ... 0 missing/extra in every class` must still hold, because BOTH
+--   sides (migrations-built and live) lose the same objects.
+--
+-- CREATED BY
+--   migrations/20260923_purchase_verifications.sql (CREATE TABLE IF NOT EXISTS) — that APPLIED
+--   migration is left untouched; this is a NEW file, per house rule "never edit an APPLIED
+--   migration".
+--
+-- DO NOT DROP `vouchers`
+--   `vouchers` is NOT orphaned (contrary to t_7a16bf0b's card text; correction recorded in
+--   /opt/swift/audits/t_7a16bf0b/EVIDENCE.md): `survey_response`
+--   (`src/handlers/loyalty_v2.rs`, POST /api/v1/campaigns/external/survey-response) still INSERTs
+--   a live $50 restaurant-card voucher anonymously, and `claim_voucher` / `list_my_vouchers` /
+--   `get_vouchers` still read that table. `vouchers` has its own card (the anonymous mint).
+--
+-- BACKUP
+--   Pre-drop dump (empty table, taken anyway and recorded) at
+--   /opt/swift/backups/t_85a2b736/purchase_verifications.pre-drop.sql
+--   sha256 98cb2b2be093a410b214f45f7d5cb6d06c8974b1f999dfb17269e7c330444d95
+--
+-- MARKER DIRECTION
+--   This header quotes `purchase_verifications`, and the runner stages migration files into the
+--   image at /app/migrations (the runner reads the directory at runtime — NOT `include_str!`), so
+--   the identifier count goes UP in `/app/migrations/` and stays 0 in the ELF itself. The clean
+--   ELF marker remains the retired route literal `loyalty/verify-purchase`, already 0.
+
+DROP TABLE IF EXISTS purchase_verifications;
