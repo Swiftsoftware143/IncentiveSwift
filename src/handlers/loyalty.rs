@@ -447,13 +447,30 @@ pub async fn update_program(
 ) -> Result<Json<Value>, AppError> {
     let program_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    // Verify program exists
-    let existing = sqlx::query_scalar::<_, Uuid>("SELECT id FROM loyalty_programs WHERE id = $1")
-        .bind(program_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Loyalty program not found".to_string()))?;
+    // Ownership gate (kanban t_1fe72bf8). The SAME predicate `list_programs` reads with: the
+    // explicit owner column, the campaign this programme points at (the reverse pointer), or a
+    // campaign that points FORWARD at this programme (the canonical link every loyalty path
+    // reads first). A programme the caller owns none of those ways gets the same 404 an absent
+    // id gets — never a role bypass, because the read has none either. Without this, ANY
+    // authenticated account could rename, re-price, deactivate or delete any tenant's programme
+    // by id (the row carries no ownership in the statement at all).
+    let existing = sqlx::query_scalar::<_, Uuid>(
+        r#"SELECT lp.id FROM loyalty_programs lp
+           WHERE lp.id = $1
+             AND (lp.account_id = $2
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $2)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))"#,
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Loyalty program not found".to_string()))?;
 
     let _ = existing;
 
@@ -461,17 +478,25 @@ pub async fn update_program(
     // carries (kanban t_25e9f950), so a rename must not silently invalidate a QR already on a
     // business's counter; the lookup resolves the printed slug first and only falls back to the
     // name-derived form when that is unambiguous.
-    sqlx::query(
-        r#"UPDATE loyalty_programs
-           SET name = COALESCE($1, name),
-               points_per_checkin = COALESCE($2, points_per_checkin),
-               max_checkins_per_day = COALESCE($3, max_checkins_per_day),
-               point_decay_days = COALESCE($4, point_decay_days),
-               is_active = COALESCE($5, is_active),
-               currency_name = COALESCE($6, currency_name),
-               currency_icon = COALESCE($7, currency_icon),
-               currency_color = COALESCE($8, currency_color)
-           WHERE id = $9"#,
+    // The predicate is bound on the UPDATE itself as well, so a foreign id cannot be written
+    // even if the gate above were reached with a stale row (belt-and-braces, and the
+    // `rows_affected() == 0` check below is what turns it into the 404).
+    let updated = sqlx::query(
+        r#"UPDATE loyalty_programs AS lp
+           SET name = COALESCE($1, lp.name),
+               points_per_checkin = COALESCE($2, lp.points_per_checkin),
+               max_checkins_per_day = COALESCE($3, lp.max_checkins_per_day),
+               point_decay_days = COALESCE($4, lp.point_decay_days),
+               is_active = COALESCE($5, lp.is_active),
+               currency_name = COALESCE($6, lp.currency_name),
+               currency_icon = COALESCE($7, lp.currency_icon),
+               currency_color = COALESCE($8, lp.currency_color)
+           WHERE lp.id = $9
+             AND (lp.account_id = $10
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $10)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $10))"#,
     )
     .bind(&body.name)
     .bind(body.points_per_checkin)
@@ -482,8 +507,13 @@ pub async fn update_program(
     .bind(body.currency_icon)
     .bind(body.currency_color)
     .bind(program_id)
+    .bind(account_id)
     .execute(&state.db)
     .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound("Loyalty program not found".to_string()));
+    }
 
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, slug, recognition_method,
@@ -511,10 +541,26 @@ pub async fn delete_program(
     let program_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM loyalty_programs WHERE id = $1")
-        .bind(program_id)
-        .execute(&state.db)
-        .await?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // Ownership predicate ON the statement (kanban t_1fe72bf8) — the same three arms
+    // `list_programs` reads with, so a foreign id deletes nothing and answers the same 404 an
+    // absent id gets. `campaigns.loyalty_program_id` is ON DELETE SET NULL, so removing a
+    // programme a campaign still points at is already safe.
+    let result = sqlx::query(
+        r#"DELETE FROM loyalty_programs AS lp
+           WHERE lp.id = $1
+             AND (lp.account_id = $2
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $2)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))"#,
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Loyalty program not found".to_string()));
@@ -1163,13 +1209,25 @@ pub async fn set_secret_code(
     let program_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
 
-    // Verify program exists and user has access via campaign
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // Verify the programme exists AND belongs to the caller. The comment here always claimed
+    // "and user has access via campaign", but the statement never checked it (kanban
+    // t_1fe72bf8): any authenticated account could set or clear ANY programme's secret code —
+    // the code that programme's members redeem for points. Same ownership predicate as
+    // `list_programs`; a programme the caller does not own is the same 404 an absent id gets.
     let existing = sqlx::query_scalar::<_, Uuid>(
         r#"SELECT lp.id FROM loyalty_programs lp
-           LEFT JOIN campaigns c ON c.id = lp.campaign_id
-           WHERE lp.id = $1"#,
+           WHERE lp.id = $1
+             AND (lp.account_id = $2
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $2)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))"#,
     )
     .bind(program_id)
+    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Program not found".to_string()))?;
