@@ -62,7 +62,6 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | DELETE | `/loyalty/programs/:id` | JWT | `loyalty::delete_program` | Delete program |
 | GET | `/loyalty/check-plan` | JWT | `loyalty::check_plan_loyalty` | Check plan loyalty access |
 | PUT | `/loyalty/programs/:id/secret-code` | JWT | `loyalty::set_secret_code` | Set program secret code |
-| GET | `/loyalty/programs/:id/qr` | JWT | `loyalty::program_qr` | Get program QR code |
 
 ## Loyalty V2 — Purchase Verification & Vouchers
 
@@ -73,18 +72,15 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | POST | `/loyalty/issue-voucher` | None | `loyalty_v2::issue_voucher` | Issue cross-promo voucher |
 | GET | `/loyalty/my-vouchers/:contact_id` | None | `loyalty_v2::list_my_vouchers` | List active vouchers |
 | POST | `/loyalty/claim-voucher` | None | `loyalty_v2::claim_voucher` | Redeem voucher by code |
-| POST | `/loyalty/expire-vouchers` | None | `loyalty_v2::expire_vouchers` | Expire overdue vouchers (cron) |
 | POST | `/loyalty/redeem-reward` | None | `loyalty_v2::redeem_reward` | Redeem points for reward |
 | GET | `/loyalty/rewards-earned/:contact_id` | None | `loyalty_v2::list_rewards_earned` | List earned rewards |
 
-## Business Pledges
-
-| Method | Path | Auth | Handler | Description |
-|--------|------|------|---------|-------------|
-| POST | `/business/pledge` | None | `loyalty_v2::create_pledge` | Submit reward offer |
-| GET | `/business/pledges/:business_id` | None | `loyalty_v2::list_business_pledges` | List pledges for business |
-
 ## Admin — Pledges
+
+> The anonymous business-facing pledge arms (`POST /business/pledge`,
+> `GET /business/pledges/:business_id`) were RETIRED in kanban t_5e244255 — 0 callers, 0 hits, 0
+> rows, directory-entity ids with no account owner derivable here. The live pledge flow is the
+> admin review surface below.
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|

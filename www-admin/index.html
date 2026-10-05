@@ -1095,7 +1095,7 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], badges: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false });
   if (!st._loaded) { st._loaded = true; loadPrograms(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
@@ -1105,7 +1105,6 @@ const LoyaltyPrograms = () => {
   async function loadPledges() { try { const data = await API.get('/admin/pledges'); st.pledges = data.pending_pledges||[]; renderApp(); } catch(e){ st.pledges=[]; } }
   async function loadReferrals() { st.refLoading = true; renderApp(); try { const data = await API.get('/loyalty/referrals'); st.referrals = data.referrals||[]; st.referralCount = data.referral_count||0; st.referralCode = data.code||null; st.refLoading=false; renderApp(); } catch(e){ st.referrals=[]; st.refLoading=false; renderApp(); } }
   async function loadCredits() { try { const data = await API.get('/credits/balance'); const hist = await API.get('/credits/history'); st.credits = {balance:data,history:hist.transactions||hist||[]}; renderApp(); } catch(e){ st.credits={balance:{},history:[]}; } }
-  async function loadBadges(progId) { try { const data = await API.get('/loyalty/badges/program/'+progId); st.badges = data.badges||[]; renderApp(); } catch(e){ st.badges=[]; } }
   async function loadDashboard(progSlug) { try { const data = await API.get('/loyalty/dashboard/admin/'+progSlug); st.dashboard = data; renderApp(); } catch(e){ st.dashboard=null; } }
   async function loadLedger() {
     try { const data = await API.get('/admin/treasury/summary'); st.treasury = data; renderApp(); } catch(e){ st.treasury = null; }
@@ -1183,7 +1182,7 @@ const LoyaltyPrograms = () => {
   };
   const remove = async (id) => { if(!confirm('Delete?')) return; await API.del('/loyalty/programs/'+id); loadPrograms(); };
 
-  const tabs = ['Plans','Programs','Tiers','Rewards','Vouchers','Pledges','Referrals','Credits','Badges','Dashboard','Ledger','Settings'];
+  const tabs = ['Plans','Programs','Tiers','Rewards','Vouchers','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
     if (t==='Tiers'&&st.list.length>0) loadTiers(st.list[0].id);
@@ -1192,7 +1191,6 @@ const LoyaltyPrograms = () => {
     if (t==='Pledges') loadPledges();
     if (t==='Referrals') loadReferrals();
     if (t==='Credits') loadCredits();
-    if (t==='Badges'&&st.list.length>0) loadBadges(st.list[0].slug||st.list[0].id);
     if (t==='Dashboard'&&st.list.length>0) loadDashboard(st.list[0].slug||st.list[0].id);
     if (t==='ledger' || t==='Ledger') { loadLedger(); }
     if (t==='site-config' || t==='SiteConfig') { loadSiteConfig(); }
@@ -1347,20 +1345,6 @@ const LoyaltyPrograms = () => {
         </tr>`)}
         ${(st.credits.history||[]).length===0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No transaction history.</td></tr>`}
       </tbody></table>
-    </div>
-  </div>`;
-
-  // ── Badges Tab ──
-  const badgesTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Badges</h2><span class="text-sm text-gray-500">${st.badges.length} enrolled</span></div>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      ${st.badges.map(b => html`<div class="card text-center">
-        <div style="font-size:32px;margin-bottom:8px">🏅</div>
-        <h3 class="font-bold">${b.name||b.entity_name||'Badge'}</h3>
-        <p class="text-sm text-gray-500">${b.entity_type||b.type||''}</p>
-        <span class="badge badge-green mt-2">Active</span>
-      </div>`)}
-      ${st.badges.length===0 && html`<div class="card col-span-full text-center text-gray-400 py-8">No badges enrolled yet. Businesses and members enroll via the directory.</div>`}
     </div>
   </div>`;
 
@@ -1623,7 +1607,7 @@ const ledgerTab = html`<div>
   </div>
 </div>`;
 
-  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='vouchers' ? vouchersTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='badges' ? badgesTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='vouchers' ? vouchersTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     <div class="flex gap-2 mb-4 flex-wrap">${tabs.map(t => html`<button class="btn btn-sm ${st.tab===t.toLowerCase()?'':'btn-outline'}" onClick=${()=>setTab(t)}>${t}</button>`)}</div>
@@ -3014,7 +2998,7 @@ const OPS_PANELS = [
 ,
 {"id": "surfaces-kiosk", "title": "14 · Surfaces (kiosk page: /tablet-demo.html)", "list": "/surfaces", "actions": [{"label": "Update surface", "method": "PUT", "path": "/surfaces/:id", "json": true, "fields": ["id", "json"]}, {"label": "Delete surface", "method": "DELETE", "path": "/surfaces/:id", "fields": ["id"]}]}
 ,
-{"id": "loyalty-analytics", "title": "15 · Loyalty analytics, badges & raffles", "actions": [{"label": "Program dashboard", "method": "GET", "path": "/loyalty/dashboard/admin/:id", "fields": ["id"], "hint": "id = program slug, e.g. rewards"}, {"label": "Member badge", "method": "GET", "path": "/loyalty/badge/member/:member_id", "fields": ["member_id"]}, {"label": "Member scans", "method": "GET", "path": "/loyalty/scans/member/:member_id", "fields": ["member_id"]}, {"label": "Redraw a raffle", "method": "POST", "path": "/raffles/:slug/redraw", "fields": ["slug"]}]}
+{"id": "loyalty-analytics", "title": "15 · Loyalty analytics & raffles", "actions": [{"label": "Program dashboard", "method": "GET", "path": "/loyalty/dashboard/admin/:id", "fields": ["id"], "hint": "id = program slug, e.g. rewards"}, {"label": "Member scans", "method": "GET", "path": "/loyalty/scans/member/:member_id", "fields": ["member_id"]}, {"label": "Redraw a raffle", "method": "POST", "path": "/raffles/:slug/redraw", "fields": ["slug"]}]}
 ,
 {"id": "campaign-secret-codes", "title": "16 · Campaign secret codes (promo codes → campaign points)", "actions": [{"label": "List codes for a campaign", "method": "GET", "path": "/campaigns/:campaign_id/secret-codes", "fields": ["campaign_id"], "hint": "campaign_id = campaign UUID"}, {"label": "Create code", "method": "POST", "path": "/campaigns/:campaign_id/secret-codes", "json": true, "fields": ["campaign_id", "json"], "hint": "{\"code\":\"SPRING25\",\"points\":100,\"max_uses\":50,\"expires_at\":\"2030-01-01T00:00:00Z\"}  (omit expires_at for a code that never expires)"}, {"label": "Update code", "method": "PUT", "path": "/campaigns/:campaign_id/secret-codes/:code_id", "json": true, "fields": ["campaign_id", "code_id", "json"], "hint": "{\"is_active\":false}   expires_at is tri-state: omit the key = keep the date, \"2031-06-30T00:00:00Z\" = change it, null = clear it (code never expires) e.g. {\"expires_at\":null}"}, {"label": "Delete code", "method": "DELETE", "path": "/campaigns/:campaign_id/secret-codes/:code_id", "fields": ["campaign_id", "code_id"]}, {"label": "List redemptions", "method": "GET", "path": "/campaigns/:campaign_id/secret-codes/redemptions", "fields": ["campaign_id"]}, {"label": "Redeem code", "method": "POST", "path": "/campaigns/:campaign_id/redeem-code", "json": true, "fields": ["campaign_id", "json"], "hint": "{\"code\":\"SPRING25\",\"contact_id\":\"...\"}"}]}
 ,

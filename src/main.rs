@@ -308,24 +308,20 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/claim-voucher",
             post(handlers::loyalty_v2::claim_voucher),
         )
-        .route(
-            "/api/v1/loyalty/expire-vouchers",
-            post(handlers::loyalty_v2::expire_vouchers),
-        )
+        // POST /api/v1/loyalty/expire-vouchers was RETIRED here (kanban t_5e244255): an anonymous
+        // mutation on a public mount that expired EVERY active voucher for EVERY account, called by
+        // no cron, no repo and no page (0 nginx hits). The fleet's expiry sweep is MultiDirectory's
+        // own /api/v1/networks/<slug>/clear/expire (scripts/md-clear-expire.sh).
         // Purchase Verify (business scanner — auto-credit)
         .route(
             "/api/v1/loyalty/purchase/verify",
             post(handlers::loyalty_v2::purchase_verify),
         )
-        // Loyalty V2 — Business Pledges
-        .route(
-            "/api/v1/business/pledge",
-            post(handlers::loyalty_v2::create_pledge),
-        )
-        .route(
-            "/api/v1/business/pledges/:business_id",
-            get(handlers::loyalty_v2::list_business_pledges),
-        )
+        // POST /api/v1/business/pledge and GET /api/v1/business/pledges/:business_id were RETIRED
+        // here (kanban t_5e244255): the anonymous half of the never-wired MultiDirectory pledge
+        // integration - 0 callers, 0 nginx hits, `business_pledges` 0 rows, and `business_id` is a
+        // directory entity, so no account owner is derivable in this app. The live pledge flow is
+        // the admin-guarded /api/v1/admin/pledges family the admin console already uses.
         // Reward redemption
         .route(
             "/api/v1/loyalty/redeem-reward",
@@ -453,32 +449,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/clearinghouse/supplier-config/:id",
             put(handlers::clearinghouse_config_handler::update_supplier_config),
         )
-        // Loyalty Badge endpoints (Phase 1)
-        .route(
-            "/api/v1/loyalty/badge/business/:business_id",
-            get(handlers::loyalty_badges::get_business_badge),
-        )
-        .route(
-            "/api/v1/loyalty/badge/supplier/:supplier_id",
-            get(handlers::loyalty_badges::get_supplier_badge),
-        )
-        .route(
-            "/api/v1/loyalty/badge/member/:contact_id",
-            get(handlers::loyalty_badges::get_member_badge),
-        )
-        .route(
-            "/api/v1/loyalty/badges/program/:program_slug",
-            get(handlers::loyalty_badges::get_program_badges),
-        )
-        // Loyalty Enrollment endpoints (Phase 2)
-        .route(
-            "/api/v1/loyalty/enroll",
-            post(handlers::loyalty_badges::enroll_entity),
-        )
-        .route(
-            "/api/v1/loyalty/unenroll",
-            post(handlers::loyalty_badges::unenroll_entity),
-        )
+        // The anonymous loyalty Badge + Enrollment surface was RETIRED here (kanban t_5e244255):
+        // GET /api/v1/loyalty/badge/business/:business_id, .../badge/supplier/:supplier_id,
+        // .../badge/member/:contact_id, GET /api/v1/loyalty/badges/program/:program_slug and
+        // POST /api/v1/loyalty/enroll + /unenroll. Measured live 2026-10-04: 0 callers in the
+        // 8-app fleet (MultiDirectory's loyalty is native), 0 nginx hits, `loyalty_enrollments`
+        // 0 rows - and with `enroll` gone nothing can ever write one, so every badge arm could
+        // only ever have answered "not enrolled". The business/supplier ids are MultiDirectory
+        // entities, so no account owner is derivable in THIS app; the sibling external surface
+        // was retired the same way (t_f76c9950).
         // Loyalty QR endpoints (Phase 3)
         .route(
             "/api/v1/loyalty/member/:member_id/qr",
@@ -488,18 +467,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/member/:member_id/qr/regenerate",
             post(handlers::loyalty_badges::regenerate_member_qr),
         )
-        // Loyalty Scan endpoints (Phase 4)
-        .route(
-            "/api/v1/loyalty/scan",
-            post(handlers::loyalty_badges::scan_member),
-        )
+        // POST /api/v1/loyalty/scan (an anonymous clearinghouse points award) and GET
+        // /api/v1/loyalty/scans/business/:business_id were RETIRED here (kanban t_5e244255): 0
+        // callers, `loyalty_scans` 0 rows, and the counter QR flow is POST /api/v1/loyalty/checkin
+        // (www-app/loyalty-checkin.html) - never this arm. The authenticated member read stays.
         .route(
             "/api/v1/loyalty/scans/member/:member_id",
             get(handlers::loyalty_badges::get_member_scans),
-        )
-        .route(
-            "/api/v1/loyalty/scans/business/:business_id",
-            get(handlers::loyalty_badges::get_business_scans),
         )
         // Loyalty Dashboard endpoints (Phase 5)
         .route(
@@ -510,23 +484,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/dashboard/admin/:program_slug",
             get(handlers::loyalty_badges::admin_dashboard),
         )
-        // Integration Center — API Key management (Phase 6)
-        .route(
-            "/api/v1/integration/keys",
-            post(handlers::loyalty_badges::create_integration_key),
-        )
-        .route(
-            "/api/v1/integration/keys/:owner_type/:owner_id",
-            get(handlers::loyalty_badges::list_integration_keys),
-        )
-        .route(
-            "/api/v1/integration/keys/:key_id",
-            delete(handlers::loyalty_badges::revoke_integration_key),
-        )
-        .route(
-            "/api/v1/integration/services",
-            get(handlers::loyalty_badges::list_available_services),
-        )
+        // The Integration Center was RETIRED here (kanban t_5e244255): POST /api/v1/integration/keys,
+        // GET /api/v1/integration/keys/:owner_type/:owner_id, DELETE /api/v1/integration/keys/:key_id
+        // and GET /api/v1/integration/services. It was an ANONYMOUS mint / list / REVOKE of API keys
+        // for `owner_type=business|supplier` ids that are MultiDirectory entities - no owner is
+        // derivable in this app, 0 callers, 0 nginx hits. The two pre-existing `api_keys` rows are
+        // directory-owned and untouched; account-scoped key management stays at /api/v1/api-keys.
         // Credits system (used by MultiDirectory proxy)
         .route(
             "/api/v1/credits/balance",
@@ -705,10 +668,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/programs/:id/secret-code",
             put(handlers::loyalty::set_secret_code),
         )
-        .route(
-            "/api/v1/loyalty/programs/:id/qr",
-            get(handlers::loyalty::program_qr),
-        )
+        // GET /api/v1/loyalty/programs/:id/qr was RETIRED here (kanban t_5e244255): an anonymous QR
+        // generator nothing called (0 nginx hits, no console, no page). It built the check-in URL
+        // from the programme NAME, the same derivation the collision card t_25e9f950 covers; the
+        // served landing page (/loyalty-checkin/<slug>) is unchanged.
         .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
         // Leads list
         .route(

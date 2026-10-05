@@ -161,7 +161,6 @@ POST /api/v1/loyalty/verify-purchase   — Consumer verifies purchase
 POST /api/v1/loyalty/issue-voucher     — Issue cross-promo voucher
 GET  /api/v1/loyalty/my-vouchers/:id   — List active vouchers
 POST /api/v1/loyalty/claim-voucher     — Redeem voucher
-POST /api/v1/loyalty/expire-vouchers   — Expire overdue (cron)
 POST /api/v1/loyalty/redeem-reward     — Points for reward
 ```
 

@@ -36,7 +36,7 @@ Rewards that consumers can redeem points/credits for. Supports:
 - **Admin approval** — requires manual review before issuance
 
 ### Pledges (Business Offers)
-Businesses submit reward offers (e.g., "15% off first service"). Status flow: `pending` → admin review → `approved` or `rejected`. Only approved pledges participate in the rotating cross-promotion network.
+Pledge offers progress `pending` → admin review → `approved` or `rejected`; only approved pledges participate in the rotating cross-promotion network. The anonymous business-facing arms (`POST /api/v1/business/pledge`, `GET /api/v1/business/pledges/:business_id`) were RETIRED (kanban t_5e244255) — pledges are reviewed in the admin console.
 
 ### Rotating Cross-Promotion Engine
 When a purchase is verified at Business A, the system auto-issues a voucher for Business B (a non-competing business in the same rotation group). This drives cross-traffic between businesses.
@@ -269,7 +269,7 @@ This replaced the previous `plan_tier_features`/`feature_limits` tables (removed
 4. **Create loyalty programs** — define earning rules per campaign
 5. **Create reward tiers** — set redemption costs and approval type
 6. **Configure rotation groups** — create rotation configs and add businesses
-7. **Businesses submit pledges** → admin reviews → approved pledges join the network
+7. **Review pledges** in the admin console → approved pledges join the network
 8. **System auto-issues vouchers** on purchase verification
 9. **Set up webhooks** — configure Marketing Boost and delivery config for real-time event notifications
 
@@ -331,13 +331,10 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/loyalty/issue-voucher` | POST | Issue a cross-promo voucher |
 | `/api/v1/loyalty/my-vouchers/:contact_id` | GET | List active vouchers for a contact |
 | `/api/v1/loyalty/claim-voucher` | POST | Redeem a voucher by code |
-| `/api/v1/loyalty/expire-vouchers` | POST | Expire overdue vouchers (cron) |
 
-### Loyalty — Business Pledges
+### Loyalty — Pledges (admin review)
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/business/pledge` | POST | Submit a reward offer |
-| `/api/v1/business/pledges/:business_id` | GET | List pledges for a business |
 | `/api/v1/admin/pledges` | GET | List pending pledges for review |
 | `/api/v1/admin/pledges/:id/review` | POST | Approve or reject a pledge |
 
@@ -507,7 +504,7 @@ A per-campaign webhook that fires on high-value events. Configured via the `mark
 
 ## Auto-Expire
 
-Vouchers expire after 30 days (configurable per-issuance). Run `POST /api/v1/loyalty/expire-vouchers` periodically as a cron job (every 6 hours recommended).
+Vouchers expire after 30 days (configurable per-issuance). The anonymous `POST /api/v1/loyalty/expire-vouchers` cron arm was RETIRED (kanban t_5e244255); no scheduled voucher sweep runs today.
 
 ## Reward Tiers Table (Example)
 

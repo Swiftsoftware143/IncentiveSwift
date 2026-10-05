@@ -1152,48 +1152,6 @@ pub async fn set_secret_code(
     })))
 }
 
-/// GET /api/v1/loyalty/programs/:id/qr — Generate QR code for member check-in.
-pub async fn program_qr(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    let program_id =
-        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
-
-    let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
-        r#"SELECT id, campaign_id, name, recognition_method,
-                  points_per_checkin, max_checkins_per_day,
-                  point_decay_days, is_active, created_at,
-                  tiers_enabled, milestones_enabled, streak_enabled,
-                  streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                  points_expire_days, social_share_points, points_per_visit,
-                  currency_name, currency_icon, currency_color
-           FROM loyalty_programs WHERE id = $1"#,
-    )
-    .bind(program_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Program not found".to_string()))?;
-
-    // Generate the check-in URL
-    let checkin_url = format!(
-        "https://app.incentiveswift.com/loyalty-checkin/{}",
-        program.name.to_lowercase().replace(' ', "-")
-    );
-
-    // Return URL + QR API link (using public QR API)
-    let qr_img_url = format!(
-        "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={}",
-        urlencoding(&checkin_url)
-    );
-
-    Ok(Json(json!({
-        "checkin_url": checkin_url,
-        "qr_image_url": qr_img_url,
-        "program_name": program.name
-    })))
-}
-
 /// GET /api/v1/loyalty/public/program/:slug — PUBLIC, no auth, no API key.
 ///
 /// The QR on a business's counter encodes
@@ -1279,21 +1237,4 @@ pub async fn public_program(
         "tiers_enabled": program.tiers_enabled,
         "milestones_enabled": program.milestones_enabled,
     })))
-}
-
-/// Simple URL encoder.
-fn urlencoding(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            ' ' => "%20".to_string(),
-            ':' => "%3A".to_string(),
-            '/' => "%2F".to_string(),
-            '?' => "%3F".to_string(),
-            '&' => "%26".to_string(),
-            '=' => "%3D".to_string(),
-            '#' => "%23".to_string(),
-            _ => format!("%{:02X}", c as u8),
-        })
-        .collect()
 }
