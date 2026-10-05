@@ -1,0 +1,67 @@
+-- 20261004_drop_vouchers.sql  (kanban t_30dfc98c)
+--
+-- DROP the ORPHANED `vouchers` table.
+--
+-- WHY IT IS SAFE TO DROP (measured, not inferred)
+--   * 0 WRITERS in `src/` -- the last INSERT writer was the anonymous survey-response mint
+--     (`loyalty_v2::survey_response`, POST /api/v1/campaigns/external/survey-response), retired
+--     in t_3bde2e27. Before it, t_b209d263 retired `generate_pin`/`issue_voucher` and
+--     t_7a16bf0b `verify_purchase`/`issue_rotation_voucher`. `grep -rn "INSERT INTO vouchers" src/`
+--     is EMPTY; the only surviving write in the tree was `claim_voucher`'s
+--     `UPDATE vouchers SET status='used'` -- the third and last reader/writer arm retired in THIS
+--     card. There is no surviving producer of a `vouchers` row anywhere in the 8-app fleet.
+--   * 0 READERS in `src/` -- the three mounted readers (`loyalty_v2::get_vouchers`,
+--     `list_my_vouchers`, `claim_voucher`) and their `src/main.rs` mounts were removed in THIS
+--     card (t_30dfc98c), together with their only live caller, the served console's Vouchers tab.
+--   * 0 rows EVER -- `SELECT count(*)` -> 0 at setup, at every proof phase, and at sweep.
+--     `grep -n "vouchers" migrations/*seed*` is empty: it is not a seed.
+--   * 0 inbound foreign keys -- `pg_constraint WHERE confrelid='vouchers'::regclass` is EMPTY:
+--     no other table references it.
+--   * 0 views / 0 routines referencing it.
+--   * 0 fleet callers (grep over /opt/swift/apps/*) and, in 693,108 nginx access-log lines,
+--     exactly 5 hits on its three paths: 4 are the agent's own curl probes and 1 is the served
+--     console's own `loadVouchers()` (the caller this card retires). 0 hits on `claim-voucher`
+--     or `my-vouchers`. Instrument validated on the same corpus: 2,977 `/api/v1/health` hits.
+--
+-- WHY RETIRE THE READ SURFACE AND NOT KEEP IT (the card's option b)
+--   Option (b) would require naming a NEW scoped issuer and its credential. There is none:
+--   every issuer this app ever had was retired (t_b209d263, t_7a16bf0b, t_3bde2e27), a contact
+--   cannot authenticate in this app (so a customer-facing claim path has no principal to bind),
+--   and the one fleet caller that once fed it (MultiDirectory's onboarding completion) retired
+--   the IncentiveSwift integration on 2026-09-23 and credits rewards natively. Keeping a mounted
+--   read surface that nothing can populate would only keep advertising a capability that does not
+--   exist -- which is exactly what the console Vouchers tab and both served guides did.
+--
+-- WHAT THIS REMOVES FROM THE SCHEMA (the drift arithmetic a reader needs)
+--   1 table + 12 columns + 2 constraints (`vouchers_pkey` PRIMARY KEY and the
+--   `vouchers_redemption_code_key` UNIQUE) + 2 indexes (the same two; each counts in BOTH
+--   classes, exactly as purchase_verifications' pkey did in t_85a2b736).
+--   The deploy's step-0b from-zero COUNTS line therefore DROPS by exactly those amounts --
+--   1 table, 12 columns, 2 constraints, 2 indexes -- and that is the EXPECTED arithmetic, NOT a
+--   regression. `RESULT: PASS ... 0 missing/extra in every class` must still hold after the
+--   deploy, because BOTH sides (migrations-built and live) lose the same objects.
+--   Live table at drop time: 103 -> 102 tables.
+--
+-- CREATED BY (all APPLIED, all left untouched)
+--   migrations/000000_baseline_core_tables.sql (CREATE TABLE vouchers)
+--   migrations/20260921_vouchers_discount_value_text.sql (discount_value numeric -> text)
+--   migrations/20260921_vouchers_used_at.sql (ADD COLUMN used_at)
+--   This is a NEW file, per the house rule "never edit an APPLIED migration".
+--
+-- NOT DROPPED HERE: `contact_tenants` and `campaign_points_balance`. The retired handler was
+-- their last SURVEY-path writer, but a census shows neither is orphaned -- both have many live
+-- writers/readers across `src/db/contacts.rs`, `src/db/viral.rs`, `analytics_handler.rs`,
+-- `spin_handler.rs`, `raffles.rs`, `entries.rs`, `secret_codes_handler.rs` and more. They stay.
+--
+-- BACKUP
+--   Pre-drop dump (empty, taken anyway and recorded) at
+--   /opt/swift/backups/t_30dfc98c/vouchers.pre-drop.sql with its sha256 in
+--   /opt/swift/backups/t_30dfc98c/SHA256SUMS.
+--
+-- MARKER DIRECTION
+--   This header quotes the identifier, and the runner stages migration files into the image at
+--   /app/migrations (read_dir at runtime -- NOT `include_str!`), so the identifier count rises in
+--   `/app/migrations/` and stays 0 in the ELF itself: the migration runner embeds no migration
+--   text. The clean ELF marker is the retired reader SQL (`FROM vouchers v`), which goes 1 -> 0.
+
+DROP TABLE IF EXISTS vouchers;

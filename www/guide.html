@@ -264,7 +264,7 @@
 
       <!-- ==================== LOYALTY SECTION ==================== -->
       <h2 id="loyalty-overview">🏪 Loyalty Program</h2>
-      <p>IncentiveSwift powers comprehensive loyalty programs with purchase verification, credit earning and redeeming, custom offers, voucher rewards, and a referral system. The loyalty module transforms one-time campaign participants into repeat, engaged customers.</p>
+      <p>IncentiveSwift powers comprehensive loyalty programs with purchase verification, credit earning and redeeming, custom offers, and a referral system. The loyalty module transforms one-time campaign participants into repeat, engaged customers.</p>
 
       <div class="feature-grid">
         <div class="feature-card">
@@ -276,11 +276,6 @@
           <div class="fc-icon">🎁</div>
           <h4>Offers &amp; Redemption</h4>
           <p>Create discount offers that customers redeem with their earned credits</p>
-        </div>
-        <div class="feature-card">
-          <div class="fc-icon">🎟️</div>
-          <h4>Voucher System</h4>
-          <p>Auto-issue vouchers when customers reach earning thresholds</p>
         </div>
         <div class="feature-card">
           <div class="fc-icon">👥</div>
@@ -341,13 +336,6 @@
         <strong>Transaction record:</strong> Every verification creates a permanent transaction record showing the amount, credits earned, any offer applied, credits redeemed, and the merchant who processed it.
       </div>
 
-      <h3>Voucher System</h3>
-      <p>When a customer's purchase verification earns credits above a configurable threshold (e.g., 100 credits earned in a single transaction), the system may <strong>auto-issue a voucher</strong>. Vouchers represent special rewards or bonus offers.</p>
-
-      <p>Vouchers are listed in the customer's portal under <strong>Loyalty → My Vouchers</strong>. Each voucher shows its value, expiration date, and status (active/claimed/expired). To use a voucher, the customer clicks <strong>Claim</strong> to receive a unique claim code they can present at checkout.</p>
-
-      <div class="callout tip" style="background:rgba(59,130,246,0.08);border-color:var(--info);padding:1rem 1.25rem;border-radius:10px;margin:1rem 0;border-left:4px solid;"><strong>Note:</strong> Voucher thresholds are configurable per tenant. Contact your admin to adjust the threshold amount or disable auto-issuance.</div>
-
       <h3>Referral System</h3>
       <p>The referral system encourages customers to bring in new business. Every participant gets a <strong>referral code</strong> (e.g., <code>REF-JOHN-ABC123</code>) they can share with friends.</p>
 
@@ -371,8 +359,6 @@
         <tbody>
           <tr><td><code>GET</code></td><td><code>/api/v1/credits/balance</code></td><td>Get the customer's current credit balance</td></tr>
           <tr><td><code>GET</code></td><td><code>/api/v1/credits/history</code></td><td>Get the customer's credit transaction history</td></tr>
-          <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/vouchers</code></td><td>List the customer's available vouchers</td></tr>
-          <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/claim-voucher</code></td><td>Claim a voucher and receive a claim code</td></tr>
           <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/referrals</code></td><td>Get the customer's referral history</td></tr>
           <tr><td><code>POST</code></td><td><code>/api/v1/loyalty/referrals/create</code></td><td>Create a new referral code</td></tr>
           <tr><td><code>GET</code></td><td><code>/api/v1/loyalty/rewards</code></td><td>List available rewards</td></tr>

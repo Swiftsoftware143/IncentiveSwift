@@ -51,7 +51,9 @@ The live flow is the tenant's own PIN: the account sets `accounts.purchase_pin` 
 authenticated caller verifies a purchase with `POST /api/v1/loyalty/purchase/verify`
 (`loyalty_v2::purchase_verify`, scoped to the calling account). The retired 4-digit
 `generate_pin`/`verify-purchase` pair — and the auto-issued cross-promo voucher that hung off it —
-are gone; `my-vouchers` and `claim-voucher` remain for the vouchers that still exist.
+are gone, and so is the rest of the voucher surface: the `vouchers` table, its three readers and
+the console's Vouchers tab were retired in t_30dfc98c (0 writers fleet-wide, 0 rows ever, no
+producer left after t_b209d263 / t_7a16bf0b / t_3bde2e27).
 
 ### Referral System
 - Campaign-scoped referral codes and earn channels
@@ -327,14 +329,16 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/auth/profile` | PUT | Update profile |
 | `/api/v1/auth/password` | PUT | Change password |
 
-### Loyalty — Vouchers
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/loyalty/my-vouchers/:contact_id` | GET | List active vouchers for a contact |
-| `/api/v1/loyalty/claim-voucher` | POST | Redeem a voucher by code |
-
-`/api/v1/loyalty/generate-pin` and `/api/v1/loyalty/issue-voucher` were retired (kanban
-t_b209d263): both were anonymous and unscoped, and neither had a live caller.
+### Loyalty — Vouchers — RETIRED
+The voucher surface (`GET /api/v1/loyalty/vouchers` -> `loyalty_v2::get_vouchers`,
+`GET /api/v1/loyalty/my-vouchers/:contact_id` -> `list_my_vouchers`,
+`POST /api/v1/loyalty/claim-voucher` -> `claim_voucher`) and the `vouchers` table were **RETIRED**
+(kanban t_30dfc98c). The table had 0 rows ever and no writer survived in the 8-app fleet — its
+last one (`survey_response`) went in t_3bde2e27, `generate_pin`/`issue_voucher` in t_b209d263 and
+`verify_purchase`/`issue_rotation_voucher` in t_7a16bf0b — so the three readers could never return
+a row and the console's Vouchers tab could never show one. All three paths now answer a bare
+404. `/api/v1/loyalty/generate-pin` and `/api/v1/loyalty/issue-voucher` were retired earlier
+(t_b209d263): both were anonymous and unscoped, and neither had a live caller.
 
 ### Loyalty — Pledges (admin review)
 | Endpoint | Method | Description |
@@ -477,9 +481,12 @@ IncentiveSwift fires webhooks for real-time event notifications. Configure via c
 |---|---|
 | `reward_redeemed` | Reward claimed by consumer |
 | `purchase_verified` | PIN entered and verified |
-| `voucher_issued` | Cross-promo voucher generated |
 | `entry_created` | New campaign entry submitted |
 | `milestone_achieved` | Consumer hit a milestone |
+
+> `voucher_issued` was REMOVED from the default event vocabulary (kanban t_30dfc98c): its only
+> emitter was the retired anonymous survey-response mint, and the `vouchers` table it announced is
+> dropped in the same pass.
 
 ### Marketing Boost
 
@@ -488,23 +495,22 @@ A per-campaign webhook that fires on high-value events. Configured via the `mark
 **Example payload:**
 ```json
 {
-  "event": "voucher_issued",
+  "event": "reward_redeemed",
   "campaign_id": "uuid",
   "timestamp": "2026-07-20T00:00:00Z",
   "data": {
-    "voucher_id": "uuid",
-    "code": "ABC12345",
-    "discount_value": "10% Off",
+    "reward_id": "uuid",
     "contact_id": "uuid",
-    "source_business_id": "uuid",
-    "target_business_id": "uuid"
+    "points_spent": 100
   }
 }
 ```
 
 ## Auto-Expire
 
-Vouchers expire after 30 days (configurable per-issuance). The anonymous `POST /api/v1/loyalty/expire-vouchers` cron arm was RETIRED (kanban t_5e244255); no scheduled voucher sweep runs today.
+The anonymous `POST /api/v1/loyalty/expire-vouchers` cron arm was RETIRED (kanban t_5e244255), and
+the `vouchers` table it swept was dropped (kanban t_30dfc98c); no scheduled voucher sweep runs
+today.
 
 ## Reward Tiers Table (Example)
 

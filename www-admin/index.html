@@ -1095,13 +1095,12 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], vouchers: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
   if (!st._loaded) { st._loaded = true; loadPrograms(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
   async function loadTiers(progId) { if (!progId) { st.tiers = []; st.tierErr = ''; renderApp(); return; } try { const data = await API.get('/loyalty/tiers?program_id='+encodeURIComponent(progId)); st.tiers = data.tiers||[]; st.tierErr=''; renderApp(); } catch(e){ st.tiers=[]; st.tierErr=(e && e.message) || String(e); renderApp(); } }
   async function loadRewards() { try { const data = await API.get('/loyalty/rewards'); st.rewards = data.rewards||[]; renderApp(); } catch(e){ st.rewards=[]; } }
-  async function loadVouchers() { try { const data = await API.get('/loyalty/vouchers'); st.vouchers = data.vouchers||[]; renderApp(); } catch(e){ st.vouchers=[]; } }
   async function loadPledges() { try { const data = await API.get('/admin/pledges'); st.pledges = data.pending_pledges||[]; renderApp(); } catch(e){ st.pledges=[]; } }
   async function loadReferrals() { st.refLoading = true; renderApp(); try { const data = await API.get('/loyalty/referrals'); st.referrals = data.referrals||[]; st.referralCount = data.referral_count||0; st.referralCode = data.code||null; st.refLoading=false; renderApp(); } catch(e){ st.referrals=[]; st.refLoading=false; renderApp(); } }
   async function loadCredits() { try { const data = await API.get('/credits/balance'); const hist = await API.get('/credits/history'); st.credits = {balance:data,history:hist.transactions||hist||[]}; renderApp(); } catch(e){ st.credits={balance:{},history:[]}; } }
@@ -1215,12 +1214,11 @@ const LoyaltyPrograms = () => {
     try { await API.del('/loyalty/tiers/' + id); refreshTiers(); } catch(e){ alert(e.message); }
   };
 
-  const tabs = ['Plans','Programs','Tiers','Rewards','Vouchers','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
+  const tabs = ['Plans','Programs','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
     if (t==='Tiers') refreshTiers();
     if (t==='Rewards') loadRewards();
-    if (t==='Vouchers') loadVouchers();
     if (t==='Pledges') loadPledges();
     if (t==='Referrals') loadReferrals();
     if (t==='Credits') loadCredits();
@@ -1326,23 +1324,6 @@ const LoyaltyPrograms = () => {
           <td>${new Date(r.created_at||r.earned_at).toLocaleDateString()}</td>
         </tr>`)}
         ${st.rewards.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No rewards earned yet.</td></tr>`}
-      </tbody></table>
-    </div>
-  </div>`;
-
-  // ── Vouchers Tab ──
-  const vouchersTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Vouchers</h2><span class="text-sm text-gray-500">${st.vouchers.length} active</span></div>
-    <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Expires</th></tr></thead>
-        <tbody>${st.vouchers.map(v => html`<tr>
-          <td class="font-mono">${v.redemption_code||v.code||'?'}</td>
-          <td>${v.voucher_type||'discount'}</td>
-          <td>${v.discount_value||0}</td>
-          <td><span class="badge ${v.status==='active'?'badge-green':'badge-yellow'}">${v.status||'active'}</span></td>
-          <td>${v.expires_at ? new Date(v.expires_at).toLocaleDateString() : 'Never'}</td>
-        </tr>`)}
-        ${st.vouchers.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No vouchers issued yet.</td></tr>`}
       </tbody></table>
     </div>
   </div>`;
@@ -1699,7 +1680,7 @@ const ledgerTab = html`<div>
   </div>
 </div>`;
 
-  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='vouchers' ? vouchersTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     <div class="flex gap-2 mb-4 flex-wrap">${tabs.map(t => html`<button class="btn btn-sm ${st.tab===t.toLowerCase()?'':'btn-outline'}" onClick=${()=>setTab(t)}>${t}</button>`)}</div>

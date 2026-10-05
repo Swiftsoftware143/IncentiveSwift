@@ -306,18 +306,18 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/rewards",
             get(handlers::loyalty_v2::get_rewards),
         )
-        .route(
-            "/api/v1/loyalty/vouchers",
-            get(handlers::loyalty_v2::get_vouchers),
-        )
-        .route(
-            "/api/v1/loyalty/my-vouchers/:contact_id",
-            get(handlers::loyalty_v2::list_my_vouchers),
-        )
-        .route(
-            "/api/v1/loyalty/claim-voucher",
-            post(handlers::loyalty_v2::claim_voucher),
-        )
+        // GET /api/v1/loyalty/vouchers, GET /api/v1/loyalty/my-vouchers/:contact_id and
+        // POST /api/v1/loyalty/claim-voucher were RETIRED here (kanban t_30dfc98c), together with
+        // their handlers (`loyalty_v2::get_vouchers` / `list_my_vouchers` / `claim_voucher` +
+        // `ClaimVoucherRequest`) and the `vouchers` table itself. Their only producer was the
+        // anonymous survey-response mint retired in t_3bde2e27; with it gone, no writer of a
+        // `vouchers` row survives anywhere in the 8-app fleet (t_b209d263 retired `generate_pin`
+        // /`issue_voucher`, t_7a16bf0b `verify_purchase`/`issue_rotation_voucher`), the table has
+        // held 0 rows ever, and the only live caller of `GET /loyalty/vouchers` was the served
+        // console's Vouchers tab (1 browser hit in 693,108 nginx lines, 0 fleet callers). Keeping
+        // a mounted read surface nothing can ever populate only advertises a capability that does
+        // not exist, so the whole surface goes and the table is dropped in
+        // migrations/20261004_drop_vouchers.sql. Proof: /opt/swift/audits/t_30dfc98c/proof.py.
         // POST /api/v1/loyalty/expire-vouchers was RETIRED here (kanban t_5e244255): an anonymous
         // mutation on a public mount that expired EVERY active voucher for EVERY account, called by
         // no cron, no repo and no page (0 nginx hits). The fleet's expiry sweep is MultiDirectory's
@@ -367,8 +367,8 @@ async fn main() -> anyhow::Result<()> {
         // onboarding completion) retired the IncentiveSwift loyalty integration on 2026-09-23
         // (`service="incentiveswift"` answers 400; MD credits rewards natively now). Census:
         // 0 nginx hits over 692,556 access-log lines, 0 fleet callers, 0 served-root call sites.
-        // This was also `vouchers`' LAST writer — but `vouchers` still has three mounted readers
-        // (see loyalty_v2.rs), so it is NOT a bare drop candidate.
+        // This was also `vouchers`' LAST writer. Its three mounted readers were RETIRED and the
+        // table dropped in kanban t_30dfc98c (see the note at the loyalty/vouchers mount above).
         // Business accounts (Phase 1: directory business integration)
         .route(
             "/api/v1/business/register",

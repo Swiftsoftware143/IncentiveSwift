@@ -695,7 +695,13 @@ pub async fn fire_marketing_boost_with_override(
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_else(|| vec!["voucher_issued".to_string(), "reward_redeemed".to_string()]);
+            // `voucher_issued` was REMOVED from this default vocabulary (kanban t_30dfc98c): its
+            // only emitter was the anonymous survey-response mint retired in t_3bde2e27, and the
+            // `vouchers` table it announced is dropped in the same pass, so the event can never
+            // fire again. A campaign that explicitly configures `voucher_issued` in its own
+            // `events` list is unaffected (that list is caller-supplied); only this fallback
+            // changes.
+            .unwrap_or_else(|| vec!["reward_redeemed".to_string()]);
 
         if !allowed_events.iter().any(|e| e == event) {
             tracing::debug!(

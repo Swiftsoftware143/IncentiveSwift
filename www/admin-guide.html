@@ -340,18 +340,6 @@ GET  /api/v1/admin/credits    — View all tenant credits (admin)</pre>
   </div>
 
   <div class="card">
-    <h3>Voucher &amp; Redemption Auditing</h3>
-    <p>Admins can review voucher issuance and claim history across all tenants. The audit log shows:</p>
-    <ul>
-      <li>Which customer received which voucher</li>
-      <li>When the voucher was issued and its expiration date</li>
-      <li>Whether the voucher was claimed, and the claim code returned</li>
-      <li>Any voucher redemptions against actual purchases</li>
-    </ul>
-    <p>If a voucher has expired before the customer could use it, an admin can <strong>re-issue</strong> it with a new expiration date. This requires admin approval and is logged in the audit trail. Re-issued vouchers get a new voucher ID linked to the original in the audit record.</p>
-    <div class="callout tip"><strong>Best practice:</strong> Set voucher expiration to a reasonable window (30–90 days) to encourage timely redemption while giving customers adequate time to use their rewards.</div>
-  </div>
-  <div class="card">
     <h3 id="loyalty-float-rule">The float rule &mdash; the three conditions the guard enforces</h3>
     <p>IncentiveSwift&rsquo;s loyalty programme has its <strong>own float</strong>: the businesses fund the rewards their members earn, and the platform holds a redemption that would leave the float short. The rule is <strong>three independent conditions</strong>, and a redemption is held if <em>any</em> of them fails. The console shows all three with the numbers that decided each one, and the hold record names the condition that was short.</p>
     <ul>

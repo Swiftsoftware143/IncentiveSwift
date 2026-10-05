@@ -6,7 +6,9 @@
 //! t_7a16bf0b — the guarded reader of `purchase_verifications` and its private voucher
 //! issuer, left writer-less by t_b209d263), then the rotation-group CRUD family (kanban
 //! t_8e9d3a52 — the last writers of `rotation_configs` / `rotation_group_members`), then the
-//! anonymous `survey_response` $50 voucher mint (kanban t_3bde2e27 — `vouchers`' last writer).
+//! anonymous `survey_response` $50 voucher mint (kanban t_3bde2e27 — `vouchers`' last writer), then
+//! the remaining voucher read surface (`get_vouchers` / `list_my_vouchers` / `claim_voucher`) with
+//! the `vouchers` table itself (kanban t_30dfc98c — 0 writers fleet-wide, 0 rows ever).
 //! See the retirement notes at each section.
 
 use axum::{
@@ -41,7 +43,7 @@ use crate::state::AppState;
 // The live purchase-verification flow is `purchase_verify` below, which validates the caller's
 // OWN `accounts.purchase_pin` — what the tenant console and the served guide describe.
 
-// ── Voucher Engine ──
+// ── Voucher Engine — RETIRED ──
 //
 // `issue_voucher` (and the `IssueVoucherRequest` it took) was RETIRED here (kanban
 // t_b209d263): an anonymous, unscoped value-mint — the caller chose the campaign slug, the
@@ -51,98 +53,18 @@ use crate::state::AppState;
 // IncentiveSwift loyalty integration on 2026-09-23: `service="incentiveswift"` answers 400;
 // `tag_rules` has 0 rows ever and the MD console's tag-rule form does not offer the action).
 // `verify_purchase` and its private issuer `issue_rotation_voucher` were RETIRED in kanban
-// t_7a16bf0b (see the notes above). The voucher lifecycle that REMAINS is `claim_voucher`
-// (keyed by a claim code, a bearer secret), the AuthenticatedUser-scoped `list_my_vouchers`
-// and `get_vouchers`. NOTE (measured, t_3bde2e27): `vouchers` now has NO writer at all —
-// its last one, `survey_response`, was RETIRED (see the note at the foot of this module).
-// Those three READERS stay mounted and are advertised in the served guides, so the table is
-// not a bare drop candidate; the reader/table decision is a separate card.
-/// GET /api/v1/loyalty/my-vouchers — list active vouchers for a contact
-pub async fn list_my_vouchers(
-    State(s): State<AppState>,
-    auth: AuthenticatedUser,
-    Path(contact_id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    // SECURITY (kanban t_f08d32e7): this arm took no `AuthenticatedUser`, so any caller who named
-    // a contact id got that contact's vouchers - redemption codes included. The caller must now be
-    // linked to the contact through the `contact_tenants` boundary (kanban t_369cb159); anything
-    // else answers the same 404 an absent contact does.
-    let account_id = Uuid::parse_str(&auth.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
-    if !crate::db::contacts::contact_visible_to(&s.db, &contact_id, &account_id).await? {
-        return Err(AppError::NotFound("Contact not found".into()));
-    }
+// t_7a16bf0b (see the notes above).
+//
+// The REMAINING voucher surface — the `claim_voucher` writer (keyed by a claim code, a bearer
+// secret), the `AuthenticatedUser`-scoped `list_my_vouchers` and `get_vouchers` readers — was
+// RETIRED in kanban t_30dfc98c, and `vouchers` was dropped in
+// migrations/20261004_drop_vouchers.sql. Measured on the deployed binary 2f06f423413bc2a9: the
+// last producer (`survey_response`) went in t_3bde2e27, no `vouchers` writer survives in the
+// 8-app fleet, the table held 0 rows EVER, and the surface was advertised only by the console's
+// own Vouchers tab (the single browser hit these paths ever saw) plus the served guides. README
+// for the decision: /opt/swift/audits/t_30dfc98c/EVIDENCE.md.
 
-    let vouchers = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            String,
-            String,
-            String,
-            String,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ),
-    >(
-        r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status,
-                  COALESCE(b.name, '') as business_name, v.expires_at
-           FROM vouchers v
-           LEFT JOIN portfolio_companies b ON b.id = v.target_business_id
-           WHERE v.issued_to_contact_id = $1
-           ORDER BY v.created_at DESC"#,
-    )
-    .bind(contact_id)
-    .fetch_all(&s.db)
-    .await?;
-
-    let result: Vec<serde_json::Value> = vouchers
-        .into_iter()
-        .map(|v| {
-            json!({
-                "id": v.0, "discount": v.1, "type": v.2, "code": v.3, "status": v.4,
-                "business": v.5, "expires_at": v.6
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"vouchers": result})))
-}
-
-/// POST /api/v1/loyalty/claim-voucher — redeem a voucher by code
-#[derive(Debug, Deserialize)]
-pub struct ClaimVoucherRequest {
-    pub code: String,
-    pub contact_id: Uuid,
-}
-
-pub async fn claim_voucher(
-    State(s): State<AppState>,
-    Json(req): Json<ClaimVoucherRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let voucher = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, discount_value, status FROM vouchers WHERE redemption_code = $1 AND issued_to_contact_id = $2 LIMIT 1"
-    )
-    .bind(req.code.to_uppercase())
-    .bind(req.contact_id)
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Voucher not found".into()))?;
-
-    if voucher.2 != "active" {
-        return Err(AppError::BadRequest(
-            "Voucher already used or expired".into(),
-        ));
-    }
-
-    sqlx::query("UPDATE vouchers SET status = 'used', used_at = NOW() WHERE id = $1")
-        .bind(voucher.0)
-        .execute(&s.db)
-        .await?;
-
-    Ok(Json(json!({"status": "claimed", "discount": voucher.1})))
-}
-
+// ── Business Pledges ──
 #[derive(Debug, Deserialize)]
 pub struct ApprovePledgeRequest {
     pub status: String, // "approved" or "rejected"
@@ -774,57 +696,13 @@ pub async fn get_rewards(
     })))
 }
 
-/// GET /api/v1/loyalty/vouchers — list vouchers for account (uses account_id as fallback contact_id)
-pub async fn get_vouchers(
-    State(s): State<AppState>,
-    auth: AuthenticatedUser,
-) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&auth.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
-
-    // Try account_id as contact_id (vouchers are issued to contacts)
-    let vouchers = sqlx::query_as::<
-        _,
-        (
-            Uuid,
-            String,
-            String,
-            String,
-            String,
-            Option<chrono::DateTime<chrono::Utc>>,
-        ),
-    >(
-        r#"SELECT v.id, v.discount_value, v.voucher_type, v.redemption_code, v.status, v.expires_at
-           FROM vouchers v
-           WHERE v.issued_to_contact_id = $1
-           ORDER BY v.created_at DESC LIMIT 50"#,
-    )
-    .bind(account_id)
-    .fetch_all(&s.db)
-    .await?;
-
-    let voucher_list: Vec<Value> = vouchers
-        .into_iter()
-        .map(|v| {
-            json!({
-                "id": v.0,
-                "discount": v.1,
-                "discount_value": v.1,
-                "type": v.2,
-                "voucher_type": v.2,
-                "code": v.3,
-                "redemption_code": v.3,
-                "status": v.4,
-                "expires_at": v.5,
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({
-        "vouchers": voucher_list,
-        "count": voucher_list.len(),
-    })))
-}
+// ── Account voucher listing (retired) ──
+//
+// `get_vouchers` (GET /api/v1/loyalty/vouchers) was RETIRED here (kanban t_30dfc98c), together
+// with its two siblings and the `vouchers` table. Its ONLY live caller was the served admin
+// console's Vouchers tab (`www-admin/index.html` -> `loadVouchers()`), which is retired in the
+// same pass; the tab could never show a row again, and the guides that advertised the rest of the
+// flow are corrected too. Proof: /opt/swift/audits/t_30dfc98c/proof.py.
 
 // ── External survey-response mint (retired) ──
 //
@@ -849,8 +727,8 @@ pub async fn get_vouchers(
 // app, so there is no credential to bind. The app's host-to-host seam (`x-internal-key`
 // /api/v1/internal/*) was not invented onto a route nothing calls.
 //
-// This was `vouchers`' LAST writer. `vouchers` still has three mounted READERS
-// (`get_vouchers`, `list_my_vouchers`, `claim_voucher`), and the served guides advertise them, so
-// the table is NOT a bare drop candidate — the reader/table decision is carded separately.
+// This was `vouchers`' LAST writer. The three mounted READERS it left behind
+// (`get_vouchers`, `list_my_vouchers`, `claim_voucher`) were RETIRED and the table dropped in
+// kanban t_30dfc98c — the decision this note used to defer.
 //
 // Proof: /opt/swift/audits/t_3bde2e27/proof.py (before 11/11, after 12/12, residue 0).
