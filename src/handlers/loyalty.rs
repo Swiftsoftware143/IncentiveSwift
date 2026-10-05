@@ -1228,8 +1228,23 @@ pub async fn public_program(
             let program_id = program_id.ok_or_else(|| {
                 AppError::NotFound("No loyalty program or campaign for that link".to_string())
             })?;
-            let program = loyalty::get_program(&state.db, &program_id).await?;
-            let campaign_id = program.campaign_id.ok_or_else(|| {
+            // Which campaign serves this programme? Resolve it the way EVERY other loyalty
+            // path already does — the canonical forward link `campaigns.loyalty_program_id`
+            // first, and only then the historical reverse pointer `loyalty_programs.campaign_id`
+            // (see handlers/loyalty.rs::checkin, handlers/secret_codes_handler.rs, and
+            // mechanics/loyalty_checkin.rs::program_campaign_id, which this reuses).
+            //
+            // Reading the reverse pointer ALONE — as this arm used to — answered 404 to the
+            // programme-name slug that `program_qr` itself writes into the printed counter QR
+            // for every programme the console creates, because `create_program` only sets that
+            // pointer when the caller passes a campaign_id, while the console wires the link
+            // the canonical way (the campaign editor). Measured live (kanban t_2968cb33).
+            let campaign_id = crate::mechanics::loyalty_checkin::program_campaign_id(
+                &state,
+                &program_id.to_string(),
+            )
+            .await?
+            .ok_or_else(|| {
                 AppError::NotFound("That program is not linked to a campaign".to_string())
             })?;
             crate::db::campaigns::get_campaign_by_id(&state.db, &campaign_id).await?
