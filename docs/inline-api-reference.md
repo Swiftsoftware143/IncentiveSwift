@@ -63,11 +63,10 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | GET | `/loyalty/check-plan` | JWT | `loyalty::check_plan_loyalty` | Check plan loyalty access |
 | PUT | `/loyalty/programs/:id/secret-code` | JWT | `loyalty::set_secret_code` | Set program secret code |
 
-## Loyalty V2 — Purchase Verification & Vouchers
+## Loyalty V2 — Vouchers
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/loyalty/verify-purchase` | JWT | `loyalty_v2::verify_purchase` | Consumer verifies purchase with PIN |
 | GET | `/loyalty/my-vouchers/:contact_id` | JWT | `loyalty_v2::list_my_vouchers` | List active vouchers |
 | POST | `/loyalty/claim-voucher` | None | `loyalty_v2::claim_voucher` | Redeem voucher by code |
 | GET | `/loyalty/rewards-earned/:contact_id` | JWT | `loyalty_v2::list_rewards_earned` | List earned rewards |
@@ -76,9 +75,16 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 > t_b209d263 (both anonymous and unscoped — any caller could mint a live voucher with a
 > caller-chosen discount, or a pending purchase verification, against any active campaign for
 > any contact id). Both now answer a bare 404. The Auth column above was measured live in the
-> same pass: `verify-purchase`, `my-vouchers` and `rewards-earned` answer 401 to an anonymous
+> same pass: `my-vouchers` and `rewards-earned` answer 401 to an anonymous
 > caller (JWT); `claim-voucher` is keyed by a claim code (a bearer secret) and answers its own
 > JSON 404 for a bad code — it takes no credential by design.
+>
+> `POST /loyalty/verify-purchase` (and the private `loyalty_v2::issue_rotation_voucher` it was the
+> only caller of) was RETIRED in kanban t_7a16bf0b. It was a correctly-guarded
+> `AuthenticatedUser` reader of `purchase_verifications`, but t_b209d263 removed that table's only
+> writer, so it answered `404 {"error":"Invalid or expired PIN"}` for every caller forever. The
+> live purchase-verification flow is `POST /loyalty/purchase/verify`, which validates the caller's
+> OWN `accounts.purchase_pin`. The route now answers a bare 0-byte 404.
 
 ## Admin — Pledges
 

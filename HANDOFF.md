@@ -154,9 +154,8 @@ POST /api/v1/admin/credits/adjust      — Admin adjustment
 POST /api/v1/channels/inbound          — Telnyx SMS/WhatsApp inbound (sms_handler chat funnel)
 ```
 
-**Loyalty V2 (purchase verification & vouchers):**
+**Loyalty V2 (vouchers):**
 ```
-POST /api/v1/loyalty/verify-purchase   — Consumer verifies purchase (JWT)
 GET  /api/v1/loyalty/my-vouchers/:id   — List active vouchers
 POST /api/v1/loyalty/claim-voucher     — Redeem voucher
 ```

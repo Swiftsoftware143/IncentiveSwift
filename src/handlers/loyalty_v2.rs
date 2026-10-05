@@ -1,8 +1,10 @@
 //! Loyalty verification & voucher handlers
-//! Receipt verification (AuthenticatedUser), rotating vouchers, business pledges
+//! Voucher claim/redeem, business pledges, rotation-group config
 //!
-//! `generate_pin` and `issue_voucher` were RETIRED (kanban t_b209d263): both were anonymous and
-//! carried no account predicate. See the notes at each section.
+//! RETIRED from this module: `generate_pin` and `issue_voucher` (kanban t_b209d263 — both
+//! anonymous and unscoped), then `verify_purchase` and `issue_rotation_voucher` (kanban
+//! t_7a16bf0b — the guarded reader of `purchase_verifications` and its private voucher
+//! issuer, left writer-less by t_b209d263). See the retirement notes at each section.
 
 use axum::{
     extract::{Path, State},
@@ -20,135 +22,21 @@ use crate::state::AppState;
 
 // ── Purchase Verification ──
 //
-// `generate_pin` was RETIRED here (kanban t_b209d263): an anonymous 4-character PIN minter that
-// inserted a pending row into `purchase_verifications` for ANY active campaign with a
-// caller-chosen `business_id`/`business_name`/`purchase_amount`, and the sole writer of that
-// table (0 rows ever). Its partner `verify_purchase` below DOES take `AuthenticatedUser` and is
-// kept. The live purchase-verification flow is `purchase_verify` (below), which validates the
-// caller's OWN `accounts.purchase_pin` — that is what the tenant console and the served guide
-// describe, and what `generate_pin` never did.
-
-#[derive(Debug, Deserialize)]
-pub struct VerifyPurchaseRequest {
-    pub pin_code: String,
-    pub contact_id: Uuid,
-}
-
-/// POST /api/v1/loyalty/verify-purchase — consumer enters PIN to verify purchase
-pub async fn verify_purchase(
-    State(s): State<AppState>,
-    auth: AuthenticatedUser,
-    Json(req): Json<VerifyPurchaseRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let account_id = Uuid::parse_str(&auth.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
-
-    let verification = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, Option<String>, String, Option<rust_decimal::Decimal>)>(
-        "SELECT pv.id, pv.campaign_id, pv.business_id, pv.business_name, pv.pin_code, pv.status, pv.purchase_amount
-         FROM purchase_verifications pv
-         WHERE pv.pin_code = $1 AND pv.status = 'pending'
-         LIMIT 1"
-    )
-    .bind(req.pin_code.to_uppercase())
-    .fetch_optional(&s.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Invalid or expired PIN".into()))?;
-
-    // The contact must already be visible to the calling business (contact_tenants, kanban
-    // t_369cb159): a caller cannot adopt a stranger's contact by naming its id here.
-    let contact_exists: bool =
-        crate::db::contacts::contact_visible_to(&s.db, &req.contact_id, &account_id).await?;
-
-    if contact_exists {
-        sqlx::query(
-            "UPDATE purchase_verifications SET status = 'verified', contact_id = $1, verified_at = NOW() WHERE id = $2"
-        )
-        .bind(req.contact_id)
-        .bind(verification.0)
-        .execute(&s.db)
-        .await?;
-    } else {
-        sqlx::query(
-            "UPDATE purchase_verifications SET status = 'verified', verified_at = NOW() WHERE id = $1"
-        )
-        .bind(verification.0)
-        .execute(&s.db)
-        .await?;
-    }
-
-    let business_name = if verification.3.is_empty() {
-        "Business".to_string()
-    } else {
-        verification.3.clone()
-    };
-
-    // Auto-issue a rotating voucher from cross-promotion group (only if contact exists)
-    let voucher = if contact_exists {
-        issue_rotation_voucher(&s.db, &verification.1, &req.contact_id, &verification.2).await?
-    } else {
-        None
-    };
-
-    // Auto-credit the customer based on purchase amount
-    let mut credit_amount = 0i32;
-    let mut credit_message = String::new();
-    if let Some(amount) = verification.6 {
-        // Convert purchase amount to credits: $1 = 10 credits
-        let scaled = (amount * rust_decimal::Decimal::new(10, 0)).round();
-        if let Ok(int_val) = i32::try_from(scaled) {
-            if int_val > 0 {
-                credit_amount = int_val;
-                // Get current balance
-                let cur_balance: i32 =
-                    sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
-                        .bind(account_id)
-                        .fetch_optional(&s.db)
-                        .await?
-                        .unwrap_or(0);
-
-                let new_balance = cur_balance + credit_amount;
-
-                // Update balance
-                sqlx::query("UPDATE accounts SET credits_balance = $1 WHERE id = $2")
-                    .bind(new_balance)
-                    .bind(account_id)
-                    .execute(&s.db)
-                    .await?;
-
-                // Log transaction
-                sqlx::query(
-                    "INSERT INTO credit_transactions (account_id, amount, balance_after, action, reference_type, reference_id, description)
-                     VALUES ($1, $2, $3, 'purchase', 'purchase_verification', $4, $5)"
-                )
-                .bind(account_id)
-                .bind(credit_amount)
-                .bind(new_balance)
-                .bind(verification.0.to_string())
-                .bind(format!("Purchase at {} — {} credits earned", business_name, credit_amount))
-                .execute(&s.db)
-                .await?;
-
-                credit_message = format!("You earned {} loyalty credits!", credit_amount);
-            }
-        }
-    }
-
-    let mut response = json!({
-        "status": "verified",
-        "business_name": business_name,
-        "credits_earned": credit_amount,
-        "message": format!("Purchase at {} verified! {}", business_name, credit_message)
-    });
-
-    if let Some(ref v) = voucher {
-        response["voucher"] = v.clone();
-        if let Some(biz) = v.get("business_name").and_then(|b| b.as_str()) {
-            response["reward_message"] = json!(format!("🎉 You earned a reward at {}!", biz));
-        }
-    }
-
-    Ok(Json(response))
-}
+// Both arms that lived here are RETIRED:
+//   * `generate_pin` (kanban t_b209d263) — an anonymous 4-character PIN minter that inserted a
+//     `pending` row into `purchase_verifications` for ANY active campaign with a caller-chosen
+//     `business_id`/`business_name`/`purchase_amount`, and the SOLE writer of that table.
+//   * `verify_purchase` + `VerifyPurchaseRequest` (kanban t_7a16bf0b) — the
+//     `AuthenticatedUser`-guarded reader of `purchase_verifications`. It was correctly guarded
+//     (it scoped the contact through `contact_tenants`), but with its only producer gone it could
+//     never find a `pending` row: dead for every caller, `404 {"error":"Invalid or expired PIN"}`
+//     forever. It was also `issue_rotation_voucher`'s only caller.
+//   Removed rather than repurposed: re-adding a PIN generator would re-add the anonymous mint
+//   t_b209d263 retired, and a contact cannot authenticate in this app, so there is no credential
+//   to scope such a generator to.
+//
+// The live purchase-verification flow is `purchase_verify` below, which validates the caller's
+// OWN `accounts.purchase_pin` — what the tenant console and the served guide describe.
 
 // ── Voucher Engine ──
 //
@@ -159,9 +47,12 @@ pub async fn verify_purchase(
 // `tag_automation.rs::execute_voucher_action`, and that call path is retired (MD retired the
 // IncentiveSwift loyalty integration on 2026-09-23: `service="incentiveswift"` answers 400;
 // `tag_rules` has 0 rows ever and the MD console's tag-rule form does not offer the action).
-// The voucher lifecycle that remains is the guarded one: `issue_rotation_voucher` (called by
-// the AuthenticatedUser-guarded `verify_purchase`), `claim_voucher` (keyed by a claim code,
-// a bearer secret) and the AuthenticatedUser-scoped `list_my_vouchers`.
+// `verify_purchase` and its private issuer `issue_rotation_voucher` were RETIRED in kanban
+// t_7a16bf0b (see the notes above). The voucher lifecycle that remains is `claim_voucher`
+// (keyed by a claim code, a bearer secret) and the AuthenticatedUser-scoped
+// `list_my_vouchers`. NOTE (measured, t_7a16bf0b): `vouchers` is NOT orphaned —
+// `survey_response` below still INSERTs a live `$50` restaurant-card voucher, anonymously.
+// That arm is its own card.
 /// GET /api/v1/loyalty/my-vouchers — list active vouchers for a contact
 pub async fn list_my_vouchers(
     State(s): State<AppState>,
@@ -303,108 +194,17 @@ pub async fn list_pending_pledges(
     Ok(Json(json!({"pending_pledges": result})))
 }
 
-// ── Rotation Engine ──────────────────────────────────────────────────
-
-/// When a purchase is verified, automatically issue a rotating voucher
-/// from a non-competing business in the same rotation group.
-pub async fn issue_rotation_voucher(
-    pool: &sqlx::PgPool,
-    campaign_id: &Uuid,
-    contact_id: &Uuid,
-    source_business_id: &Uuid,
-) -> Result<Option<serde_json::Value>, AppError> {
-    // Find active rotation configs for this campaign
-    let configs = sqlx::query_as::<_, (Uuid, String, i32, String, i32)>(
-        "SELECT id, name, group_size, rotation_frequency, max_vouchers_per_rotation
-         FROM rotation_configs WHERE campaign_id = $1 AND is_active = true LIMIT 5",
-    )
-    .bind(campaign_id)
-    .fetch_all(pool)
-    .await?;
-
-    for (config_id, config_name, group_size, frequency, max_vouchers) in &configs {
-        // Find businesses in this rotation group, excluding the source business
-        let targets = sqlx::query_as::<_, (Uuid, String, i32)>(
-            "SELECT rgm.business_id, rgm.business_name, rgm.rotation_order
-             FROM rotation_group_members rgm
-             JOIN rotation_configs rc ON rc.id = rgm.rotation_config_id
-             WHERE rgm.rotation_config_id = $1 AND rgm.is_active = true
-             AND rgm.business_id != $2
-             ORDER BY rgm.rotation_order ASC",
-        )
-        .bind(config_id)
-        .bind(source_business_id)
-        .fetch_all(pool)
-        .await?;
-
-        if targets.is_empty() {
-            continue;
-        }
-
-        // Pick the next business in rotation order
-        let target_idx = rand::thread_rng().gen_range(0..targets.len());
-        let (target_id, target_name, _order) = &targets[target_idx];
-
-        // Check if they have an active pledge
-        let pledge = sqlx::query_as::<_, (String, String, Option<String>)>(
-            "SELECT offer_type, offer_value, offer_description FROM business_pledges
-             WHERE business_id = $1 AND status = 'active' AND is_active = true
-             LIMIT 1",
-        )
-        .bind(target_id)
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some((offer_type, offer_value, offer_desc)) = pledge {
-            // Generate voucher code
-            let code: String = rand::thread_rng()
-                .sample_iter(&rand::distributions::Alphanumeric)
-                .take(8)
-                .map(char::from)
-                .collect::<String>()
-                .to_uppercase();
-
-            let voucher_id = Uuid::new_v4();
-            let validity_days = 30;
-
-            sqlx::query(
-                "INSERT INTO vouchers (id, campaign_id, issued_to_contact_id, source_business_id,
-                 target_business_id, voucher_type, discount_value, redemption_code, expires_at, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + make_interval(days => $9), 'active')"
-            )
-            .bind(voucher_id)
-            .bind(campaign_id)
-            .bind(contact_id)
-            .bind(source_business_id)
-            .bind(target_id)
-            .bind(&offer_type)
-            .bind(&offer_value)
-            .bind(&code)
-            .bind(validity_days)
-            .execute(pool)
-            .await?;
-
-            // Track the rotation
-            sqlx::query(
-                "UPDATE purchase_verifications SET voucher_id = $1 WHERE issued_to_contact_id = (SELECT id FROM purchase_verifications WHERE contact_id = $2 ORDER BY created_at DESC LIMIT 1)"
-            )
-            .bind(voucher_id)
-            .bind(contact_id)
-            .execute(pool)
-            .await.ok();
-
-            return Ok(Some(json!({
-                "voucher_id": voucher_id,
-                "code": code,
-                "business_name": target_name,
-                "offer": format!("{} {}", offer_value, offer_type),
-                "expires_in_days": validity_days
-            })));
-        }
-    }
-
-    Ok(None)
-}
+// ── Rotation Engine (retired) ──
+//
+// `issue_rotation_voucher` was RETIRED here (kanban t_7a16bf0b): the private issuer that picked
+// the next non-competing business in a rotation group and INSERTed a live `vouchers` row. Its ONLY
+// caller was `verify_purchase` (retired in the same pass) and it had no route of its own, so it was
+// live code with no way in.
+//
+// Its INSERT was one of `vouchers`'s two writers. The other, `survey_response` below, is STILL
+// LIVE and anonymous, so `vouchers` is NOT orphaned — contrary to the card's premise (carded).
+// The rotation-group CRUD below still writes `rotation_configs` / `rotation_group_members`; their
+// only consumer was this function, so they are now write-only (carded).
 
 // ── Rotation Group API ────────────────────────────────────────────────
 

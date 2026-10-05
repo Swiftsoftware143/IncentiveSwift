@@ -286,10 +286,13 @@ async fn main() -> anyhow::Result<()> {
         //     `purchase_verifications` (0 rows ever).
         // 0 nginx hits for either path over 718k log lines. Both tables were empty before and
         // after (proof: /opt/swift/audits/t_b209d263/proof.py).
-        .route(
-            "/api/v1/loyalty/verify-purchase",
-            post(handlers::loyalty_v2::verify_purchase),
-        )
+        // POST /api/v1/loyalty/verify-purchase was RETIRED here too (kanban t_7a16bf0b): the
+        // AuthenticatedUser-guarded reader of `purchase_verifications`. It was correctly guarded
+        // (it scoped the contact through `contact_tenants`), but with its only writer
+        // `generate_pin` retired above it could never find a `pending` row — 404 for every caller
+        // forever — and it was the sole caller of `loyalty_v2::issue_rotation_voucher` (also
+        // retired). Nothing called the route: 0 nginx hits over 719k log lines, no served page,
+        // no fleet app. Proof: /opt/swift/audits/t_7a16bf0b/proof.py.
         // Account-level loyalty routes (via auth)
         .route(
             "/api/v1/loyalty/referrals",

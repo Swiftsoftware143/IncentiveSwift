@@ -323,10 +323,9 @@ Schedule/event tracking per tenant (event / reminder / appointment), optional ca
 | `/api/v1/auth/profile` | PUT | Update profile |
 | `/api/v1/auth/password` | PUT | Change password |
 
-### Loyalty — PIN Purchase Verification
+### Loyalty — Vouchers
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/loyalty/verify-purchase` | POST | Consumer enters PIN to verify purchase |
 | `/api/v1/loyalty/my-vouchers/:contact_id` | GET | List active vouchers for a contact |
 | `/api/v1/loyalty/claim-voucher` | POST | Redeem a voucher by code |
 
