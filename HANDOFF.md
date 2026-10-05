@@ -68,7 +68,7 @@ The full SQL schema is in `migrations/00001_full_schema.sql` — includes:
 
 ### Loyalty Module (separate upsell)
 - **Loyalty V1:** Recurring point-based check-in, online visit/share/referral tracking, reward tiers (auto/manual approval), daily cap enforcement (DB-level)
-- **Loyalty V2 (fully built):** Purchase verification via PIN, rotating cross-promotion vouchers, business pledges (admin review), reward redemption, rotation group config (non-competing business pairs)
+- **Loyalty V2:** Purchase verification via the tenant's own PIN (`POST /api/v1/loyalty/purchase/verify`), business pledges (admin review), reward redemption, voucher claim/`my-vouchers`. The rotating cross-promotion voucher engine and its rotation-group config CRUD were RETIRED (kanban t_7a16bf0b / t_8e9d3a52); `rotation_configs` / `rotation_group_members` are orphaned (0 rows ever).
 - Gated behind `module_loyalty_program` feature flag
 
 ### Delivery — Two Paths

@@ -2801,7 +2801,7 @@ const OPS_PANELS = [
 },
 {
 "id": "biz",
-"title": "7 \u00b7 Businesses, rotation & pledges",
+"title": "7 \u00b7 Businesses & pledges",
 "list": "/admin/businesses",
 "actions": [
 {
@@ -2817,49 +2817,6 @@ const OPS_PANELS = [
 "method": "POST",
 "path": "/admin/businesses/:business_id/rotate-key",
 "fields": [
-"business_id"
-]
-},
-{
-"label": "Create rotation config",
-"method": "POST",
-"path": "/admin/rotation-configs",
-"json": true,
-"fields": [
-"json"
-]
-},
-{
-"label": "Get rotation config",
-"method": "GET",
-"path": "/admin/rotation-configs/:campaign_slug",
-"fields": [
-"campaign_slug"
-]
-},
-{
-"label": "Add rotation member",
-"method": "POST",
-"path": "/admin/rotation-members",
-"json": true,
-"fields": [
-"json"
-]
-},
-{
-"label": "List rotation members",
-"method": "GET",
-"path": "/admin/rotation-members/:config_id",
-"fields": [
-"config_id"
-]
-},
-{
-"label": "Remove rotation member",
-"method": "DELETE",
-"path": "/admin/rotation-members/:config_id/:business_id",
-"fields": [
-"config_id",
 "business_id"
 ]
 },

@@ -1,10 +1,12 @@
 //! Loyalty verification & voucher handlers
-//! Voucher claim/redeem, business pledges, rotation-group config
+//! Voucher claim/redeem, business pledges
 //!
 //! RETIRED from this module: `generate_pin` and `issue_voucher` (kanban t_b209d263 — both
 //! anonymous and unscoped), then `verify_purchase` and `issue_rotation_voucher` (kanban
 //! t_7a16bf0b — the guarded reader of `purchase_verifications` and its private voucher
-//! issuer, left writer-less by t_b209d263). See the retirement notes at each section.
+//! issuer, left writer-less by t_b209d263), then the rotation-group CRUD family (kanban
+//! t_8e9d3a52 — the last writers of `rotation_configs` / `rotation_group_members`).
+//! See the retirement notes at each section.
 
 use axum::{
     extract::{Path, State},
@@ -203,152 +205,15 @@ pub async fn list_pending_pledges(
 //
 // Its INSERT was one of `vouchers`'s two writers. The other, `survey_response` below, is STILL
 // LIVE and anonymous, so `vouchers` is NOT orphaned — contrary to the card's premise (carded).
-// The rotation-group CRUD below still writes `rotation_configs` / `rotation_group_members`; their
-// only consumer was this function, so they are now write-only (carded).
-
-// ── Rotation Group API ────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct CreateRotationConfigRequest {
-    pub campaign_slug: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub group_size: Option<i32>,
-    pub rotation_frequency: Option<String>,
-    pub voucher_validity_days: Option<i32>,
-}
-
-/// POST /api/v1/admin/rotation-configs — create a rotation config
-pub async fn create_rotation_config(
-    State(s): State<AppState>,
-    Json(req): Json<CreateRotationConfigRequest>,
-) -> Result<Json<Value>, AppError> {
-    let campaign = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM campaigns WHERE slug = $1 LIMIT 1")
-        .bind(&req.campaign_slug)
-        .fetch_optional(&s.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Campaign not found".into()))?;
-
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO rotation_configs (id, campaign_id, name, description, group_size, rotation_frequency, voucher_validity_days)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)"
-    )
-    .bind(id)
-    .bind(campaign.0)
-    .bind(&req.name)
-    .bind(&req.description)
-    .bind(req.group_size.unwrap_or(4))
-    .bind(req.rotation_frequency.as_deref().unwrap_or("weekly"))
-    .bind(req.voucher_validity_days.unwrap_or(30))
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(json!({"id": id, "status": "created"})))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AddToRotationRequest {
-    pub rotation_config_id: Uuid,
-    pub business_id: Uuid,
-    pub business_name: String,
-    pub business_category: Option<String>,
-    pub rotation_order: Option<i32>,
-}
-
-/// POST /api/v1/admin/rotation-members — add a business to a rotation group
-pub async fn add_rotation_member(
-    State(s): State<AppState>,
-    Json(req): Json<AddToRotationRequest>,
-) -> Result<Json<Value>, AppError> {
-    sqlx::query(
-        "INSERT INTO rotation_group_members (id, rotation_config_id, business_id, business_name, business_category, rotation_order)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (rotation_config_id, business_id) DO UPDATE SET is_active = true"
-    )
-    .bind(Uuid::new_v4())
-    .bind(req.rotation_config_id)
-    .bind(req.business_id)
-    .bind(&req.business_name)
-    .bind(&req.business_category)
-    .bind(req.rotation_order.unwrap_or(0))
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(json!({"status": "added"})))
-}
-
-/// DELETE /api/v1/admin/rotation-members/:config_id/:business_id — remove from rotation
-pub async fn remove_rotation_member(
-    State(s): State<AppState>,
-    Path((config_id, business_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Value>, AppError> {
-    sqlx::query(
-        "UPDATE rotation_group_members SET is_active = false WHERE rotation_config_id = $1 AND business_id = $2"
-    )
-    .bind(config_id)
-    .bind(business_id)
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(json!({"status": "removed"})))
-}
-
-/// GET /api/v1/admin/rotation-configs/:campaign_slug — list rotation configs for a campaign
-pub async fn list_rotation_configs(
-    State(s): State<AppState>,
-    Path(campaign_slug): Path<String>,
-) -> Result<Json<Value>, AppError> {
-    let configs = sqlx::query_as::<_, (Uuid, String, Option<String>, i32, String, i32, bool)>(
-        "SELECT rc.id, rc.name, rc.description, rc.group_size, rc.rotation_frequency,
-                rc.voucher_validity_days, rc.is_active
-         FROM rotation_configs rc
-         JOIN campaigns c ON c.id = rc.campaign_id
-         WHERE c.slug = $1
-         ORDER BY rc.created_at DESC",
-    )
-    .bind(&campaign_slug)
-    .fetch_all(&s.db)
-    .await?;
-
-    let result: Vec<Value> = configs
-        .into_iter()
-        .map(|c| {
-            json!({
-                "id": c.0, "name": c.1, "description": c.2, "group_size": c.3,
-                "frequency": c.4, "validity_days": c.5, "is_active": c.6
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"rotation_configs": result})))
-}
-
-/// GET /api/v1/admin/rotation-members/:config_id — list members of a rotation group
-pub async fn list_rotation_members(
-    State(s): State<AppState>,
-    Path(config_id): Path<Uuid>,
-) -> Result<Json<Value>, AppError> {
-    let members = sqlx::query_as::<_, (Uuid, String, Option<String>, i32, bool)>(
-        "SELECT business_id, business_name, business_category, rotation_order, is_active
-         FROM rotation_group_members WHERE rotation_config_id = $1
-         ORDER BY rotation_order ASC",
-    )
-    .bind(config_id)
-    .fetch_all(&s.db)
-    .await?;
-
-    let result: Vec<Value> = members
-        .into_iter()
-        .map(|m| {
-            json!({
-                "id": m.0, "name": m.1, "category": m.2, "order": m.3, "active": m.4
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"members": result})))
-}
+//
+// The rotation-group CRUD below was RETIRED in kanban t_8e9d3a52 (the five /admin/rotation-configs
+// and /admin/rotation-members arms + `CreateRotationConfigRequest` / `AddToRotationRequest`). They
+// were the last writers of `rotation_configs` / `rotation_group_members` (0 rows ever), nothing
+// consumed what they wrote, and one arm could never have worked: `add_rotation_member`'s
+// `ON CONFLICT (rotation_config_id, business_id)` has no matching unique constraint on the live
+// table, so it answered 500 for every caller. The tables are now orphaned; their drop is a
+// separate card. `admin_guard` (path-based over /api/v1/admin/*) covered all five — they were NOT
+// anonymous, contrary to the card. Proof: /opt/swift/audits/t_8e9d3a52/proof.py.
 
 /// GET /api/v1/loyalty/rewards-earned/:contact_id — list rewards earned by a contact
 pub async fn list_rewards_earned(

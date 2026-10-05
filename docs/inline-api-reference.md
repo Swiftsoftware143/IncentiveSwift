@@ -98,15 +98,23 @@ Quick reference for every route group in the Axum router (`src/main.rs`). Groupe
 | GET | `/admin/pledges` | Admin | `loyalty_v2::list_pending_pledges` | List pending pledges |
 | POST | `/admin/pledges/:id/review` | Admin | `loyalty_v2::review_pledge` | Approve/reject pledge |
 
-## Admin — Rotation Config (Cross-Promotion)
+## Admin — Rotation Config (Cross-Promotion) — RETIRED
 
-| Method | Path | Auth | Handler | Description |
-|--------|------|------|---------|-------------|
-| POST | `/admin/rotation-configs` | Admin | `loyalty_v2::create_rotation_config` | Create rotation config |
-| GET | `/admin/rotation-configs/:campaign_slug` | Admin | `loyalty_v2::list_rotation_configs` | List configs for campaign |
-| POST | `/admin/rotation-members` | Admin | `loyalty_v2::add_rotation_member` | Add business to rotation |
-| GET | `/admin/rotation-members/:config_id` | Admin | `loyalty_v2::list_rotation_members` | List members in config |
-| DELETE | `/admin/rotation-members/:config_id/:business_id` | Admin | `loyalty_v2::remove_rotation_member` | Remove member |
+> The five rotation arms — `POST`/`GET /admin/rotation-configs` and `POST`/`GET`/`DELETE
+> /admin/rotation-members` (`loyalty_v2::create_rotation_config`, `list_rotation_configs`,
+> `add_rotation_member`, `list_rotation_members`, `remove_rotation_member`) — were **RETIRED** in
+> kanban t_8e9d3a52. They wrote `rotation_configs` / `rotation_group_members`, whose only consumer
+> was `loyalty_v2::issue_rotation_voucher` (retired in t_7a16bf0b); both tables have 0 rows ever
+> and nothing read what those arms wrote.
+>
+> They ARE **admin-guarded** (`security::auth::admin_guard`, path-based over `/api/v1/admin/*`) —
+> an anonymous caller gets `401 Admin authentication required` and a `company_admin` `403 Admin
+> role required`, so they were never an anonymous surface. An operator token reached a LIVE
+> handler, and `POST /admin/rotation-members` answered **500 for every caller**: its
+> `ON CONFLICT (rotation_config_id, business_id)` has no matching unique constraint on the live
+> table. All five now answer a bare 0-byte 404 to an operator token (a route that never existed
+> answers the same shape). The now-orphaned tables' drop is a separate card.
+> Proof: `/opt/swift/audits/t_8e9d3a52/proof.py`.
 
 ## Cross-App Integration
 

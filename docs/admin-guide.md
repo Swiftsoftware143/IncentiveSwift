@@ -36,16 +36,22 @@ Rewards that consumers can redeem points/credits for. Supports:
 - **Admin approval** — requires manual review before issuance
 
 ### Pledges (Business Offers)
-Pledge offers progress `pending` → admin review → `approved` or `rejected`; only approved pledges participate in the rotating cross-promotion network. The anonymous business-facing arms (`POST /api/v1/business/pledge`, `GET /api/v1/business/pledges/:business_id`) were RETIRED (kanban t_5e244255) — pledges are reviewed in the admin console.
+Pledge offers progress `pending` → admin review → `approved` or `rejected`; only approved pledges become business offers. The anonymous business-facing arms (`POST /api/v1/business/pledge`, `GET /api/v1/business/pledges/:business_id`) were RETIRED (kanban t_5e244255) — pledges are reviewed in the admin console.
 
-### Rotating Cross-Promotion Engine
-When a purchase is verified at Business A, the system auto-issues a voucher for Business B (a non-competing business in the same rotation group). This drives cross-traffic between businesses.
+### Rotating Cross-Promotion Engine — RETIRED
+The rotating cross-promotion voucher engine and its rotation-group configuration CRUD
+(`/api/v1/admin/rotation-configs`, `/api/v1/admin/rotation-members`) were **RETIRED** (kanban
+t_7a16bf0b retired the issuer, t_8e9d3a52 the five CRUD arms, which were the last writers of
+`rotation_configs` / `rotation_group_members`). Nothing consumed what those tables held and a
+customer-facing replacement would need the anonymous unscoped generator that was also retired.
+The routes now answer a bare 404.
 
 ### Purchase Verification (PIN)
-1. Business generates a 4-digit PIN via the API
-2. Customer enters the PIN to verify their purchase
-3. Rotating cross-promo voucher is issued automatically
-4. Customer redeems the voucher at another business within the expiry window
+The live flow is the tenant's own PIN: the account sets `accounts.purchase_pin` and the
+authenticated caller verifies a purchase with `POST /api/v1/loyalty/purchase/verify`
+(`loyalty_v2::purchase_verify`, scoped to the calling account). The retired 4-digit
+`generate_pin`/`verify-purchase` pair — and the auto-issued cross-promo voucher that hung off it —
+are gone; `my-vouchers` and `claim-voucher` remain for the vouchers that still exist.
 
 ### Referral System
 - Campaign-scoped referral codes and earn channels
@@ -268,10 +274,8 @@ This replaced the previous `plan_tier_features`/`feature_limits` tables (removed
 3. **Create a campaign** — set type, slug, delivery config
 4. **Create loyalty programs** — define earning rules per campaign
 5. **Create reward tiers** — set redemption costs and approval type
-6. **Configure rotation groups** — create rotation configs and add businesses
-7. **Review pledges** in the admin console → approved pledges join the network
-8. **System auto-issues vouchers** on purchase verification
-9. **Set up webhooks** — configure Marketing Boost and delivery config for real-time event notifications
+6. **Review pledges** in the admin console → approved pledges become business offers
+7. **Set up webhooks** — configure Marketing Boost and delivery config for real-time event notifications
 
 ## Support Tickets, Reviews & Calendar Modules
 
@@ -381,14 +385,11 @@ t_b209d263): both were anonymous and unscoped, and neither had a live caller.
 | `/api/v1/campaigns/:campaign_id/secret-codes` | GET/POST | Campaign-scoped codes |
 | `/api/v1/campaigns/:campaign_id/redeem-code` | POST | Redeem a code against campaign |
 
-### Rotation Config (Cross-Promotion)
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/admin/rotation-configs` | POST | Create rotation config |
-| `/api/v1/admin/rotation-configs/:campaign_slug` | GET | List configs for campaign |
-| `/api/v1/admin/rotation-members` | POST | Add business to rotation |
-| `/api/v1/admin/rotation-members/:config_id` | GET | List members in config |
-| `/api/v1/admin/rotation-members/:config_id/:business_id` | DELETE | Remove member |
+### Rotation Config (Cross-Promotion) — RETIRED
+The five `/api/v1/admin/rotation-*` endpoints were **RETIRED** (kanban t_8e9d3a52). They were
+admin-guarded, but their only consumer (`loyalty_v2::issue_rotation_voucher`) was retired in
+t_7a16bf0b, so nothing read `rotation_configs` / `rotation_group_members` (0 rows ever). All five
+answer a bare 404 now.
 
 ### Admin
 | Endpoint | Method | Description |

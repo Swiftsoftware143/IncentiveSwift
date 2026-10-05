@@ -523,27 +523,23 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/pledges/:id/review",
             post(handlers::loyalty_v2::review_pledge),
         )
-        // Rotation Config API
-        .route(
-            "/api/v1/admin/rotation-configs",
-            post(handlers::loyalty_v2::create_rotation_config),
-        )
-        .route(
-            "/api/v1/admin/rotation-configs/:campaign_slug",
-            get(handlers::loyalty_v2::list_rotation_configs),
-        )
-        .route(
-            "/api/v1/admin/rotation-members",
-            post(handlers::loyalty_v2::add_rotation_member),
-        )
-        .route(
-            "/api/v1/admin/rotation-members/:config_id/:business_id",
-            delete(handlers::loyalty_v2::remove_rotation_member),
-        )
-        .route(
-            "/api/v1/admin/rotation-members/:config_id",
-            get(handlers::loyalty_v2::list_rotation_members),
-        )
+        // Rotation Config API — RETIRED (kanban t_8e9d3a52). The five arms
+        //   POST   /api/v1/admin/rotation-configs
+        //   GET    /api/v1/admin/rotation-configs/:campaign_slug
+        //   POST   /api/v1/admin/rotation-members
+        //   GET    /api/v1/admin/rotation-members/:config_id
+        //   DELETE /api/v1/admin/rotation-members/:config_id/:business_id
+        // wrote `rotation_configs` / `rotation_group_members`, whose ONLY consumer was
+        // `loyalty_v2::issue_rotation_voucher` (retired in t_7a16bf0b). Both tables have 0 rows
+        // ever; nothing reads what they write. The arms ARE admin-guarded (security::auth::
+        // admin_guard, path-based over /api/v1/admin/*) — contrary to the card, which called them
+        // anonymous; measured live, anon=401 and company_admin=403. Operator token = LIVE handler:
+        // POST rotation-configs 200 + row, GET 200, POST rotation-members **500 forever** (the ON
+        // CONFLICT target has no unique constraint — a second, independent defect), GET 200.
+        // A scope+wire arm would need the retired anonymous generator back and a credential a
+        // contact cannot hold, so RETIRE. 0 nginx hits over 692,285 access-log lines; no served
+        // call site; no fleet caller. Drop of the now-orphaned tables is a separate card.
+        // Proof: /opt/swift/audits/t_8e9d3a52/proof.py.
         // Offers CRUD (admin endpoints)
         .route(
             "/api/v1/admin/offers",
