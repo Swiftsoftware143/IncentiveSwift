@@ -218,7 +218,7 @@ pub async fn read_provisioning_settings(
     let enabled = read_setting(db, PROVISION_ENABLED_KEY).await?;
     let slug = read_setting(db, PROVISION_ENTRY_PLAN_KEY).await?;
     Ok(ProvisioningSettings {
-        enabled: bool_setting(enabled.as_ref()).unwrap_or(false),
+        enabled: bool_setting(enabled.as_ref()).unwrap_or(true),
         entry_plan_slug: string_setting(slug.as_ref(), &["plan_slug", "slug", "value"])
             .unwrap_or_else(|| DEFAULT_ENTRY_PLAN_SLUG.to_string()),
     })
@@ -363,8 +363,9 @@ pub async fn handle_provision_free_account(
         return Err(AppError::Unauthorized("Invalid internal key".into()));
     }
 
-    // 2. The master switch. Ships OFF; while it is off this app refuses and mints NOTHING, so a
-    //    caller cannot create an account in an app whose operator has not enabled the door.
+    // 2. The master switch. Ships ON (code default true, so a FRESH INSTALL has the door open); an
+    //    operator closes it from the console and this app then refuses and mints NOTHING, so a
+    //    caller cannot create an account in an app whose operator has disabled the door.
     let settings = read_provisioning_settings(&state.db).await?;
     if !settings.enabled {
         tracing::info!(
