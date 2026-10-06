@@ -1356,6 +1356,16 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             security::auth::admin_guard,
         ))
+        // DEFAULT-DENY (kanban t_28a832dd). Applied OUTSIDE `admin_guard`, so it runs first: a
+        // matched route that is not in `security::route_policy::PUBLIC_ROUTES` must present a
+        // credential (issued API key, app JWT, or the shared internal key) before any handler runs.
+        // This is what makes a NEWLY mounted route private by default instead of relying on its
+        // author remembering an `AuthenticatedUser` extractor. See the module docs for the census
+        // that produced the allowlist and for the four previously-anonymous routes it closes.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::route_policy::default_deny,
+        ))
         .layer(middleware::from_fn(security::headers::add_security_headers))
         .layer(TraceLayer::new_for_http())
         .layer(
