@@ -17,6 +17,23 @@
 //!      has to be told to top up.
 //!   3. EVERY MOVEMENT IS WRITTEN DOWN. If it moved money and it is not in `journal_entries`, it did not
 //!      happen as far as an audit is concerned.
+//!
+//! ── STAGED STATUS, MEASURED 2026-10-06 (kanban t_0107d46b) — READ THIS BEFORE "CLEANING UP" ──────
+//! The engine is HALF LIVE, and the two halves must be described differently:
+//!   * LIVE (a route reaches it): money in (`record_funding`), the rule + the position for DISPLAY
+//!     (`get_state`, the business rules page, `set_rule`), and the human-resolve arm of a hold
+//!     (`list_holds` / `resolve_hold`, which the console renders only when a hold exists).
+//!   * NOT WIRED (routed nothing, called by nothing): `check_float` — the enforcement. Its ONLY caller
+//!     was the anonymous clearinghouse redemption in `loyalty_badges.rs`, and that whole surface was
+//!     RETIRED on purpose (f3d212e4, kanban t_5e244255: anonymous + unscoped, 0 callers fleet-wide,
+//!     0 nginx hits, 0 rows at stake). That retire also removed the only writer of
+//!     `point_redemption_log` and the only redemption-side writer of the `point_treasury` counters, so
+//!     nothing in the crate now reaches the guard or can insert a `treasury_hold`.
+//! So today the guard is STAGED ENFORCEMENT, not display-only decoration and not dead code: do NOT
+//! delete it and do NOT dismantle the hold arms. Wire `check_float` into a payout path (an event that
+//! pays a business money and therefore has a dollar amount) when that path exists again; the blocker is
+//! a product decision, not code — what a redemption is worth in dollars, and who carries the shortfall.
+//! Until then the console's float verdict is a REPORT of the position, not a rule the app acts on.
 
 use axum::{
     extract::{Path, State},
@@ -96,6 +113,11 @@ pub fn on_breach_sentence(rule: &float_rule::FloatRule, stored: &str) -> String 
 
 /// What a hold record should say the rule WAS. The record describes what the app DID, so an
 /// unimplemented stored setting is named as such instead of being quoted as the rule in force.
+///
+/// STAGED (kanban t_0107d46b): no caller today — the hold record it writes is produced by `check_float`,
+/// which nothing calls since the redemption payout path was retired. Kept with its consumer so the two
+/// land together; see the STAGED STATUS note at the top of this file.
+#[allow(dead_code)]
 pub fn on_breach_applied_note(behaviour: &str) -> String {
     if on_breach_is_implemented(behaviour) {
         format!("Rule in force: {behaviour}")
@@ -176,8 +198,10 @@ pub(crate) struct FloatPosition {
 }
 
 /// The trailing-30-day redemption volume, in money — what "one month" means to the burn condition.
-/// `point_redemption_log` is written by the redemption path (`loyalty_badges.rs`), so this is measured
-/// from the same rows the programme actually paid, never assumed.
+/// `point_redemption_log` WAS written by the redemption path in `loyalty_badges.rs`; that path was
+/// retired (kanban t_5e244255) and nothing writes it now, so this measures 0 and the burn condition
+/// cannot fail. It stays as the measurement of the same rows the programme actually paid — the moment a
+/// payout path writes them again, burn becomes real with no change here (kanban t_0107d46b).
 pub(crate) async fn monthly_burn(s: &AppState) -> Result<Decimal, AppError> {
     let burn: Decimal = sqlx::query_scalar(
         "SELECT COALESCE(SUM(total_reimbursement),0) FROM point_redemption_log
@@ -240,8 +264,14 @@ pub async fn get_state(State(s): State<AppState>) -> Result<Json<Value>, AppErro
     let available = collected - reimbursed;
 
     // The three-condition rule in force, judged against the LIVE position by the SAME function the
-    // enforcement calls (`float_rule::evaluate`), so the console can never show a verdict the guard
-    // does not act on.
+    // guard uses (`float_rule::evaluate`) — so the verdict on screen is computed from the same rule with
+    // the same numbers the guard would judge if it were called.
+    //
+    // It is NOT acted on: `check_float` has no caller since the redemption payout path was retired
+    // (kanban t_5e244255), so a "short" verdict here is a REPORT of the position, and no hold can be
+    // raised from it today. Stated plainly rather than left implied — the comment that previously stood
+    // here claimed the console "can never show a verdict the guard does not act on", which stopped being
+    // true the day the guard lost its caller (kanban t_0107d46b).
     let rule = float_rule::rule_from_columns(t.float_coverage_pct, t.float_burn_months, minimum);
     let burn = monthly_burn(&s).await?;
     let verdict = float_rule::evaluate(available, t.outstanding_liability, Some(burn), &rule);
@@ -699,6 +729,14 @@ pub async fn get_business_rules(State(s): State<AppState>) -> Result<Json<Value>
 ///
 /// Returns whether `amount` may leave the treasury right now. It never silently refuses and never
 /// silently pays: the caller gets a verdict, and a breach is counted.
+///
+/// STAGED — NOT WIRED (kanban t_0107d46b). Read the STAGED STATUS note at the top of this file before
+/// touching this: there is no caller today, and the only one it ever had was retired with the anonymous
+/// clearinghouse redemption it guarded. It is kept, not deleted, because the treasury engine is a staged
+/// feature (David 2026-10-02: *"I'll connect Stripe later on but that system needs to be built in"*), and
+/// `FloatCheck` is the contract a payout path will call. Wire it there — never call it from a read path,
+/// and never delete it to satisfy a dead-code census.
+#[allow(dead_code)]
 pub enum FloatCheck {
     /// Every condition still holds after the payment. Pay it.
     Allowed { available: Decimal },
