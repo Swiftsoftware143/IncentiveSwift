@@ -337,29 +337,6 @@ pub async fn deduct_credits(
     Ok((true, new_balance, cost))
 }
 
-/// Check if account has enough credits (without deducting).
-///
-/// NOTE (2026-09-25, kanban t_329b61b2): no caller anywhere in the crate (see `deduct_credits`).
-/// The old read resolved the action price from `plans.features->>'cost_<action>'` through
-/// a `plans` join on `a.plan_tier_id = p.id` — a key no catalog row backs and a table the FK does not
-/// point at — so the price was *always* the `unwrap_or(1)` fallback. It is now the explicit
-/// `DEFAULT_ACTION_COST` constant; `action` is kept in the signature for the callers this is
-/// waiting for.
-pub async fn check_credits(
-    pool: &sqlx::PgPool,
-    account_id: Uuid,
-    _action: &str,
-) -> Result<(bool, i32, i32), String> {
-    let balance: i32 = sqlx::query_scalar("SELECT credits_balance FROM accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Account not found".to_string())?;
-
-    Ok((balance >= DEFAULT_ACTION_COST, balance, DEFAULT_ACTION_COST))
-}
-
 // --- Credit PACKS / top-up: deleted (kanban t_24b17131) ---------------------------------------
 //
 // `create_topup_checkout` + `create_stripe_session` + this module's duplicate Stripe receiver were

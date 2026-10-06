@@ -213,49 +213,6 @@ pub async fn list_programs(
     Ok(Json(json!({ "programs": programs })))
 }
 
-/// GET /api/v1/loyalty/rewards — list all rewards for the account.
-pub async fn list_rewards(
-    State(state): State<AppState>,
-    user: AuthenticatedUser,
-) -> Result<Json<Value>, AppError> {
-    let account_id = Uuid::parse_str(&user.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
-
-    #[derive(sqlx::FromRow, serde::Serialize)]
-    struct RewardRow {
-        id: Uuid,
-        member_id: Uuid,
-        tier_id: Uuid,
-        status: String,
-        earned_at: chrono::DateTime<chrono::Utc>,
-        tier_name: String,
-        points_required: i32,
-        requires_approval: bool,
-        first_name: Option<String>,
-        last_name: Option<String>,
-        email: Option<String>,
-    }
-
-    let rewards = sqlx::query_as::<_, RewardRow>(
-        r#"SELECT re.id, re.member_id, re.tier_id, re.status, re.earned_at,
-                  rt.name as tier_name, rt.points_required, rt.requires_approval,
-                  c.first_name, c.last_name, c.email
-           FROM loyalty_rewards_earned re
-           JOIN loyalty_reward_tiers rt ON rt.id = re.tier_id
-           JOIN loyalty_members lm ON lm.id = re.member_id
-           JOIN contacts c ON c.id = lm.contact_id
-           JOIN loyalty_programs lp ON lp.id = rt.program_id
-           LEFT JOIN campaigns cam ON cam.id = lp.campaign_id
-           WHERE cam.account_id = $1 OR lp.campaign_id IS NULL
-           ORDER BY re.earned_at DESC"#,
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(json!({ "rewards": rewards })))
-}
-
 /// POST /api/v1/loyalty/rewards/:id/deny — authenticated.
 pub async fn deny_reward(
     State(state): State<AppState>,
