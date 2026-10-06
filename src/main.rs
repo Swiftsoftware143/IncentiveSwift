@@ -265,8 +265,9 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::tag_provision_handler::handle_tag_provision),
         )
         // FunnelSwift tag → free ACCOUNT door (kanban t_3724204f). The same shared internal key
-        // credentials it; the master switch ships OFF so it answers 403 until an operator enables
-        // it in the console (`admin_settings.provision_from_tags_enabled`).
+        // credentials it; the master switch SHIPS ON (code default true), so a fresh install has
+        // the door open and an operator closes it in the console
+        // (`admin_settings.provision_from_tags_enabled`).
         .route(
             "/api/v1/internal/provision-free-account",
             post(handlers::tag_provision_handler::handle_provision_free_account),
