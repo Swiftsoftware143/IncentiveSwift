@@ -3041,7 +3041,7 @@ const OPS_PANELS = [
 ,
 {"id": "email-queue", "title": "22 · Email queue (dead letters)", "list": "/admin/email-queue"}
 ,
-{"id": "tag-provisioning", "title": "23 · Tag provisioning (free accounts from FunnelSwift tags)", "list": "/admin/provisioning-config", "actions": [{"label": "Turn tag provisioning on / off and pick the entry plan", "method": "PUT", "path": "/admin/provisioning-config", "json": true, "fields": ["json"], "hint": "{\"enabled\":true,\"entry_plan_slug\":\"free\"}   — OFF by default: until enabled is true, POST /api/v1/internal/provision-free-account refuses with 403 and creates nothing. entry_plan_slug must be one of this app's own free, active plan tiers (the free_plans list is shown above)."}, {"label": "Read the settings", "method": "GET", "path": "/admin/provisioning-config"}]}
+{"id": "tag-provisioning", "title": "23 · Tag provisioning (free accounts from FunnelSwift tags)", "list": "/admin/provisioning-config", "actions": [{"label": "Turn tag provisioning on / off and pick the entry plan", "method": "PUT", "path": "/admin/provisioning-config", "json": true, "fields": ["json"], "hint": "{\"enabled\":true,\"entry_plan_slug\":\"free\"}   — ON by default: the door ships open, so a FunnelSwift tag mints a free account immediately; set enabled=false to close it (the door then refuses with 403 and creates nothing). entry_plan_slug must be one of this app's own free, active plan tiers (the free_plans list is shown above)."}, {"label": "Read the settings", "method": "GET", "path": "/admin/provisioning-config"}]}
 ];
 
 const OpsAction = ({ act }) => {

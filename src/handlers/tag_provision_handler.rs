@@ -203,7 +203,8 @@ pub const DEFAULT_ENTRY_PLAN_SLUG: &str = "free";
 /// The provisioning knobs, as the app reads them.
 #[derive(Debug, Clone)]
 pub struct ProvisioningSettings {
-    /// Master switch. `false` (the shipped state) makes the account door answer 403.
+    /// Master switch. `true` is the shipped state (David 2026-10-06): the account door is
+    /// OPEN by default. Set `false` to make it answer 403.
     pub enabled: bool,
     /// The tier slug a minted account is seated on. Resolved IN THIS APP (`plan_tiers`) — a
     /// sibling's plan name can never resolve here (spec §3.1 rule 1).
@@ -211,7 +212,7 @@ pub struct ProvisioningSettings {
 }
 
 /// Read both knobs. Absent keys, and values of an unexpected shape, fall back to the shipped
-/// defaults — the door is OFF until an operator turns it on.
+/// defaults — the door is ON by default; an operator turns it OFF from the console.
 pub async fn read_provisioning_settings(
     db: &sqlx::PgPool,
 ) -> Result<ProvisioningSettings, AppError> {
