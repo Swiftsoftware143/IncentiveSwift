@@ -19,6 +19,8 @@ mod email_queue;
 mod lifecycle_emails;
 
 pub mod access;
+/// The ONE mint of a self-serve signup unit (kanban t_3724204f) — see `account_mint`.
+mod account_mint;
 pub mod billing;
 mod body_deadline;
 mod config;
@@ -261,6 +263,13 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/internal/tag-provision",
             post(handlers::tag_provision_handler::handle_tag_provision),
+        )
+        // FunnelSwift tag → free ACCOUNT door (kanban t_3724204f). The same shared internal key
+        // credentials it; the master switch ships OFF so it answers 403 until an operator enables
+        // it in the console (`admin_settings.provision_from_tags_enabled`).
+        .route(
+            "/api/v1/internal/provision-free-account",
+            post(handlers::tag_provision_handler::handle_provision_free_account),
         )
         .route(
             "/api/v1/internal/portfolio-companies",
@@ -1065,6 +1074,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/admin/email-settings/test",
             post(handlers::email_settings_handler::test_email_settings),
+        )
+        // Tag-provisioning console (kanban t_3724204f): the master switch and the entry-tier
+        // picker. `/api/v1/admin/*` is covered by `security::auth::admin_guard` (platform
+        // operator only), so a tenant owner is refused here exactly like every other admin route.
+        .route(
+            "/api/v1/admin/provisioning-config",
+            get(handlers::tag_provision_handler::get_provisioning_config)
+                .put(handlers::tag_provision_handler::update_provisioning_config),
         )
         .route(
             "/api/v1/provider-keys",

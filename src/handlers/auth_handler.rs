@@ -5,7 +5,7 @@ use crate::security::auth::AuthenticatedUser;
 use crate::security::email_addr;
 use crate::state::AppState;
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordVerifier},
     Argon2,
 };
 use axum::{extract::State, Json};
@@ -87,99 +87,34 @@ pub async fn register(
         .clone()
         .unwrap_or_else(|| body.password.clone());
 
-    // Check if account already exists
-    let existing: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
-            .bind(&email)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten();
-    if existing.is_some() {
-        return Err(AppError::BadRequest(
-            "An account with this email already exists".to_string(),
-        ));
-    }
-
-    // Get the Free plan TIER id. `accounts.plan_tier_id` has an FK to `plan_tiers(id)`, so the
-    // lookup belongs on `plan_tiers`: resolving it from `plans` (the marketing/checkout table)
-    // worked only while both tables' `free` rows happened to share the uuid `8b8cc0e5…`, and would
-    // start failing the FK — a 500 on every signup — the moment the free TIER row was recreated.
-    // The `plans` row is still what checkout/marketing read; it is just not the accounting identity
-    // of an account's tier (kanban t_329b61b2).
-    let free_tier_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = 'free' LIMIT 1")
-            .fetch_one(&state.db)
-            .await
-            .map_err(|_| AppError::Internal("Free plan tier not configured".to_string()))?;
-
-    // Generate account id first (so we can use as tenant_id)
-    let account_id = Uuid::new_v4();
-    let password_hash = hash_password(&plaintext_password)?;
+    // The account UNIT is minted by the app's ONE signup writer (`account_mint::mint_account`) —
+    // the same function the FunnelSwift tag door calls — so the two doors cannot drift. It owns the
+    // duplicate check, the free-tier resolution (`plan_tiers`, the table `accounts.plan_tier_id`
+    // actually has the FK to), the `accounts` row, the generated purchase PIN and the default
+    // industry. `register` keeps only what is signup-specific: the JWT, the referral bonus, the
+    // welcome mail and this door's response shape.
     let name = body
         .name
         .unwrap_or_else(|| email.split('@').next().unwrap_or("User").to_string());
-
-    // Generate a unique slug from email
-    let slug_base = email.split('@').next().unwrap_or("user");
-    let slug = format!("{}-{}", slug_base, &account_id.to_string()[..8]);
-
-    // Insert account with tenant_id = self (standalone tenant)
-    // purchase_pin set to '0000' temporarily; real PIN generated below
-    sqlx::query(
-        r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug, purchase_pin)
-           VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000')"#
+    let minted = match crate::account_mint::mint_account(
+        &state.db,
+        crate::account_mint::MintRequest {
+            email: &email,
+            name: &name,
+            password: &plaintext_password,
+            // The self-serve signup is always the platform's own free tier, never a setting.
+            entry_plan_slug: "free",
+        },
     )
-    .bind(account_id)
-    .bind(&name)
-    .bind(&email)
-    .bind(&password_hash)
-    .bind(free_tier_id)
-    .bind(account_id) // tenant_id = self
-    .bind(&slug)
-    .execute(&state.db)
-    .await?;
-
-    // Auto-generate purchase PIN: prefix "Z" + sequential number from account's tenant record
-    // Format: Z followed by 3-digit zero-padded number (e.g., Z100, Z101, ..., Z999, Z1000+)
-    let next_num: Option<i32> = sqlx::query_scalar(
-        "UPDATE accounts SET next_pin_number = next_pin_number + 1 WHERE id = $1 RETURNING next_pin_number - 1"
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await?;
-    if let Some(num) = next_num {
-        let new_pin = if num < 1000 {
-            format!("Z{:03}", num)
-        } else {
-            format!("Z{}", num)
-        };
-        sqlx::query("UPDATE accounts SET purchase_pin = $1 WHERE id = $2")
-            .bind(&new_pin)
-            .bind(account_id)
-            .execute(&state.db)
-            .await?;
-    }
-
-    // Assign industry if provided; fall back to 'general'
-    let industry_slug = body.industry_slug.as_deref().unwrap_or("general");
-    let industry_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM industries WHERE slug = $1 AND is_active = true")
-            .bind(industry_slug)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten();
-
-    if let Some(ind_id) = industry_id {
-        sqlx::query(
-            r#"INSERT INTO account_industries (account_id, industry_id, is_primary)
-               VALUES ($1, $2, true)
-               ON CONFLICT (account_id, industry_id) DO NOTHING"#,
-        )
-        .bind(account_id)
-        .bind(ind_id)
-        .execute(&state.db)
-        .await?;
-    }
+    .await
+    {
+        Ok(m) => m,
+        // This door has always answered 400 for a taken address; the machine door answers 200
+        // `already_exists` through its own pre-check.
+        Err(AppError::Conflict(msg)) => return Err(AppError::BadRequest(msg)),
+        Err(e) => return Err(e),
+    };
+    let account_id = minted.account_id;
 
     // Generate JWT
     let token = create_jwt(
@@ -301,37 +236,38 @@ pub async fn register(
     let wl_account = account_id;
     let wl_generated = generated_password.clone();
     tokio::spawn(async move {
-        let vars = serde_json::json!({
-            "name": wl_name,
-            "email": wl_email,
-            "password": wl_generated.clone().unwrap_or_default(),
-            "app_name": "IncentiveSwift",
-            "login_url": "https://app.incentiveswift.com"
-        });
-        // `welcome_credentials` is the only template that carries a Password line, so it is used
-        // exactly when THIS handler minted the password — the same producer/consumer rule the
-        // template's own comment states. A caller that brought its own password keeps the plain
-        // `welcome` mail, because mailing a password the user chose seconds ago is the thing the
-        // fleet's other credential mails deliberately avoid.
-        let template = if wl_generated.is_some() {
-            "welcome_credentials"
-        } else {
-            "welcome"
-        };
-        if let Err(e) = crate::email::send_template_email(
-            &wl_pool,
-            Some(wl_account),
-            &wl_email,
-            template,
-            &vars,
-        )
-        .await
-        {
-            tracing::error!(
-            "CREDENTIAL EMAIL FAILED for {} — the account exists but its generated password was never sent: {}",
-            wl_email,
-            e
-        );
+        // `welcome_credentials` is the only template that carries a Password line, so it is sent
+        // exactly when THIS handler minted the password — through the SAME shared writer the
+        // tag-provision door uses, so both doors mail one rendering of the credential. A caller
+        // that brought its own password keeps the plain `welcome` mail, because mailing a password
+        // the user chose seconds ago is the thing the fleet's other credential mails avoid.
+        match wl_generated {
+            Some(pw) => {
+                crate::account_mint::send_credentials_email(
+                    &wl_pool, wl_account, &wl_email, &wl_name, &pw,
+                )
+                .await;
+            }
+            None => {
+                let vars = serde_json::json!({
+                    "name": wl_name,
+                    "email": wl_email,
+                    "password": "",
+                    "app_name": "IncentiveSwift",
+                    "login_url": "https://app.incentiveswift.com"
+                });
+                if let Err(e) = crate::email::send_template_email(
+                    &wl_pool,
+                    Some(wl_account),
+                    &wl_email,
+                    "welcome",
+                    &vars,
+                )
+                .await
+                {
+                    tracing::error!("Welcome email failed for {}: {}", wl_email, e);
+                }
+            }
         }
     });
 
@@ -401,14 +337,10 @@ fn verify_password(password: &str, hash: &str) -> bool {
     bcrypt::verify(password, hash).unwrap_or(false)
 }
 
-/// Hash a password with argon2.
+/// Hash a password with argon2 — delegated to the app's ONE hasher
+/// ([`crate::account_mint::hash_password`]), which the signup mint and the tag door also use.
 fn hash_password(password: &str) -> Result<String, AppError> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))
+    crate::account_mint::hash_password(password)
 }
 
 /// POST /api/v1/auth/login

@@ -14,6 +14,9 @@
 //! Keep the module structure identical to main.rs so tests can reference everything.
 
 pub mod access;
+// The ONE mint of a self-serve signup unit (kanban t_3724204f): the signup door and the FunnelSwift
+// tag door both call `account_mint::mint_account`.
+pub mod account_mint;
 // Billing is also compiled into the LIB since 2026-10-01: the self-signup handler lives in
 // `handlers` (a lib module) and now MINTS a credential with `billing::webhooks::generate_temp_password`
 // — one generator, not a second copy of the charset. It was previously declared only in `main.rs`, so
