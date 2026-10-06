@@ -151,8 +151,17 @@ fn matches_template(template: &str, path: &str) -> bool {
 
 /// Default-deny at the request boundary.
 ///
-/// Mounted with `Router::layer`, so it only ever sees requests that MATCHED a route — an unmatched
-/// path still gets the router's own 404 and never a misleading 401.
+/// Mounted with `Router::route_layer` (kanban t_a0c272ec), so it only ever sees requests that
+/// MATCHED a route — an unmatched path still gets the router's own 404 and never a misleading 401.
+///
+/// That distinction is MEASURED, not assumed. Under the original `Router::layer` mount (kanban
+/// t_28a832dd) every unmatched path on the live origin (127.0.0.1:8083, probed 2026-10-06) answered
+/// `401 {"code":401,"error":"Authentication required"}` — `/nonexistent.js`, `/admin`, `/foobar`,
+/// `/api/v1/nope`, `/api/v1/contacts/xyz` — because `Router::layer` also wraps the fallback. Only
+/// `route_layer` layers `path_router` alone (`routing/mod.rs` passes `fallback_router` through
+/// untouched), which is what axum recommends for an authorization gate: it would otherwise
+/// "convert a `404 Not Found` into a `401 Unauthorized`". A matched private route reached without a
+/// credential still answers 401.
 ///
 /// **Why the credential is read OUT of the request before the await.** axum's `Body` is
 /// deliberately `!Sync`, so `&Request<Body>` is not `Send`; a future that held such a reference

@@ -1362,7 +1362,20 @@ async fn main() -> anyhow::Result<()> {
         // This is what makes a NEWLY mounted route private by default instead of relying on its
         // author remembering an `AuthenticatedUser` extractor. See the module docs for the census
         // that produced the allowlist and for the four previously-anonymous routes it closes.
-        .layer(middleware::from_fn_with_state(
+        //
+        // MOUNTED WITH `route_layer`, NOT `layer` (kanban t_a0c272ec; measured live 2026-10-06).
+        // `Router::layer` also wraps the router's FALLBACK — see its impl (`routing/mod.rs`:
+        // `fallback_router: this.fallback_router.layer(layer.clone())`) — so an UNMATCHED path was
+        // refused by default-deny and answered 401 `"Authentication required"` instead of the
+        // router's own 404, contradicting this middleware's doc comment. That scope is wrong for an
+        // authorization gate; axum's own `route_layer` docs name this exact case: middleware "that
+        // return early (such as authorization) which might otherwise convert a `404 Not Found` into
+        // a `401 Unauthorized`". `route_layer` layers only `path_router`, so matched routes are
+        // guarded exactly as before and an unmatched path keeps the router's 404. Safe because this
+        // router serves NO static files — no `ServeDir`/`ServeFile`/`.fallback(...)` anywhere in
+        // `src/`, so the fallback IS the plain 404 and hides nothing; the served statics live in
+        // nginx (`/opt/swift/nginx/www*`), never in this process.
+        .route_layer(middleware::from_fn_with_state(
             state.clone(),
             security::route_policy::default_deny,
         ))
