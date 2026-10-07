@@ -3458,8 +3458,77 @@ const Deals = () => {
   </div>`;
 };
 
+
+// ---- PROVISIONING (admin) · kanban t_dd195073 ----
+// Tag → free account: IncentiveSwift is a RECEIVER. FunnelSwift applies a tag that names this app
+// and calls POST /api/v1/internal/provision-free-account; the two knobs below are what that door
+// reads (backend kanban t_3724204f; frozen contract
+// /opt/swift/docs/tag-to-free-account-design-2026-10-06.md §3.1).
+//
+// The door shipped ON by default with NO screen anywhere that showed or flipped it — the setting
+// lived only in `admin_settings`, so the platform operator could neither see nor control it
+// (David's rule: a feature that cannot be managed from a panel is a defect). This view is the
+// console's editor for it. It renders exactly what GET /api/v1/admin/provisioning-config answers —
+// never a local guess — and re-renders from the STORE's answer on save, so the switch can never
+// display a state the door would not honour.
+const ProvisioningView = () => {
+  const st = viewState('provisioning', { data: null, error: null, saving: false, saved: false, loaded: false });
+  const load = async () => {
+    try { st.data = await API.get('/admin/provisioning-config'); st.error = null; }
+    catch (e) { st.data = null; st.error = e.message || 'Could not load the provisioning settings'; }
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; load(); }
+  const save = async (patch_body) => {
+    st.saving = true; st.saved = false; st.error = null; renderApp();
+    try { st.data = await API.put('/admin/provisioning-config', patch_body); st.saved = true; }
+    catch (e) { st.error = e.message || 'Could not save the provisioning settings'; }
+    st.saving = false; renderApp();
+  };
+  const d = st.data;
+  const keys = (d && d.setting_keys) || {};
+  const hdr = html`<div class="mb-4">
+      <h2 class="text-xl font-bold">Provisioning</h2>
+      <p class="text-sm text-gray-500">Free accounts minted here when a FunnelSwift tag names this app</p>
+    </div>`;
+  if (st.error) return html`<div>${hdr}
+    <div class="card"><p class="text-red-600 text-sm">${st.error}</p>
+      <button class="btn btn-outline btn-sm mt-3" onClick=${load}>Retry</button></div></div>`;
+  if (!d) return html`<div>${hdr}<div class="card text-sm text-gray-500">Loading…</div></div>`;
+  const plans = Array.isArray(d.free_plans) ? d.free_plans : [];
+  const badge = d.enabled
+    ? html`<span class="badge badge-green">● ON — a tagged lead gets an account</span>`
+    : html`<span class="badge badge-yellow">● OFF — the account door refuses with 403</span>`;
+  return html`<div>${hdr}
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <div class="text-sm font-medium">Free accounts from tags</div>${badge}
+      </div>
+      <label class="flex items-center gap-2 text-sm mb-4">
+        <input type="checkbox" checked=${!!d.enabled} disabled=${st.saving}
+          onChange=${e => save({ enabled: e.target.checked })} class="w-4 h-4" />
+        Mint a free account when a FunnelSwift tag names this app
+      </label>
+      <div class="mb-4">
+        <label class="block text-xs font-medium mb-1">Entry tier for a minted account</label>
+        <select class="input" disabled=${st.saving}
+          onChange=${e => save({ entry_plan_slug: e.target.value })}>
+          ${plans.length
+            ? plans.map(p => html`<option value=${p.slug} selected=${p.slug === d.entry_plan_slug}>${p.name} (${p.slug})</option>`)
+            : html`<option value=${d.entry_plan_slug || 'free'} selected>${d.entry_plan_slug || 'free'}</option>`}
+        </select>
+        <p class="text-xs text-gray-500 mt-1">Only this app's own free, active tiers are listed — a priced tier can never be seated on a tag-provisioned account.</p>
+        ${d.entry_plan_resolves === false ? html`<p class="text-xs text-red-600 mt-1">The saved entry tier no longer resolves to a free, active tier here — pick one above and save.</p>` : null}
+      </div>
+      <p class="text-xs text-gray-500">Stored in <code>admin_settings</code> as <code>${keys.enabled || 'provision_from_tags_enabled'}</code> and <code>${keys.entry_plan_slug || 'provision_entry_plan_slug'}</code>. FunnelSwift calls <code>${d.endpoint || '/api/v1/internal/provision-free-account'}</code>.</p>
+      ${st.saved ? html`<p class="text-xs mt-2" style="color:#065f46">Saved — the door reads this state now.</p>` : null}
+    </div>
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
+    { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
@@ -3484,7 +3553,7 @@ const Deals = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole};
+  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   return html`<div class="flex w-full">
