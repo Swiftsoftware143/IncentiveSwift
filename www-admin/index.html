@@ -3498,6 +3498,13 @@ const Deals = () => {
           <span>${n.icon}</span><span class="nav-text">${n.label}</span>
         </div>`)}
       </div>
+      ${/* Admin Guide entry point (kanban t_15f0bf7d, fleet standard t_c504d969): the admin guide is
+            served on THIS console's own origin at /admin-guide.html and nothing linked it, so the
+            document the operator needs was reachable only by typing its URL. Offered on the same
+            condition as the admin-only nav entries above, because it is the operator reference.
+            NOTE htm/preact: this MUST be an html`` child, not a bare string - a string child renders
+            as TEXT and the anchor would show up as markup. */
+        isAdmin ? html`<a class="nav-item" id="admin-guide-link" href="/admin-guide.html" target="_blank" rel="noopener" style="text-decoration:none" title="IncentiveSwift Admin Guide - running the software: accounts, campaigns, loyalty programs, tags, leads, API keys and settings">📖 <span class="nav-text">Admin Guide</span></a>` : ''}
       <div class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }}>
         <span>🚪</span><span class="nav-text">Logout</span>
       </div>

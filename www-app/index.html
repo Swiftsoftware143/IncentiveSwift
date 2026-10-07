@@ -157,7 +157,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;min-height:100vh;
     </form>
   </div>
 
-  <p style="text-align:center;font-size:12px;color:#94a3b8;margin-top:20px">IncentiveSwift &copy; 2026</p>
+  <!-- User Guide entry point (kanban t_15f0bf7d, fleet standard t_c504d969): app.incentiveswift.com
+       serves the tenant guide at /guide.html and the app shell linked it nowhere, so a user had to be
+       told the URL. Sits in the shell's footer (the login shell has no sidebar yet). -->
+  <p style="text-align:center;font-size:12px;color:#94a3b8;margin-top:20px">
+    <a href="/guide.html" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:none">📖 User Guide</a>
+    <span style="margin:0 6px">&middot;</span>IncentiveSwift &copy; 2026
+  </p>
 </div>
 
 <script>
