@@ -120,7 +120,12 @@
   var CONFIG = {
     // Override per venue with ?campaign=<slug>. Prizes, colours and odds always
     // come from the server (GET /api/v1/play/<slug>); nothing here mirrors them.
-    defaultCampaign: "finalgate-spin-874ee0c6",
+    // The default is the operator's own live demo campaign ("Demo — Spin to Win",
+    // Swift Admin account, seeded 2026-10-01). It used to be "finalgate-spin-874ee0c6",
+    // a campaign that no longer exists, so the shared kiosk URL (no query string)
+    // loaded GET /api/v1/play/finalgate-spin-874ee0c6 -> 404 and showed the
+    // "Game unavailable" screen before the wheel ever drew.
+    defaultCampaign: "demo-spin-to-win-de17ae96",
     apiBase: "/api/v1",
     resetSeconds: 12,          // idle time before a kiosk returns to the start screen
     spinMs: 4200               // wheel animation length
