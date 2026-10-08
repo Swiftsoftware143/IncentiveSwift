@@ -66,12 +66,10 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
       <label>Email Address</label>
       <input type="email" id="signup-email" placeholder="you@company.com" required>
     </div>
-    <div class="form-group">
-      <label>Password</label>
-      <input type="password" id="signup-password" placeholder="At least 6 characters" minlength="6" required>
-    </div>
     <button type="submit" id="signup-btn" class="submit-btn">Create Free Account →</button>
   </form>
+
+  <p class="terms">We'll email your login details to the address above. You can change your password any time in your profile settings.</p>
 
   <p class="terms">By signing up, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</p>
   <p class="login-link">Already have an account? <a href="https://app.incentiveswift.com/">Sign In →</a></p>
@@ -82,7 +80,6 @@ async function handleSignup(e) {
   e.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
   const email = document.getElementById('signup-email').value.trim();
-  const password = document.getElementById('signup-password').value;
   const btn = document.getElementById('signup-btn');
   const errDiv = document.getElementById('signup-error');
   const sucDiv = document.getElementById('signup-success');
@@ -90,13 +87,8 @@ async function handleSignup(e) {
   errDiv.style.display = 'none';
   sucDiv.style.display = 'none';
 
-  if (!email || !password) {
-    errDiv.textContent = 'Please fill in all required fields';
-    errDiv.style.display = 'block';
-    return;
-  }
-  if (password.length < 6) {
-    errDiv.textContent = 'Password must be at least 6 characters';
+  if (!name || !email) {
+    errDiv.textContent = 'Please enter your name and email address';
     errDiv.style.display = 'block';
     return;
   }
@@ -105,10 +97,13 @@ async function handleSignup(e) {
   btn.innerHTML = '<span class="spinner"></span> Creating account...';
 
   try {
+    // No password is sent: the server generates the login credentials and emails them to this
+    // address (the SAME path the auto-created tag accounts use), so signup and auto-provisioning
+    // can never drift. The user confirms their address by signing in with the emailed password.
     const res = await fetch('/api/v1/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email }),
     });
 
     const data = await res.json();
@@ -117,14 +112,11 @@ async function handleSignup(e) {
       throw new Error(data.message || data.error || 'Registration failed');
     }
 
-    // Success — show message then redirect to app with token
-    sucDiv.textContent = '✅ Account created! Redirecting to your dashboard...';
+    // Success — do NOT log them in. They confirm their email by signing in with the password we sent.
+    document.getElementById('signup-form').style.display = 'none';
+    sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
+      email.replace(/[<>&]/g, '') + '.<br><br>You can change your password any time in your profile settings.';
     sucDiv.style.display = 'block';
-
-    // Store token and redirect to the app subdomain
-    setTimeout(() => {
-      window.location.href = 'https://app.incentiveswift.com/#token=' + encodeURIComponent(data.token);
-    }, 1000);
   } catch (e) {
     errDiv.textContent = e.message;
     errDiv.style.display = 'block';
