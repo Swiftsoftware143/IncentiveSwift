@@ -817,6 +817,19 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/password",
             put(crate::handlers::auth_handler::change_password),
         )
+        // The account's own profile picture (kanban t_4fcbe895). The UPLOAD is an authenticated act
+        // on the caller's own account; the READ is deliberately public (see
+        // `security::route_policy::PUBLIC_ROUTES`) because an HTML `<img src>` carries no bearer
+        // token. Storage is `user_avatars` — bytes in the DB, streamed back by the read — because
+        // this container binds no path a run-time upload could survive in; see the migration.
+        .route(
+            "/api/v1/auth/avatar",
+            post(crate::handlers::auth_handler::upload_avatar),
+        )
+        .route(
+            "/api/v1/auth/avatar/:user_id",
+            get(crate::handlers::auth_handler::get_avatar),
+        )
         .route(
             "/api/v1/auth/forgot-password",
             post(crate::handlers::auth_handler::forgot_password),

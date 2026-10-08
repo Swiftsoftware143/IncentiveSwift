@@ -1,4 +1,4 @@
-//! Auth handlers — login, me, change password, forgot/reset password.
+//! Auth handlers — login, me, profile, password, profile picture, forgot/reset password.
 
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
@@ -8,7 +8,11 @@ use argon2::{
     password_hash::{PasswordHash, PasswordVerifier},
     Argon2,
 };
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Multipart, Path, State},
+    response::Response,
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -398,9 +402,19 @@ pub async fn login(
 }
 
 /// GET /api/v1/auth/me
+///
+/// The signed-in ACCOUNT with everything the console's Profile screen and account panel render:
+/// `plan_name` (the real tier — never the literal word "User"), `username`, `company` and
+/// `avatar_url`. `company`/`username` live on `accounts` and `avatar_url` is DERIVED from the
+/// presence of the `user_avatars` row (migration zz_is12) rather than stored, so no second writer
+/// can leave a URL pointing at a picture that is not there.
 #[derive(Deserialize)]
 pub struct UpdateProfileInput {
     pub name: Option<String>,
+    pub username: Option<String>,
+    pub company: Option<String>,
+    /// Retained from before this card: the industry selector is a real, plan-gated capability of
+    /// this app (`features::industry_limit`), and the fleet profile contract does not remove it.
     pub industry_slug: Option<String>,
 }
 
@@ -420,6 +434,8 @@ pub async fn me(
            -- t_c7ba0473; same class as t_cf7469bb, which missed this one because it is a JOIN).
            -- GET /api/v1/auth/me and PUT /api/v1/auth/profile share this statement verbatim.
            SELECT a.name, a.email, a.role, a.plan_tier_id,
+                  a.username, a.company,
+                  (SELECT ua.updated_at FROM user_avatars ua WHERE ua.user_id = a.id) AS avatar_updated_at,
                   t.name as plan_name,
                   t.slug as plan_slug,
                   COALESCE((
@@ -445,6 +461,26 @@ pub async fn me(
     let email: String = row.get("email");
     let role: String = row.get("role");
     let plan_name: Option<String> = row.get("plan_name");
+    // The account's own profile fields (migration zz_is12). `avatar_url` is DERIVED from the
+    // `user_avatars` row's `updated_at` (chosen by the subquery in the SELECT above) instead of
+    // being stored on `accounts`: with no stored URL there is no second writer that can leave a
+    // reference to a picture that has since been replaced, and the `?v=` stamp rolls the browser
+    // and CDN cache the moment a new picture lands.
+    let username: Option<String> = row.get("username");
+    let company: Option<String> = row.get("company");
+    let avatar_at: Option<chrono::DateTime<chrono::Utc>> = row.get("avatar_updated_at");
+    let avatar_url = avatar_at
+        .map(|t| {
+            format!(
+                "/api/v1/auth/avatar/{}?v={}",
+                user.account_id,
+                t.timestamp()
+            )
+        })
+        .unwrap_or_default();
+    // The tier, as the console paints it. A tier-less account reads "Free" rather than an empty
+    // badge — and never the raw role word ("User"), which is the stray label this card removes.
+    let plan_label = plan_name.clone().unwrap_or_else(|| "Free".to_string());
     let plan_slug: Option<String> = row.get("plan_slug");
     let features: serde_json::Value = row.get("features");
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
@@ -493,6 +529,12 @@ pub async fn me(
             "email": email,
             "name": name.unwrap_or_default(),
             "role": role,
+            // The account's own profile (kanban t_4fcbe895). `plan_name` is the REAL tier; the
+            // console paints this and never the raw role word.
+            "username": username.clone().unwrap_or_default(),
+            "company": company.clone().unwrap_or_default(),
+            "avatar_url": avatar_url,
+            "plan_name": plan_label,
             "plan_tier_id": plan_tier_id,
             "plan": {
                 "name": plan_name,
@@ -506,7 +548,11 @@ pub async fn me(
             "industries": industries,
             "industry_limit": industry_limit,
             "impersonating": user.impersonating
-        }
+        },
+        // Flat twin of `user.plan_name`: the fleet contract names `plan_name` as a field of this
+        // response, and a client must not have to know this app nests the account under `user`.
+        // Both placements are the SAME computed string (`plan_label`), so they cannot disagree.
+        "plan_name": plan_label
     })))
 }
 
@@ -519,13 +565,33 @@ pub async fn update_profile(
     let account_uuid = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
 
-    if let Some(ref name) = body.name {
-        sqlx::query("UPDATE accounts SET name = $1 WHERE id = $2")
-            .bind(name)
-            .bind(account_uuid)
-            .execute(&state.db)
-            .await?;
+    // A blank NAME would leave the console header and every "signed in as" line empty, so it is
+    // refused rather than stored. `company` and `username` may legitimately be cleared, so an empty
+    // value is written for them (COALESCE only keeps a field the caller did not send at all).
+    if let Some(name) = body.name.as_deref() {
+        if name.trim().is_empty() {
+            return Err(AppError::BadRequest("Name cannot be empty".to_string()));
+        }
     }
+
+    // ONE statement, so a request carrying name + company + username either lands whole or not at
+    // all; `updated_at` is stamped here (nothing else in this app writes these columns).
+    sqlx::query(
+        r#"-- The fleet profile contract (kanban t_4fcbe895): name is required non-blank above,
+           -- company/username are optional and clearable. `updated_at` is nullable-safe:
+           -- accounts.updated_at is NOT NULL with a default, so NOW() is always writable.
+           UPDATE accounts SET name = COALESCE($1, name),
+                               username = COALESCE($2, username),
+                               company = COALESCE($3, company),
+                               updated_at = NOW()
+           WHERE id = $4"#,
+    )
+    .bind(body.name.as_deref().map(str::trim))
+    .bind(body.username.as_deref().map(str::trim))
+    .bind(body.company.as_deref().map(str::trim))
+    .bind(account_uuid)
+    .execute(&state.db)
+    .await?;
 
     // Industry change: set as primary, swapping out previous primary if at limit
     if let Some(ref industry_slug) = body.industry_slug {
@@ -623,6 +689,8 @@ pub async fn update_profile(
            -- t_c7ba0473; same class as t_cf7469bb, which missed this one because it is a JOIN).
            -- GET /api/v1/auth/me and PUT /api/v1/auth/profile share this statement verbatim.
            SELECT a.name, a.email, a.role, a.plan_tier_id,
+                  a.username, a.company,
+                  (SELECT ua.updated_at FROM user_avatars ua WHERE ua.user_id = a.id) AS avatar_updated_at,
                   t.name as plan_name,
                   t.slug as plan_slug,
                   COALESCE((
@@ -676,7 +744,23 @@ pub async fn update_profile(
     let industry_limit: i32 =
         crate::features::industry_limit(&state.db, account_uuid).await? as i32;
 
+    // Same profile fields as /me, from the same shared statement (see the note on that SELECT):
+    // the console reads this response back into the form it just saved, so the two shapes must
+    // agree or the form would repaint itself from a different source than the one it saved to.
+    let username: Option<String> = row.get("username");
+    let company: Option<String> = row.get("company");
+    let avatar_at: Option<chrono::DateTime<chrono::Utc>> = row.get("avatar_updated_at");
+    let avatar_url = avatar_at
+        .map(|t| {
+            format!(
+                "/api/v1/auth/avatar/{}?v={}",
+                user.account_id,
+                t.timestamp()
+            )
+        })
+        .unwrap_or_default();
     let plan_name: Option<String> = row.get("plan_name");
+    let plan_label = plan_name.clone().unwrap_or_else(|| "Free".to_string());
     let plan_slug: Option<String> = row.get("plan_slug");
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
     let max_campaigns: Option<i32> = row.get("max_campaigns");
@@ -693,6 +777,12 @@ pub async fn update_profile(
             "email": email,
             "name": name.unwrap_or_default(),
             "role": role,
+            // The account's own profile (kanban t_4fcbe895). `plan_name` is the REAL tier; the
+            // console paints this and never the raw role word.
+            "username": username.clone().unwrap_or_default(),
+            "company": company.clone().unwrap_or_default(),
+            "avatar_url": avatar_url,
+            "plan_name": plan_label,
             "plan_tier_id": plan_tier_id,
             "plan": {
                 "name": plan_name,
@@ -705,7 +795,11 @@ pub async fn update_profile(
             },
             "industries": industries,
             "industry_limit": industry_limit,
-        }
+        },
+        // The fleet profile contract's own reply shape (kanban t_4fcbe895, matching the FunnelSwift
+        // reference): the write reports `{"status":"ok"}`. The full user object rides along too,
+        // because this app's console re-reads the row it just saved from this same response.
+        "status": "ok"
     })))
 }
 
@@ -715,6 +809,14 @@ pub async fn change_password(
     user: AuthenticatedUser,
     Json(body): Json<ChangePasswordInput>,
 ) -> Result<Json<Value>, AppError> {
+    // The fleet profile contract's floor (kanban t_4fcbe895): the console refuses a short password
+    // before sending, and this is the authoritative backstop for any other caller.
+    if body.new_password.len() < 8 {
+        return Err(AppError::BadRequest(
+            "New password must be at least 8 characters".to_string(),
+        ));
+    }
+
     let account_uuid = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
 
@@ -730,13 +832,19 @@ pub async fn change_password(
     match password_hash {
         Some(ref hash) => {
             if !verify_password(&body.current_password, hash) {
-                return Err(AppError::Forbidden(
+                // 401, not 403: the fleet profile contract names this refusal, and a client cannot
+                // act on "forbidden" (it reads as "you may not use this screen") whereas a 401 on a
+                // credential check means exactly "that password is wrong, try again" (kanban
+                // t_4fcbe895, matching the FunnelSwift reference). The caller IS authenticated —
+                // their bearer token got them this far — so the only secret in question is the one
+                // they just typed.
+                return Err(AppError::Unauthorized(
                     "Current password is incorrect".to_string(),
                 ));
             }
         }
         None => {
-            return Err(AppError::Forbidden(
+            return Err(AppError::Unauthorized(
                 "No password set for this account".to_string(),
             ));
         }
@@ -751,6 +859,88 @@ pub async fn change_password(
         .await?;
 
     Ok(Json(json!({ "status": "password_updated" })))
+}
+
+/// `POST /api/v1/auth/avatar` — store the caller's own profile picture.
+///
+/// Storage decision (kanban t_4fcbe895). This container binds only its release binary and
+/// `migrations/` (`docker inspect incentiveswift`), so a file written at run time lives inside the
+/// container and dies with the next recreate — and no host webroot could serve it either. The bytes
+/// are therefore held in `user_avatars` (one row per account, migration zz_is12) and streamed back
+/// by [`get_avatar`]. The multipart read, the size cap and the magic-byte sniff are
+/// `crate::image_store`'s — the ONE accept/store/serve path, shared with the account's own email
+/// logo (kanban t_feab8aff).
+pub async fn upload_avatar(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, AppError> {
+    let account_uuid = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
+
+    // The ONE shared image path: the first part carrying a filename, the 2 MB envelope cap, and the
+    // magic-byte sniff to PNG / JPEG / GIF / WebP. Every refusal is a 4xx.
+    let (content_type, bytes) = crate::image_store::read_uploaded_image(&mut multipart).await?;
+
+    sqlx::query(
+        r#"-- One picture per account: a later upload REPLACES the bytes in place, so the row's
+           -- updated_at (which /auth/me turns into the `?v=` cache stamp) always tracks the bytes.
+           INSERT INTO user_avatars (user_id, content_type, bytes, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (user_id) DO UPDATE
+             SET content_type = EXCLUDED.content_type,
+                 bytes = EXCLUDED.bytes,
+                 updated_at = NOW()"#,
+    )
+    .bind(account_uuid)
+    .bind(&content_type)
+    .bind(&bytes)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB error: {e}")))?;
+
+    // NO URL is stored anywhere: /auth/me derives it from this row, so a replaced picture can never
+    // leave a stale reference behind. The URL is still returned here (`?v=` stamped now) so the
+    // console repaints its header without a second round trip.
+    let avatar_url = format!(
+        "/api/v1/auth/avatar/{}?v={}",
+        user.account_id,
+        chrono::Utc::now().timestamp()
+    );
+
+    Ok(Json(json!({
+        "status": "ok",
+        "avatar_url": avatar_url,
+        "content_type": content_type,
+    })))
+}
+
+/// `GET /api/v1/auth/avatar/:user_id` — stream a stored profile picture back.
+///
+/// Deliberately reachable with NO credential (see `security::route_policy::PUBLIC_ROUTES`): an HTML
+/// `<img src>` cannot carry the bearer token, and a profile picture is not a secret. The route can
+/// only ever return the picture one account uploaded — the id is an unguessable uuid, the stored
+/// `content_type` was sniffed from the bytes at upload time, and an account with no picture answers
+/// 404 so the console falls back to its initial-letter placeholder.
+pub async fn get_avatar(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<Response, AppError> {
+    let uid = Uuid::parse_str(&user_id)
+        .map_err(|_| AppError::NotFound("No such profile picture".to_string()))?;
+
+    let row: Option<(String, Vec<u8>)> =
+        sqlx::query_as("SELECT content_type, bytes FROM user_avatars WHERE user_id = $1")
+            .bind(uid)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let (content_type, bytes) =
+        row.ok_or_else(|| AppError::NotFound("No such profile picture".to_string()))?;
+
+    // The shared response arm (crate::image_store): the sniffed type pinned, `nosniff`, and caching
+    // that never invites a shared cache to keep one customer's picture.
+    crate::image_store::image_response(content_type, bytes)
 }
 
 /// POST /api/v1/auth/forgot-password

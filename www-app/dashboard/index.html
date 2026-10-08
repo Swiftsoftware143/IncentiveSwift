@@ -11,13 +11,27 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 .card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
 .btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}
 .btn-sm{padding:5px 12px;font-size:13px}
+.uav{width:34px;height:34px;border-radius:50%;object-fit:cover;background:#e2e8f0;flex-shrink:0;display:block}
+.uav-ph{width:34px;height:34px;border-radius:50%;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500;background:#dbeafe;color:#1e40af}
+.row{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:14px}
+.row .k{width:110px;color:#64748b;flex-shrink:0}
+.row .v{color:#0f172a;word-break:break-word}
 </style>
 </head>
 <body>
 <div class="header">
   <h1 style="font-size:18px;font-weight:700;color:#1e293b;margin:0">IncentiveSwift</h1>
   <div style="display:flex;align-items:center;gap:12px">
-    <span id="userName" style="font-size:14px;color:#475569"></span>
+    <!-- kanban t_4fcbe895 — the account's own face and TIER, from GET /api/v1/auth/me. This used to
+         print the raw role word ("User") when the account had no name, which is the stray label the
+         card removes: a customer reads their real plan name here (or "Free"), never a role word. -->
+    <img id="uav" class="uav" alt="" style="display:none">
+    <span id="uavph" class="uav-ph">?</span>
+    <div style="min-width:0;text-align:right">
+      <div id="userName" style="font-size:14px;color:#334155;font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+      <div style="margin-top:3px"><span id="userPlan" class="badge">…</span></div>
+    </div>
     <!-- User Guide entry point (kanban t_15f0bf7d, fleet standard t_c504d969): beside Sign Out, where
          a signed-in tenant looks. app.incentiveswift.com serves the guide at /guide.html. -->
     <a href="/guide.html" target="_blank" rel="noopener" style="font-size:13px;color:#2563eb;text-decoration:none">📖 User Guide</a>
@@ -26,8 +40,15 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 </div>
 <div style="max-width:1100px;margin:24px auto;padding:0 24px">
   <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
+    <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
+         sign-in page had cached). It is now the account's real row, read from /api/v1/auth/me, with
+         the REAL plan name and a way into the Profile screen. -->
+    <div id="account" style="color:#64748b;font-size:14px">Loading your account…</div>
+  </div>
+  <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Dashboard</h2>
-    <p style="color:#64748b;font-size:14px">Welcome to IncentiveSwift. Your user portal is active.</p>
+    <p style="color:#64748b;font-size:14px;margin:0">Welcome to IncentiveSwift. Your user portal is active.</p>
     <p style="color:#64748b;font-size:14px;margin:8px 0 0">Your admin console manages your campaigns, loyalty programs, leads, tags, API keys and settings.</p>
     <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
       <!-- kanban t_8a6160c9 — the customer app had NO route to campaign management: the console was
@@ -40,20 +61,78 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" style="background:#7c3aed" onclick="location.href='/iqs.html'">🎯 IQS — Qualifying Surveys</button>
       <button class="btn" style="background:#64748b" onclick="location.href='/integrations.html'">🔌 Integrations</button>
     </div>
-    <div id="userInfo" style="margin-top:16px;padding:16px;background:#f1f5f9;border-radius:8px;font-size:13px;color:#475569"></div>
   </div>
 </div>
 <script>
 var TOKEN_KEY = 'is_token';
 var USER_KEY = 'is_user';
-var token = sessionStorage.getItem(TOKEN_KEY);
-var user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null');
+var STORE_KEY = 'ws_fs_token';
+// The token this page runs on: the app shell's own sessionStorage pair, or the bearer the hand-off
+// put in localStorage ('ws_fs_token') when sessionStorage is empty in a fresh tab.
+var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(STORE_KEY);
+var user = null;
+try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
-if (!token || !user) {
+if (!token) {
   window.location.href = '/';
 } else {
-  document.getElementById('userName').textContent = user.email || user.name || 'User';
-  document.getElementById('userInfo').textContent = JSON.stringify(user, null, 2);
+  paintAccount(user || {});
+  fetchAccount();
+}
+
+// Paint from the server's row: name, email, company, the REAL plan name and the picture.
+function paintAccount(u) {
+  var nm = u.name || u.email || 'Your account';
+  var plan = u.plan_name || (u.plan && u.plan.name) || 'Free';
+  var nameEl = document.getElementById('userName');
+  var planEl = document.getElementById('userPlan');
+  var av = document.getElementById('uav');
+  var ph = document.getElementById('uavph');
+  if (nameEl) nameEl.textContent = nm;
+  if (planEl) planEl.textContent = plan;
+  if (u.avatar_url) { av.src = u.avatar_url; av.style.display = 'block'; ph.style.display = 'none'; }
+  else {
+    av.style.display = 'none';
+    ph.style.display = 'flex';
+    ph.textContent = (String(nm) + '?').charAt(0).toUpperCase();
+  }
+  var rows = [
+    ['Name', u.name || '—'],
+    ['Email', u.email || '—'],
+    ['Company', u.company || '—'],
+    ['Plan', '<span class="badge">' + esc(plan) + '</span>']
+  ];
+  var h = '';
+  for (var i = 0; i < rows.length; i++) {
+    h += '<div class="row"><span class="k">' + rows[i][0] + '</span><span class="v">' + (i === 3 ? rows[i][1] : esc(rows[i][1])) + '</span></div>';
+  }
+  h += '<p style="margin:14px 0 0"><a class="btn" style="text-decoration:none;display:inline-block" href="/admin/#profile">👤 Profile &amp; password</a>'
+     + ' <span style="font-size:12.5px;color:#64748b">Change your name, company, picture or the password you sign in with.</span></p>';
+  document.getElementById('account').innerHTML = h;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) {
+    return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c];
+  });
+}
+
+function fetchAccount() {
+  fetch(window.location.origin + '/api/v1/auth/me', {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function (d) {
+    var u = (d && d.user) || null;
+    if (!u) return;
+    try { sessionStorage.setItem(USER_KEY, JSON.stringify(u)); } catch (e) {}
+    paintAccount(u);
+  }).catch(function () {
+    // The cached paint stays on screen; a failed refresh must not blank the panel.
+    var el = document.getElementById('account');
+    if (el && el.textContent.indexOf('Loading') === 0) el.textContent = 'Could not load your account right now.';
+  });
 }
 
 function doLogout() {
@@ -72,5 +151,13 @@ function doLogout() {
   window.location.href = '/login';
 }
 </script>
+<script>
+/* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
+   screen, so one entry keyed by the served path tells the widget what this page is for. */
+window.appGuidePages = {
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company and the plan you are on) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
 </body>
 </html>

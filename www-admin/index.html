@@ -15,7 +15,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>IncentiveSwift — Admin Dashboard</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<style>body{font-family:Inter,system-ui,sans-serif;background:#f8fafc}.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}.btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}.btn-sm{padding:5px 12px;font-size:13px}.btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}.btn-green{background:#059669}.btn-green:hover{background:#047857}.btn-outline{background:0 0;border:1px solid #cbd5e1;color:#475569}.btn-outline:hover{background:#f1f5f9}.btn-blue{background:#7c3aed}.btn-blue:hover{background:#6d28d9}.input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;width:100%;font-size:14px;outline:0}.input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}.modal-content{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:480px;max-height:80vh;overflow-y:auto}.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500}.badge-green{background:#d1fae5;color:#065f46}.badge-red{background:#fee2e2;color:#991b1b}.badge-yellow{background:#fef3c7;color:#92400e}.badge-blue{background:#dbeafe;color:#1e40af}.nav-item{padding:10px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:10px;color:#64748b;font-size:14px;font-weight:500}.nav-item:hover{background:#f1f5f9;color:#1e293b}.nav-item.active{background:#2563eb;color:#fff}.table{width:100%;border-collapse:collapse}.table th{text-align:left;padding:10px 12px;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #e2e8f0}.table td{padding:10px 12px;font-size:14px;border-bottom:1px solid #f1f5f9}.table tr:hover td{background:#f8fafc}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-value{font-size:28px;font-weight:700;color:#1e293b}.stat-label{font-size:13px;color:#64748b;margin-top:4px}.dropdown-item{padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px}.dropdown-item:hover{background:#f1f5f9}.text-red-500{color:#ef4444}.upgrade-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999}.upgrade-box{background:#fff;border-radius:20px;padding:32px;text-align:center;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2)}.upgrade-box h2{font-size:20px;color:#1e293b;margin:0 0 8px}.upgrade-box p{color:#64748b;margin:0 0 20px;line-height:1.5}.upgrade-box .btn-upgrade{background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:600;border:none;cursor:pointer}@media(max-width:768px){.sidebar{width:60px!important}.sidebar .nav-text{display:none}.sidebar .nav-item{justify-content:center;padding:10px}.main{margin-left:60px!important}}</style>
+<style>body{font-family:Inter,system-ui,sans-serif;background:#f8fafc}.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}.btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}.btn-sm{padding:5px 12px;font-size:13px}.btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}.btn-green{background:#059669}.btn-green:hover{background:#047857}.btn-outline{background:0 0;border:1px solid #cbd5e1;color:#475569}.btn-outline:hover{background:#f1f5f9}.btn-blue{background:#7c3aed}.btn-blue:hover{background:#6d28d9}.input{border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;width:100%;font-size:14px;outline:0}.input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}.modal-content{background:#fff;border-radius:16px;padding:24px;width:90%;max-width:480px;max-height:80vh;overflow-y:auto}.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:500}.badge-green{background:#d1fae5;color:#065f46}.badge-red{background:#fee2e2;color:#991b1b}.badge-yellow{background:#fef3c7;color:#92400e}.badge-blue{background:#dbeafe;color:#1e40af}.nav-item{padding:10px 16px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:10px;color:#64748b;font-size:14px;font-weight:500}.nav-item:hover{background:#f1f5f9;color:#1e293b}.nav-item.active{background:#2563eb;color:#fff}.table{width:100%;border-collapse:collapse}.table th{text-align:left;padding:10px 12px;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.5px;border-bottom:2px solid #e2e8f0}.table td{padding:10px 12px;font-size:14px;border-bottom:1px solid #f1f5f9}.table tr:hover td{background:#f8fafc}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-value{font-size:28px;font-weight:700;color:#1e293b}.stat-label{font-size:13px;color:#64748b;margin-top:4px}.uav{width:34px;height:34px;border-radius:50%;object-fit:cover;background:#e2e8f0;flex-shrink:0;display:block}.uav-ph{width:34px;height:34px;border-radius:50%;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;flex-shrink:0}.dropdown-item{padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px}.dropdown-item:hover{background:#f1f5f9}.text-red-500{color:#ef4444}.upgrade-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:9999}.upgrade-box{background:#fff;border-radius:20px;padding:32px;text-align:center;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.2)}.upgrade-box h2{font-size:20px;color:#1e293b;margin:0 0 8px}.upgrade-box p{color:#64748b;margin:0 0 20px;line-height:1.5}.upgrade-box .btn-upgrade{background:linear-gradient(135deg,#7c3aed,#2563eb);color:#fff;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:600;border:none;cursor:pointer}@media(max-width:768px){.sidebar{width:60px!important}.sidebar .nav-text{display:none}.sidebar .nav-item{justify-content:center;padding:10px}.main{margin-left:60px!important}}</style>
 </head>
 <body class="min-h-screen">
 <div id="app" class="flex min-h-screen"></div>
@@ -210,6 +210,13 @@ API.put = async (p, b) => _put(p, b).catch(e => { if (e.message && e.message.inc
 API.del = async (p) => _del(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 
 const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
+
+// kanban t_4fcbe895 — a deep link to ONE screen (`/admin/#profile`), so the app dashboard's
+// "Profile & password" button lands on the Profile screen instead of the dashboard. Read once at
+// boot and kept in step by the sidebar; an unknown name falls back to the dashboard (see `views`).
+const setViewHash = (id) => { try { history.replaceState(null, '', '#' + id); } catch (e) {} };
+const VIEW_FROM_HASH = (function () { try { return (window.location.hash || '').replace(/^#\/?/, ''); } catch (e) { return ''; } })();
+if (VIEW_FROM_HASH) S.view = VIEW_FROM_HASH;
 
 // ---- LOGIN ----
 const LoginView = () => {
@@ -3659,10 +3666,170 @@ const ProvisioningView = () => {
   </div>`;
 };
 
+/* ── kanban t_4fcbe895 — PROFILE ────────────────────────────────────────────────────────────────
+   David: "there is no user profile, so he cannot change his password". The backend already existed
+   (GET /api/v1/auth/me, PUT /api/v1/auth/profile, PUT /api/v1/auth/password) plus the new
+   /api/v1/auth/avatar pair; this is the screen that calls it. /auth/me is re-read every time the
+   screen is opened, so what the form shows is what the server holds — never a stale copy kept in
+   the page.
+
+   The picture is posted as multipart and therefore NOT through API.post(): that helper forces
+   `Content-Type: application/json`, which would destroy the multipart boundary the browser
+   generates for a FormData body. The cap below is the server's own limit, from src/image_store.rs
+   (the 2 MB envelope minus its multipart headroom), so the picker and the server refuse the SAME
+   files. */
+const AVATAR_MAX_BYTES = 2031616;
+
+const ProfileView = () => {
+  const st = viewState('profile', {
+    me: null, err: null, saving: false, saved: '', savedErr: false,
+    nameDraft: null, companyDraft: null,
+    avMsg: '', avKind: 'info', pwMsg: '', pwKind: 'info',
+    np: '', np2: '', cp: '',
+  });
+
+  // ONE reader of the profile: /auth/me. It also feeds the sidebar header (`S.me`), so the name,
+  // the picture and the tier painted there come from the same response this form renders.
+  const load = () => {
+    API.get('/auth/me').then(d => {
+      const u = (d && d.user) || null;
+      st.me = u; st.err = null;
+      if (u) { S.me = u; st.nameDraft = u.name || ''; st.companyDraft = u.company || ''; }
+      renderApp();
+    }).catch(e => { st.err = e.message; renderApp(); });
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+
+  const me = st.me || S.me || {};
+  const avMsgStyle = 'margin-left:8px;font-size:12px;color:' +
+    (st.avKind === 'err' ? '#dc2626' : (st.avKind === 'ok' ? '#059669' : '#64748b'));
+  const pwMsgStyle = 'margin-left:8px;font-size:12px;color:' +
+    (st.pwKind === 'err' ? '#dc2626' : (st.pwKind === 'ok' ? '#059669' : '#64748b'));
+
+  const saveProfile = async () => {
+    const n = String(st.nameDraft == null ? (me.name || '') : st.nameDraft).trim();
+    const c = String(st.companyDraft == null ? (me.company || '') : st.companyDraft).trim();
+    if (!n) { st.savedErr = true; st.saved = 'Enter your name'; renderApp(); return; }
+    st.saving = true; st.saved = ''; renderApp();
+    try {
+      // The response carries the saved row back (same shape as /auth/me), so the form and the
+      // header repaint from what the SERVER stored rather than from what was typed.
+      const d = await API.put('/auth/profile', { name: n, company: c });
+      const u = (d && d.user) || null;
+      const next = u || Object.assign({}, me, { name: n, company: c });
+      st.me = next; S.me = next;
+      st.nameDraft = next.name || ''; st.companyDraft = next.company || '';
+      API.setAuth(API.token, Object.assign({}, API.user || {}, { name: next.name || '', company: next.company || '' }));
+      st.savedErr = false; st.saved = 'Saved';
+    } catch (e) { st.savedErr = true; st.saved = e.message || 'Could not save'; }
+    st.saving = false; renderApp();
+  };
+
+  const uploadAvatar = async () => {
+    const inp = document.getElementById('pf-file');
+    const f = inp && inp.files ? inp.files[0] : null;
+    if (!f) { st.avKind = 'err'; st.avMsg = 'Choose an image first'; renderApp(); return; }
+    if (f.size > AVATAR_MAX_BYTES) { st.avKind = 'err'; st.avMsg = 'That image is too large — 2 MB maximum'; renderApp(); return; }
+    st.avKind = 'info'; st.avMsg = 'Uploading…'; renderApp();
+    const fd = new FormData();
+    fd.append('file', f);
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/auth/avatar', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + API.token }, body: fd,
+      });
+      const t = await r.text();
+      let d = null; try { d = JSON.parse(t); } catch (x) {}
+      if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+      if (inp) inp.value = '';
+      st.avKind = 'ok'; st.avMsg = 'Picture updated';
+      load();   // re-read /auth/me so the picture's URL (and its cache stamp) come from the server
+      return;
+    } catch (e) { st.avKind = 'err'; st.avMsg = e.message || 'Upload failed'; }
+    renderApp();
+  };
+
+  // The NEW password and its confirmation first, the CURRENT password UNDERNEATH as the check,
+  // then Save — the order the fleet profile contract specifies.
+  const changePw = async () => {
+    const np = st.np || '', np2 = st.np2 || '', cp = st.cp || '';
+    if (np.length < 8) { st.pwKind = 'err'; st.pwMsg = 'The new password must be at least 8 characters'; renderApp(); return; }
+    if (np !== np2) { st.pwKind = 'err'; st.pwMsg = 'The two new passwords do not match'; renderApp(); return; }
+    if (!cp) { st.pwKind = 'err'; st.pwMsg = 'Enter your current password to confirm'; renderApp(); return; }
+    st.pwKind = 'info'; st.pwMsg = 'Saving…'; renderApp();
+    try {
+      await API.put('/auth/password', { current_password: cp, new_password: np });
+      st.np = ''; st.np2 = ''; st.cp = '';
+      st.pwKind = 'ok'; st.pwMsg = 'Password changed';
+    } catch (e) { st.pwKind = 'err'; st.pwMsg = e.message || 'Could not change the password'; }
+    renderApp();
+  };
+
+  const initial = (String(me.name || me.email || '?') + '?').charAt(0).toUpperCase();
+
+  return html`<div>
+    <h2 class="text-xl font-bold mb-2">Profile</h2>
+    <p class="text-sm text-gray-500 mb-4">Your name, company, picture and the password you sign in with.</p>
+    ${st.err ? html`<div class="card">
+      <p class="text-red-600 text-sm">Could not load your profile: ${st.err}</p>
+      <button class="btn btn-outline btn-sm mt-3" onClick=${load}>Retry</button></div>` : null}
+    ${!st.me && !st.err ? html`<div class="card text-sm text-gray-500">Loading…</div>` : html`
+    <div class="card">
+      <h3 class="text-base font-semibold mb-3">Profile picture</h3>
+      <div class="flex items-center gap-4 flex-wrap">
+        ${me.avatar_url
+          ? html`<img class="uav" style="width:72px;height:72px;border-radius:50%" src=${me.avatar_url} alt="" />`
+          : html`<span class="uav-ph" style="width:72px;height:72px;font-size:28px">${initial}</span>`}
+        <div>
+          <input type="file" id="pf-file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:12px" />
+          <p class="text-xs text-gray-400" style="margin:4px 0 6px">PNG, JPEG, GIF or WebP, up to 2 MB.</p>
+          <button class="btn btn-sm" onClick=${uploadAvatar}>Upload picture</button>
+          <span style=${avMsgStyle}>${st.avMsg}</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="text-base font-semibold mb-3">Your details</h3>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-name">Name</label>
+        <input class="input" id="pf-name" value=${st.nameDraft == null ? (me.name || '') : st.nameDraft} onInput=${e => { st.nameDraft = e.target.value; }} placeholder="Your name" />
+      </div>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-co">Company</label>
+        <input class="input" id="pf-co" value=${st.companyDraft == null ? (me.company || '') : st.companyDraft} onInput=${e => { st.companyDraft = e.target.value; }} placeholder="Your company" />
+      </div>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-email">Email</label>
+        <input class="input" id="pf-email" value=${me.email || ''} disabled style="background:#f8fafc;color:#94a3b8" />
+        <p class="text-xs text-gray-400" style="margin-top:4px">Your sign-in address cannot be changed here.</p>
+      </div>
+      <button class="btn" onClick=${saveProfile} disabled=${st.saving}>${st.saving ? 'Saving…' : 'Save'}</button>
+      <span style=${'margin-left:8px;font-size:12px;color:' + (st.savedErr ? '#dc2626' : '#059669')}>${st.saved}</span>
+    </div>
+    <div class="card">
+      <h3 class="text-base font-semibold mb-3">Change Password</h3>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-np">New password</label>
+        <input class="input" id="pf-np" type="password" autocomplete="new-password" value=${st.np || ''} onInput=${e => { st.np = e.target.value; }} placeholder="At least 8 characters" />
+      </div>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-np2">Confirm new password</label>
+        <input class="input" id="pf-np2" type="password" autocomplete="new-password" value=${st.np2 || ''} onInput=${e => { st.np2 = e.target.value; }} />
+      </div>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-cp">Current password (verifies it is you)</label>
+        <input class="input" id="pf-cp" type="password" autocomplete="current-password" value=${st.cp || ''} onInput=${e => { st.cp = e.target.value; }} />
+      </div>
+      <button class="btn" onClick=${changePw}>Save</button>
+      <span style=${pwMsgStyle}>${st.pwMsg}</span>
+    </div>`}
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    { id: 'profile', label: 'Profile', icon: '👤' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
@@ -3686,8 +3853,18 @@ const ProvisioningView = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
+
+  // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
+  // `S.me` is the ONE source: the boot refresh below and the Profile screen both fill it from
+  // GET /api/v1/auth/me, so the name, the picture and the tier can never disagree with the row.
+  // The tier painted here is the REAL plan name — never the raw role word ("User"), which is the
+  // stray label this card removes — and an account with no tier reads "Free".
+  const me = S.me || {};
+  const meName = me.name || me.email || 'Account';
+  const meInitial = (meName + '?').charAt(0).toUpperCase();
+  const mePlan = me.plan_name || 'Free';
 
   return html`<div class="flex w-full">
     <div class="sidebar w-56 bg-white border-r border-gray-200 min-h-screen p-3 flex flex-col" style="flex-shrink:0">
@@ -3695,8 +3872,17 @@ const ProvisioningView = () => {
         <span class="text-2xl">🎯</span>
         <span class="nav-text font-bold text-gray-800">IncentiveSwift</span>
       </div>
+      <div class="flex items-center gap-2 px-3 pb-3 mb-2" style="border-bottom:1px solid #f1f5f9">
+        ${me.avatar_url
+          ? html`<img class="uav" src=${me.avatar_url} alt="" />`
+          : html`<span class="uav-ph">${meInitial}</span>`}
+        <div style="min-width:0">
+          <div class="nav-text" style="font-size:13px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=${meName}>${meName}</div>
+          <div class="nav-text" style="margin-top:3px"><span class="badge badge-blue">${mePlan}</span></div>
+        </div>
+      </div>
       <div class="flex-1 space-y-1">
-        ${nav.map(n => html`<div class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; renderApp(); }}>
+        ${nav.map(n => html`<div class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }}>
           <span>${n.icon}</span><span class="nav-text">${n.label}</span>
         </div>`)}
       </div>
@@ -3749,6 +3935,23 @@ const wsStoredToken = () => { try { return localStorage.getItem('ws_fs_token'); 
 const wsAdopting = !API.token && !!wsStoredToken();
 if (wsAdopting) { try { document.documentElement.style.visibility = 'hidden'; } catch (e) {} }
 renderApp();
+/* kanban t_4fcbe895 — ONE refresh behind GET /api/v1/auth/me on every boot.
+   The console used to paint the sidebar from the sessionStorage copy of the user captured at
+   sign-in, so a name, a picture or a TIER changed after that pointed at a stale row — and this app
+   had no tier to paint at all, which is how the raw role word ("User") ended up under a customer's
+   name. This re-reads the account once per load and republishes it (sidebar header + the Profile
+   screen's drafts + the stored session), so every signed-in surface shows the server's row. */
+if (API.token) {
+  API.get('/auth/me').then(function (d) {
+    var u = d && d.user ? d.user : null;
+    if (!u) return;
+    S.me = u;
+    API.setAuth(API.token, Object.assign({}, API.user || {}, u));
+    var pf = S.views['profile'];
+    if (pf) { pf.me = u; pf.nameDraft = u.name || ''; pf.companyDraft = u.company || ''; }
+    renderApp();
+  }).catch(function () {});
+}
 if (wsAdopting) (async () => {
   const show = () => { try { document.documentElement.style.visibility = ''; } catch (e) {} };
   const settle = setTimeout(show, 10000);
@@ -3758,7 +3961,8 @@ if (wsAdopting) (async () => {
     const d = await r.json();
     clearTimeout(settle); show();
     API.setAuth(wsStoredToken(), (d && d.user) || d || {});
-    S.view = 'dashboard';
+    S.me = (d && d.user) || null;
+    S.view = VIEW_FROM_HASH || 'dashboard';
     renderApp();
   } catch (e) {
     clearTimeout(settle);

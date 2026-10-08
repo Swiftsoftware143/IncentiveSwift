@@ -79,6 +79,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // (`POST|DELETE /api/v1/settings/branding/logo`) are deliberately NOT here: writing a logo is an
     // authenticated act on the caller's own account.
     "/api/v1/branding/logo/:tenant_id",
+    // --- the account's own profile picture (kanban t_4fcbe895) -------------------
+    // The READ, and only the read. Same reasoning as the branding logo above: an HTML `<img src>`
+    // carries no credential, so a token-gated picture would simply never render in the console. It
+    // returns the bytes one account uploaded, keyed by an unguessable uuid, with the content type
+    // sniffed from those bytes at upload time; an account with no picture answers 404. Its WRITE
+    // twin (`POST /api/v1/auth/avatar`) is deliberately NOT here: uploading a picture is an
+    // authenticated act on the caller's own account.
+    "/api/v1/auth/avatar/:user_id",
     // --- participant / player surfaces (the campaign's own audience) -------------
     "/api/v1/play/:id",
     "/api/v1/play/:id/dashboard",
@@ -343,6 +351,9 @@ mod tests {
             "/api/v1/loyalty/supplier/milestones/0a1b2c3d",
             "/api/v1/credits/balance",
             "/api/v1/auth/me",
+            // The WRITE twin of the public avatar read (kanban t_4fcbe895): uploading a picture is
+            // an authenticated act on the caller's own account, so it must stay private.
+            "/api/v1/auth/avatar",
             "/api/v1/admin/tenants",
             "/api/v1/admin/plans",
             "/api/v1/admin/treasury/summary",
@@ -368,6 +379,9 @@ mod tests {
             "/api/v1/business/register",
             "/api/v1/plans",
             "/api/v1/api-keys/verify",
+            // The account's own profile picture (kanban t_4fcbe895): a bare `<img src>` in the
+            // console cannot carry a bearer token, so this read must answer anonymously.
+            "/api/v1/auth/avatar/0a1b2c3d",
             "/api/v1/entries",
             "/api/v1/play/0a1b2c3d",
             "/api/v1/play/0a1b2c3d/dashboard",
