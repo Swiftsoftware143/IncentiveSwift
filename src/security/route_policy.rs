@@ -71,6 +71,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // A sibling service verifies a pasted API key here by contract (the app's own
     // `POST /api/v1/api-keys/verify` answers `{"valid": …}` for any well-formed request).
     "/api/v1/api-keys/verify",
+    // --- account email branding (kanban t_feab8aff) ------------------------------
+    // The LOGO read, and only the read. A mail client renders `<img src>` with no credential of any
+    // kind, so a token-gated logo simply never appears in the recipient's inbox. It returns the
+    // bytes one account uploaded, keyed by an unguessable uuid, with the content type sniffed from
+    // those bytes at upload time. Its two WRITE twins
+    // (`POST|DELETE /api/v1/settings/branding/logo`) are deliberately NOT here: writing a logo is an
+    // authenticated act on the caller's own account.
+    "/api/v1/branding/logo/:tenant_id",
     // --- participant / player surfaces (the campaign's own audience) -------------
     "/api/v1/play/:id",
     "/api/v1/play/:id/dashboard",

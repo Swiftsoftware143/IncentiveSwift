@@ -270,6 +270,32 @@ pub async fn update_settings(
             })?;
         } else if entry.key == crate::delivery::sender::SMTP_PASSWORD_KEY {
             value = seal_smtp_password(&state, account_id, value).await?;
+        } else if entry.key == crate::branding::SETTINGS_KEY {
+            // Account email branding (kanban t_feab8aff). The two halves are asymmetric on purpose:
+            //  * `brand_name` / `brand_color` are validated here (length, control chars, hex colour)
+            //    so the renderer never has to defend against what this write let through;
+            //  * `logo_url` is owned by the logo endpoints, so when the caller omits the key the
+            //    STORED value is inherited. The console echoes the document it was given, and a stale
+            //    echo must not un-reference a logo that is still stored. An explicit `""` still
+            //    clears it (the panel's own "remove", alongside DELETE /settings/branding/logo).
+            crate::branding::validate_value(&value).map_err(AppError::BadRequest)?;
+            if let Some(obj) = value.as_object_mut() {
+                if !obj.contains_key("logo_url") {
+                    let stored: Option<serde_json::Value> = sqlx::query_scalar(
+                        "SELECT value->'logo_url' FROM tenant_settings WHERE tenant_id = $1 AND key = $2",
+                    )
+                    .bind(account_id)
+                    .bind(&entry.key)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten();
+                    if let Some(u) = stored {
+                        obj.insert("logo_url".to_string(), u);
+                    }
+                }
+            }
         }
 
         sqlx::query(

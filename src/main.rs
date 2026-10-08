@@ -23,12 +23,14 @@ pub mod access;
 mod account_mint;
 pub mod billing;
 mod body_deadline;
+pub mod branding;
 mod config;
 mod db;
 pub mod delivery;
 mod error;
 mod features;
 pub mod handlers;
+pub mod image_store;
 pub mod iqs_validation;
 pub mod mechanics;
 pub mod security;
@@ -153,6 +155,12 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
+        // Account email-branding logo, PUBLIC by design (kanban t_feab8aff): a mail client renders
+        // `<img src>` with no credential, so a token-gated logo would never appear.
+        .route(
+            "/api/v1/branding/logo/:tenant_id",
+            get(handlers::branding_handler::get_logo),
+        )
         .route(
             "/api/v1/channels/inbound",
             post(handlers::sms_handler::channel_inbound_webhook),
@@ -1208,6 +1216,15 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/settings/email",
             delete(handlers::settings_handler::delete_settings_mail),
+        )
+        // Account email branding (kanban t_feab8aff): the logo this account puts on its own
+        // transactional mail. The caller's OWN account is taken from the credential — there is no
+        // id in the path to spoof. The read arm is PUBLIC (see `security::route_policy`): a mail
+        // client fetches `<img src>` with no credential at all.
+        .route(
+            "/api/v1/settings/branding/logo",
+            post(handlers::branding_handler::upload_logo)
+                .delete(handlers::branding_handler::delete_logo),
         )
         // Analytics routes
         .route(

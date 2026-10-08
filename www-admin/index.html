@@ -2052,7 +2052,7 @@ const ApiKeysView = () => {
 // /api/v1/settings/email/test never falls back to the platform mailer) — hence the unsaved-changes
 // note beside the button instead of a silent surprise.
 const SettingsView = () => {
-  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false });
+  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false, brand: {}, brandMsg: null, brandBusy: false });
   const MAIL_KEYS = ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_email', 'smtp_from_name'];
   const asText = (v) => (v === null || v === undefined) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
   const load = async () => {
@@ -2063,6 +2063,10 @@ const SettingsView = () => {
       st.rows.forEach(r => { node[r.key] = asText(r.value); });
       st.mail = Object.assign({}, node);
       st.stored = Object.assign({}, node);
+      // Account email branding (kanban t_feab8aff) rides the same settings document under its own
+      // key; keep the raw object (asText would stringify it) for the branding card below.
+      const brandRow = st.rows.find(r => r.key === 'email_branding');
+      st.brand = (brandRow && brandRow.value && typeof brandRow.value === 'object') ? brandRow.value : {};
       st.error = null;
     } catch (e) { st.error = e.message; }
     renderApp();
@@ -2126,8 +2130,104 @@ const SettingsView = () => {
     <input id=${'mail-' + key} class="input" type=${type || 'text'} placeholder=${placeholder || ''} value=${asText(st.mail[key])}
       onInput=${e => { st.mail[key] = e.target.value; renderApp(); }} />
   </div>`;
+  // ── Account email branding (kanban t_feab8aff) ──────────────────────────────────────────────
+  // The brand name + colour ride this account's OWN settings document (the same PUT /settings the
+  // mail-server pane above uses, key `email_branding`); the logo BYTES go to the upload route.
+  // `logo_url` is written only by the logo endpoints — this pane never sends it, so a save cannot
+  // un-reference a logo that is still stored. The picker checks the same byte cap the server does.
+  const BRAND_LOGO_MAX_BYTES = 2031616;
+  const brandSave = async () => {
+    const name = asText(st.brand && st.brand.brand_name).trim();
+    const color = asText(st.brand && st.brand.brand_color).trim();
+    if (color && !/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(color)) {
+      st.brandMsg = { ok: false, text: 'Brand colour must be a hex colour such as #4f46e5' };
+      renderApp(); return;
+    }
+    st.brandBusy = true; st.brandMsg = null; renderApp();
+    try {
+      await API.put('/settings', { settings: [{ key: 'email_branding', value: { brand_name: name, brand_color: color } }] });
+      st.brandMsg = { ok: true, text: 'Email branding saved.' };
+      st.brandBusy = false;
+      await load();
+    } catch (e) { st.brandBusy = false; st.brandMsg = { ok: false, text: e.message }; }
+    renderApp();
+  };
+  const brandUpload = async (file) => {
+    if (!file) return;
+    if (file.size > BRAND_LOGO_MAX_BYTES) {
+      st.brandMsg = { ok: false, text: 'That image is ' + file.size + ' bytes — the limit is ' + BRAND_LOGO_MAX_BYTES + ' bytes.' };
+      renderApp(); return;
+    }
+    st.brandBusy = true; st.brandMsg = null; renderApp();
+    try {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      const r = await fetch(window.location.origin + '/api/v1/settings/branding/logo', {
+        method: 'POST',
+        headers: { 'Authorization': ['Bearer', API.token].join(' ') },
+        body: fd,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Upload failed (' + r.status + ')'));
+      st.brandMsg = { ok: true, text: 'Logo saved.' };
+      st.brandBusy = false;
+      await load();
+    } catch (e) { st.brandBusy = false; st.brandMsg = { ok: false, text: e.message }; }
+    renderApp();
+  };
+  const brandRemove = async () => {
+    st.brandBusy = true; st.brandMsg = null; renderApp();
+    try {
+      await API.del('/settings/branding/logo');
+      st.brandMsg = { ok: true, text: 'Logo removed.' };
+      st.brandBusy = false;
+      await load();
+    } catch (e) { st.brandBusy = false; st.brandMsg = { ok: false, text: e.message }; }
+    renderApp();
+  };
   return html`<div>
     <h2 class="text-xl font-bold mb-4">Settings</h2>
+    <div class="card max-w-2xl">
+      <div class="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h3 class="font-medium">Email — your branding</h3>
+          <div class="text-sm text-gray-500">Your logo and display name on every transactional email this account's users receive — welcome, receipts, password resets and the campaign mail you send. Leave it blank and the mail keeps the IncentiveSwift look.</div>
+        </div>
+        <span class=${'badge ' + ((st.brand && (st.brand.brand_name || st.brand.logo_url)) ? 'badge-green' : 'badge-yellow')}>${(st.brand && (st.brand.brand_name || st.brand.logo_url)) ? 'branded' : 'not branded'}</span>
+      </div>
+      ${st.brandMsg ? html`<div class=${'text-sm mb-3 ' + (st.brandMsg.ok ? 'text-green-800' : 'text-red-700')}>${st.brandMsg.text}</div>` : null}
+      <div class="flex gap-4 items-start flex-wrap">
+        <div>
+          <div class="text-xs font-medium text-gray-500 mb-1">Logo</div>
+          <div style="width:150px;height:88px;border:1px dashed #cbd5e1;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#f8fafc;overflow:hidden">
+            ${st.brand && st.brand.logo_url
+              ? html`<img id="brand-logo-img" src=${st.brand.logo_url} alt=${st.brand.brand_name || 'Your logo'} style="max-width:100%;max-height:100%"/>`
+              : html`<span id="brand-logo-none" class="text-xs text-gray-400">No logo yet</span>`}
+          </div>
+          <div class="flex gap-2 mt-2">
+            <input id="brand-logo-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none"
+              onChange=${e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; brandUpload(f); }} />
+            <button class="btn btn-sm" id="brand-upload-btn" disabled=${st.brandBusy} onClick=${() => document.getElementById('brand-logo-input').click()}>Upload</button>
+            <button class="btn btn-sm btn-red" id="brand-remove-btn" disabled=${st.brandBusy} onClick=${brandRemove}>Remove</button>
+          </div>
+          <div class="text-xs text-gray-400 mt-1">PNG, JPEG, GIF or WebP · up to 2 MB</div>
+        </div>
+        <div class="flex-1" style="min-width:240px">
+          <div class="mb-3">
+            <label class="text-xs font-medium block mb-1 text-gray-500">Brand display name</label>
+            <input id="brand-name-input" class="input" maxlength="60" placeholder="e.g. Giraudy Capital" value=${asText(st.brand && st.brand.brand_name)}
+              onInput=${e => { st.brand.brand_name = e.target.value; }} />
+          </div>
+          <div class="mb-3">
+            <label class="text-xs font-medium block mb-1 text-gray-500">Brand colour</label>
+            <input id="brand-color-input" class="input" maxlength="9" placeholder="#4f46e5" value=${asText(st.brand && st.brand.brand_color)}
+              onInput=${e => { st.brand.brand_color = e.target.value; }} />
+            <div class="text-xs text-gray-400 mt-1">A hex colour such as #4f46e5, used for the rule under your logo.</div>
+          </div>
+          <button class="btn" id="brand-save-btn" disabled=${st.brandBusy} onClick=${brandSave}>Save branding</button>
+        </div>
+      </div>
+    </div>
     ${st.error ? html`<div class="card p-3 text-sm text-red-700" style="background:#fef2f2">${st.error}</div>` : null}
     ${st.removed && !st.error ? html`<div class="card p-3 text-sm text-green-800" style="background:#f0fdf4">Mail server removed — this account now uses the platform mail service.</div>` : null}
     ${st.saved && !st.error ? html`<div class="card p-3 text-sm text-green-800" style="background:#f0fdf4">Mail server settings saved.</div>` : null}

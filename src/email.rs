@@ -26,6 +26,57 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
     result
 }
 
+/// Bind the two branding merge fields into a render's variable map (kanban t_feab8aff).
+///
+/// They are PER-ACCOUNT, so they cannot live in a `&'static` default map: the account's own values
+/// when it has branding, the app's identity otherwise — so an admin-authored `{{brand_name}}` never
+/// reaches a recipient as literal text. Every other key of the map is left alone.
+fn bind_branding(vars: &mut serde_json::Value, branding: Option<&crate::branding::Branding>) {
+    if !vars.is_object() {
+        *vars = json!({});
+    }
+    let (name, logo) = match branding {
+        Some(b) => (
+            b.brand_name.clone(),
+            b.resolve_logo_url(APP_URL).unwrap_or_default(),
+        ),
+        None => (APP_NAME.to_string(), String::new()),
+    };
+    if let Some(obj) = vars.as_object_mut() {
+        obj.insert("brand_name".to_string(), json!(name));
+        obj.insert("logo_url".to_string(), json!(logo));
+    }
+}
+
+/// Put the account's branding at the TOP of a rendered message (kanban t_feab8aff).
+///
+/// The HTML part gains the header block (logo + name + colour rule); the text part gains the brand
+/// name as a one-line header (a text part cannot carry an image). When the account HAS branding but
+/// the message carries no HTML part — every inline fallback returns text only — one is built from
+/// the ESCAPED text so a branded mail still shows the logo. A no-op for an account with no branding,
+/// which is what makes the change additive: those renders are byte-identical to before.
+fn with_branding_header(
+    branding: Option<&crate::branding::Branding>,
+    text: String,
+    html: String,
+) -> (String, String) {
+    let Some(b) = branding else {
+        return (text, html);
+    };
+    let logo = b.resolve_logo_url(APP_URL);
+    let header = b.header_html(logo.as_deref());
+    let html = if html.trim().is_empty() {
+        format!(
+            "{header}<div style=\"white-space:pre-wrap;font:14px/1.5 \
+             -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{}</div>",
+            crate::branding::escape_html(&text)
+        )
+    } else {
+        format!("{header}{html}")
+    };
+    (format!("{}{}", b.text_header(), text), html)
+}
+
 /// Send a templated email using database-stored templates.
 /// Falls back to old inline methods when no template found.
 ///
@@ -43,14 +94,27 @@ pub async fn send_template_email(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
-    let app_name = "IncentiveSwift";
-    let app_url = "https://app.incentiveswift.com";
+    let app_name = APP_NAME;
+    let app_url = APP_URL;
+
+    // Per-account email branding (kanban t_feab8aff). Loaded ONCE here, at the single funnel every
+    // transactional type passes through, so a template added later inherits it for free. The two
+    // merge fields are bound into the render map (per-account, so they cannot be static defaults)
+    // and the header block is applied to the rendered parts below. An account with no branding
+    // renders byte-identical mail to before this module existed.
+    let branding = match account_id {
+        Some(id) => crate::branding::load(pool, id).await,
+        None => None,
+    };
+    let mut vars = vars.clone();
+    bind_branding(&mut vars, branding.as_ref());
+    let vars = &vars;
 
     let template = crate::delivery::sender::load_template_by_type(pool, account_id, template_type)
         .await
         .map_err(|e| format!("DB error loading template for '{template_type}': {e}"))?;
 
-    match template {
+    let (subject, text_body, html_body) = match template {
         Some(t) => {
             let subject = render_template(
                 &t.subject
@@ -64,17 +128,18 @@ pub async fn send_template_email(
                 .unwrap_or_default();
             let text_body = render_template(&t.body.unwrap_or_default(), vars);
             let use_html = t.html_body.is_some();
-            send_email_request(
-                pool,
-                to,
-                &subject,
-                &text_body,
-                if use_html { &html_body } else { "" },
+            (
+                subject,
+                text_body,
+                if use_html { html_body } else { String::new() },
             )
-            .await
         }
-        None => send_inline(pool, to, template_type, vars, app_name, app_url).await,
-    }
+        None => send_inline(to, template_type, vars, app_name, app_url).await?,
+    };
+
+    // The account's branding opens both parts of the message (a no-op without branding).
+    let (text_body, html_body) = with_branding_header(branding.as_ref(), text_body, html_body);
+    send_email_request(pool, to, &subject, &text_body, &html_body).await
 }
 
 fn get_default_subject(template_type: &str, app_name: &str) -> String {
@@ -89,13 +154,12 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
 }
 
 async fn send_inline(
-    pool: &sqlx::PgPool,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
     app_name: &str,
     app_url: &str,
-) -> Result<(), String> {
+) -> Result<(String, String, String), String> {
     let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
     let email = vars.get("email").and_then(|v| v.as_str()).unwrap_or("");
     let password = vars.get("password").and_then(|v| v.as_str()).unwrap_or("");
@@ -114,25 +178,29 @@ async fn send_inline(
                 "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
                 app_name, name, email, password, app_url, app_name
             );
-            send_email_request(pool, to, &format!("Welcome to {}!", app_name), &body, "").await
+            Ok((format!("Welcome to {}!", app_name), body, String::new()))
         }
         "purchase_confirmed" => {
             let body = format!(
                 "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, please contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
                 name, plan_name_val, app_url, app_name
             );
-            send_email_request(pool, to, "Payment Received - Thank You!", &body, "").await
+            Ok((
+                "Payment Received - Thank You!".to_string(),
+                body,
+                String::new(),
+            ))
         }
         "password_reset" => {
             let body = format!(
                 "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- SwiftSoftware",
                 token
             );
-            send_email_request(pool, to, "Password Reset Request", &body, "").await
+            Ok(("Password Reset Request".to_string(), body, String::new()))
         }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);
-            send_email_request(pool, to, &format!("{} Notification", app_name), &body, "").await
+            Ok((format!("{} Notification", app_name), body, String::new()))
         }
     }
 }

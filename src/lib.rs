@@ -23,6 +23,7 @@ pub mod account_mint;
 // the lib could not see it and `cargo check` said "cannot find `billing` in `crate`".
 pub mod billing;
 pub mod body_deadline;
+pub mod branding;
 pub mod config;
 pub mod db;
 pub mod delivery;
@@ -32,6 +33,7 @@ mod email_queue;
 pub mod error;
 pub mod features;
 pub mod handlers;
+pub mod image_store;
 pub mod iqs_validation;
 mod lifecycle_emails;
 pub mod mechanics;

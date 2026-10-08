@@ -526,5 +526,19 @@ exist for them.</p>
 software they are interested in. The account is created here, in the destination app, so the lead
 signs in at the app they actually want - and upgrades on this app's own plans and pricing.</p>
 
+<h2>Email branding (per account)</h2>
+<p>Every transactional email is rendered through the app's one funnel (the account's
+<code>email_branding</code> document + the <code>tenant_logos</code> row), so the mail a business's
+users receive can carry that business's own logo and display name. The tenant manages it in the
+console at <strong>Settings &rarr; Email &mdash; your branding</strong> (name, colour, logo
+upload/preview/remove); the picker checks the same 2,031,616&nbsp;byte ceiling the server enforces.</p>
+<p>Routes: <code>POST|DELETE /api/v1/settings/branding/logo</code> (authenticated, the caller's own
+account) and the <strong>public</strong> <code>GET /api/v1/branding/logo/:tenant_id</code> &mdash;
+public by design, because a mail client renders <code>&lt;img src&gt;</code> with no credential.
+Storage: the text lives in <code>tenant_settings</code> key <code>email_branding</code>; the logo bytes
+live in <code>tenant_logos</code> (migration <code>zz_is11_tenant_email_branding.sql</code>), one row
+per account, <code>ON DELETE CASCADE</code>. An account with no branding renders byte-identical mail
+to before the feature.</p>
+
 </body>
 </html>

@@ -15,6 +15,7 @@ pub use loyalty_v2::*;
 pub mod admin_handler;
 pub mod api_keys;
 pub mod auth_handler;
+pub mod branding_handler;
 pub mod contacts;
 pub mod email_templates_handler;
 pub mod integration_target_handler;
