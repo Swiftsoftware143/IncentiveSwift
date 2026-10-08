@@ -223,6 +223,44 @@ async fn retire_tenant(state: &AppState, account_id: Uuid) -> Result<u64, AppErr
     Ok(result.rows_affected())
 }
 
+/// David's sister companies (portfolio). Their accounts exist in every app and are kept by rule, so
+/// the mass-delete must never be able to remove one — a mistaken click would silently drop a
+/// business that is supposed to be permanent.
+const PORTFOLIO_MARKERS: [&str; 3] = ["swiftimpact", "zaarhub", "giraudy"];
+
+/// Refuse a retirement that must not happen: the account the operator is signed in as (a lockout,
+/// not a cleanup) or a portfolio company. Everything else is allowed — this only ever ADDS a
+/// refusal, so the operator's ordinary cleanup path is unchanged.
+async fn guard_protected(
+    state: &AppState,
+    account_id: Uuid,
+    caller: &AuthenticatedUser,
+) -> Result<(), AppError> {
+    if let Ok(own) = Uuid::parse_str(caller.account_id.trim()) {
+        if own == account_id {
+            return Err(AppError::BadRequest(
+                "refusing to delete the account you are signed in as".to_string(),
+            ));
+        }
+    }
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(name, ''), COALESCE(email, '') FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some((name, email)) = row {
+        let hay = format!("{} {}", name, email).to_lowercase();
+        if let Some(hit) = PORTFOLIO_MARKERS.iter().find(|m| hay.contains(*m)) {
+            return Err(AppError::BadRequest(format!(
+                "refusing to delete a portfolio account ({})",
+                hit
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// DELETE /api/v1/admin/tenants/:id
 /// Deletes a tenant account and cleans up related data, atomically.
 pub async fn delete_tenant(
@@ -232,6 +270,8 @@ pub async fn delete_tenant(
 ) -> Result<Json<Value>, AppError> {
     let account_id = uuid::Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
+
+    guard_protected(&state, account_id, &user).await?;
 
     let removed = retire_tenant(&state, account_id).await?;
     if removed == 0 {
@@ -273,10 +313,13 @@ pub async fn bulk_delete_tenants(
     for raw in &body.ids {
         match Uuid::parse_str(raw.trim()) {
             Err(_) => failed.push(json!({ "id": raw, "error": "invalid tenant id" })),
-            Ok(account_id) => match retire_tenant(&state, account_id).await {
-                Ok(0) => failed.push(json!({ "id": raw, "error": "tenant not found" })),
-                Ok(_) => deleted.push(raw.clone()),
+            Ok(account_id) => match guard_protected(&state, account_id, &user).await {
                 Err(e) => failed.push(json!({ "id": raw, "error": e.to_string() })),
+                Ok(()) => match retire_tenant(&state, account_id).await {
+                    Ok(0) => failed.push(json!({ "id": raw, "error": "tenant not found" })),
+                    Ok(_) => deleted.push(raw.clone()),
+                    Err(e) => failed.push(json!({ "id": raw, "error": e.to_string() })),
+                },
             },
         }
     }
