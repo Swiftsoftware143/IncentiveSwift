@@ -728,7 +728,7 @@ mod retry_policy_tests {
     #[test]
     fn the_backoff_table_covers_every_retry() {
         assert_eq!(RETRY_BACKOFF.len() as i32, MAX_SEND_ATTEMPTS - 1);
-        assert!(
+        const _: () = assert!(
             MAX_SEND_ATTEMPTS >= 2,
             "a one-attempt budget is the old defect"
         );
@@ -801,11 +801,11 @@ mod tick_fairness_tests {
     /// concurrent DB users, so they stay well inside the pool.
     #[test]
     fn the_flush_runs_more_than_one_account_at_a_time() {
-        assert!(
+        const _: () = assert!(
             FLUSH_CONCURRENCY >= 2,
             "a one-slot flush is exactly the t_96695538 behaviour"
         );
-        assert!(
+        const _: () = assert!(
             FLUSH_CONCURRENCY <= 16,
             "more simultaneous dials than the pool (DB_MAX_CONNECTIONS default 20) can serve is not a bound"
         );
@@ -852,20 +852,20 @@ mod tick_fairness_tests {
             "Mailgun returned 502",
         ];
         for err in cases {
-            assert_eq!(failure_scope(&err), FailureScope::Account, "{err}");
-            assert!(defers_account(&err), "{err}");
+            assert_eq!(failure_scope(err), FailureScope::Account, "{err}");
+            assert!(defers_account(err), "{err}");
             assert_eq!(
-                deferred_after_failure(3, 0, &err),
+                deferred_after_failure(3, 0, err),
                 2,
                 "rows 2 and 3 of the batch wait for the next tick: {err}"
             );
             assert_eq!(
-                deferred_after_failure(1, 0, &err),
+                deferred_after_failure(1, 0, err),
                 0,
                 "a one-row batch defers nothing — though the account is still named stalled: {err}"
             );
             assert_eq!(
-                deferred_after_failure(3, 2, &err),
+                deferred_after_failure(3, 2, err),
                 0,
                 "the account's LAST row leaves nothing behind: {err}"
             );
