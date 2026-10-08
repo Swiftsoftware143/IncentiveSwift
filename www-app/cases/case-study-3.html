@@ -8,6 +8,18 @@
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+ <style>
+ /* case-study-3 layout: horizontal labelled stat ROWS + RESULTS-FIRST section order + a
+    left-bar callout. A third distinct SHAPE (cs1 = 3-col grid, cs2 = hero stat + steps). */
+ .statrows{max-width:820px;margin:36px auto 0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+ .statrow{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 26px;border-bottom:1px solid var(--border);background:var(--surface)}
+ .statrow:last-child{border-bottom:0}
+ .statrow .v{font-size:30px;font-weight:800;color:var(--accent)}
+ .statrow .l{color:var(--text2);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1.4px;text-align:right}
+ .sec-narrow{max-width:820px;margin:0 auto}
+ .callout{max-width:820px;margin:0 auto;background:rgba(0,229,255,.06);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:var(--radius);padding:28px 30px}
+ .callout h2{font-size:22px;font-weight:800;margin-bottom:10px}
+ </style>
 </head>
 <body>
 <nav class="navbar">
@@ -31,46 +43,46 @@
 </section>
 
 <section class="container">
-  <div class="stats">
-    <div class="stat"><div class="num">+488%</div><div class="label">List Growth</div></div>
-    <div class="stat"><div class="num">1,170%</div><div class="label">Measured ROI</div></div>
-    <div class="stat"><div class="num">30 Days</div><div class="label">Campaign Length</div></div>
+  <div class="statrows">
+    <div class="statrow"><span class="v">+488%</span><span class="l">List Growth</span></div>
+    <div class="statrow"><span class="v">1,170%</span><span class="l">Measured ROI</span></div>
+    <div class="statrow"><span class="v">30 Days</span><span class="l">Campaign Length</span></div>
   </div>
 </section>
 
 <section class="section">
-  <div class="container">
-    <h2>&#128203; The Business Case</h2>
-    <p>November Bicycles, an independent maker of custom carbon wheelsets, wanted to build marketing momentum for a new product launch without relying on paid ads. They needed a way to reach new customers using only the audience they already had.</p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
-    <h2>&#128203; The Challenge</h2>
-    <p>Highly specialized consumer brands sell to a narrow, well-defined audience, which makes growth difficult once that audience is reached. Traditional ads often just recycle impressions among the same enthusiasts rather than finding new ones. For a niche brand, the real barrier to growth isn't demand, it's discovery among people who look like existing customers but haven't found the brand yet.</p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
-    <h2>&#128161; The Strategy</h2>
-    <p>November Bicycles ran a sweepstakes that rewarded participants for sharing it, turning entrants into promoters. Because entry was tied to referrals, existing enthusiasts did the work of introducing the contest to lookalike prospects in their own networks. This let the campaign spread through trusted word-of-mouth instead of paid distribution.</p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
+  <div class="container"><div class="sec-narrow">
     <h2>&#128200; The Results</h2>
     <p>Over a 30-day campaign, the sweepstakes drove 488% growth in November Bicycles' marketing list. The campaign also produced a measured ROI of 1,170%, indicating the growth translated into meaningful returns. These results were achieved without ongoing paid ad spend.</p>
-  </div>
+  </div></div>
 </section>
 
 <section class="section">
-  <div class="container">
+  <div class="container"><div class="sec-narrow">
+    <h2>&#128203; The Business Case</h2>
+    <p>November Bicycles, an independent maker of custom carbon wheelsets, wanted to build marketing momentum for a new product launch without relying on paid ads. They needed a way to reach new customers using only the audience they already had.</p>
+  </div></div>
+</section>
+
+<section class="section">
+  <div class="container"><div class="sec-narrow">
+    <h2>&#128203; The Challenge</h2>
+    <p>Highly specialized consumer brands sell to a narrow, well-defined audience, which makes growth difficult once that audience is reached. Traditional ads often just recycle impressions among the same enthusiasts rather than finding new ones. For a niche brand, the real barrier to growth isn't demand, it's discovery among people who look like existing customers but haven't found the brand yet.</p>
+  </div></div>
+</section>
+
+<section class="section">
+  <div class="container"><div class="sec-narrow">
+    <h2>&#128161; The Strategy</h2>
+    <p>November Bicycles ran a sweepstakes that rewarded participants for sharing it, turning entrants into promoters. Because entry was tied to referrals, existing enthusiasts did the work of introducing the contest to lookalike prospects in their own networks. This let the campaign spread through trusted word-of-mouth instead of paid distribution.</p>
+  </div></div>
+</section>
+
+<section class="section">
+  <div class="container"><div class="callout">
     <h2>&#127919; Why It Matters For Any Business</h2>
     <p>When a business's most enthusiastic customers are incentivized to share, they can open doors to new audiences that advertising alone can't reach. Any business with a passionate niche following can turn that existing enthusiasm into a built-in growth engine.</p>
-  </div>
+  </div></div>
 </section>
 
 <section class="cta-section">

@@ -8,6 +8,24 @@
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+ <style>
+ /* case-study-2 layout: ONE hero stat + a 2-up mini row, then a numbered step timeline.
+    Deliberately a different SHAPE from case-study-1's 3-column stat grid + flat sections. */
+ .hero-stat{max-width:960px;margin:36px auto 0;text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:44px 24px}
+ .hero-stat .big{font-size:64px;font-weight:800;line-height:1;background:linear-gradient(135deg,var(--accent),#7c3aed);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+ .hero-stat .cap{color:var(--text2);font-size:14px;margin-top:12px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
+ .ministats{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;max-width:960px;margin:16px auto 0}
+ .ministat{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:22px;text-align:center}
+ .ministat .num{font-size:30px;font-weight:800;color:var(--accent)}
+ .ministat .label{color:var(--text2);font-size:13px;margin-top:4px}
+ .lede{max-width:820px;margin:0 auto;color:var(--text2);font-size:18px;text-align:center;line-height:1.7}
+ .step{max-width:820px;margin:34px auto;padding:0 0 0 22px;border-left:3px solid var(--accent)}
+ .step .n{font-size:12px;font-weight:800;letter-spacing:2px;color:var(--accent);text-transform:uppercase}
+ .step h2{font-size:24px;font-weight:800;margin:6px 0 10px}
+ .step p{color:var(--text);opacity:.92}
+ .whybox{max-width:820px;margin:0 auto;background:linear-gradient(135deg,rgba(0,229,255,.08),rgba(124,58,237,.10));border:1px solid var(--border);border-radius:var(--radius);padding:32px}
+ .whybox h2{font-size:22px;font-weight:800;margin-bottom:10px}
+ </style>
 </head>
 <body>
 <nav class="navbar">
@@ -31,45 +49,48 @@
 </section>
 
 <section class="container">
-  <div class="stats">
-    <div class="stat"><div class="num">100,000</div><div class="label">Pre-launch signups</div></div>
-    <div class="stat"><div class="num">77%</div><div class="label">Signups from referrals</div></div>
-    <div class="stat"><div class="num">7 days</div><div class="label">Campaign length</div></div>
+  <div class="hero-stat">
+    <div class="big">100,000</div>
+    <div class="cap">Pre-launch signups in 7 days</div>
+  </div>
+  <div class="ministats">
+    <div class="ministat"><div class="num">77%</div><div class="label">Signups from referrals</div></div>
+    <div class="ministat"><div class="num">7 days</div><div class="label">Campaign length</div></div>
   </div>
 </section>
 
 <section class="section">
   <div class="container">
-    <h2>&#128203; The Business Case</h2>
-    <p>Harry's needed a large, ready-to-buy audience the moment they launched, not weeks after. Instead of just collecting emails, they built a page that turned every visitor into a recruiter for more visitors.</p>
+    <p class="lede">Harry's needed a large, ready-to-buy audience the moment they launched, not weeks after. Instead of just collecting emails, they built a page that turned every visitor into a recruiter for more visitors.</p>
   </div>
 </section>
 
 <section class="section">
   <div class="container">
-    <h2>&#128203; The Challenge</h2>
-    <p>A typical landing page asks a visitor to type their email and then does nothing else with them. There's no reason for that visitor to tell anyone else, so growth is capped at however much traffic you can buy or earn directly. Harry's needed signups to multiply on their own, not just accumulate one at a time.</p>
+    <div class="step">
+      <div class="n">01 &mdash; The Challenge</div>
+      <h2>A landing page that grows itself</h2>
+      <p>A typical landing page asks a visitor to type their email and then does nothing else with them. There's no reason for that visitor to tell anyone else, so growth is capped at however much traffic you can buy or earn directly. Harry's needed signups to multiply on their own, not just accumulate one at a time.</p>
+    </div>
+    <div class="step">
+      <div class="n">02 &mdash; The Strategy</div>
+      <h2>Make every signup a recruiter</h2>
+      <p>Harry's built a referral page where signing up was just the first step. Each visitor got a personal link and could see themselves unlock better rewards as more friends joined through that link. This gave people a reason to actively share instead of passively signing up and moving on.</p>
+    </div>
+    <div class="step">
+      <div class="n">03 &mdash; The Results</div>
+      <h2>100,000 in seven days</h2>
+      <p>The campaign ran for 7 days and produced 100,000 pre-launch signups. Of those, 77% came from referrals rather than direct traffic, meaning the audience was growing itself. Harry's entered launch day with a large list built largely by the people on it, not by the brand alone.</p>
+    </div>
   </div>
 </section>
 
 <section class="section">
   <div class="container">
-    <h2>&#128161; The Strategy</h2>
-    <p>Harry's built a referral page where signing up was just the first step. Each visitor got a personal link and could see themselves unlock better rewards as more friends joined through that link. This gave people a reason to actively share instead of passively signing up and moving on.</p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
-    <h2>&#128200; The Results</h2>
-    <p>The campaign ran for 7 days and produced 100,000 pre-launch signups. Of those, 77% came from referrals rather than direct traffic, meaning the audience was growing itself. Harry's entered launch day with a large list built largely by the people on it, not by the brand alone.</p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
-    <h2>&#127919; Why It Matters For Any Business</h2>
-    <p>When you give people a visible, rewarding reason to share, they become part of your distribution instead of just an end point of it. Any business collecting signups before a launch can apply the same logic: make sharing pay off, and growth stops depending solely on your own reach.</p>
+    <div class="whybox">
+      <h2>&#127919; Why It Matters For Any Business</h2>
+      <p>When you give people a visible, rewarding reason to share, they become part of your distribution instead of just an end point of it. Any business collecting signups before a launch can apply the same logic: make sharing pay off, and growth stops depending solely on your own reach.</p>
+    </div>
   </div>
 </section>
 
