@@ -122,6 +122,39 @@ function isdConfigKeys(cfg) {
 }
 </script>
 
+<script>
+/* Inline guide content (fleet standard; the in-app counterpart of /admin-guide.html). One entry per
+   console screen. This console is a preact SPA that switches views in JS without moving the path or
+   hash, so renderApp tells the widget which screen is open via window.inlineGuidePage(view). */
+window.appGuidePages = {
+  dashboard:      { title: "Dashboard", desc: "Your numbers at a glance \u2014 campaigns, participants and activity in one place.", actions: ["Scan recent activity", "Jump into a campaign"] },
+  campaigns:      { title: "Campaigns", desc: "Your incentive campaigns \u2014 the games and forms customers play (quizzes, spin wheels, scratch cards and more).", actions: ["Create a campaign", "Open one to edit it", "Publish it"] },
+  prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
+  loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
+  integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
+  tags:           { title: "Tags", desc: "Labels that group your contacts. A system tag can also trigger other actions, such as creating a free account in another app.", actions: ["Create a tag", "Apply a tag to contacts"] },
+  leads:          { title: "Leads", desc: "The people your campaigns have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
+  contacts:       { title: "Contacts", desc: "Everyone on your list, collected in one place.", actions: ["Search your contacts", "Open a contact"] },
+  "api-keys":     { title: "API Keys", desc: "Keys that let other tools call IncentiveSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
+  settings:       { title: "Settings", desc: "Your workspace, profile and email settings.", actions: ["Update your profile", "Set your email provider"] },
+  "my-plan":      { title: "Plan & Pricing", desc: "Your plan decides what is available to you. This is where you see it and upgrade.", actions: ["Compare plans", "Upgrade"] },
+  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
+  reviews:        { title: "Reviews & Ratings", desc: "Feedback customers have left, collected so you can see how you are doing.", actions: ["Read a review", "Respond"] },
+  calendar:       { title: "Calendar", desc: "Scheduled dates for your campaigns and events, in one view.", actions: ["See what is coming up", "Add a date"] },
+  "knowledge-base": { title: "Knowledge Base", desc: "Help articles you can read and, for operators, publish.", actions: ["Read an article", "Search the base"] },
+  "call-logs":    { title: "Call Logs", desc: "The history of calls handled on this account.", actions: ["Review recent calls", "Open a call"] },
+  deals:          { title: "Deals", desc: "Sales deals tracked as they move from first contact to won.", actions: ["Add a deal", "Move a deal along"] },
+  ops:            { title: "Operator Console", desc: "Platform-operator tools for running the service across accounts (operators only).", actions: ["Review platform status", "Open an account"] },
+  provisioning:   { title: "Provisioning", desc: "Where a system tag can create a free account in another app. The switch controls whether tags auto-provision here.", actions: ["Turn automatic provisioning on or off", "Choose which free plan is given"] },
+  "site-config":  { title: "Site Config", desc: "Operator settings for how this deployment behaves (operators only).", actions: ["Review the settings"] },
+  portfolio:      { title: "Portfolio", desc: "An operator view across the accounts you manage.", actions: ["Open an account", "Compare activity"] },
+  plans:          { title: "Plans", desc: "The plan catalogue customers can be on (operators only).", actions: ["Review a plan", "Edit its limits"] },
+  "plan-tiers":   { title: "Plan Tiers", desc: "The definitions behind each plan tier (operators only).", actions: ["Review a tier", "Edit it"] },
+  "email-templates": { title: "Email Templates", desc: "The wording of the emails this app sends (operators only).", actions: ["Edit a template", "Preview it"] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
+
 <script type="module">
 import { h, render } from 'https://esm.sh/preact@10.26.4';
 // Hooks are NOT exported from preact's root module — they live in /hooks. Importing useEffect
@@ -3584,7 +3617,12 @@ const ProvisioningView = () => {
   </div>`;
 };
 
-const renderApp = () => render(html`<${App} />`, document.getElementById('app'));
+const renderApp = () => {
+  render(html`<${App} />`, document.getElementById('app'));
+  // Keep the inline guide on the screen the operator/tenant is looking at (the widget cannot follow a
+  // preact SPA by path/hash). Only when signed in, so the sign-in form shows no screen's guide.
+  if (window.inlineGuidePage && API.token && S.view) window.inlineGuidePage(S.view);
+};
 // kanban t_c9182c26 -- the 402 upgrade overlay is built with an inline onclick, which a module
 // shell evaluates in GLOBAL scope and cannot see S/renderApp from. One window helper is the fix
 // this console already uses elsewhere (see the nav-audience note on inline module bindings).
