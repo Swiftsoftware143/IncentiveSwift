@@ -170,6 +170,7 @@
       <div class="section-title">Analytics &amp; Settings</div>
       <a href="#analytics" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📈</span> Analytics</a>
       <a href="#settings" class="nav-item" onclick="closeMobile()"><span class="nav-icon">⚙️</span> Settings</a>
+      <a href="#tag-to-free-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🆓</span> Tag to free account</a>
       <div class="section-title">Support</div>
       <a href="#faq" class="nav-item" onclick="closeMobile()"><span class="nav-icon">❓</span> FAQ</a>
           <div class="section-title">Knowledge Base</div>
@@ -833,6 +834,22 @@
         <button class="faq-q" onclick="this.nextElementSibling.classList.toggle('open')">Do loyalty points expire?</button>
         <div class="faq-a">Yes. Each loyalty program has a points expiration window (<code>points_expire_days</code>, 365 days by default when it isn't set), and an admin runs the expiry sweep to clear points that have fallen outside it. The sweep recalculates each member's balance from their earning and redemption records instead of subtracting a fixed amount, so running it twice changes nothing. Members are treated as spending their oldest points first, so the balance they hold is always their newest points.</div>
       </div>
+
+      <h2 id="tag-to-free-account">🆓 Tag to free account</h2>
+      <p>When a lead is tagged in FunnelSwift with one of this app's tags &mdash; for example <strong>IncentiveSwift &mdash; Free</strong> &mdash; IncentiveSwift is told to create a <strong>free account</strong> for that lead, using the same name and email the lead was captured with. IncentiveSwift emails the new user their login details automatically, so they can sign in and upgrade here whenever they are ready.</p>
+
+      <h3>What happens when it is ON</h3>
+      <ul>
+        <li>A tagged lead gets a real account here on the free plan &mdash; not just a contact record</li>
+        <li>The new user is emailed their login details by IncentiveSwift</li>
+        <li>Tagging the same lead twice does <strong>not</strong> create a duplicate account &mdash; the second attempt is recognised by email and ignored</li>
+      </ul>
+
+      <h3>What happens when it is OFF</h3>
+      <p>The tagged lead is still recorded here as a contact, so nothing is lost, but <strong>no account is created and no login email is sent</strong>. Use this if you want to review leads before accounts exist for them.</p>
+
+      <h3>Where the switch is</h3>
+      <p>Operators turn this on or off in the admin console, under <strong>Provisioning</strong> (the <em>Auto-provision free accounts from tags</em> switch and the entry plan beside it).</p>
 
     </div>
   </div>
