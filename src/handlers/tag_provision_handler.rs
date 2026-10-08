@@ -548,6 +548,11 @@ fn is_placeholder_address(email: &str) -> bool {
         || domain.contains("placeholder")
         || domain.ends_with(".local")
         || domain == "localhost"
+        // t_a8bd2860: an RFC 2606 / RFC 6761 RESERVED address (example.com/.net/.org, .invalid,
+        // .test, .example) is equally undeliverable — minting on it leaves a real, permanent
+        // orphan login whose credentials mail can never arrive. Delegate to the app's own
+        // canonical predicate (the same one the SEND SEAM enforces).
+        || crate::security::email_addr::is_reserved_address(email)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════

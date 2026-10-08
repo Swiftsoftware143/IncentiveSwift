@@ -167,6 +167,18 @@ fn reserved_domain_reason(domain: &str) -> Option<String> {
     None
 }
 
+/// Does this address sit on a domain that provably cannot receive the credentials mail?
+///
+/// The account-creation doors call this BEFORE minting (kanban t_a8bd2860): a reserved address
+/// must never become a real, unreachable login. The SEND SEAM's
+/// [`refuse_undeliverable_recipient`] is the other half — same predicate, different boundary.
+pub fn is_reserved_address(email: &str) -> bool {
+    match email.rsplit_once('@') {
+        Some((_, domain)) => reserved_domain_reason(domain).is_some(),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +331,33 @@ mod tests {
         assert_eq!(lookup_key("  Mixed@Case.COM "), "mixed@case.com");
         // A malformed value has no failure arm here — it just matches nothing.
         assert_eq!(lookup_key("bad"), "bad");
+    }
+
+    #[test]
+    fn is_reserved_address_flags_rfc_2606_and_allows_routable() {
+        for bad in [
+            "someone@example.com",
+            "a@example.net",
+            "b@example.org",
+            "c@sub.example.com",
+            "d@foo.invalid",
+            "e@foo.test",
+            "f@foo.example",
+            "g@host.local",
+            "h@localhost",
+        ] {
+            assert!(is_reserved_address(bad), "{bad} must be flagged reserved");
+        }
+        // Routable addresses whose LABEL merely looks reserved stay allowed.
+        for ok in [
+            "david@swiftsoftware.dev",
+            "user@test.swiftsoftware.net",
+            "a@real.example.io",
+        ] {
+            assert!(
+                !is_reserved_address(ok),
+                "{ok} must NOT be flagged reserved"
+            );
+        }
     }
 }
