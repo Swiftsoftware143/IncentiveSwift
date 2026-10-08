@@ -863,6 +863,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/tenants/:id",
             delete(crate::handlers::admin_handler::delete_tenant),
         )
+        // Bulk tenant retirement for the console's "Delete selected" control (kanban t_9f3d85dc).
+        // POST, not DELETE: the id list IS the request body, so it cannot ride a path. The
+        // single-id DELETE above is unchanged, and both call the same one-transaction retire.
+        // The `/api/v1/admin/` prefix is the operator gate (`security::auth::is_admin_surface`).
+        .route(
+            "/api/v1/admin/tenants/bulk-delete",
+            post(crate::handlers::admin_handler::bulk_delete_tenants),
+        )
         .route(
             "/api/v1/admin/tenants/:tenant_id/credits-rate",
             get(crate::handlers::admin_handler::get_credit_rate)

@@ -355,6 +355,7 @@ mod tests {
             // an authenticated act on the caller's own account, so it must stay private.
             "/api/v1/auth/avatar",
             "/api/v1/admin/tenants",
+            "/api/v1/admin/tenants/bulk-delete",
             "/api/v1/admin/plans",
             "/api/v1/admin/treasury/summary",
             "/api/v1/admin/credits",

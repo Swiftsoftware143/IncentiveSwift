@@ -145,8 +145,86 @@ pub async fn stop_impersonation(user: AuthenticatedUser) -> Result<Json<Value>, 
     })))
 }
 
+/// Retire ONE tenant: every dependent row, then the tenant, inside ONE transaction.
+///
+/// Returns the number of `accounts` rows removed (0 = no such tenant). The transaction is the
+/// point: the previous version ran its deletes as separate AUTOCOMMIT statements, so a failure on
+/// the last one left the earlier ones committed and the account row alive.
+///
+/// WHY THIS EXISTS (kanban t_9f3d85dc, measured 2026-10-08): `DELETE /api/v1/admin/tenants/:id`
+/// answered HTTP 500 and the account SURVIVED. The handler deleted four hand-picked child tables
+/// and then the `accounts` row, so Postgres refused on the first child it had not been told about:
+///
+/// ```text
+/// update or delete on table "accounts" violates foreign key constraint
+/// ```
+///
+/// Measured causes, all six of them sitting on this delete path: `inbound_messages.account_id`,
+/// `iqs_funnels.account_id`, `password_resets.account_id` and `provider_keys.account_id` carried NO
+/// ACTION edges to `accounts`; `loyalty_checkins.entry_id` and
+/// `loyalty_rewards_earned.tier_id` block the SECOND level (accounts -> campaigns -> entries,
+/// accounts -> loyalty_programs -> loyalty_reward_tiers); and `loyalty_programs.account_id` had no
+/// foreign key at all, so deleting an account left live, readable loyalty programs behind.
+/// Migration `20261008_tenant_delete_cascade_arms.sql` gives all six an `ON DELETE CASCADE` arm
+/// (the column is the ownership pointer of a row nothing can read without the parent), which is
+/// what fixes every OTHER delete path too. The four `accounts` children and `loyalty_programs` are
+/// still deleted explicitly below so this endpoint stays correct even on a database where that
+/// migration has not run yet.
+async fn retire_tenant(state: &AppState, account_id: Uuid) -> Result<u64, AppError> {
+    let mut tx = state.db.begin().await?;
+
+    // 1. The direct `accounts` children whose edge was NO ACTION, plus the table that had no edge
+    //    at all. Each of these is the ownership pointer of a row no reader can reach without this
+    //    account (every SELECT in src/ scopes by it), so the row is not preserved data.
+    sqlx::query("DELETE FROM loyalty_programs WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM inbound_messages WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM iqs_funnels WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM password_resets WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM provider_keys WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // 2. The fleet vocabulary rows that share this id. This app never reads `tenants` or `users`
+    //    (no SELECT and no INSERT in src/ — they are the shared canary/portfolio-sync vocabulary),
+    //    but a delete that leaves them behind has NOT deleted the tenant: the operator's list would
+    //    drop the row while the tenant id stayed live. `users.tenant_id -> tenants(id)` is NO
+    //    ACTION, so `users` has to go first or `tenants` refuses with 23503.
+    sqlx::query("DELETE FROM users WHERE tenant_id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM tenants WHERE id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // 3. The tenant itself. Everything else it owned (campaigns, entries, loyalty children,
+    //    contacts, leads, credits, keys, avatars, …) is reached by the ON DELETE CASCADE arms
+    //    measured on `accounts`, so this one statement retires the whole tree.
+    let result = sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    Ok(result.rows_affected())
+}
+
 /// DELETE /api/v1/admin/tenants/:id
-/// Deletes a tenant account and cleans up related data.
+/// Deletes a tenant account and cleans up related data, atomically.
 pub async fn delete_tenant(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -155,44 +233,59 @@ pub async fn delete_tenant(
     let account_id = uuid::Uuid::parse_str(&id)
         .map_err(|_| AppError::BadRequest("Invalid tenant ID".to_string()))?;
 
-    // Delete related data first
-    // 1. Delete campaigns belonging to this account
-    sqlx::query("DELETE FROM campaigns WHERE account_id = $1")
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
-
-    // 2. Delete portfolio companies for this account
-    sqlx::query("DELETE FROM portfolio_companies WHERE account_id = $1")
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
-
-    // 3. Delete API keys (uses tenant_id)
-    sqlx::query("DELETE FROM api_keys WHERE tenant_id = $1")
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
-
-    // 4. Delete integration targets
-    sqlx::query("DELETE FROM integration_targets WHERE account_id = $1")
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
-
-    // 5. Delete the account itself
-    let result = sqlx::query("DELETE FROM accounts WHERE id = $1")
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
-
-    if result.rows_affected() == 0 {
+    let removed = retire_tenant(&state, account_id).await?;
+    if removed == 0 {
         return Err(AppError::NotFound(format!("Tenant not found: {}", id)));
     }
 
     Ok(Json(json!({
         "status": "deleted",
-        "tenant_id": id
+        "tenant_id": id,
+        "deleted": true
+    })))
+}
+
+/// Input for the bulk tenant delete.
+#[derive(Deserialize)]
+pub struct BulkDeleteTenantsInput {
+    pub ids: Vec<String>,
+}
+
+/// POST /api/v1/admin/tenants/bulk-delete
+///
+/// The console's "Delete selected" control's only caller (kanban t_9f3d85dc). Each id is retired
+/// by the SAME `retire_tenant` the single-id route uses, in its own transaction: a mass cleanup
+/// must not be all-or-nothing, so one id that has already gone (or that never existed) cannot roll
+/// back the fifteen that are real. The reply carries both lists — what went and what did not, with
+/// the reason — so the operator sees a partial result instead of a silent 500.
+pub async fn bulk_delete_tenants(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<BulkDeleteTenantsInput>,
+) -> Result<Json<Value>, AppError> {
+    if body.ids.is_empty() {
+        return Err(AppError::BadRequest("ids must not be empty".to_string()));
+    }
+
+    let mut deleted: Vec<String> = Vec::new();
+    let mut failed: Vec<Value> = Vec::new();
+
+    for raw in &body.ids {
+        match Uuid::parse_str(raw.trim()) {
+            Err(_) => failed.push(json!({ "id": raw, "error": "invalid tenant id" })),
+            Ok(account_id) => match retire_tenant(&state, account_id).await {
+                Ok(0) => failed.push(json!({ "id": raw, "error": "tenant not found" })),
+                Ok(_) => deleted.push(raw.clone()),
+                Err(e) => failed.push(json!({ "id": raw, "error": e.to_string() })),
+            },
+        }
+    }
+
+    Ok(Json(json!({
+        "status": if failed.is_empty() { "deleted" } else { "partial" },
+        "deleted": deleted.len(),
+        "deleted_ids": deleted,
+        "failed": failed
     })))
 }
 

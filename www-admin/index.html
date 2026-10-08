@@ -2833,6 +2833,7 @@ const OPS_PANELS = [
 "id": "tenants",
 "title": "4 \u00b7 Tenants",
 "list": "/admin/tenants",
+"bulk": "tenant-delete",
 "actions": [
 {
 "label": "Delete tenant",
@@ -3184,6 +3185,104 @@ const OPS_PANELS = [
 {"id": "tag-provisioning", "title": "23 · Tag provisioning (free accounts from FunnelSwift tags)", "list": "/admin/provisioning-config", "actions": [{"label": "Turn tag provisioning on / off and pick the entry plan", "method": "PUT", "path": "/admin/provisioning-config", "json": true, "fields": ["json"], "hint": "{\"enabled\":true,\"entry_plan_slug\":\"free\"}   — ON by default: the door ships open, so a FunnelSwift tag mints a free account immediately; set enabled=false to close it (the door then refuses with 403 and creates nothing). entry_plan_slug must be one of this app's own free, active plan tiers (the free_plans list is shown above)."}, {"label": "Read the settings", "method": "GET", "path": "/admin/provisioning-config"}]}
 ];
 
+// kanban t_9f3d85dc — MASS TENANT CLEANUP.
+//
+// The Tenants panel listed the accounts but offered no way to act on more than one at a time:
+// no select-all, no delete-selected control, and no confirmation step, so removing a batch of
+// test tenants meant one 500-ing request per row. This renders ONLY for the panel that declares
+// `bulk: "tenant-delete"` (see OpsPanel), so every other panel is byte-for-byte unaffected.
+//
+// It is the ONLY caller of POST /api/v1/admin/tenants/bulk-delete, which retires each id with the
+// same one-transaction path the single-id DELETE uses — including the tenant's child rows, which
+// is what the old endpoint failed to do.
+const BulkTenantDelete = () => {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [sel, setSel] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    try {
+      const d = await OPSAPI.get('/admin/tenants');
+      setRows((d && d.tenants) || []);
+    } catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const list = rows || [];
+  const allSelected = list.length > 0 && sel.length === list.length;
+  const toggle = (id) => setSel((s) => (s.indexOf(id) >= 0 ? s.filter((x) => x !== id) : s.concat([id])));
+  const toggleAll = () => setSel(allSelected ? [] : list.map((r) => r.id));
+  const chosen = list.filter((r) => sel.indexOf(r.id) >= 0);
+
+  const run = async () => {
+    setConfirming(false);
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await OPSAPI.post('/admin/tenants/bulk-delete', { ids: sel });
+      setResult({ ok: true, body: r });
+      setSel([]);
+      await load();
+    } catch (e) {
+      setResult({ ok: false, body: { error: String((e && e.message) || e) } });
+    }
+    setBusy(false);
+  };
+
+  return html`<div class="ops-action border rounded-lg p-2 mb-2 bg-gray-50">
+    <div class="flex flex-wrap items-center gap-2 mb-2">
+      <span class="text-xs font-semibold text-gray-700">Mass delete (select-all)</span>
+      <button class="px-2 py-0.5 rounded border text-xs" disabled=${busy} onClick=${load}>reload</button>
+      <button class="px-3 py-1 rounded text-sm ${sel.length ? 'btn-red' : 'bg-gray-200 text-gray-500'}"
+        disabled=${busy || sel.length === 0} onClick=${() => setConfirming(true)}>
+        Delete selected (${sel.length})</button>
+      ${result && html`<span class="text-xs ${result.ok ? 'text-green-700' : 'text-red-600'}">${result.ok ? 'done' : 'ERROR'}</span>`}
+    </div>
+    ${err ? html`<div class="text-xs text-red-600">${err}</div>`
+      : !rows ? html`<div class="text-xs text-gray-400">loading...</div>`
+      : html`<div class="overflow-auto" style="max-height:260px">
+        <table class="ops-table text-xs w-full border-collapse">
+          <thead><tr>
+            <th class="text-left border-b px-2 py-1 bg-gray-100" style="width:34px">
+              <input type="checkbox" id="tenant-select-all" checked=${allSelected} onChange=${toggleAll} /></th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">name</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">email</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">plan</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">users</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">id</th>
+          </tr></thead>
+          <tbody>${list.map((r) => html`<tr>
+            <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
+              checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
+            <td class="border-b px-2 py-1">${r.name || ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}</td>
+            <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
+            <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
+            <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
+          </tr>`)}</tbody>
+        </table></div>
+        <div class="text-xs text-gray-500 mt-1">${list.length} tenant(s) — tick the rows (or the header box for all), then press Delete selected.</div>`}
+    ${result && html`<pre class="text-xs bg-white border rounded p-2 mt-1 overflow-auto" style="max-height:180px">${JSON.stringify(result.body, null, 1)}</pre>`}
+    ${confirming && html`<div class="modal">
+      <div class="modal-content">
+        <h3 class="font-bold mb-2">Delete ${sel.length} tenant(s)?</h3>
+        <p class="text-sm text-gray-600 mb-2">This removes the account and everything it owns — campaigns,
+          entries, loyalty programs, contacts, keys and saved credentials. It cannot be undone.</p>
+        <div class="text-xs mb-3" style="font-family:monospace;max-height:160px;overflow:auto">
+          ${chosen.map((r) => html`<div>${r.name || r.email} — ${r.email} — ${r.id}</div>`)}</div>
+        <div class="flex gap-2">
+          <button class="btn btn-red btn-sm" disabled=${busy} onClick=${run}>Delete ${sel.length} tenant(s)</button>
+          <button class="btn btn-outline btn-sm" onClick=${() => setConfirming(false)}>Cancel</button>
+        </div>
+      </div>
+    </div>`}
+  </div>`;
+};
+
 const OpsAction = ({ act }) => {
   const [v, setV] = useState({});
   const [res, setRes] = useState(null);
@@ -3293,7 +3392,8 @@ const OpsPanel = ({ panel }) => {
       <span class="text-xs text-gray-400">${(panel.actions || []).length} controls ${open ? '\u2212' : '+'}</span>
     </div>
     ${open && html`<div class="px-4 pb-3 border-t pt-3">
-      ${panel.list && html`<${OpsList} path=${panel.list} />`}
+      ${panel.list && !panel.bulk && html`<${OpsList} path=${panel.list} />`}
+      ${panel.bulk === 'tenant-delete' && html`<${BulkTenantDelete} />`}
       ${(panel.actions || []).map(a => html`<${OpsAction} act=${a} />`)}
     </div>`}
   </div>`;
