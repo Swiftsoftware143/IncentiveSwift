@@ -248,7 +248,7 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
    <label>Email Address</label>
    <input type="email" id="reg-email" placeholder="you@company.com" required autocomplete="email">
    <label>Password</label>
-   <input type="password" id="reg-password" placeholder="At least 8 characters" required minlength="8" autocomplete="new-password">
+   <!-- No password field: the server generates the login credentials and emails them. -->
    
    <div class="modal-error" id="reg-error"></div>
    <div class="modal-success" id="reg-success"></div>
@@ -317,16 +317,16 @@ async function handleRegister(e) {
 
  var name = document.getElementById('reg-name').value.trim();
  var email = document.getElementById('reg-email').value.trim();
- var password = document.getElementById('reg-password').value;
+  // No password field: the server generates the login credentials and emails them
+  // (kanban t_4fcbe895, self-serve signup mints name+email only).
 
- if (!email || !password) { errEl.textContent = 'Please fill in all required fields.'; errEl.style.display = 'block'; return; }
- if (password.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; errEl.style.display = 'block'; return; }
+ if (!email) { errEl.textContent = 'Please enter your email address.'; errEl.style.display = 'block'; return; }
 
  btn.disabled = true;
  btn.innerHTML = '<span class="spinner"></span> Creating account...';
 
  try {
-  var payload = { email: email, password: password, name: name || email.split('@')[0] };
+  var payload = { email: email, name: name || email.split('@')[0] };
   
   var res = await fetch('https://app.incentiveswift.com/api/v1/auth/register', {
    method: 'POST',
