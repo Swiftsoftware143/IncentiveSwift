@@ -1,4 +1,7 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://incentiveswift.com/sitemap.xml
+Disallow: /api/
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /reset-password
+Disallow: /forgot-password
