@@ -30,6 +30,12 @@ pub const FLEET_HARNESS_DOMAINS: &[&str] = &[
     "swiftsoftware.dev",
     "swiftsoftware.net",
     "swiftsoftware.local",
+    "example.invalid",
+    "example.com",
+    "example.net",
+    "example.org",
+    "invalid",
+    "test",
 ];
 
 /// The fleet harness domain `addr` belongs to, if any. A subdomain counts
@@ -91,7 +97,9 @@ mod tests {
         assert_eq!(harness_domain("x@swiftsoftware.dev.evil.com"), None);
         // Reserved non-routable names are not this rule's business (see the module doc).
         assert_eq!(harness_domain("cr1sink0a1b@probe.local"), None);
-        assert_eq!(harness_domain("x@example.com"), None);
+        assert_eq!(harness_domain("x@example.com"), Some("example.com"));
+        // Reserved names are suppressed too (2026-10-09): they can never resolve, so the
+        // only possible outcomes are a bounce and lost sending reputation.
     }
 
     #[test]
