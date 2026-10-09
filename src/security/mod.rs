@@ -9,6 +9,7 @@ pub mod auth;
 pub mod email_addr;
 pub mod headers;
 pub mod jwt;
+pub mod probe_addr;
 pub mod provider_key_crypto;
 pub mod public_projection;
 pub mod route_policy;

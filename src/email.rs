@@ -282,6 +282,24 @@ pub(crate) async fn send_email_request(
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
+    // Fleet harness addresses never reach a real relay (parity with FunnelSwift, kanban t_36b55ed2).
+    // A probe that signs up with a fleet-dev domain (`swiftsoftware.dev/.net`) is created normally but
+    // its mail is withheld: the address is routable, so a send can only land in a fleet mailbox or
+    // bounce (measured 2026-10-09 on mail.incentiveswift.com: `accepted` then `bounced` 552), and every
+    // such send burns a delivery on the domain's sending reputation. This function is the choke point
+    // BOTH the template arm and the inline fallback pass through, so every transactional type is
+    // covered. The RFC-2606 class (.local/.test/.invalid/example.*) is deliberately NOT suppressed —
+    // content harnesses point the provider at a local sink and read the message off the wire, so
+    // silencing it would delete proof.
+    if let Some(domain) = crate::security::probe_addr::harness_domain(to) {
+        tracing::info!(
+            to = %to,
+            domain = %domain,
+            subject = %subject,
+            "send suppressed: recipient is a fleet harness address (fleet-dev domain)"
+        );
+        return Ok(());
+    }
     let Some(cfg) = crate::email_provider::resolve(pool).await else {
         tracing::warn!(
             to = %to,
