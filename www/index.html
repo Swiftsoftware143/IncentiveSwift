@@ -337,10 +337,12 @@ async function handleRegister(e) {
   if (!res.ok) {
    throw new Error(data.error || data.message || 'Registration failed. Please try again.');
   }
-  if (!data.token) { throw new Error('Your account was created, but no session was returned. Please sign in.'); }
-  successEl.textContent = 'Account created! Redirecting...';
+  // No auto-login: the account exists and the credentials were emailed. Show the two-step
+  // confirmation and stop — the visitor signs in with the password we sent (programme a).
+  successEl.textContent = 'Account created! Check your email — we sent your login details to ' + email + '.';
   successEl.style.display = 'block';
-  window.location.href = 'https://app.incentiveswift.com/#token=' + encodeURIComponent(data.token);
+  btn.disabled = false;
+  btn.innerHTML = 'Check your email';
  } catch (err) {
   errEl.textContent = err.message || 'An error occurred. Please try again.';
   errEl.style.display = 'block';
