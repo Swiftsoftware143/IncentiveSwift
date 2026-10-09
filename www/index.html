@@ -247,8 +247,8 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
    <input type="text" id="reg-name" placeholder="Your name" autocomplete="name">
    <label>Email Address</label>
    <input type="email" id="reg-email" placeholder="you@company.com" required autocomplete="email">
-   <label>Password</label>
-   <!-- No password field: the server generates the login credentials and emails them. -->
+   <!-- No password field: the server generates the login credentials and emails them
+        (label removed 2026-10-09 — a "Password" label with no input was a stray raw label). -->
    
    <div class="modal-error" id="reg-error"></div>
    <div class="modal-success" id="reg-success"></div>
