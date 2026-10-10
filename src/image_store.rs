@@ -17,9 +17,9 @@
 //! no host webroot could serve it either.
 
 use axum::{
-    body::Body,
-    extract::Multipart,
-    http::{header, StatusCode},
+    body::{to_bytes, Body},
+    extract::{FromRequest, Multipart, Request},
+    http::{header, HeaderMap, StatusCode},
     response::Response,
 };
 
@@ -68,6 +68,51 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
         return Some("image/webp");
     }
     None
+}
+
+/// Read an uploaded image from EITHER a `multipart/form-data` form or a RAW image body.
+///
+/// The fleet's other apps (`WorkflowSwift`, `missedcallrespondr`, `FunnelSwift`) accept both, so ONE
+/// uploader works against every app; this app historically took the form only, so a client posting
+/// the image as the bare body was refused by the extractor before the handler ran. The format is
+/// chosen by `Content-Type`, but the image is recognised by its BYTES in either arm — never by the
+/// caller's label — and both arms share the empty-body refusal, the 2 MB envelope and the sniff.
+pub async fn read_request_image<S>(
+    state: &S,
+    headers: &HeaderMap,
+    request: Request,
+) -> Result<(String, Vec<u8>), AppError>
+where
+    S: Send + Sync,
+{
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if content_type.starts_with("multipart/form-data") {
+        let mut multipart = Multipart::from_request(request, state)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
+        return read_uploaded_image(&mut multipart).await;
+    }
+
+    let data = to_bytes(request.into_body(), ENVELOPE_BYTES)
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Failed to read the image: {e}")))?;
+    if data.is_empty() {
+        return Err(AppError::BadRequest("The image file is empty".to_string()));
+    }
+    if data.len() > MAX_IMAGE_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "The image must be {} bytes or smaller (2 MB minus the upload envelope)",
+            MAX_IMAGE_BYTES
+        )));
+    }
+    let kind = sniff(&data)
+        .ok_or_else(|| AppError::BadRequest("Upload a PNG, JPEG, GIF or WebP image".to_string()))?;
+    Ok((kind.to_string(), data.to_vec()))
 }
 
 /// Read the first multipart part that carries a filename, cap it, and sniff it.

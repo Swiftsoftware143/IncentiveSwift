@@ -9,7 +9,8 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Path, Request, State},
+    http::HeaderMap,
     response::Response,
     Json,
 };
@@ -873,14 +874,16 @@ pub async fn change_password(
 pub async fn upload_avatar(
     State(state): State<AppState>,
     user: AuthenticatedUser,
-    mut multipart: Multipart,
+    headers: HeaderMap,
+    request: Request,
 ) -> Result<Json<Value>, AppError> {
     let account_uuid = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
 
-    // The ONE shared image path: the first part carrying a filename, the 2 MB envelope cap, and the
-    // magic-byte sniff to PNG / JPEG / GIF / WebP. Every refusal is a 4xx.
-    let (content_type, bytes) = crate::image_store::read_uploaded_image(&mut multipart).await?;
+    // The ONE shared image path: a multipart form OR a raw image body, the 2 MB envelope cap, and
+    // the magic-byte sniff to PNG / JPEG / GIF / WebP. Every refusal is a 4xx.
+    let (content_type, bytes) =
+        crate::image_store::read_request_image(&state, &headers, request).await?;
 
     sqlx::query(
         r#"-- One picture per account: a later upload REPLACES the bytes in place, so the row's
