@@ -156,12 +156,12 @@ window.appGuidePages = {
 <script src="/inline-guide-widget.js"></script>
 
 <script type="module">
-import { h, render } from 'https://esm.sh/preact@10.26.4';
+import { h, render } from './vendor/preact.js';
 // Hooks are NOT exported from preact's root module — they live in /hooks. Importing useEffect
 // from the root threw "does not provide an export named 'useEffect'", which killed the whole
 // module and left the admin dashboard rendering nothing in production.
-import { useState, useEffect } from 'https://esm.sh/preact@10.26.4/hooks';
-import htm from 'https://esm.sh/htm@3.1.1';
+import { useState, useEffect } from './vendor/hooks.js';
+import htm from './vendor/htm.js';
 const html = htm.bind(h);
 
 const showUpgradePrompt = (msg) => {
