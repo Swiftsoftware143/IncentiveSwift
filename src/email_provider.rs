@@ -311,6 +311,23 @@ pub async fn deliver(
     // `security::email_addr::refuse_undeliverable_recipient` for the decision and the vocabulary.
     let to = crate::security::email_addr::refuse_undeliverable_recipient(to)?;
 
+    // ── FLEET HARNESS DOMAINS TOO (kanban t_36b55ed2) ───────────────────────────────────────────
+    // `refuse_undeliverable_recipient` covers the RFC-2606 class, but the fleet's OWN dev domains
+    // (`swiftsoftware.dev` / `.net` / `.local`) are routable and deliberately not reserved. The
+    // guard that refused them lived only in `email.rs`, so `deliver`'s direct callers — the
+    // Settings → Email test-send route, most visibly — bypassed it and could hand a harness address
+    // to the real relay (it lands in a fleet mailbox or bounces, burning the domain's sending
+    // reputation). Refuse it HERE at the leaf that spends a provider send, so every caller inherits
+    // it. (`*.local` is already refused above for this app; the check is kept for parity/clarity.)
+    if let Some(domain) = crate::security::probe_addr::harness_domain(&to) {
+        tracing::info!(
+            to = %to,
+            domain = %domain,
+            "email suppressed: recipient is a fleet harness address (no send attempted)"
+        );
+        return Ok(());
+    }
+
     if !cfg.api_url.is_empty() {
         crate::security::webhook_security::gate_provider_endpoint(
             pool,
