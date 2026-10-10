@@ -13,7 +13,8 @@ use crate::email_provider;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
-use axum::{extract::State, Json};
+use axum::{extract::Query, extract::State, Json};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// The one string a masked secret is replaced with in responses.
@@ -134,8 +135,19 @@ pub async fn update_email_settings(
 }
 
 /// POST /api/v1/admin/email-settings/test — real send, returns the provider's true answer.
+/// Optional explicit recipient for the "Send test email" button: `POST …/email-settings/test?to=<addr>`.
+///
+/// Absent, the test goes to the signed-in admin's own address — behaviour unchanged. Added
+/// 2026-10-10 (test-mail-hygiene): an automated fleet probe must be able to aim the test at a
+/// disposable mailbox, because otherwise every probe run mails whatever inbox the admin owns.
+#[derive(Deserialize)]
+pub struct TestRecipientQuery {
+    pub to: Option<String>,
+}
+
 pub async fn test_email_settings(
     State(state): State<AppState>,
+    Query(q): Query<TestRecipientQuery>,
     auth: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     // Reads the SAME row this route's GET and PUT use (the fleet-wide `admin_settings.email`): a
@@ -148,10 +160,10 @@ pub async fn test_email_settings(
         })));
     };
 
-    let to = if auth.email.trim().is_empty() {
-        "swiftsoftware143@yahoo.com".to_string()
-    } else {
-        auth.email.clone()
+    let to = match q.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(explicit) => explicit.to_string(),
+        None if auth.email.trim().is_empty() => "swiftsoftware143@yahoo.com".to_string(),
+        None => auth.email.clone(),
     };
 
     match email_provider::deliver(
