@@ -17,6 +17,7 @@ use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
 use serde::Deserialize;
@@ -388,7 +389,7 @@ pub async fn campaign_share_link(
     Path(campaign_slug): Path<String>,
     headers: HeaderMap,
     Query(query): Query<ShareQuery>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<Response, AppError> {
     let campaign = campaigns::get_campaign_by_slug(&state.db, &campaign_slug).await?;
 
     if campaign.status != "active" {
@@ -422,16 +423,12 @@ pub async fn campaign_share_link(
         None => format!("/play/{}", campaign.slug),
     };
 
-    Ok(Json(json!({
-        "campaign": {
-            "id": campaign.id,
-            "name": campaign.name,
-            "slug": campaign.slug,
-            "type": campaign.r#type,
-        },
-        "referral_code": carried,
-        "redirect": redirect,
-    })))
+    // A share link is a HUMAN link: answer with a real redirect, so the recipient who clicks
+    // `https://app.incentiveswift.com/c/<slug>?ref=<code>` lands on the campaign page instead of a
+    // JSON document. SEE_OTHER keeps the follow-up a GET on /play/<slug>, which is what the play
+    // page expects (it reads ?ref= and renders the "share this campaign" affordance from it).
+    // The referral click has already been counted above, so the stats stay truthful.
+    Ok(Redirect::to(&redirect).into_response())
 }
 
 // ---------------------------------------------------------------------------
