@@ -2,7 +2,8 @@
 //!
 //! # The rule
 //!
-//! **A mounted route is PRIVATE unless it appears in [`PUBLIC_ROUTES`].** The router is flat — one
+//! **A mounted route is PRIVATE unless it appears in [`PUBLIC_ROUTES`] (any method) or in
+//! [`PUBLIC_METHOD_ROUTES`] together with the caller's method.** The router is flat — one
 //! `Router::new()` with ~224 `.route(...)` calls and per-handler `AuthenticatedUser` extractors —
 //! so before this module the only thing standing between a newly mounted route and the public
 //! internet was the author remembering to add an extractor. `security::auth::admin_guard` covers
@@ -43,9 +44,14 @@
 //!
 //! # Adding a route
 //!
-//! Leave it out of [`PUBLIC_ROUTES`] and it is private. Do NOT add an entry unless the route must
-//! answer a caller that presents no credential — and then add a unit-test leg for it in
-//! `route_policy`'s test module so the decision is recorded with its reason.
+//! Leave it out of both lists and it is private. Do NOT add an entry unless the route must answer a
+//! caller that presents no credential — and then add a unit-test leg for it in `route_policy`'s test
+//! module so the decision is recorded with its reason.
+//!
+//! When ONE path carries both a public read and a private write, it belongs in
+//! [`PUBLIC_METHOD_ROUTES`] with the READ's method only — never in [`PUBLIC_ROUTES`], which is
+//! method-blind and would hand the write arm to the internet. `/api/v1/knowledge-base` is the
+//! worked example (kanban t_61be5ccc).
 
 use crate::error::AppError;
 use axum::extract::Request;
@@ -139,6 +145,39 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/business/:business_id/stats",
 ];
 
+/// Routes that may be reached with NO credential, but ONLY by the listed HTTP methods.
+///
+/// # Why this list exists (kanban t_61be5ccc)
+///
+/// [`PUBLIC_ROUTES`] is method-blind: it can only describe a path that is public or private as a
+/// whole. `/api/v1/knowledge-base` is neither. The GET is the participant-facing walkthrough —
+/// `handlers::knowledge_base_handler::list_articles` documents it as public, "the people being
+/// walked through the product are frequently not signed in (a player on a kiosk, someone who
+/// followed a link)" — while the POST on the SAME path is authoring, which every account holder may
+/// do and an anonymous caller may not. Listing the path in [`PUBLIC_ROUTES`] would have made the
+/// WRITE anonymous; leaving it out left the documented READ answering 401 to every anonymous
+/// caller instead (measured 2026-10-11 before this list existed: `GET
+/// /api/v1/knowledge-base?audience=user` → `401 Authentication required`, so the served anonymous
+/// reader `www/kb.html` never rendered an article).
+///
+/// # The rule for an entry here
+///
+/// The method list carries a READ method (`GET`; `HEAD` is treated as `GET`, see
+/// [`is_public_request`]) and nothing that can change a row. Every other method on the same
+/// template stays as private as any other route, and the path itself stays out of
+/// [`PUBLIC_ROUTES`] so the method-blind census below still sees it as private. The tests in this
+/// module assert both halves for each entry: the listed read answers anonymously, and the path's
+/// write arms still refuse one.
+pub const PUBLIC_METHOD_ROUTES: &[(&str, &[Method])] = &[
+    // The user side of the knowledge base: the platform-wide walkthrough that ships with the
+    // product, read by a player on a kiosk who followed a link. GET only — the POST on this path
+    // authors an article for either audience and is an account-holder act.
+    ("/api/v1/knowledge-base", &[Method::GET]),
+    // One article WITH its body — the read behind the same served page. The write arms live on
+    // other templates (`/api/v1/knowledge-base/:id`), which are deliberately absent from this list.
+    ("/api/v1/knowledge-base/article/:slug", &[Method::GET]),
+];
+
 /// Is `path` (a concrete request path) one of the committed public templates?
 ///
 /// Segment-wise match: the split lengths must agree and every template segment is either a
@@ -147,6 +186,29 @@ pub const PUBLIC_ROUTES: &[&str] = &[
 /// template can never accidentally swallow a longer path.
 pub fn is_public_route(path: &str) -> bool {
     PUBLIC_ROUTES.iter().any(|t| matches_template(t, path))
+}
+
+/// Is this METHOD + path pair one the boundary may let through with no credential at all?
+///
+/// This is the decision [`default_deny`] makes. The method-blind arm is checked first, so a path in
+/// [`PUBLIC_ROUTES`] keeps answering every method (that is what those entries mean); a path in
+/// [`PUBLIC_METHOD_ROUTES`] answers only the methods listed for it.
+///
+/// `HEAD` is judged as `GET`: axum serves a `HEAD` from a `get(..)` route, so refusing it here would
+/// 401 a bodyless probe of a page that is public by decision. It can never reach a write arm, since
+/// no write method is listed.
+pub fn is_public_request(method: &Method, path: &str) -> bool {
+    if is_public_route(path) {
+        return true;
+    }
+    let effective = if method == Method::HEAD {
+        &Method::GET
+    } else {
+        method
+    };
+    PUBLIC_METHOD_ROUTES
+        .iter()
+        .any(|(t, methods)| matches_template(t, path) && methods.contains(effective))
 }
 
 /// Does one template match one concrete path?
@@ -198,7 +260,7 @@ pub async fn default_deny(
         return next.run(req).await;
     }
 
-    if is_public_route(req.uri().path()) {
+    if is_public_request(req.method(), req.uri().path()) {
         return next.run(req).await;
     }
 
@@ -263,7 +325,10 @@ async fn credential_is_valid(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_public_route, matches_template, PUBLIC_ROUTES};
+    use super::{
+        is_public_request, is_public_route, matches_template, PUBLIC_METHOD_ROUTES, PUBLIC_ROUTES,
+    };
+    use axum::http::Method;
 
     /// The route templates `src/main.rs` mounts, read from the source at compile time. A route
     /// joining or leaving the router changes this set, which is what makes the parity test below
@@ -362,6 +427,11 @@ mod tests {
             "/api/v1/internal/portfolio-sync",
             "/api/v1/internal/tag-provision",
             "/api/v1/checkout/create",
+            // The knowledge base path carries a public READ and a private WRITE, so the path
+            // itself must stay method-blind-private (kanban t_61be5ccc); the read is reached
+            // through PUBLIC_METHOD_ROUTES and is asserted in
+            // `knowledge_base_read_is_public_and_its_writes_are_not`.
+            "/api/v1/knowledge-base",
         ] {
             assert!(!is_public_route(p), "{p} must be private by default");
         }
@@ -426,5 +496,77 @@ mod tests {
         assert!(!matches_template("/api/v1/play/:id", "/api/v1/play"));
         assert!(!matches_template("/api/v1/play/:id", "/api/v1/play/x/y"));
         assert!(!matches_template("/api/v1/play/:id", "/api/v1/play/"));
+    }
+
+    /// Every method-scoped entry must name a route the router actually mounts, and must not sit in
+    /// the method-blind list — an entry there is only meaningful because the path is NOT public as a
+    /// whole, and a duplicate would silently re-expose the write arm it exists to protect.
+    #[test]
+    fn method_public_entries_are_mounted_and_not_redundant() {
+        let mounted = mounted_routes();
+        for (entry, methods) in PUBLIC_METHOD_ROUTES {
+            assert!(
+                mounted.iter().any(|m| m == entry),
+                "PUBLIC_METHOD_ROUTES entry {entry:?} is not a mounted route"
+            );
+            assert!(
+                !PUBLIC_ROUTES.contains(entry),
+                "{entry:?} is method-blind public already — a method-scoped entry beside it is                  redundant and hides the write arm"
+            );
+            assert!(
+                !methods.is_empty(),
+                "{entry:?} lists no method, so it can never match"
+            );
+            assert!(
+                !methods.iter().any(|m| *m == Method::POST
+                    || *m == Method::PUT
+                    || *m == Method::PATCH
+                    || *m == Method::DELETE),
+                "{entry:?} lists a WRITE method — a method-scoped entry may only carry a read"
+            );
+        }
+    }
+
+    /// The knowledge base is ONE path carrying the participant read and the authoring write
+    /// (kanban t_61be5ccc). The read must answer an anonymous caller and the write must not — that
+    /// second half is exactly what a method-blind allowlist entry would have thrown away.
+    #[test]
+    fn knowledge_base_read_is_public_and_its_writes_are_not() {
+        for read in [
+            "/api/v1/knowledge-base",
+            "/api/v1/knowledge-base/article/some-slug",
+        ] {
+            assert!(
+                is_public_request(&Method::GET, read),
+                "GET {read} must answer the anonymous user side of the knowledge base"
+            );
+            // A bodyless probe of the same read: axum serves HEAD from a `get(..)` route.
+            assert!(
+                is_public_request(&Method::HEAD, read),
+                "HEAD {read} must answer an anonymous caller too"
+            );
+            assert!(
+                !is_public_route(read),
+                "{read} must NOT be method-blind public — it also carries write arms"
+            );
+        }
+        // The write arms, all mounted on these templates (src/main.rs): authoring on the collection,
+        // edit and delete on the item. Every one of them must present a credential.
+        for (method, path) in [
+            (Method::POST, "/api/v1/knowledge-base"),
+            (Method::PUT, "/api/v1/knowledge-base/0a1b2c3d"),
+            (Method::DELETE, "/api/v1/knowledge-base/0a1b2c3d"),
+        ] {
+            assert!(
+                !is_public_request(&method, path),
+                "{method} {path} is a write arm and must stay private"
+            );
+        }
+        // Nothing about the list leaks to a sibling path: the item template is a different shape and
+        // carries no public arm at all.
+        assert!(!is_public_request(
+            &Method::GET,
+            "/api/v1/knowledge-base/0a1b2c3d"
+        ));
     }
 }

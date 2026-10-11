@@ -63,6 +63,10 @@ fn audience_of(q: &AudienceQuery) -> Result<&'static str, AppError> {
 /// The USER side is public: the people being walked through the product are frequently not signed in
 /// (a player on a kiosk, someone who followed a link). The ADMIN side requires a caller, because it
 /// describes how the account holder's own software works and names screens only they can see.
+///
+/// The anonymous read is granted at the boundary by `security::route_policy::PUBLIC_METHOD_ROUTES`
+/// (kanban t_61be5ccc) — GET only, because the POST on this same path is authoring. Until that entry
+/// existed this documented read answered 401 to every anonymous caller before the handler ran.
 pub async fn list_articles(
     State(state): State<AppState>,
     user: Option<AuthenticatedUser>,
@@ -92,6 +96,8 @@ pub async fn list_articles(
 }
 
 /// GET /api/v1/knowledge-base/article/:slug?audience=user|admin — one article WITH its body.
+///
+/// Same public/private split as the list above, and the same method-scoped boundary entry.
 pub async fn get_article(
     State(state): State<AppState>,
     user: Option<AuthenticatedUser>,
