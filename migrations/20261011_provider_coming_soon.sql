@@ -1,0 +1,85 @@
+-- 20261011_provider_coming_soon.sql
+-- IncentiveSwift: five rows in the Integration Center catalogue are offered with a key box and
+-- ACCEPT a stored credential, but NO code path in this app can ever spend them. A customer pastes
+-- a real Letterman / Nexweave / SAM.gov / ConvertKit / Mailchimp key, POST /api/v1/provider-keys
+-- answers 200 and stores the row, and nothing ever reads it. Same defect class the ADASwift lane
+-- closed with migration 010 (t_71794d5a), WorkflowSwift with 083-087 (t_b7c628b1, t_9141dd7e,
+-- t_eb871518, t_243bdce6) and FunnelSwift with 100 (t_c10c05b6). Kanban t_289bc8b0.
+--
+-- MEASURED ON THE LIVE APP + LIVE DATABASE 2026-10-11 (cron `default`, off-peak; audit dir
+-- /opt/swift/audits/t_289bc8b0/, transcript PRE-FIX-measurement.txt):
+--   * GET /api/v1/available-providers -> 200, 16 rows, none carrying a coming_soon flag (the
+--     column did not exist in this database); all five below were served connectable.
+--   * POST /api/v1/provider-keys {"provider":"<one of the five>","api_key":"…"} with a real
+--     tenant session -> **HTTP 200** and a row in provider_keys (`stored=True`) for every one of
+--     the five, then removed again through the app's own DELETE route so provider_keys ends the
+--     measurement at 0 rows (the table held 0 rows before the probe and 0 after).
+--   * READER CENSUS (the card's method: a hit count is not a verdict — read the hits). Every
+--     consumer of the credential store in this app:
+--       src/delivery/coreswift_external.rs:64   provider 'coreswift'      (api_key + base_url)
+--       src/delivery/output_actions.rs:399      provider 'telnyx_sms'
+--       src/handlers/sms_handler.rs:530         provider 'telnyx_sms'
+--       src/handlers/sms_handler.rs:452         AI reply, provider bound from the campaign
+--       src/handlers/chat_handler.rs:71         'deepseek' then 'openai' (AI chat)
+--       src/handlers/marketing_boost_handler.rs:81 + handlers/campaign_integrations.rs:562,583,600
+--                                                provider 'marketing_boost'
+--       src/handlers/loyalty_plans.rs:164        provider 'stripe' (not in the catalogue)
+--     Nothing else in src/ reads provider_keys. There is no env-var reader (src/config.rs reads
+--     DATABASE_URL, JWT_SECRET, INTERNAL_SYNC_KEY, CORESWIFT_URL, FUNNELSWIFT_URL, the AES and
+--     PROVIDER_KEY_ENC secrets, the MB_* keys and the mail settings - no Letterman, Nexweave,
+--     SAM.gov, ConvertKit or Mailchimp key), nothing resolves a provider by catalogue category,
+--     and no integration_provider_presets row carries any of the five, so a stored key cannot be
+--     reached indirectly either.
+--   * THE FIVE, row by row, and why each is a placeholder rather than a feature:
+--       letterman, nexweave, sam_gov - the name occurs ONCE in src/, as an entry of
+--         `DELIVERY_PROVIDERS` in src/handlers/spin_handler.rs:26-33, and that const is declared
+--         and NEVER referenced (grep DELIVERY_PROVIDERS -> the declaration only). There is no
+--         Letterman / Nexweave / SAM.gov dispatch arm anywhere.
+--       convertkit - the name occurs ONCE in src/, in the autoresponder target SELECT at
+--         src/delivery/integration_hub.rs:718 (`... OR provider IN ('activecampaign',
+--         'convertkit', 'mailchimp', 'gohighlevel', 'hubspot')`). That clause SELECTS an
+--         integration_targets row; the credential it spends is that row's own
+--         `integration_targets.api_key`, never provider_keys. A campaign configured with
+--         int_type 'convertkit' falls through to `tracing::warn!("Unknown integration type")`
+--         in src/handlers/entries.rs: no ConvertKit arm exists.
+--       mailchimp - named by the card only as a neighbour, flagged here because the census says it
+--         fails the same test: its campaign arm (src/handlers/entries.rs, `"mailchimp" =>`) reads
+--         the campaign's own config key into a binding it never uses and logs
+--         "Mailchimp integration configured for … — pushing to list …" under an explicit
+--         `// TODO: add Mailchimp direct push module`. Nothing is sent, and direct_api/ carries
+--         activecampaign/gohighlevel/hubspot/marketing_boost but no mailchimp module.
+--     NOT flagged, and why: activecampaign / gohighlevel / hubspot each have a REAL dispatch arm
+--     (direct_api/{activecampaign,gohighlevel,hubspot}.rs, called from handlers/entries.rs) and
+--     mailgun / sendgrid / sendiio are spent through src/email_provider.rs (send_mailgun /
+--     send_sendgrid / send_sendiio), so this app demonstrably can spend a credential for them;
+--     deepseek / openai / telnyx_sms / marketing_boost / coreswift are the readers listed above.
+--
+-- WHY coming_soon AND NOT is_active = false: David's standing rule is LABEL, DON'T HIDE. The rows
+-- stay visible in every console and gain coming_soon = true. The two code halves that read the
+-- flag ship in the same commit:
+--   * src/handlers/provider_keys_handler.rs::list_available_providers now serves `coming_soon`, so
+--     the tenant console (www-app/integrations.html) renders a non-interactive Coming Soon card -
+--     badge, no key input, no Connect, no Test;
+--   * src/handlers/provider_keys_handler.rs::upsert_provider_key now refuses a flagged row with
+--     400 "<name> is Coming Soon and cannot be connected yet - nothing in IncentiveSwift reads its
+--     key.", so the API can no longer store a credential nothing can spend.
+--
+-- REVERSAL (deliberate, one line each): a row returns to connectable with
+--   UPDATE available_providers SET coming_soon = false WHERE key = 'letterman';
+-- and it then needs the missing half named - a real dispatch arm for that provider (a newsletter
+-- sender, a video renderer, a federal-discovery lookup, an autoresponder push) plus whatever
+-- credential reader the arm needs.
+--
+-- ADDITIVE + IDEMPOTENT: `ADD COLUMN IF NOT EXISTS` is safe on a database that already holds the
+-- column (a fresh install gets it from this file) and the UPDATE is a no-op once applied.
+-- provider_keys held ZERO rows on production before this file and none is written by it, so no
+-- customer's stored credential is affected by the refusal being switched on. No BEGIN/COMMIT and no
+-- semicolons inside comments - the in-app runner (src/db/migrations.rs) executes the whole file as
+-- one batch and records the filename in `_migrations`.
+
+ALTER TABLE available_providers
+    ADD COLUMN IF NOT EXISTS coming_soon boolean NOT NULL DEFAULT false;
+
+UPDATE available_providers
+   SET coming_soon = true
+ WHERE key IN ('convertkit', 'letterman', 'mailchimp', 'nexweave', 'sam_gov');

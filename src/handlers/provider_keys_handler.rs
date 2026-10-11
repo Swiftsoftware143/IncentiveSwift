@@ -82,17 +82,34 @@ pub async fn upsert_provider_key(
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    // Validate provider exists
-    let provider_exists = sqlx::query("SELECT 1 FROM available_providers WHERE key = $1")
-        .bind(&body.provider)
-        .fetch_optional(&state.db)
-        .await?;
+    // CATALOGUE GATE (kanban t_289bc8b0). Until now this route stored a credential for ANY string
+    // the caller sent, and the catalogue carried rows that NO code path in this app can spend - so a
+    // customer could paste a real key, get 200, and nothing would ever read it. Two refusals, both
+    // 400, both naming the cause:
+    //   * a provider that is not in `available_providers` at all;
+    //   * a catalogue row flagged `coming_soon`, which is what migration
+    //     20261011_provider_coming_soon.sql sets on the five zero-reader rows (convertkit,
+    //     letterman, mailchimp, nexweave, sam_gov).
+    let catalogue: Option<(String, bool)> = sqlx::query_as(
+        "SELECT name, COALESCE(coming_soon, false) FROM available_providers WHERE key = $1",
+    )
+    .bind(&body.provider)
+    .fetch_optional(&state.db)
+    .await?;
 
-    if provider_exists.is_none() {
-        return Err(AppError::BadRequest(format!(
-            "Unknown provider: '{}'. Must be one of the available providers.",
-            body.provider
-        )));
+    match catalogue {
+        None => {
+            return Err(AppError::BadRequest(format!(
+                "Unknown provider: '{}'. Must be one of the available providers.",
+                body.provider
+            )));
+        }
+        Some((name, true)) => {
+            return Err(AppError::BadRequest(format!(
+                "{name} is Coming Soon and cannot be connected yet - nothing in IncentiveSwift reads its key."
+            )));
+        }
+        Some((_, false)) => {}
     }
 
     // Encrypt BEFORE the write so the column only ever holds 'enc:v1:' ciphertext. This
@@ -213,7 +230,9 @@ pub async fn list_available_providers(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
-        "SELECT key, name, description, requires_base_url, requires_metadata, icon FROM available_providers ORDER BY name"
+        "SELECT key, name, description, requires_base_url, requires_metadata, icon, \
+                COALESCE(coming_soon, false) AS coming_soon \
+           FROM available_providers ORDER BY name",
     )
     .fetch_all(&state.db)
     .await?;
@@ -228,6 +247,11 @@ pub async fn list_available_providers(
                 "requires_base_url": row.get::<bool, _>("requires_base_url"),
                 "requires_metadata": row.get::<serde_json::Value, _>("requires_metadata"),
                 "icon": row.get::<Option<String>, _>("icon"),
+                // A catalogue row that no code path in this app can spend (kanban t_289bc8b0):
+                // the console renders it as a non-interactive Coming Soon card and
+                // `upsert_provider_key` refuses it, so the flag is served and enforced, not
+                // decorative.
+                "coming_soon": row.get::<bool, _>("coming_soon"),
             })
         })
         .collect();

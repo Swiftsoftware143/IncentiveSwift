@@ -104,6 +104,20 @@ function cardHtml(p){
   var k = keyFor(p.key), on = !!(k && k.is_active !== false && k.api_key_masked);
   var pinned = p.key === PINNED_KEY;
   var meta = metadataInputs(p);
+  // kanban t_289bc8b0 — a catalogue row flagged coming_soon has NO code path in this app that can
+  // spend a key, so the card is informational: badge, no key box, no Connect, no Test. The API
+  // refuses the key too (upsert_provider_key -> 400), so this is the honest rendering, not the
+  // only gate.
+  if (p.coming_soon === true) {
+    var cs = '<div class="card" data-provider="'+esc(p.key)+'">';
+    cs += '<div style="display:flex;justify-content:space-between;align-items:center">';
+    cs += '<h2 style="font-size:16px;font-weight:600;margin:0">'+esc(p.name)+'</h2>';
+    cs += '<span class="badge no">Coming Soon</span></div>';
+    cs += '<p class="muted" style="margin:8px 0 0">'+esc(p.description||'')+'</p>';
+    cs += '<p class="muted" style="font-size:12px;margin:8px 0 0">Not connectable yet — IncentiveSwift has no code that reads a '+esc(p.name)+' key, so there is nothing to paste one into. It is listed here so you know it is planned, not missing.</p>';
+    cs += '</div>';
+    return cs;
+  }
   var h = '<div class="card' + (pinned?' pinned':'') + '" data-provider="'+esc(p.key)+'">';
   h += '<div style="display:flex;justify-content:space-between;align-items:center">';
   h += '<h2 style="font-size:16px;font-weight:600;margin:0">'+esc(p.name)+(pinned?'<span class="badge rec">Recommended</span>':'')+'</h2>';

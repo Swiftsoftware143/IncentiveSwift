@@ -2712,12 +2712,14 @@ const OPS_PANELS = [
 "provider",
 "api_key",
 "base_url"
-]
+],
+"note": "A catalogue row carrying coming_soon: true is not connectable: no code path in IncentiveSwift reads a key for it, and this route refuses one with 400 (kanban t_289bc8b0)."
 },
 {
 "label": "List supported providers",
 "method": "GET",
-"path": "/available-providers"
+"path": "/available-providers",
+"note": "Rows with coming_soon: true have no reader in this app - they render as a non-interactive Coming Soon card on the tenant Integration Center."
 },
 {
 "label": "Delete provider key",
@@ -3326,6 +3328,7 @@ const OpsAction = ({ act }) => {
       ${res && html`<span class="text-xs ${res.ok ? 'text-green-700' : 'text-red-600'}">${res.ok ? 'OK' : 'ERROR'}</span>`}
     </div>
     <div class="text-xs text-gray-500 mt-1"><code>${act.method} /api/v1${act.path}</code></div>
+    ${act.note && html`<div class="text-xs text-amber-700 mt-1">${act.note}</div>`}
     ${res && html`<pre class="text-xs bg-white border rounded p-2 mt-1 overflow-auto" style="max-height:200px">${res.text}</pre>`}
   </div>`;
 };
