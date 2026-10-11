@@ -48,6 +48,13 @@ pub const ENVELOPE_HEADROOM: usize = 64 * 1024;
 /// as the authoritative backstop.
 pub const MAX_IMAGE_BYTES: usize = ENVELOPE_BYTES - ENVELOPE_HEADROOM;
 
+/// The sentence EVERY app in the fleet answers when an upload is over the envelope (2026-10-11).
+///
+/// One literal, one wording: a customer who hits the cap on this app reads the same sentence they
+/// would read on any other, and the console's picker shows it verbatim.
+pub const TOO_LARGE: &str =
+    "That file is too large to upload. The maximum size is 2 MB - please choose a smaller image and try again.";
+
 /// The `Content-Type` an upload is served back as, recognised from the MAGIC BYTES.
 ///
 /// These bytes are stored and later served from our own origin with the type this returns, so
@@ -92,27 +99,42 @@ where
         .to_ascii_lowercase();
 
     if content_type.starts_with("multipart/form-data") {
-        let mut multipart = Multipart::from_request(request, state)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
+        let mut multipart = Multipart::from_request(request, state).await.map_err(|e| {
+            over_limit(e.status())
+                .unwrap_or_else(|| AppError::BadRequest(format!("Invalid multipart body: {e}")))
+        })?;
         return read_uploaded_image(&mut multipart).await;
     }
 
     let data = to_bytes(request.into_body(), ENVELOPE_BYTES)
         .await
-        .map_err(|e| AppError::BadRequest(format!("Failed to read the image: {e}")))?;
+        .map_err(|e| {
+            if e.to_string().contains("length limit") {
+                AppError::PayloadTooLarge(TOO_LARGE.to_string())
+            } else {
+                AppError::BadRequest(format!("Failed to read the image: {e}"))
+            }
+        })?;
     if data.is_empty() {
         return Err(AppError::BadRequest("The image file is empty".to_string()));
     }
     if data.len() > MAX_IMAGE_BYTES {
-        return Err(AppError::BadRequest(format!(
-            "The image must be {} bytes or smaller (2 MB minus the upload envelope)",
-            MAX_IMAGE_BYTES
-        )));
+        return Err(AppError::PayloadTooLarge(TOO_LARGE.to_string()));
     }
     let kind = sniff(&data)
         .ok_or_else(|| AppError::BadRequest("Upload a PNG, JPEG, GIF or WebP image".to_string()))?;
     Ok((kind.to_string(), data.to_vec()))
+}
+
+/// `413`, in this app's own error type, when an extractor's own refusal says the body was too big.
+///
+/// The multipart extractor carries the status of the underlying failure (`MultipartError::status`,
+/// and the composite rejection forwards it), and a body over the envelope is the one case there
+/// that is not a malformed request - so it answers the `413` and the shared sentence instead of a
+/// `400` naming a parse error.
+fn over_limit(status: StatusCode) -> Option<AppError> {
+    (status == StatusCode::PAYLOAD_TOO_LARGE)
+        .then(|| AppError::PayloadTooLarge(TOO_LARGE.to_string()))
 }
 
 /// Read the first multipart part that carries a filename, cap it, and sniff it.
@@ -130,18 +152,15 @@ pub async fn read_uploaded_image(multipart: &mut Multipart) -> Result<(String, V
         if field.file_name().is_none() {
             continue;
         }
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Failed to read the image: {e}")))?;
+        let data = field.bytes().await.map_err(|e| {
+            over_limit(e.status())
+                .unwrap_or_else(|| AppError::BadRequest(format!("Failed to read the image: {e}")))
+        })?;
         if data.is_empty() {
             return Err(AppError::BadRequest("The image file is empty".into()));
         }
         if data.len() > MAX_IMAGE_BYTES {
-            return Err(AppError::BadRequest(format!(
-                "The image must be {} bytes or smaller (2 MB minus the upload envelope)",
-                MAX_IMAGE_BYTES
-            )));
+            return Err(AppError::PayloadTooLarge(TOO_LARGE.to_string()));
         }
         let kind = sniff(&data)
             .ok_or_else(|| AppError::BadRequest("Upload a PNG, JPEG, GIF or WebP image".into()))?;

@@ -40,6 +40,13 @@ pub enum AppError {
     #[error("Upgrade required: {0}")]
     UpgradeRequired(String),
 
+    /// A body over the envelope a route accepts (2 MB on the image routes). Its own variant so the
+    /// answer is `413`, not `400`: the payload was not malformed, it was too big. Added by the
+    /// fleet-wide upload normalisation (2026-10-11) so the sentence a customer reads here is the
+    /// same one the other five apps answer.
+    #[error("Payload too large: {0}")]
+    PayloadTooLarge(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -56,6 +63,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
+            AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),
             AppError::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "Rate limit exceeded".to_string(),
