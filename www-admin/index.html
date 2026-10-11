@@ -1149,6 +1149,10 @@ const LoyaltyPrograms = () => {
   async function loadLedger() {
     try { const data = await API.get('/admin/treasury/summary'); st.treasury = data; renderApp(); } catch(e){ st.treasury = null; }
     try { const businesses = await API.get('/admin/treasury/businesses'); st.businessLedgers = businesses; renderApp(); } catch(e){ st.businessLedgers = []; }
+    // The issuance log is a real route the backend has always served (and the API guide below already
+    // lists) but no screen rendered: a backend route with no UI is a defect. Read it alongside the
+    // ledger so the Treasury tab shows the actual point-issuance events, not just the monthly rollup.
+    try { st.issuanceLog = await API.get('/admin/treasury/issuance-log?limit=50'); } catch(e){ st.issuanceLog = { items: [] }; }
     // The float POSITION and the rule in force. `/summary` is the counters; this is whether the
     // programme can PAY — the two are not the same question and only this one is the safety rule.
     try { st.tFloat = await API.get('/admin/treasury/state'); } catch(e){ st.tFloat = null; }
@@ -1717,6 +1721,19 @@ const ledgerTab = html`<div>
         <td>$${Number(b.net_position||0).toFixed(2)}</td>
       </tr>`)}
       ${(!st.businessLedgers||st.businessLedgers.length===0) ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No ledger data.</td></tr>` : null}
+    </tbody></table>
+  </div>
+  <h3 class="text-lg font-bold mb-3 mt-6">Point Issuance Log</h3>
+  <div class="card p-0 overflow-hidden">
+    <table class="table"><thead><tr><th>When</th><th>Business</th><th>Member</th><th>Points</th><th>Billed</th></tr></thead>
+      <tbody>${(((st.issuanceLog&&st.issuanceLog.items)||[])).map(r => html`<tr>
+        <td class="text-xs text-gray-500">${String(r.time||'').replace('T',' ').slice(0,19) || '—'}</td>
+        <td class="font-medium">${r.business_name||'—'}</td>
+        <td class="text-xs text-gray-500">${r.member_id||'—'}</td>
+        <td>${r.points||0}</td>
+        <td>$${Number(r.billed||0).toFixed(2)}</td>
+      </tr>`)}
+      ${(!st.issuanceLog||!st.issuanceLog.items||st.issuanceLog.items.length===0) ? html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No points issued yet.</td></tr>` : null}
     </tbody></table>
   </div>
 </div>`;
