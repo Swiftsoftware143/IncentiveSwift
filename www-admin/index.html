@@ -929,8 +929,8 @@ const Campaigns = () => {
                   <button class="btn btn-sm btn-blue" onClick=${saveTheme}>Save Theme</button>
                 </div>
               </div>
-              ${st.themeErr && html`<div id="themeNotice" class="text-xs mb-2" style="color:#b91c1c">&#9888; ${st.themeErr}${st.theme ? '' : ' \u2014 the fields below hold DEFAULTS, not the stored theme'}</div>`}
-              ${st.themeSaved && html`<div id="themeSaved" class="text-xs mb-2" style="color:#15803d">&#10003; ${st.themeSaved}</div>`}
+              ${st.themeErr && html`<div id="themeNotice" class="text-xs mb-2" style="color:#b91c1c">⚠ ${st.themeErr}${st.theme ? '' : ' \u2014 the fields below hold DEFAULTS, not the stored theme'}</div>`}
+              ${st.themeSaved && html`<div id="themeSaved" class="text-xs mb-2" style="color:#15803d">✓ ${st.themeSaved}</div>`}
               <div class="grid grid-cols-5 gap-2">
                 ${colorField('primary_color', 'Primary')}
                 ${colorField('accent_color', 'Accent')}
