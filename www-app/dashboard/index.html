@@ -62,6 +62,35 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" style="background:#64748b" onclick="location.href='/integrations.html'">🔌 Integrations</button>
     </div>
   </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Email branding</h2>
+    <!-- The logo and display name every transactional email from THIS workspace carries — the
+         sign-in details a new user receives, and password resets. The other five apps surface this
+         control on the customer's own dashboard; here it lived only inside the admin console, so a
+         customer had to leave their dashboard to find it. Writes the SAME tenant_settings document
+         the console writes (key "email_branding") and uploads through the same
+         POST /api/v1/settings/branding/logo, so there is one store and one writer, never two. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">Your logo and display name on every email this workspace sends — the sign-in details a new user receives, and password resets. Leave it blank and the mail keeps the IncentiveSwift look.</p>
+    <div id="eb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:220px">
+        <label style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Brand display name</label>
+        <input id="eb-name" placeholder="Your business name" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;box-sizing:border-box">
+        <label style="display:block;font-size:12px;color:#64748b;margin:12px 0 4px">Brand colour</label>
+        <input id="eb-colour" type="color" value="#4f46e5" style="width:64px;height:32px;padding:1px;border:1px solid #e2e8f0;border-radius:8px;background:#fff">
+      </div>
+      <div style="flex:1;min-width:220px">
+        <div style="font-size:12px;color:#64748b;margin-bottom:4px">Logo</div>
+        <img id="eb-logo-prev" alt="" style="max-height:56px;max-width:200px;display:none;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
+        <input id="eb-logo" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:8px">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn" onclick="ebSave()">Save branding</button>
+      <button class="btn" style="background:#059669" onclick="ebUpload()">Upload logo</button>
+      <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
+    </div>
+  </div>
 </div>
 <script>
 var TOKEN_KEY = 'is_token';
@@ -78,6 +107,7 @@ if (!token) {
 } else {
   paintAccount(user || {});
   fetchAccount();
+  ebLoad();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
@@ -149,6 +179,90 @@ function doLogout() {
   });
   sessionStorage.removeItem(USER_KEY);
   window.location.href = '/login';
+}
+// ---- Email branding ------------------------------------------------------------------------
+// The customer half of the tenant_settings document under key "email_branding". The same two
+// endpoints the admin console's Settings screen drives: PUT /api/v1/settings {settings:[{key,value}]}
+// for the name + colour (validated server-side), and POST|DELETE /api/v1/settings/branding/logo for
+// the logo bytes (the only writer of `logo_url`). A save NEVER sends `logo_url`, so it cannot
+// un-reference a logo that is still stored.
+function ebMsg(t, kind) {
+  var m = document.getElementById('eb-msg');
+  if (!m) return;
+  m.style.color = (kind === 'e') ? '#dc2626' : (kind === 's' ? '#16a34a' : '#64748b');
+  m.textContent = t;
+}
+function ebAuth() { return { 'Authorization': 'Bearer ' + token }; }
+function ebLogoUrl(u) {
+  if (!u) return '';
+  return (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) ? u : window.location.origin + u;
+}
+function ebSetLogo(u) {
+  var im = document.getElementById('eb-logo-prev');
+  var rm = document.getElementById('eb-rm');
+  if (!im) return;
+  if (u) { im.src = ebLogoUrl(u); im.style.display = 'block'; if (rm) rm.style.display = ''; }
+  else { im.style.display = 'none'; im.removeAttribute('src'); if (rm) rm.style.display = 'none'; }
+}
+function ebLoad() {
+  fetch(window.location.origin + '/api/v1/settings', { headers: ebAuth(), cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var rows = (d && d.settings) || [], row = null;
+      for (var i = 0; i < rows.length; i++) { if (rows[i].key === 'email_branding') { row = rows[i]; break; } }
+      var b = (row && row.value && typeof row.value === 'object') ? row.value : {};
+      var n = document.getElementById('eb-name');
+      var c = document.getElementById('eb-colour');
+      if (n && b.brand_name) n.value = b.brand_name;
+      if (c && /^#[0-9a-fA-F]{6}$/.test(b.brand_color || '')) c.value = b.brand_color;
+      ebSetLogo(b.logo_url || '');
+    })
+    .catch(function () {});
+}
+function ebSave() {
+  var n = (document.getElementById('eb-name').value || '').trim();
+  var c = (document.getElementById('eb-colour').value || '').trim();
+  ebMsg('Saving…', 'i');
+  fetch(window.location.origin + '/api/v1/settings', {
+    method: 'PUT',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: JSON.stringify({ settings: [{ key: 'email_branding', value: { brand_name: n, brand_color: c } }] })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+      ebMsg('Branding saved', 's');
+      ebLoad();
+    });
+  }).catch(function (e) { ebMsg((e && e.message) || 'Could not save', 'e'); });
+}
+function ebUpload() {
+  var f = document.getElementById('eb-logo');
+  var file = (f && f.files) ? f.files[0] : null;
+  if (!file) { ebMsg('Choose an image first', 'e'); return; }
+  if (file.size > 2031616) { ebMsg('That image is too large — 2 MB maximum', 'e'); return; }
+  var fd = new FormData(); fd.append('file', file, file.name || 'logo');
+  ebMsg('Uploading…', 'i');
+  fetch(window.location.origin + '/api/v1/settings/branding/logo', { method: 'POST', headers: ebAuth(), body: fd })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function (d) { ebSetLogo(d.logo_url || ''); if (f) f.value = ''; ebMsg('Logo uploaded', 's'); })
+    .catch(function (e) { ebMsg((e && e.message) || 'Upload failed', 'e'); });
+}
+function ebRemove() {
+  ebMsg('Removing…', 'i');
+  fetch(window.location.origin + '/api/v1/settings/branding/logo', { method: 'DELETE', headers: ebAuth() })
+    .then(function (r) {
+      if (!r.ok) throw new Error('Error ' + r.status);
+      ebSetLogo('');
+      ebMsg('Logo removed', 's');
+    })
+    .catch(function (e) { ebMsg((e && e.message) || 'Could not remove the logo', 'e'); });
 }
 </script>
 <script>
