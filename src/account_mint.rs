@@ -112,13 +112,25 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
         ));
     };
 
-    // ── 3. the accounts row ───────────────────────────────────────────────────────────────────
+    // ── 3. the account unit — ONE transaction (measured defect, 2026-10-12) ─────────────
+    // Steps 3-5 used to run as separate statements on separate pooled connections, so a failure
+    // after the accounts INSERT left a half-minted account behind while the caller got a
+    // `500 {"code":500,"error":"Internal server error"}` — and the retry then hit the duplicate
+    // pre-check, so the address was burned with nobody able to sign in. Measured live at the app
+    // origin: eight concurrent POST /api/v1/auth/register with ONE address produced SEVEN 500s.
+    // The unit is now ONE transaction, committed only once the account is complete.
     let account_id = Uuid::new_v4();
     let password_hash = hash_password(req.password)?;
     let slug_base = req.email.split('@').next().unwrap_or("user");
     let slug = format!("{}-{}", slug_base, &account_id.to_string()[..8]);
 
-    sqlx::query(
+    let mut tx = db.begin().await?;
+
+    // `accounts_email_key` is the real guard against a duplicate address; the SELECT at step 1 is
+    // only a fast path and cannot make the check atomic. Two racing signups for one address both
+    // pass it, so the loser must be told the truth — the same Conflict step 1 returns — instead of
+    // the 500 a raw `?` turned the unique violation into.
+    let account_insert = sqlx::query(
         r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug, purchase_pin)
            VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000')"#,
     )
@@ -129,16 +141,27 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     .bind(plan_tier_id)
     .bind(account_id) // tenant_id = self (standalone workspace)
     .bind(&slug)
-    .execute(db)
-    .await?;
+    .execute(&mut *tx)
+    .await;
+    if let Err(e) = account_insert {
+        tx.rollback().await.ok();
+        if let sqlx::Error::Database(db_err) = &e {
+            if db_err.constraint() == Some("accounts_email_key") {
+                return Err(AppError::Conflict(
+                    "An account with this email already exists".to_string(),
+                ));
+            }
+        }
+        return Err(e.into());
+    }
 
-    // ── 4. the purchase PIN ───────────────────────────────────────────────────────────────────
+    // ── 4. the purchase PIN ───────────────────────────────────────────────────────────────────────────────────
     // Format: Z followed by a 3-digit zero-padded number (Z100, Z101, …, Z999, Z1000+).
     let next_num: Option<i32> = sqlx::query_scalar(
         "UPDATE accounts SET next_pin_number = next_pin_number + 1 WHERE id = $1 RETURNING next_pin_number - 1",
     )
     .bind(account_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?;
     let purchase_pin = match next_num {
         Some(num) => {
@@ -150,17 +173,17 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
             sqlx::query("UPDATE accounts SET purchase_pin = $1 WHERE id = $2")
                 .bind(&new_pin)
                 .bind(account_id)
-                .execute(db)
+                .execute(&mut *tx)
                 .await?;
             Some(new_pin)
         }
         None => None,
     };
 
-    // ── 5. the default industry ───────────────────────────────────────────────────────────────
+    // ── 5. the default industry ────────────────────────────────────────────────────────────────────────────
     let industry_id: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM industries WHERE slug = 'general' AND is_active = true")
-            .fetch_optional(db)
+            .fetch_optional(&mut *tx)
             .await?
             .flatten();
     if let Some(ind_id) = industry_id {
@@ -171,9 +194,14 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
         )
         .bind(account_id)
         .bind(ind_id)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
     }
+
+    // The account row, its purchase PIN and its default industry are now ONE unit of work: the
+    // commit lands only when all three are complete. The credentials mail stays after the commit
+    // (a published outcome, not an account row).
+    tx.commit().await?;
 
     Ok(MintedAccount {
         account_id,
