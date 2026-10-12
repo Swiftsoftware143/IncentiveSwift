@@ -27,7 +27,16 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/tw.css">
+<!-- VERSIONED STYLESHEET (2026-10-12, cron `default`). Plain `/tw.css` was being answered by a
+     CACHED SELF-REDIRECT at the Cloudflare edge (301 -> https://incentiveswift.com/tw.css, i.e. to
+     itself, cf-cache-status: HIT, age growing, cache-control max-age=14400), so the browser gave up
+     with net::ERR_TOO_MANY_REDIRECTS and this page rendered with ZERO Tailwind rules — every
+     `flex`/`grid` was inert, `hidden` was visible, mx-auto did nothing. The ORIGIN has always
+     served the file correctly (200, text/css, 9656 B); only the edge entry is poisoned, and nothing
+     on this box can purge the zone. A URL that has never been through the edge therefore fetches
+     cleanly, and the `?v=` stamp is what makes this page ask for one. Bump the stamp whenever the
+     sheet is republished, so a fresh sheet can never inherit a stale edge entry either. -->
+<link rel="stylesheet" href="/tw.css?v=20261012a">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;background:#0f1117}
