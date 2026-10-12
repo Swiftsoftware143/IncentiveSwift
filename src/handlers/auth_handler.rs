@@ -114,9 +114,11 @@ pub async fn register(
     .await
     {
         Ok(m) => m,
-        // This door has always answered 400 for a taken address; the machine door answers 200
-        // `already_exists` through its own pre-check.
-        Err(AppError::Conflict(msg)) => return Err(AppError::BadRequest(msg)),
+        // A taken address is a CONFLICT (409) — the answer every sibling app's signup door gives
+        // (FunnelSwift 409, WorkflowSwift 409, ADASwift 409, MissedCall 409, and CoreSwift pinned
+        // 409 as the fleet standard in kanban t_1f6e509c). This door historically downgraded the
+        // Conflict to 400, so a client that tells "already registered" apart from "bad input" by
+        // STATUS was wrong here and only here. The machine door's own pre-check is unchanged.
         Err(e) => return Err(e),
     };
     let account_id = minted.account_id;
