@@ -1406,10 +1406,15 @@ const LoyaltyPrograms = () => {
     </div>
   </div>`;
 
+  // kanban t_fb61a467 - the share-link hint below names an angle bracket in PROSE, and htm does
+  // not decode entities in STATIC template text (the same class as the My Plan note), so the
+  // entity form reached the operator as literal words. An angle bracket the prose genuinely
+  // needs is written as an expression child - htm never parses that as markup, and preact
+  // renders string children as text nodes.
   // ── Referrals Tab ──
   const referralsTab = html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Referrals</h2><div><span class="text-sm text-gray-500 mr-4">Your account code: <b>${st.referralCode||'None'}</b></span><span class="badge badge-blue">${st.referralCount||0} campaign referrals</span></div></div>
-    <p class="text-sm text-gray-500 mb-3">Participants of your campaigns share a personal link (<code>/c/&lt;campaign&gt;?ref=&lt;code&gt;</code>, shown on the play page); a click counts and a friend who plays through it credits the sharer.</p>
+    <p class="text-sm text-gray-500 mb-3">Participants of your campaigns share a personal link (<code>/c/${'<campaign>'}?ref=${'<code>'}</code>, shown on the play page); a click counts and a friend who plays through it credits the sharer.</p>
     ${st.refLoading ? html`<div class="card text-center py-8 text-gray-400">Loading...</div>` : html`
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Campaign</th><th>Code</th><th>Source</th><th>Converted</th><th>Clicks</th><th>Points</th><th>Date</th></tr></thead>
@@ -2438,7 +2443,7 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS, TYPES }) => {
   return html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${hide}>
     <div class="bg-white rounded-xl p-6 w-3xl max-w-2xl shadow-xl max-h-screen overflow-y-auto" onClick=${e => e.stopPropagation()}>
       <h3 class="font-bold mb-4">${item.id ? 'Edit' : 'Add'} Email Template</h3>
-      ${isFleetDefault ? html`<div data-fleet-default="1" class="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">Platform default &mdash; every account inherits this row until it saves its own copy. Saving changes this email for <b>every account</b>.</div>` : null}
+      ${isFleetDefault ? html`<div data-fleet-default="1" class="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">Platform default — every account inherits this row until it saves its own copy. Saving changes this email for <b>every account</b>.</div>` : null}
       <div class="grid grid-cols-2 gap-3 mb-4">
         <div><label class="block text-xs font-medium mb-1">Name</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.name} onInput=${e => { form.name = e.target.value; renderApp(); }} /></div>
         <div><label class="block text-xs font-medium mb-1">Type</label>
@@ -2448,7 +2453,7 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS, TYPES }) => {
               ? html`<select class="border rounded px-3 py-2 w-full text-sm" onChange=${e => { form.template_type = e.target.value; renderApp(); }}>
             ${templateTypeOptions(TYPES, form.template_type)}
           </select>`
-              : html`<div class="border rounded px-3 py-2 w-full text-sm bg-gray-50 text-gray-500">Loading the sendable types&hellip;</div>`)}
+              : html`<div class="border rounded px-3 py-2 w-full text-sm bg-gray-50 text-gray-500">Loading the sendable types…</div>`)}
         </div>
       </div>
       <div class="mb-3"><label class="block text-xs font-medium mb-1">Subject</label><input class="border rounded px-3 py-2 w-full text-sm" value=${form.subject} onInput=${e => { form.subject = e.target.value; renderApp(); }} /></div>
