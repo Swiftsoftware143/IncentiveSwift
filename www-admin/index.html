@@ -328,13 +328,28 @@ const Portfolio = () => {
 
 // ---- PLANS ----
 const Plans = () => {
-  const st = viewState('plans', { list: [], showModal: false, editItem: null });
+  const st = viewState('plans', { list: [], pubById: {}, showModal: false, editItem: null });
   // The list must come from the OPERATOR catalogue, GET /api/v1/admin/plans: the old
   // `API.get('/plans')` is the PUBLIC marketing listing, which (a) answers an envelope
   // `{plans:[…]}` that `Array.isArray(data) ? data : []` turned into [], so the table rendered
   // ZERO rows and the per-row Edit arm was unreachable, and (b) carries `monthly_price`, not the
   // `price_monthly` / `price_yearly` this editor round-trips. Measured live, kanban t_8e0ae96e.
-  const load = async () => { try { const data = await API.get('/admin/plans'); st.list = (data && data.plans) ? data.plans : (Array.isArray(data) ? data : []); renderApp(); } catch(e) { console.error(e); } };
+  const load = async () => {
+    try {
+      const data = await API.get('/admin/plans');
+      st.list = (data && data.plans) ? data.plans : (Array.isArray(data) ? data : []);
+      // The price the public pricing page lists: GET /api/v1/plans maps `plans.price` ->
+      // `monthly_price` (dashboard_handler.rs). GET /admin/plans never sends `price`, so it is
+      // merged here by plan id. Display only — the editor's write path is untouched.
+      st.pubById = {};
+      try {
+        const pub = await API.get('/plans');
+        const rows = (pub && pub.plans) ? pub.plans : (Array.isArray(pub) ? pub : []);
+        rows.forEach(r => { if (r && r.id != null && r.monthly_price != null) st.pubById[r.id] = r.monthly_price; });
+      } catch (_) { st.pubById = {}; }
+      renderApp();
+    } catch(e) { console.error(e); }
+  };
   if (!st._loaded) { st._loaded = true; load(); }
 
   const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
@@ -351,12 +366,13 @@ const Plans = () => {
       <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Actions</th></tr></thead>
         <tbody>${st.list.map(p => html`<tr>
           <td class="font-medium">${p.name}</td>
-          <td class="text-gray-500">${p.price_monthly ? '$' + p.price_monthly : '-'}</td>
+          <td class="text-gray-500">${((st.pubById || {})[p.id] ?? p.price_monthly) ? '$' + ((st.pubById || {})[p.id] ?? p.price_monthly) : '-'}</td>
           <td class="text-gray-500">${p.price_yearly ? '$' + p.price_yearly : '-'}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
         </tr>`)}
         ${st.list.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
       </tbody></table>
+      <div class="text-xs text-gray-400 px-3 py-2">Monthly is the price the public pricing page lists for this plan. The tier an account is actually seated on is on the Tiers screen.</div>
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
       <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
