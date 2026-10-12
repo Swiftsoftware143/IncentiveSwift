@@ -200,13 +200,23 @@ async fn notify_funnelswift_upgrade(
 /// Resolve the account's email + plan, and notify FunnelSwift if it's a PAID upgrade.
 /// Free plan is the initial attribution (handled at tag time), not an upgrade.
 pub(crate) async fn attribute_plan_upgrade(state: &AppState, account_id: Uuid, plan_id: Uuid) {
-    let plan: Option<(String, Option<f64>)> =
-        sqlx::query_as("SELECT name, price_monthly::float8 FROM plans WHERE id = $1")
-            .bind(plan_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
+    // THE PRICE LIVES IN `plans.price`, NOT `plans.price_monthly` (measured live 2026-10-12): every
+    // row of `plans` carries `price_monthly = 0` / `price_yearly = 0` while `price` holds the number
+    // the PUBLIC listing serves (`GET /api/v1/plans` reads `price::int as monthly_price`: Free 0,
+    // Pro 49, Enterprise 199 — `plan_tiers.price_monthly` agrees). Reading `price_monthly` alone
+    // therefore made the `<= 0.0` guard below fire for EVERY plan, so a paid upgrade was never
+    // reported to FunnelSwift and the referring affiliate was never credited — the whole
+    // cross-app attribution was dead. `COALESCE(NULLIF(price_monthly, 0), price)` keeps
+    // `price_monthly` authoritative the moment an operator fills it in, and falls back to the price
+    // the app actually sells at until then.
+    let plan: Option<(String, Option<f64>)> = sqlx::query_as(
+        "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8 FROM plans WHERE id = $1",
+    )
+    .bind(plan_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
     let Some((plan_name, price)) = plan else {
         return;
     };
