@@ -139,10 +139,17 @@ pub async fn list_leads(
 }
 
 /// GET /api/v1/plans (public - no auth required)
+///
+/// Ordered as a PRICE LADDER, not alphabetically (kanban, cron `default`, 2026-10-13). The tenant's
+/// "Plan & Pricing" screen renders this catalogue in the order returned, and `ORDER BY name` listed
+/// Enterprise ($199) ABOVE Free ($0) — a scrambled ladder on the one screen whose whole job is "what
+/// the other plans cost". The fleet's convention for a plan catalogue is cheapest-first (ADASwift:
+/// `ORDER BY price ASC`). `sort_order` is honoured first so an operator can still pin an explicit
+/// order; every row carries 0 today, so the price ladder decides.
 pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
         r#"SELECT id, name, slug, price::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description, features, NULL::text as how_it_works
-           FROM plans ORDER BY name"#,
+           FROM plans ORDER BY sort_order ASC NULLS LAST, price ASC NULLS LAST, name ASC"#,
     ).fetch_all(&state.db).await?;
     let mut plans: Vec<Value> = Vec::new();
     for row in &rows {
