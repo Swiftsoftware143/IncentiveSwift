@@ -106,6 +106,16 @@ fn generate_slug(name: &str) -> String {
 }
 
 /// GET /api/v1/admin/plans
+///
+/// Ordered as a PRICE LADDER, cheapest-first (kanban t_1fcaacb2): the operator's Plans panel
+/// renders this list in the order returned, and `ORDER BY sort_order, name` put ENTERPRISE ($199)
+/// FIRST and FREE ($0) second — the free tier rendered BELOW a paid tier, and the ladder read
+/// 199 / 0 / 49. `sort_order` is 0 on every live `plans` row, so the name tie-break decided the
+/// order; it stays first so an operator can still pin one, but the tie now breaks on the plan's
+/// EFFECTIVE price — `COALESCE(NULLIF(price_monthly, 0), price)`, the same expression
+/// `get_plan`/`update_plan` use — because `plans.price_monthly` is 0 on every row while `price`
+/// carries the real 0/49/199. Same rule as the public catalogue (dashboard_handler::list_public_plans)
+/// and the fleet convention (ADASwift `ORDER BY price ASC`).
 pub async fn list_plans(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -115,7 +125,8 @@ pub async fn list_plans(
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans
            WHERE is_active = true
-           ORDER BY sort_order, name"#,
+           ORDER BY sort_order ASC NULLS LAST,
+                    COALESCE(NULLIF(price_monthly, 0), price) ASC NULLS LAST, name ASC"#,
     )
     .fetch_all(&state.db)
     .await?;
