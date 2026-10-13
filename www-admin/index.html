@@ -3824,7 +3824,7 @@ const ProvisioningView = () => {
         <p class="text-xs text-gray-500 mt-1">Only this app's own free, active tiers are listed — a priced tier can never be seated on a tag-provisioned account.</p>
         ${d.entry_plan_resolves === false ? html`<p class="text-xs text-red-600 mt-1">The saved entry tier no longer resolves to a free, active tier here — pick one above and save.</p>` : null}
       </div>
-      <p class="text-xs text-gray-500">Stored in <code>admin_settings</code> as <code>${keys.enabled || 'provision_from_tags_enabled'}</code> and <code>${keys.entry_plan_slug || 'provision_entry_plan_slug'}</code>. FunnelSwift calls <code>${d.endpoint || '/api/v1/internal/provision-free-account'}</code>.</p>
+      <p class="text-xs text-gray-500">Stored in <code>admin_settings</code> as <code>${keys.enabled || 'provision_from_tags_enabled'}</code> and <code>${keys.entry_plan_slug || 'provision_entry_plan_slug'}</code>. FunnelSwift sends the tagged lead's name and email here when a tag names this app.</p>
       ${st.saved ? html`<p class="text-xs mt-2" style="color:#065f46">Saved — the door reads this state now.</p>` : null}
     </div>
   </div>`;
