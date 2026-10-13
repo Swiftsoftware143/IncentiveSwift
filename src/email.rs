@@ -282,10 +282,13 @@ pub async fn send_reset_email(
     account_id: uuid::Uuid,
     to: &str,
     token: &str,
+    name: &str,
 ) -> Result<(), String> {
     let vars = json!({
         "token": token,
-        "name": "there",
+        // The customer's own name, not the "there" placeholder the reset mail used to greet every
+        // recipient with (fixed 2026-10-13, cron `default`).
+        "name": if name.trim().is_empty() { "there" } else { name.trim() },
         "app_url": "https://app.incentiveswift.com",
     });
     send_template_email(pool, Some(account_id), to, "password_reset", &vars).await

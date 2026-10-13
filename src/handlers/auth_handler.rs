@@ -959,23 +959,24 @@ pub async fn forgot_password(
     // unconditional for every well-formed address, so it still leaks nothing about accounts.
     let email = email_addr::normalize(&body.email).map_err(AppError::BadRequest)?;
 
-    // Check if account exists
-    let account_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
+    // Check if account exists. The NAME travels with the id so the reset mail can greet the
+    // customer by name instead of the hard-coded "Hi there," it used to send (fixed 2026-10-13,
+    // cron `default`) — the app already knows who they are.
+    let account: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT id, coalesce(name, '') FROM accounts WHERE lower(email) = $1")
             .bind(&email)
             .fetch_optional(&state.db)
-            .await?
-            .flatten();
+            .await?;
 
     // Always return success to prevent email enumeration
-    if account_id.is_none() {
+    if account.is_none() {
         return Ok(Json(json!({
             "status": "ok",
             "message": "If the email exists, a reset link has been sent",
         })));
     }
 
-    let account_id = account_id.unwrap();
+    let (account_id, account_name) = account.unwrap();
     let token = Uuid::new_v4().to_string();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
 
@@ -1007,7 +1008,8 @@ pub async fn forgot_password(
     );
 
     // Attempt to send the email via configured provider
-    let email_sent = crate::email::send_reset_email(&state.db, account_id, &email, &token).await;
+    let email_sent =
+        crate::email::send_reset_email(&state.db, account_id, &email, &token, &account_name).await;
     if let Err(e) = email_sent {
         tracing::warn!("Failed to send password reset email: {}", e);
     }
