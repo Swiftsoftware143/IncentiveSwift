@@ -107,6 +107,24 @@ pub async fn send_template_email(
         None => None,
     };
     let mut vars = vars.clone();
+    // The template surface ADVERTISES `{{app_name}}` and `{{login_url}}` (the console's merge-field
+    // list), but until now only the SUBJECT default and the inline fallback ever saw them — a
+    // DB-ROW template that used them mailed the braces verbatim. Measured 2026-10-13 (cron
+    // `default`): the `password_reset` row rendered "Open {{login_url}} and click …" to a live
+    // customer. Bind them here, at the single funnel every transactional type passes through, the
+    // same fix FunnelSwift carries (kanban t_2349e6ce). A caller that already set either key keeps
+    // its own value.
+    if !vars.is_object() {
+        vars = json!({});
+    }
+    if let Some(obj) = vars.as_object_mut() {
+        obj.entry("app_name".to_string())
+            .or_insert_with(|| json!(APP_NAME));
+        obj.entry("login_url".to_string())
+            .or_insert_with(|| json!(APP_URL));
+        obj.entry("app_url".to_string())
+            .or_insert_with(|| json!(APP_URL));
+    }
     bind_branding(&mut vars, branding.as_ref());
     let vars = &vars;
 
