@@ -34,6 +34,18 @@
     o[key] = val;
     try { localStorage.setItem(LS_KEY, JSON.stringify(o)); } catch(e) {}
   }
+  /* kanban t_ff948669 — has this browser ever seen the panel open? `seenAnyGuide(true)` records it,
+     `seenAnyGuide()` reads it. If localStorage is unavailable (private mode, blocked storage) the
+     read answers TRUE, i.e. "already seen": the panel then never auto-opens rather than opening on
+     every single load, which is the annoyance this flag exists to remove. */
+  var SEEN_KEY = 'inline_guide_seen';
+  /* Set the first time this page load decides to auto-open, so the MutationObserver (which re-runs
+     updateGuide whenever the SPA paints) cannot close the panel again a moment after it opened. */
+  var autoOpenedThisLoad = false;
+  function seenAnyGuide(mark) {
+    if (mark) { try { localStorage.setItem(SEEN_KEY, '1'); } catch(e) {} return true; }
+    try { return localStorage.getItem(SEEN_KEY) === '1'; } catch(e) { return true; }
+  }
   function esc(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -84,7 +96,9 @@
   var widget, toggle, panel;
 
   function createWidget() {
-    if (widgetCreated) return;
+    /* Re-create when the host wiped the DOM (WorkflowSwift's console rebuilds document.body
+       on every render). A no-op for a host that never removes the widget. */
+    if (widgetCreated && document.getElementById('inline-guide-widget')) return;
     widgetCreated = true;
 
     widget = document.createElement('div');
@@ -170,8 +184,16 @@
     // Show panel if not dismissed
     if (closed === true) {
       panel.classList.remove('open');
-    } else {
+    } else if (!autoOpenedThisLoad && !seenAnyGuide()) {
+      /* First screen this browser has ever opened: show it once, and leave it open for this page
+         load (autoOpenedThisLoad stops the observer from closing it under the user). */
+      autoOpenedThisLoad = true;
+      seenAnyGuide(true);
       panel.classList.add('open');
+    } else {
+      /* kanban t_ff948669 — and after that, STAY CLOSED. It used to re-open on every screen load,
+         covering the dashboard it describes; the round ? button is always there to open it. */
+      panel.classList.remove('open');
     }
   }
 
