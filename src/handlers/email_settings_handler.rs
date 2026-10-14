@@ -44,6 +44,14 @@ pub async fn get_email_settings(
         .as_ref()
         .map(|v| email_provider::EmailConfig::from_json(v, "smtp"));
 
+    let last_send: Option<Value> = sqlx::query_scalar::<_, Value>(
+        "SELECT value FROM admin_settings WHERE key = 'email_last_send'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
     let mut out = value.unwrap_or_else(|| json!({}));
     if let Some(obj) = out.as_object_mut() {
         if obj.contains_key("api_key") {
@@ -66,6 +74,7 @@ pub async fn get_email_settings(
         "configured": cfg.as_ref().map(|c| c.is_configured()).unwrap_or(false),
         "provider": cfg.as_ref().map(|c| c.provider.clone()).unwrap_or_default(),
         "providers": email_provider::available(),
+        "last_send": last_send,
     })))
 }
 
@@ -166,27 +175,56 @@ pub async fn test_email_settings(
         None => auth.email.clone(),
     };
 
+    // The SAME record the customer send funnel writes, so a test press and a real customer mail are
+    // read off one line. A recipient that cannot receive mail is WITHHELD by `deliver` (it answers
+    // Ok), so the withheld case is decided here and reported as its own outcome — the test-mail-hygiene
+    // rule: never hand a test address to the provider, and never call a withheld send a delivery.
+    let subject = "IncentiveSwift System Email Test";
+    let held = crate::email::recipient_is_undeliverable(&to);
     match email_provider::deliver(
         &state.db,
         &cfg,
         &to,
-        "IncentiveSwift System Email Test",
+        subject,
         "This is a test of the IncentiveSwift system email provider.\n\nIf you received it, sending works.\n\n- IncentiveSwift",
         None,
     )
     .await
     {
-        Ok(()) => Ok(Json(json!({
-            "success": true,
-            "provider": cfg.provider,
-            "to": to,
-            "detail": format!("{} accepted the message", cfg.provider)
-        }))),
-        Err(e) => Ok(Json(json!({
-            "success": false,
-            "provider": cfg.provider,
-            "to": to,
-            "detail": e
-        }))),
+        Ok(()) if held => {
+            crate::email::record_last_send(
+                &state.db,
+                &to,
+                subject,
+                false,
+                "withheld: recipient cannot receive mail (no send attempted)",
+            )
+            .await;
+            Ok(Json(json!({
+                "success": false,
+                "withheld": true,
+                "provider": cfg.provider,
+                "to": to,
+                "detail": "Withheld: this address cannot receive mail, so no message was sent. Point the test at a real inbox to prove delivery."
+            })))
+        }
+        Ok(()) => {
+            crate::email::record_last_send(&state.db, &to, subject, true, "").await;
+            Ok(Json(json!({
+                "success": true,
+                "provider": cfg.provider,
+                "to": to,
+                "detail": format!("{} accepted the message", cfg.provider)
+            })))
+        }
+        Err(e) => {
+            crate::email::record_last_send(&state.db, &to, subject, false, &e).await;
+            Ok(Json(json!({
+                "success": false,
+                "provider": cfg.provider,
+                "to": to,
+                "detail": e
+            })))
+        }
     }
 }

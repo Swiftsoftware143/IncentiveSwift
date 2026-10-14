@@ -294,6 +294,50 @@ pub async fn send_reset_email(
     send_template_email(pool, Some(account_id), to, "password_reset", &vars).await
 }
 
+/// The operator's view of the LAST transactional send this installation attempted.
+///
+/// The send funnel already LOGS an outcome, but a log is not a panel. FunnelSwift records its own
+/// last send (2026-10-14) and its comment names the siblings that do — ADASwift `email_send_state`,
+/// MissedCall `email_last_send`, WorkflowSwift `last_send_ok`; IncentiveSwift recorded NOTHING, so
+/// an operator could not tell from any screen whether a customer's credentials mail actually left.
+/// Same key and shape as FunnelSwift (`admin_settings.email_last_send`), returned by
+/// `GET /api/v1/admin/email-settings` and rendered on the console's Email Provider screen.
+///
+/// A WITHHELD send is recorded too (`ok: false` with the reason): the operator's question is "did the
+/// customer get it", and a withheld message means no. Writing the record NEVER fails a send — an
+/// error here is logged and dropped.
+pub(crate) async fn record_last_send(
+    pool: &sqlx::PgPool,
+    to: &str,
+    subject: &str,
+    ok: bool,
+    detail: &str,
+) {
+    let payload = json!({
+        "at": chrono::Utc::now().to_rfc3339(),
+        "ok": ok,
+        "to": to,
+        "subject": subject,
+        "detail": detail.chars().take(240).collect::<String>(),
+    });
+    if let Err(e) = sqlx::query(
+        "INSERT INTO admin_settings (key, value, description, updated_at) VALUES ('email_last_send', $1, 'The last transactional email this installation attempted to send (written by the send funnel)', NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+    )
+    .bind(payload)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!("could not record email_last_send: {e}");
+    }
+}
+
+/// Whether a recipient can never receive mail (reserved RFC-2606 name, or a fleet harness domain).
+/// Used to record an HONEST outcome for a send that was withheld before any provider request.
+pub(crate) fn recipient_is_undeliverable(to: &str) -> bool {
+    crate::security::probe_addr::harness_domain(to).is_some()
+        || crate::security::email_addr::refuse_undeliverable_recipient(to).is_err()
+}
+
 /// Core email sender — the provider (`smtp | mailgun | sendgrid | sendiio`) and its credentials
 /// come from the database (`admin_settings.email`, the fleet-wide system row). Nothing is read from
 /// the process environment. The per-tenant override this used to fall back on is RETIRED (kanban
@@ -323,6 +367,14 @@ pub(crate) async fn send_email_request(
             subject = %subject,
             "send suppressed: recipient is a fleet harness address (fleet-dev domain)"
         );
+        record_last_send(
+            pool,
+            to,
+            subject,
+            false,
+            "withheld: recipient is a fleet harness address (no send attempted)",
+        )
+        .await;
         return Ok(());
     }
     let Some(cfg) = crate::email_provider::resolve(pool).await else {
@@ -331,6 +383,7 @@ pub(crate) async fn send_email_request(
             subject = %subject,
             "email skipped — no email provider configured (Admin > Settings > Email Provider)"
         );
+        record_last_send(pool, to, subject, false, "no email provider configured").await;
         return Err(
             "Email provider not configured. Set it in Admin > Settings > Email Provider."
                 .to_string(),
@@ -343,10 +396,25 @@ pub(crate) async fn send_email_request(
         Some(html_body)
     };
 
-    crate::email_provider::deliver(pool, &cfg, to, subject, text_body, html)
-        .await
-        .map_err(|e| {
+    let outcome = crate::email_provider::deliver(pool, &cfg, to, subject, text_body, html).await;
+    match &outcome {
+        Ok(()) if recipient_is_undeliverable(to) => {
+            // `deliver` withholds a recipient that provably cannot receive mail and still answers
+            // Ok, so Ok alone is NOT a delivery — record the truth the operator needs to see.
+            record_last_send(
+                pool,
+                to,
+                subject,
+                false,
+                "withheld: recipient cannot receive mail (no send attempted)",
+            )
+            .await;
+        }
+        Ok(()) => record_last_send(pool, to, subject, true, "").await,
+        Err(e) => {
             tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
-            e
-        })
+            record_last_send(pool, to, subject, false, e).await;
+        }
+    }
+    outcome
 }

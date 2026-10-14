@@ -1904,6 +1904,112 @@ const PaymentProviderModal = ({ st, closeForm, submit }) => {
   </div>`;
 };
 
+// ── EMAIL PROVIDER (system email — the platform-wide mail credential) ─────────────────────────────
+// Every transactional mail this installation sends (the credentials mail a new signup needs to log in,
+// password resets, purchase confirmations) leaves through `admin_settings.email`. Its API existed with
+// NO screen: the only way to set the platform mail credential was the raw JSON debug action in the
+// Operator Console, and nothing anywhere said whether a mail had actually left (David's rule: a
+// backend route with no UI is a defect). Five sibling consoles ship this screen; this one did not.
+//
+// The LAST SEND line is the answer to the question the programme asks — did the customer's mail leave?
+// `configured` only says a provider is stored. `last_send` is written by the SEND FUNNEL
+// (`email::send_email_request`, the choke point every transactional type passes through) and by the
+// test button below, and is read back from `GET /api/v1/admin/email-settings`.
+const EmailProvider = () => {
+  const st = viewState('email-provider', { cfg: null, providers: [], last: null, configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '' });
+  // `api_key` / `smtp_password` come back MASKED (••••••••) when a value is stored; the server keeps
+  // the stored secret when it reads the mask back, so sending the field unchanged never clears it.
+  const TEXT_FIELDS = [['from_name', 'From name'], ['from_address', 'From address'], ['domain', 'Mailgun domain'], ['api_url', 'Provider API URL'], ['smtp_host', 'SMTP host'], ['smtp_port', 'SMTP port'], ['smtp_username', 'SMTP username']];
+  const load = async () => {
+    try {
+      const d = await API.get('/admin/email-settings');
+      st.cfg = d.config || {};
+      st.providers = d.providers || [];
+      st.configured = !!d.configured;
+      st.provider = d.provider || st.cfg.provider || 'smtp';
+      if (!st.cfg.provider) st.cfg.provider = st.provider;
+      st.last = d.last_send || null;
+      st.err = null;
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+  const save = async () => {
+    st.busy = true; st.msg = null; st.err = null; renderApp();
+    try {
+      const body = {};
+      Object.keys(st.cfg || {}).forEach(k => { if (k !== 'api_key_set' && k !== 'smtp_password_set') body[k] = st.cfg[k]; });
+      body.provider = st.provider;
+      await API.put('/admin/email-settings', body);
+      st.msg = 'Saved — sends from now on use this provider.';
+    } catch (e) { st.err = 'Not saved: ' + e.message; }
+    st.busy = false; await load();
+  };
+  const sendTest = async () => {
+    st.testing = true; st.test = null; renderApp();
+    try {
+      const to = (st.testTo || '').trim();
+      st.test = await API.post('/admin/email-settings/test' + (to ? '?to=' + encodeURIComponent(to) : ''));
+    } catch (e) { st.test = { success: false, detail: e.message }; }
+    st.testing = false; await load();
+  };
+  const inp = 'border rounded px-3 py-2 w-full text-sm';
+  const cfg = st.cfg || {};
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Email Provider</h2>
+        <p class="text-sm text-gray-500">The mail service this installation sends through. Every account's transactional mail — a new signup's credentials, password resets, purchase confirmations — leaves through this provider unless that account has saved its own mail server under Settings.</p></div>
+      <span class=${'badge ' + (st.configured ? 'badge-green' : 'badge-yellow')}>${st.configured ? ('configured · ' + (st.provider || '')) : 'not configured'}</span>
+    </div>
+    ${st.err ? html`<div class="text-sm mb-3 text-red-700">${st.err}</div>` : null}
+    ${st.msg ? html`<div class="text-sm mb-3 text-green-700">${st.msg}</div>` : null}
+    ${st.cfg === null ? html`<div class="card text-center text-gray-400 py-8">Loading...</div>` : html`
+    <div class="card mb-4">
+      <h3 class="font-semibold mb-2">Last transactional email</h3>
+      ${(!st.last || typeof st.last !== 'object')
+        ? html`<div class="text-sm text-gray-400">No transactional email has been attempted yet on this installation.</div>`
+        : html`<div class=${st.last.ok ? 'text-sm text-green-700' : 'text-sm text-red-700'}>
+            ${st.last.ok ? '✅ Last email accepted by the provider' : '❌ Last email was NOT delivered — the customer received nothing'}
+            <span class="text-gray-500">· ${st.last.at ? new Date(st.last.at).toLocaleString() : 'time not recorded'} · "${st.last.subject || ''}" to ${st.last.to || ''}</span>
+          </div>
+          ${(!st.last.ok && st.last.detail) ? html`<div class="text-sm text-red-700 mt-1">${st.last.detail}</div>` : null}`}
+    </div>
+    <div class="card mb-4">
+      <h3 class="font-semibold mb-2">Provider</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="block text-xs font-medium mb-1">Provider</label>
+          <select class=${inp} value=${st.provider} onChange=${e => { st.provider = e.target.value; st.cfg.provider = e.target.value; }}>
+            ${(st.providers.length ? st.providers : [{ value: 'smtp', label: 'SMTP' }]).map(p => html`<option value=${p.value}>${p.label || p.value}</option>`)}
+          </select></div>
+        <div><label class="block text-xs font-medium mb-1">From name</label>
+          <input class=${inp} value=${cfg.from_name || ''} onInput=${e => { st.cfg.from_name = e.target.value; }} /></div>
+        <div><label class="block text-xs font-medium mb-1">From address</label>
+          <input class=${inp} value=${cfg.from_address || ''} onInput=${e => { st.cfg.from_address = e.target.value; }} />
+          <div class="text-xs text-gray-400 mt-1">The address every transactional mail is sent from (must be a verified sender at the provider).</div></div>
+        ${TEXT_FIELDS.filter(f => f[0] !== 'from_address' && f[0] !== 'from_name').map(f => html`<div><label class="block text-xs font-medium mb-1">${f[1]}</label>
+          <input class=${inp} value=${cfg[f[0]] || ''} onInput=${e => { st.cfg[f[0]] = e.target.value; }} /></div>`)}
+        <div><label class="block text-xs font-medium mb-1">API key ${cfg.api_key ? '(stored — leave as it is to keep it)' : ''}</label>
+          <input class=${inp} type="password" autocomplete="new-password" value=${cfg.api_key || ''} onInput=${e => { st.cfg.api_key = e.target.value; }} /></div>
+        <div><label class="block text-xs font-medium mb-1">SMTP password ${cfg.smtp_password ? '(stored — leave as it is to keep it)' : ''}</label>
+          <input class=${inp} type="password" autocomplete="new-password" value=${cfg.smtp_password || ''} onInput=${e => { st.cfg.smtp_password = e.target.value; }} /></div>
+      </div>
+      <div class="flex items-center gap-2 mt-4">
+        <button class="btn" disabled=${st.busy} onClick=${save}>${st.busy ? 'Saving...' : 'Save provider'}</button>
+        <span class="text-xs text-gray-400">Secrets are stored encrypted and are never shown back in full.</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="font-semibold mb-2">Send a test email</h3>
+      <div class="text-sm text-gray-500 mb-2">Sends one real message through the SAVED provider and records it on the Last transactional email line above, so you can prove the mail path without waiting for a signup. Leave the box empty to send to your own address. An address that cannot receive mail is withheld — nothing leaves the building and the line says so.</div>
+      <div class="flex items-center gap-2">
+        <input class="${inp}" style="max-width:320px" placeholder="someone@example.com (optional)" value=${st.testTo} onInput=${e => { st.testTo = e.target.value; }} />
+        <button class="btn" disabled=${st.testing} onClick=${sendTest}>${st.testing ? 'Sending...' : 'Send test email'}</button>
+      </div>
+      ${st.test ? html`<div class=${'text-sm mt-2 ' + (st.test.success ? 'text-green-700' : 'text-amber-700')}>${st.test.success ? 'Sent — ' : 'Not sent — '}${st.test.detail || ''}</div>` : null}
+    </div>`}
+  </div>`;
+};
+
 const IntegrationCenter = () => {
   const st = viewState('integration', { list: [], showModal: false, editItem: null, search: '' });
   const load = async () => { try { const data = await API.get('/integration-targets'); st.list = Array.isArray(data) ? data : (data.targets || []); renderApp(); } catch(e) { console.error(e); } };
@@ -4108,6 +4214,7 @@ const ProfileView = () => {
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
     { id: 'payment-providers', label: 'Payment Providers', icon: '💳', adminOnly: true },
+    { id: 'email-provider', label: 'Email Provider', icon: '📧', adminOnly: true },
     { id: 'tags', label: 'Tags', icon: '🏷' },
     { id: 'leads', label: 'Leads', icon: '📋' },
     { id: 'contacts', label: 'Contacts', icon: '👥' },
@@ -4127,7 +4234,7 @@ const ProfileView = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
