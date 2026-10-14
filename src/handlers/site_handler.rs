@@ -503,7 +503,10 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
         replace_verbatim(&mut result, hp, "logo_text", LOGO_OPEN, "</span>");
         replace_verbatim(&mut result, hp, "headline", H1_OPEN, "</h1>");
         replace_verbatim(&mut result, hp, "subheadline", SUB_OPEN, "</p>");
-        replace_verbatim(&mut result, hp, "button_text", CTA_OPEN, "</a>");
+        // `</button>`, not `</a>`: the CTA is a <button>, and a stale `</a>` close marker made
+        // this replacement run past the real closer into the NEXT element (the hero's secondary
+        // CTA), deleting it on every scheduled apply.
+        replace_verbatim(&mut result, hp, "button_text", CTA_OPEN, "</button>");
         replace_verbatim(
             &mut result,
             hp,
@@ -965,7 +968,7 @@ mod tests {
                 (LOGO_OPEN, "</span>", "logo_text"),
                 (H1_OPEN, "</h1>", "headline"),
                 (SUB_OPEN, "</p>", "subheadline"),
-                (CTA_OPEN, "</a>", "button_text"),
+                (CTA_OPEN, "</button>", "button_text"),
                 (SECONDARY_OPEN, "</a>", "secondary_button_text"),
             ] {
                 let a = src.find(open).expect("marker must be on the served page") + open.len();
@@ -988,7 +991,7 @@ mod tests {
             (LOGO_OPEN, "</span>"),
             (H1_OPEN, "</h1>"),
             (SUB_OPEN, "</p>"),
-            (CTA_OPEN, "</a>"),
+            (CTA_OPEN, "</button>"),
             (SECONDARY_OPEN, "</a>"),
         ] {
             assert_eq!(
@@ -1004,7 +1007,7 @@ mod tests {
     #[test]
     fn an_operator_value_reaches_the_served_bytes_and_the_shipped_value_does_not() {
         // The fixture mirrors the served page: same canonical tag, same nav brand span, same h1 /
-        // hero <p> / primary CTA button (closed by `</a>` on this page) / secondary <a>, and NO
+        // hero <p> / primary CTA <button> (closed by `</button>` on this page) / secondary <a>, and NO
         // favicon tag at all — that absence is what the favicon arm has to cope with.
         let d = default_site_settings();
         let hp = &d["homepage"];
@@ -1014,7 +1017,7 @@ mod tests {
                 "{}{}</span>\n",
                 "{}{}</h1>\n",
                 "{}{}</p>\n",
-                "{}{}</a>\n",
+                "{}{}</button>\n",
                 "{}{}</a>\n",
                 "</body>\n"
             ),
@@ -1075,7 +1078,7 @@ mod tests {
             "{H1_OPEN}Stop <span class=\"gradient-text\">Guessing</span></h1>"
         )));
         assert!(h.contains(&format!("{SUB_OPEN}One line.</p>")));
-        assert!(h.contains(&format!("{CTA_OPEN}Go</a>")));
+        assert!(h.contains(&format!("{CTA_OPEN}Go</button>")));
         assert!(h.contains(&format!("{SECONDARY_OPEN}Learn more</a>")));
         assert!(!h.contains("Your Best Marketers"));
 
