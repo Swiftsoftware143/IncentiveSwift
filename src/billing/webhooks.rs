@@ -15,15 +15,19 @@
 //! provider session id against `stripe_checkout_sessions`, exactly as before. The account whose
 //! configuration verified the delivery is logged (`verified_account`), so an operator can tell
 //! which workspace's key authenticated a delivery without guessing.
+//!
+//! The header itself (`t=…,v1=…`, HMAC over `"{t}.{body}"`) is parsed and compared by
+//! `crate::billing::stripe_signature`, shared with the loyalty-plan receiver (`handlers::
+//! stripe_webhook`) so the two doors cannot disagree about it. Until kanban t_1b8d96f6 this file
+//! read the header as a bare `v1=` value, so a genuine Stripe delivery — which begins with `t=` —
+//! was answered `400 Missing v1= prefix in signature header`.
 
 use crate::email;
 use crate::error::AppError;
 use crate::state::AppState;
 use axum::{extract::State, http::HeaderMap, Json};
-use hmac::{Hmac, Mac};
 use rand::Rng;
 use serde_json::{json, Value};
-use sha2::Sha256;
 use sqlx::Row;
 use tracing;
 use uuid::Uuid;
@@ -31,55 +35,15 @@ use uuid::Uuid;
 // Re-export these for use outside billing (e.g. admin handler)
 pub use crate::billing::providers::{lookup_webhook_secrets, WebhookSecretRow};
 
+/// The ONE parse-and-verify for a `Stripe-Signature` header, shared with the loyalty-plan receiver
+/// (`handlers::stripe_webhook`) so two receivers cannot disagree about the header or about the bytes
+/// Stripe signed. See the module for the header shape and for why the bare-body HMAC that used to
+/// live here could never accept a genuine delivery (kanban t_1b8d96f6).
+use crate::billing::stripe_signature::verify_stripe_signature_any;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// True when `sig_value` is the HMAC-SHA256 of `payload` under `secret` (Stripe's `v1=` value).
-///
-/// Constant-time-ish comparison via hex string equality (bounded by hex length), as before.
-fn stripe_signature_matches(
-    payload: &str,
-    sig_value: &str,
-    secret: &str,
-) -> Result<bool, AppError> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .map_err(|_| AppError::Internal("HMAC key initialization failed".to_string()))?;
-
-    mac.update(payload.as_bytes());
-    let computed = mac.finalize().into_bytes();
-    let computed_hex = hex::encode(computed);
-
-    Ok(computed_hex == sig_value)
-}
-
-/// Verify a Stripe-style HMAC-SHA256 signature header against EVERY active signing secret, and
-/// return the account whose configuration verified the delivery.
-///
-/// A delivery is accepted as soon as ANY account's secret verifies it (the endpoints are shared,
-/// the rows are per-account — see the module doc). The verdict on every credential is computed, so
-/// the work done does not vary with which one matched. No credential matching is the same refusal
-/// as before: 400 "Invalid webhook signature".
-fn verify_stripe_signature_any(
-    payload: &str,
-    sig_header: &str,
-    credentials: &[WebhookSecretRow],
-) -> Result<Uuid, AppError> {
-    // Stripe v1 signatures are hex-encoded HMAC-SHA256 prefixed with "v1="
-    let sig_value = sig_header.strip_prefix("v1=").ok_or_else(|| {
-        AppError::BadRequest("Missing v1= prefix in signature header".to_string())
-    })?;
-
-    let mut verified_for: Option<Uuid> = None;
-    for credential in credentials {
-        let matches = stripe_signature_matches(payload, sig_value, &credential.secret)?;
-        if matches && verified_for.is_none() {
-            verified_for = Some(credential.account_id);
-        }
-    }
-
-    verified_for.ok_or_else(|| AppError::BadRequest("Invalid webhook signature".to_string()))
-}
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -475,17 +439,26 @@ async fn handle_paypal_payment_failed(_state: &AppState, _event: &Value) -> Resu
 mod tests {
     use super::*;
 
-    // ── multi-account signature verification (kanban t_3c98f2b6) ────────────────────────────────
+    // ── multi-account signature verification (kanban t_3c98f2b6, header shape t_1b8d96f6) ────────
     //
     // The endpoints are ONE shared URL while `payment_providers` is per-account, so the receiver
     // must accept a delivery signed with ANY account's active secret, must resolve the account from
     // the event rather than from which secret matched, and must still refuse a delivery that no
-    // active secret signed. These four properties are what a later refactor must not break.
+    // active secret signed. These properties are what a later refactor must not break.
+    //
+    // The signature is a GENUINE Stripe one: the header carries `t=`, and the HMAC is over
+    // `"{t}.{body}"`. The previous fixture signed the bare body and sent a bare `v1=` header, which
+    // is why it could not tell that the receiver this file used to ship refused every real delivery.
+
+    const STAMP: &str = "1492774577";
 
     fn sign(payload: &str, secret: &str) -> String {
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(payload.as_bytes());
-        format!("v1={}", hex::encode(mac.finalize().into_bytes()))
+        format!(
+            "t={},v1={}",
+            STAMP,
+            crate::billing::stripe_signature::hmac_hex(&format!("{}.{}", STAMP, payload), secret)
+                .unwrap()
+        )
     }
 
     fn credential(secret: &str) -> WebhookSecretRow {
@@ -529,16 +502,25 @@ mod tests {
 
         // A signature over DIFFERENT bytes is refused too.
         let err =
-            verify_stripe_signature_any("{}", &sign(payload, "whsec_account_a"), &credentials)
+            verify_stripe_signature_any("{}.", &sign(payload, "whsec_account_a"), &credentials)
                 .expect_err("a signature over other bytes must not verify");
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
     #[test]
-    fn refuses_a_header_that_is_not_a_v1_signature() {
+    fn refuses_a_header_that_is_not_a_signed_delivery() {
         let credentials = vec![credential("whsec_account_a")];
-        let err = verify_stripe_signature_any("{}", "t=1,v0=deadbeef", &credentials)
-            .expect_err("a non-v1 header is not a signature");
+
+        // What Stripe never sends: a bare `v1=` with no `t=`. There are no signed bytes this app
+        // can reproduce, so it must not be accepted (the old receiver demanded exactly this shape,
+        // which is the inverse of what a real delivery looks like).
+        let err = verify_stripe_signature_any("{}", "v1=deadbeef", &credentials)
+            .expect_err("a stamp-less header is not a signed delivery");
+        assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("Missing t=")));
+
+        // A stamp with no signature value at all is not a delivery either.
+        let err = verify_stripe_signature_any("{}", &format!("t={}", STAMP), &credentials)
+            .expect_err("a header with no v1= carries no signature");
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("Missing v1=")));
     }
 

@@ -8,6 +8,11 @@
 //!   GET  /api/v1/checkout/sessions              -> checkout::list
 //!   POST /api/v1/webhooks/stripe                -> webhooks::stripe
 //!   POST /api/v1/webhooks/paypal                -> webhooks::paypal
+//!
+//! `stripe_signature` is the ONE parse-and-verify for a `Stripe-Signature` header, shared by both
+//! Stripe receivers in this app: `webhooks::stripe_webhook` (the payment receiver) and
+//! `handlers::stripe_webhook::stripe_webhook` (the loyalty-plan receiver). Two receivers must not
+//! be able to disagree about the header or about the bytes Stripe signed (kanban t_1b8d96f6).
 
 use crate::state::AppState;
 use axum::{
@@ -17,6 +22,7 @@ use axum::{
 
 pub mod checkout;
 pub mod providers;
+pub mod stripe_signature;
 pub mod webhooks;
 
 /// Build a router that nests all billing sub-routes under a shared state.

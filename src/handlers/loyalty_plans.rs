@@ -159,28 +159,46 @@ pub async fn subscribe(
         }));
     }
 
-    // Get Stripe key
-    let stripe_key: Option<String> = sqlx::query_scalar(
-        "SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND is_active = true LIMIT 1",
+    // Resolve the CALLER's own active `stripe` row on the **Payment Providers** screen (kanban
+    // t_1b8d96f6). That is the one credential table the rest of the payment flow uses: the inbound
+    // receivers authenticate a delivery against the workspace's own signing secret in it, the
+    // console's Payment Providers panel writes it, and the admin guide names it as the home of the
+    // keys "your own checkout and inbound payment webhooks run on".
+    //
+    // The read used to be
+    //     SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND is_active = true LIMIT 1
+    // — no account predicate, no ordering, and impossible to satisfy: `stripe` is not in
+    // `available_providers`, so `upsert_provider_key` refuses it and no such row could be created
+    // through the app at all. It also would have charged whichever account's key the planner
+    // returned first for whoever called this endpoint.
+    let provider: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM payment_providers \
+         WHERE account_id = $1 AND provider_type = 'stripe' AND is_active = true \
+         ORDER BY created_at, id LIMIT 1",
     )
+    .bind(account_id)
     .fetch_optional(&s.db)
     .await?;
 
-    // provider_keys.api_key is ciphertext at rest: decrypt before the key is used.
+    // payment_providers.api_key is ciphertext at rest: decrypt before the key is used.
     let stripe_key = crate::security::provider_key_crypto::decrypt_from_storage(
         &s.db,
-        stripe_key.as_deref().unwrap_or("").trim(),
+        provider.as_deref().unwrap_or("").trim(),
     )
     .await
     .ok()
-    .filter(|k| !k.is_empty());
+    .filter(|k| !k.trim().is_empty());
 
     let stripe_key = match stripe_key {
         Some(k) => k,
         _ => {
             return Ok(Json(SubscribeResponse {
                 checkout_url: None,
-                error: Some("Stripe not configured. Add your Stripe key in Provider Keys.".into()),
+                error: Some(
+                    "Stripe not configured. Add your Stripe secret key on the Payment Providers \
+                     screen."
+                        .into(),
+                ),
                 plan: None,
                 monthly_price: None,
                 monthly_zc_pool: None,
