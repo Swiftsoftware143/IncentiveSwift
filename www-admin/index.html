@@ -154,6 +154,7 @@ window.appGuidePages = {
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
   integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
+  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret the inbound payment webhooks are verified with. The keys are stored encrypted and are never shown back in full.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use"] },
   tags:           { title: "Tags", desc: "Labels that group your contacts. A system tag can also trigger other actions, such as creating a free account in another app.", actions: ["Create a tag", "Apply a tag to contacts"] },
   leads:          { title: "Leads", desc: "The people your campaigns have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
   contacts:       { title: "Contacts", desc: "Everyone on your list, collected in one place.", actions: ["Search your contacts", "Open a contact"] },
@@ -1799,6 +1800,110 @@ const ledgerTab = html`<div>
 // ---- SHELL ----
 
 // ---- INTEGRATION CENTER ----
+// ---- PAYMENT PROVIDERS -------------------------------------------------------------------------
+// The app's own billing router (src/billing/mod.rs) mounts
+//   GET    /api/v1/payment-providers               list this account's providers
+//   POST   /api/v1/payment-providers               upsert one (blank secret = keep the stored one)
+//   DELETE /api/v1/payment-providers/:provider_type
+// account-scoped, secrets sealed at rest as `enc:v1:` ciphertext and returned MASKED, and until
+// now NO screen anywhere in this console called any of them — so an account could not connect the
+// payment provider its own checkout path and webhook receivers use. David's rule: a backend route
+// with no UI is a DEFECT, not a feature.
+const PaymentProviders = () => {
+  const st = viewState('payment_providers_view', { list: null, err: null, busy: false, msg: null, form: null });
+  const load = async () => {
+    try { const d = await API.get('/payment-providers'); st.list = (d && d.items) || []; st.err = null; }
+    catch (e) { st.list = []; st.err = (e && e.message) || 'Could not load the payment providers'; }
+    renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+  // The DELETE route is a super-admin gate in the handler itself ("Only super admins can delete
+  // payment providers"), so the control is offered only where the API will honour it.
+  const isSuper = !!(API.user && API.user.role === 'super_admin');
+  const openForm = (row) => {
+    st.form = { open: true, edit: !!row, provider_type: row ? row.provider_type : 'stripe',
+      api_key: '', webhook_secret: '', base_url: (row && row.base_url) || '',
+      is_active: row ? row.is_active !== false : true, err: null, busy: false };
+    st.msg = null; renderApp();
+  };
+  const closeForm = () => { st.form = null; renderApp(); };
+  const submit = async () => {
+    const f = st.form; if (!f) return;
+    const pt = String(f.provider_type || '').trim().toLowerCase();
+    if (!pt) { f.err = 'Name the provider this account pays through (stripe or paypal).'; renderApp(); return; }
+    f.busy = true; f.err = null; renderApp();
+    const body = { provider_type: pt, base_url: (f.base_url || '').trim() || null, is_active: !!f.is_active };
+    // A BLANK credential is the "keep the stored value" signal the upsert's ON CONFLICT CASE reads,
+    // so a box the operator did not type into is left OUT of the body entirely.
+    if ((f.api_key || '').trim()) body.api_key = f.api_key.trim();
+    if ((f.webhook_secret || '').trim()) body.webhook_secret = f.webhook_secret.trim();
+    try { await API.post('/payment-providers', body); st.msg = 'Saved the ' + pt + ' configuration.'; st.form = null; await load(); }
+    catch (e) { f.busy = false; f.err = (e && e.message) || 'Could not save that provider'; renderApp(); }
+  };
+  const remove = async (row) => {
+    if (!confirm('Delete this account\'s ' + row.provider_type + ' configuration?')) return;
+    st.busy = true; st.msg = null; renderApp();
+    try { await API.del('/payment-providers/' + encodeURIComponent(row.provider_type)); st.msg = 'Removed ' + row.provider_type + '.'; }
+    catch (e) { st.msg = 'Not removed: ' + ((e && e.message) || e); }
+    st.busy = false; await load();
+  };
+  const rows = st.list || [];
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Payment Providers</h2>
+        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key is stored encrypted and is never shown back in full.</p></div>
+      <button class="btn btn-sm btn-green" disabled=${st.busy} onClick=${() => openForm(null)}>+ Add provider</button>
+    </div>
+    ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
+    ${st.err ? html`<div class="text-sm mb-3 text-red-700">${st.err}</div>` : null}
+    ${st.list === null ? html`<div class="card text-center text-gray-400 py-8">Loading...</div>`
+      : rows.length === 0 ? html`<div class="card text-center text-gray-400 py-8">No payment provider is connected yet. Add your Stripe or PayPal keys so checkout and the inbound payment webhooks can work.</div>`
+      : html`<div class="card p-0 overflow-hidden"><table class="table">
+          <thead><tr><th>Provider</th><th>Secret key</th><th>Webhook secret</th><th>Base URL</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${rows.map(r => html`<tr>
+            <td class="font-medium">${r.provider_type}</td>
+            <td class="font-mono text-xs text-gray-500">${r.api_key_masked || 'not set'}</td>
+            <td class="font-mono text-xs text-gray-500">${r.webhook_secret_masked || 'not set'}</td>
+            <td class="text-xs text-gray-500">${r.base_url || 'default'}</td>
+            <td>${r.is_active ? html`<span class="badge badge-green">Active</span>` : html`<span class="badge badge-red">Inactive</span>`}</td>
+            <td><button class="btn btn-sm" disabled=${st.busy} onClick=${() => openForm(r)}>Edit</button>${isSuper
+              ? html`<button class="btn btn-sm btn-red" style="margin-left:8px" disabled=${st.busy} onClick=${() => remove(r)}>Delete</button>`
+              : html`<span class="text-xs text-gray-400" style="margin-left:8px">Delete is super-admin only</span>`}</td>
+          </tr>`)}</tbody></table></div>`}
+    ${st.form && st.form.open ? PaymentProviderModal({ st, closeForm, submit }) : null}
+  </div>`;
+};
+
+const PaymentProviderModal = ({ st, closeForm, submit }) => {
+  const f = st.form;
+  const inp = 'border rounded px-3 py-2 w-full text-sm';
+  return html`<div class="modal" onClick=${e => e.target === e.currentTarget && closeForm()}>
+    <div class="modal-content">
+      <h3 class="text-lg font-bold mb-4">${f.edit ? 'Edit' : 'Add'} payment provider</h3>
+      <div class="space-y-3">
+        <div><label class="block text-xs font-medium mb-1">Provider</label>
+          <input class=${inp} list="pp-kinds" placeholder="stripe" value=${f.provider_type} disabled=${f.edit}
+            onInput=${e => { f.provider_type = e.target.value; }} />
+          <datalist id="pp-kinds"><option value="stripe"></option><option value="paypal"></option></datalist>
+          <div class="text-xs text-gray-400 mt-1">stripe and paypal have an inbound webhook receiver in this app; any other value is stored but nothing reads it.</div></div>
+        <div><label class="block text-xs font-medium mb-1">Secret key${f.edit ? ' (leave blank to keep the stored one)' : ''}</label>
+          <input class=${inp} type="password" autocomplete="new-password" value=${f.api_key} onInput=${e => { f.api_key = e.target.value; }} /></div>
+        <div><label class="block text-xs font-medium mb-1">Webhook signing secret${f.edit ? ' (leave blank to keep the stored one)' : ''}</label>
+          <input class=${inp} type="password" autocomplete="new-password" value=${f.webhook_secret} onInput=${e => { f.webhook_secret = e.target.value; }} />
+          <div class="text-xs text-gray-400 mt-1">The key the inbound webhook signature is verified against — Stripe shows it beside the endpoint's signing secret.</div></div>
+        <div><label class="block text-xs font-medium mb-1">Base URL (optional)</label>
+          <input class=${inp} placeholder="https://api.stripe.com" value=${f.base_url} onInput=${e => { f.base_url = e.target.value; }} /></div>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — the webhook lookup only reads an active row</label>
+        ${f.err ? html`<div class="text-sm text-red-700">${f.err}</div>` : null}
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="btn btn-outline" disabled=${f.busy} onClick=${closeForm}>Cancel</button>
+        <button class="btn" disabled=${f.busy} onClick=${submit}>${f.edit ? 'Save' : 'Add'}</button>
+      </div>
+    </div>
+  </div>`;
+};
+
 const IntegrationCenter = () => {
   const st = viewState('integration', { list: [], showModal: false, editItem: null, search: '' });
   const load = async () => { try { const data = await API.get('/integration-targets'); st.list = Array.isArray(data) ? data : (data.targets || []); renderApp(); } catch(e) { console.error(e); } };
@@ -4002,6 +4107,7 @@ const ProfileView = () => {
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
+    { id: 'payment-providers', label: 'Payment Providers', icon: '💳', adminOnly: true },
     { id: 'tags', label: 'Tags', icon: '🏷' },
     { id: 'leads', label: 'Leads', icon: '📋' },
     { id: 'contacts', label: 'Contacts', icon: '👥' },
@@ -4021,7 +4127,7 @@ const ProfileView = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.

@@ -250,6 +250,16 @@ POST /api/v1/portfolio-companies      — Create company</pre>
     <h3>Chat Funnel AI replies</h3>
     <p>The <strong>Chat Funnel</strong> mechanic answers a visitor's typed message with an LLM when the account has connected an LLM provider key (resolved per account, <strong>DeepSeek</strong> preferred, <strong>OpenAI</strong> fallback), and otherwise replies with the campaign's scripted <code>chat_flow</code>. Both providers are in the catalogue and are connected from the same <strong>Provider Keys</strong> screen; their public vendor endpoints are the default, so no base URL is required. A tenant-supplied base URL follows the same public-destination rule as every other provider — a private relay needs a platform preset for that provider, which the platform seats, not the tenant.</p>
   </div>
+  <div class="card">
+    <h3>Payment providers (Stripe / PayPal)</h3>
+    <p>The keys your own checkout and inbound payment webhooks run on live on the <strong>Payment Providers</strong> screen (admin section) &mdash; not on the integration <strong>Provider Keys</strong> screen above. That one holds the third-party tools this app <em>calls out to</em>; these are the credentials your customers' money comes <em>in</em> through.</p>
+    <ul>
+      <li><strong>What to enter</strong> &mdash; a provider (<code>stripe</code> and <code>paypal</code> are the two with a webhook receiver in this app), the <strong>secret key</strong>, and the <strong>webhook signing secret</strong> from that provider's own dashboard. The base URL is optional and only needed for a non-standard endpoint.</li>
+      <li><strong>What is stored</strong> &mdash; both secrets are encrypted before they are written and never come back in full: the screen shows <code>abc...xyz</code> (the first and last three characters), so you can tell one key from another without the value leaving the server.</li>
+      <li><strong>Editing keeps what you do not retype</strong> &mdash; leave a secret box blank and the stored value is kept; type a new one and it replaces it. Each row reads <strong>Active</strong> or <strong>Inactive</strong>, and the inbound webhook lookup only reads an active row, so a provider can be taken out of use without deleting its keys.</li>
+      <li><strong>Deleting is a super-admin action</strong> &mdash; the screen offers Delete only to a super admin and says so for everyone else (the API refuses the call with that same reason).</li>
+    </ul>
+  </div>
 </section>
 
 <section id="security">
