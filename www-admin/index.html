@@ -154,7 +154,7 @@ window.appGuidePages = {
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
   integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
-  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret the inbound payment webhooks are verified with. The keys are stored encrypted and are never shown back in full.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use"] },
+  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret this workspace's inbound payment events are verified with — every workspace's own secret authenticates its own deliveries. The keys are stored encrypted and are never shown back in full.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use"] },
   tags:           { title: "Tags", desc: "Labels that group your contacts. A system tag can also trigger other actions, such as creating a free account in another app.", actions: ["Create a tag", "Apply a tag to contacts"] },
   leads:          { title: "Leads", desc: "The people your campaigns have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
   contacts:       { title: "Contacts", desc: "Everyone on your list, collected in one place.", actions: ["Search your contacts", "Open a contact"] },
@@ -1852,7 +1852,7 @@ const PaymentProviders = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Payment Providers</h2>
-        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key is stored encrypted and is never shown back in full.</p></div>
+        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are stored encrypted and are never shown back in full; the webhook signing secret authenticates this workspace's own inbound payment events.</p></div>
       <button class="btn btn-sm btn-green" disabled=${st.busy} onClick=${() => openForm(null)}>+ Add provider</button>
     </div>
     ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
@@ -1890,10 +1890,10 @@ const PaymentProviderModal = ({ st, closeForm, submit }) => {
           <input class=${inp} type="password" autocomplete="new-password" value=${f.api_key} onInput=${e => { f.api_key = e.target.value; }} /></div>
         <div><label class="block text-xs font-medium mb-1">Webhook signing secret${f.edit ? ' (leave blank to keep the stored one)' : ''}</label>
           <input class=${inp} type="password" autocomplete="new-password" value=${f.webhook_secret} onInput=${e => { f.webhook_secret = e.target.value; }} />
-          <div class="text-xs text-gray-400 mt-1">The key the inbound webhook signature is verified against — Stripe shows it beside the endpoint's signing secret.</div></div>
+          <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the endpoint is shared, every workspace's secret is checked, and an event can only ever act on the session it names. Stripe shows it beside the endpoint's signing secret.</div></div>
         <div><label class="block text-xs font-medium mb-1">Base URL (optional)</label>
           <input class=${inp} placeholder="https://api.stripe.com" value=${f.base_url} onInput=${e => { f.base_url = e.target.value; }} /></div>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — the webhook lookup only reads an active row</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — this workspace's own row is the one your checkout and inbound payment events use</label>
         ${f.err ? html`<div class="text-sm text-red-700">${f.err}</div>` : null}
       </div>
       <div class="flex justify-end gap-2 mt-4">

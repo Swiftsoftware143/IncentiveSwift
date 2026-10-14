@@ -23,8 +23,27 @@
 //! 20260925_payment_providers_secrets_encrypted_at_rest make a future writer that forgets to
 //! encrypt FAIL CLOSED.
 //!
-//! Every reader decrypts: the list mask, the upsert echo and `lookup_webhook_secret` (the HMAC
-//! key the Stripe signature is verified with). Ciphertext is never returned to a client.
+//! Every reader decrypts: the list mask, the upsert echo and `lookup_webhook_secrets` (the HMAC
+//! keys the Stripe signature is verified with). Ciphertext is never returned to a client.
+//!
+//! Inbound webhook verification is PER-ACCOUNT, and that is a decision (kanban t_3c98f2b6)
+//! ---------------------------------------------------------------------------------------------
+//! The table is per-account BY CONSTRUCTION: `UNIQUE (account_id, provider_type)`, an FK to
+//! `accounts`, all three CRUD arms bind the CALLER'S `account_id`, `checkout/create` resolves the
+//! account's own active row, and the console and the admin guide both present the row as "this
+//! workspace's". The inbound endpoints, however, are ONE shared URL per provider
+//! (`POST /api/v1/webhooks/<provider>` — the table has no per-account webhook URL column), so a
+//! receiver cannot know which account a delivery belongs to before it authenticates it.
+//!
+//! Before t_3c98f2b6 the reader was `WHERE provider_type = $1 AND is_active = true LIMIT 1` with no
+//! account predicate and no ORDER BY, so whichever row the planner returned first was the secret
+//! used to verify EVERY account's delivery: the moment two accounts configured the same provider,
+//! only one of them had working webhooks and the others were answered "Invalid webhook signature"
+//! (and Stripe's retries could never succeed). The fix keeps the per-account model and makes the
+//! shared door work for every account: `lookup_webhook_secrets` returns EVERY active row of the
+//! provider type and the receiver accepts the delivery when ANY one of them verifies it, while the
+//! destination account keeps coming from the event's OWN identity (the provider session id resolved
+//! against `stripe_checkout_sessions`), never from which secret matched.
 
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
@@ -460,49 +479,94 @@ pub async fn delete_payment_provider(
     ))
 }
 
-/// Look up a payment provider's webhook secret from the database by provider type.
-/// Returns the first active provider's webhook secret, DECRYPTED.
+/// One account's active signing credential for a provider type.
+#[derive(Debug, Clone)]
+pub struct WebhookSecretRow {
+    /// The account the credential belongs to.
+    pub account_id: Uuid,
+    /// The stored secret, DECRYPTED. Never empty: an unusable row is dropped by the lookup.
+    pub secret: String,
+}
+
+/// Every account's ACTIVE webhook signing credential for `provider_type`, DECRYPTED.
 ///
-/// The column holds `enc:v1:` ciphertext, and this is the read-for-use path: the value returned
-/// here is the HMAC key the inbound Stripe signature is verified with, so it must be the
-/// plaintext (a mask or the raw ciphertext would make every signature check fail). A legacy
-/// plaintext row is returned unchanged by the helper.
-/// Re-exported from `billing` so webhooks can share this lookup.
-pub async fn lookup_webhook_secret(
+/// This is the read-for-use path for the inbound receivers: the values returned here are the HMAC
+/// keys a delivery's signature is checked against, so they must be plaintext (a mask or the raw
+/// ciphertext would make every signature check fail). A legacy plaintext row is returned unchanged
+/// by the helper.
+///
+/// Multi-account contract (kanban t_3c98f2b6): the inbound endpoints are one shared URL per
+/// provider while the rows are per-account, so the receiver must be able to authenticate ANY
+/// account's delivery. The lookup therefore returns EVERY active row of the type, ordered
+/// deterministically by `created_at, id`, and the receiver accepts a delivery when ANY one of them
+/// verifies it.
+///
+/// Rows that cannot authenticate anything are skipped LOUDLY rather than failing the whole lookup,
+/// because one account's unusable row must never deny another account's live webhooks: an active
+/// row whose stored secret is blank (`''` is the column default for "no secret entered yet") is
+/// skipped at debug level, and one whose stored value cannot be decrypted with the current master
+/// key is skipped at error level with its account id (never the value). If that leaves NO usable
+/// credential, the lookup fails, so a misconfigured provider is loud instead of silent.
+///
+/// Re-exported from `billing` so the webhook receivers share this lookup.
+pub async fn lookup_webhook_secrets(
     state: &AppState,
     provider_type: &str,
-) -> Result<String, AppError> {
-    let row = sqlx::query(
-        "SELECT pp.webhook_secret FROM payment_providers pp WHERE pp.provider_type = $1 AND pp.is_active = true LIMIT 1"
+) -> Result<Vec<WebhookSecretRow>, AppError> {
+    let rows = sqlx::query(
+        "SELECT pp.account_id, pp.webhook_secret FROM payment_providers pp \
+         WHERE pp.provider_type = $1 AND pp.is_active = true \
+         ORDER BY pp.created_at, pp.id",
     )
     .bind(provider_type)
-    .fetch_optional(&state.db)
+    .fetch_all(&state.db)
     .await?;
 
-    match row {
-        Some(r) => {
-            let stored: String = r.get("webhook_secret");
-            if stored.trim().is_empty() {
-                return Err(AppError::Internal(format!(
-                    "{} webhook secret is configured but empty",
-                    provider_type
-                )));
-            }
-            // Fails closed: a wrong/missing master key is an error (500), never a plaintext or
-            // ciphertext HMAC key.
-            let secret = decrypt_from_storage(&state.db, stored.trim()).await?;
-            if secret.is_empty() {
-                Err(AppError::Internal(format!(
-                    "{} webhook secret is configured but empty",
-                    provider_type
-                )))
-            } else {
-                Ok(secret)
-            }
-        }
-        None => Err(AppError::Internal(format!(
+    if rows.is_empty() {
+        return Err(AppError::Internal(format!(
             "No active {} payment provider configured",
             provider_type
-        ))),
+        )));
     }
+
+    let mut usable: Vec<WebhookSecretRow> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let account_id: Uuid = row.get("account_id");
+        let stored: String = row.get("webhook_secret");
+        if stored.trim().is_empty() {
+            tracing::debug!(
+                %account_id,
+                provider_type,
+                "active payment provider row carries no webhook secret — skipped for signature verification"
+            );
+            continue;
+        }
+        // Fails closed per row: a wrong/missing master key is never a plaintext or ciphertext HMAC
+        // key. The row is dropped and reported; the other accounts keep verifying.
+        match decrypt_from_storage(&state.db, stored.trim()).await {
+            Ok(secret) if !secret.is_empty() => {
+                usable.push(WebhookSecretRow { account_id, secret })
+            }
+            Ok(_) => tracing::debug!(
+                %account_id,
+                provider_type,
+                "active payment provider webhook secret decrypted to empty — skipped"
+            ),
+            Err(e) => tracing::error!(
+                %account_id,
+                provider_type,
+                error = %e,
+                "active payment provider webhook secret could not be decrypted — skipped for signature verification"
+            ),
+        }
+    }
+
+    if usable.is_empty() {
+        return Err(AppError::Internal(format!(
+            "{} payment provider rows are active but none carries a usable webhook secret",
+            provider_type
+        )));
+    }
+
+    Ok(usable)
 }

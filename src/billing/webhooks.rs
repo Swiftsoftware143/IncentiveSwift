@@ -3,6 +3,18 @@
 //! Endpoints:
 //!   POST /api/v1/webhooks/stripe  — Stripe webhook receiver
 //!   POST /api/v1/webhooks/paypal  — PayPal webhook receiver
+//!
+//! Multi-account verification (kanban t_3c98f2b6)
+//! ---------------------------------------------
+//! These two endpoints are ONE shared URL each, while `payment_providers` is per-account (unique
+//! `(account_id, provider_type)`, all CRUD arms account-scoped, checkout resolves the account's own
+//! row). A delivery therefore cannot be attributed to an account before it is authenticated, so the
+//! receiver authenticates it against EVERY active signing secret the app holds for that provider
+//! and accepts it when ANY one of them verifies. The account the event acts on is never taken from
+//! whichever secret matched — `handle_stripe_checkout_completed` resolves it from the event's own
+//! provider session id against `stripe_checkout_sessions`, exactly as before. The account whose
+//! configuration verified the delivery is logged (`verified_account`), so an operator can tell
+//! which workspace's key authenticated a delivery without guessing.
 
 use crate::email;
 use crate::error::AppError;
@@ -17,19 +29,20 @@ use tracing;
 use uuid::Uuid;
 
 // Re-export these for use outside billing (e.g. admin handler)
-pub use crate::billing::providers::lookup_webhook_secret;
+pub use crate::billing::providers::{lookup_webhook_secrets, WebhookSecretRow};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Verify a Stripe-style HMAC-SHA256 signature header against a known secret.
-fn verify_stripe_signature(payload: &str, sig_header: &str, secret: &str) -> Result<(), AppError> {
-    // Stripe v1 signatures are hex-encoded HMAC-SHA256 prefixed with "v1="
-    let sig_value = sig_header.strip_prefix("v1=").ok_or_else(|| {
-        AppError::BadRequest("Missing v1= prefix in signature header".to_string())
-    })?;
-
+/// True when `sig_value` is the HMAC-SHA256 of `payload` under `secret` (Stripe's `v1=` value).
+///
+/// Constant-time-ish comparison via hex string equality (bounded by hex length), as before.
+fn stripe_signature_matches(
+    payload: &str,
+    sig_value: &str,
+    secret: &str,
+) -> Result<bool, AppError> {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .map_err(|_| AppError::Internal("HMAC key initialization failed".to_string()))?;
 
@@ -37,13 +50,35 @@ fn verify_stripe_signature(payload: &str, sig_header: &str, secret: &str) -> Res
     let computed = mac.finalize().into_bytes();
     let computed_hex = hex::encode(computed);
 
-    // Constant-time comparison via hex string equality (bounded by hex length)
-    if computed_hex != sig_value {
-        return Err(AppError::BadRequest(
-            "Invalid webhook signature".to_string(),
-        ));
+    Ok(computed_hex == sig_value)
+}
+
+/// Verify a Stripe-style HMAC-SHA256 signature header against EVERY active signing secret, and
+/// return the account whose configuration verified the delivery.
+///
+/// A delivery is accepted as soon as ANY account's secret verifies it (the endpoints are shared,
+/// the rows are per-account — see the module doc). The verdict on every credential is computed, so
+/// the work done does not vary with which one matched. No credential matching is the same refusal
+/// as before: 400 "Invalid webhook signature".
+fn verify_stripe_signature_any(
+    payload: &str,
+    sig_header: &str,
+    credentials: &[WebhookSecretRow],
+) -> Result<Uuid, AppError> {
+    // Stripe v1 signatures are hex-encoded HMAC-SHA256 prefixed with "v1="
+    let sig_value = sig_header.strip_prefix("v1=").ok_or_else(|| {
+        AppError::BadRequest("Missing v1= prefix in signature header".to_string())
+    })?;
+
+    let mut verified_for: Option<Uuid> = None;
+    for credential in credentials {
+        let matches = stripe_signature_matches(payload, sig_value, &credential.secret)?;
+        if matches && verified_for.is_none() {
+            verified_for = Some(credential.account_id);
+        }
     }
-    Ok(())
+
+    verified_for.ok_or_else(|| AppError::BadRequest("Invalid webhook signature".to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -62,11 +97,19 @@ pub async fn stripe_webhook(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| AppError::BadRequest("Missing stripe-signature header".to_string()))?;
 
-    // Look up webhook secret from the database (multi-tenant)
-    let webhook_secret = lookup_webhook_secret(&state, "stripe").await?;
+    // Authenticate the delivery against EVERY active "stripe" signing secret this app holds — the
+    // endpoints are one shared URL while the provider rows are per-account (kanban t_3c98f2b6), and
+    // the account acted on is resolved from the event's own session id below, never from the secret
+    // that matched.
+    let credentials = lookup_webhook_secrets(&state, "stripe").await?;
 
     // Verify the signature
-    verify_stripe_signature(&body, sig_header, &webhook_secret)?;
+    let verified_for = verify_stripe_signature_any(&body, sig_header, &credentials)?;
+    tracing::info!(
+        verified_account = %verified_for,
+        active_secrets = credentials.len(),
+        "Stripe webhook signature verified"
+    );
 
     // Parse the event payload
     let event: Value = serde_json::from_str(&body)
@@ -107,8 +150,10 @@ pub async fn paypal_webhook(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| AppError::BadRequest("Missing paypal-transmission-id header".to_string()))?;
 
-    // Look up webhook ID from the database (multi-tenant)
-    let _webhook_id = lookup_webhook_secret(&state, "paypal").await?;
+    // The receiver needs an active "paypal" row to exist before it will look at the event; the
+    // verification itself is the stub below. Loading EVERY active row (not one arbitrary row) keeps
+    // the presence check account-independent (kanban t_3c98f2b6).
+    let _secrets = lookup_webhook_secrets(&state, "paypal").await?;
 
     // Full PayPal webhook verification requires a POST to PayPal's verify-webhook-signature API.
     // This is a stub — production should implement the full verification flow.
@@ -424,4 +469,92 @@ async fn handle_paypal_payment_completed(state: &AppState, event: &Value) -> Res
 async fn handle_paypal_payment_failed(_state: &AppState, _event: &Value) -> Result<(), AppError> {
     tracing::info!("PayPal payment failed/refunded — processing...");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── multi-account signature verification (kanban t_3c98f2b6) ────────────────────────────────
+    //
+    // The endpoints are ONE shared URL while `payment_providers` is per-account, so the receiver
+    // must accept a delivery signed with ANY account's active secret, must resolve the account from
+    // the event rather than from which secret matched, and must still refuse a delivery that no
+    // active secret signed. These four properties are what a later refactor must not break.
+
+    fn sign(payload: &str, secret: &str) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(payload.as_bytes());
+        format!("v1={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    fn credential(secret: &str) -> WebhookSecretRow {
+        WebhookSecretRow {
+            account_id: Uuid::new_v4(),
+            secret: secret.to_string(),
+        }
+    }
+
+    #[test]
+    fn accepts_a_signature_from_any_active_account() {
+        let payload = r#"{"id":"evt_1","type":"checkout.session.completed"}"#;
+        let a = credential("whsec_account_a");
+        let b = credential("whsec_account_b");
+        let credentials = vec![a.clone(), b.clone()];
+
+        // The SECOND account's secret verifies: before t_3c98f2b6 only whichever row the planner
+        // returned first was used, so this delivery was answered 400 "Invalid webhook signature".
+        let verified =
+            verify_stripe_signature_any(payload, &sign(payload, &b.secret), &credentials)
+                .expect("account B's own secret must verify");
+        assert_eq!(verified, b.account_id);
+
+        // The first account's secret still verifies (the owner control).
+        let verified =
+            verify_stripe_signature_any(payload, &sign(payload, &a.secret), &credentials)
+                .expect("account A's own secret must verify");
+        assert_eq!(verified, a.account_id);
+    }
+
+    #[test]
+    fn refuses_a_signature_no_active_account_signed() {
+        let payload = r#"{"id":"evt_2"}"#;
+        let credentials = vec![credential("whsec_account_a"), credential("whsec_account_b")];
+
+        // A secret that belongs to NO active row (a rotated/removed account) is refused.
+        let err =
+            verify_stripe_signature_any(payload, &sign(payload, "whsec_unknown"), &credentials)
+                .expect_err("a foreign secret must not verify");
+        assert!(matches!(err, AppError::BadRequest(ref m) if m == "Invalid webhook signature"));
+
+        // A signature over DIFFERENT bytes is refused too.
+        let err =
+            verify_stripe_signature_any("{}", &sign(payload, "whsec_account_a"), &credentials)
+                .expect_err("a signature over other bytes must not verify");
+        assert!(matches!(err, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn refuses_a_header_that_is_not_a_v1_signature() {
+        let credentials = vec![credential("whsec_account_a")];
+        let err = verify_stripe_signature_any("{}", "t=1,v0=deadbeef", &credentials)
+            .expect_err("a non-v1 header is not a signature");
+        assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("Missing v1=")));
+    }
+
+    #[test]
+    fn single_account_behaviour_is_unchanged() {
+        let payload = r#"{"id":"evt_3"}"#;
+        let only = credential("whsec_only_account");
+        let credentials = vec![only.clone()];
+
+        assert_eq!(
+            verify_stripe_signature_any(payload, &sign(payload, &only.secret), &credentials)
+                .unwrap(),
+            only.account_id
+        );
+        assert!(
+            verify_stripe_signature_any(payload, &sign(payload, "other"), &credentials).is_err()
+        );
+    }
 }

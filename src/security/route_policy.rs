@@ -42,6 +42,17 @@
 //! GET  /api/v1/loyalty/supplier/milestones/:id      <- an anonymous read of a business's milestones
 //! ```
 //!
+//! # The census had a blind spot, and it cost a receiver (kanban t_3c98f2b6, measured 2026-10-14)
+//!
+//! The census read `src/main.rs` alone, so the six routes mounted by the `merge`d sub-router
+//! `src/billing/mod.rs` were never classified: the payment-provider CRUD, `checkout/*` — and BOTH
+//! inbound payment receivers. `POST /api/v1/webhooks/stripe` and `/paypal` therefore sat in
+//! neither list and answered an anonymous POST `401 Authentication required`, which is why no
+//! Stripe or PayPal delivery could ever reach this app's receiver. The census now reads every
+//! merged sub-router, `merged_routers_are_censused` fails when a new `::router` merge is not added
+//! to it, and the two receivers are listed in [`PUBLIC_ROUTES`] beside the loyalty one — a payment
+//! provider presents no credential of ours, so the signature over the raw body is the credential.
+//!
 //! # Adding a route
 //!
 //! Leave it out of both lists and it is private. Do NOT add an entry unless the route must answer a
@@ -136,6 +147,16 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/loyalty/secret-code/verify",
     // --- inbound webhooks (their own signature / shared key is the credential) --
     "/api/v1/loyalty/webhook/stripe",
+    // The billing receivers (kanban t_3c98f2b6). A payment provider delivers with NO credential of
+    // ours — the HMAC over the raw body, verified against the account's own stored signing secret,
+    // IS the credential (src/billing/webhooks.rs). They were reachable before this middleware
+    // existed and were left out of the 2026-10-05 census's deliberately-public list, so both
+    // answered `401 Authentication required` to an anonymous POST — measured 2026-10-14, and the
+    // reason Stripe/PayPal could never deliver: the receiver was dead, not merely unverified. Only
+    // POST is mounted on these two paths, so the method-blind entry cannot expose a write arm
+    // beyond the receiver itself; the sibling `/api/v1/checkout/create` stays private below.
+    "/api/v1/webhooks/stripe",
+    "/api/v1/webhooks/paypal",
     "/api/v1/channels/inbound",
     // Read by the businesses themselves (the served admin guide documents it).
     "/api/v1/treasury/rules",
@@ -330,13 +351,28 @@ mod tests {
     };
     use axum::http::Method;
 
-    /// The route templates `src/main.rs` mounts, read from the source at compile time. A route
+    /// The route templates the router mounts, read from the sources at compile time. A route
     /// joining or leaving the router changes this set, which is what makes the parity test below
     /// fail loudly instead of the allowlist silently rotting.
-    fn mounted_routes() -> Vec<String> {
-        const MAIN: &str = include_str!("../main.rs");
-        let bytes = MAIN.as_bytes();
-        let needle = b".route(";
+    ///
+    /// # Why this is a list and not just `main.rs` (kanban t_3c98f2b6)
+    ///
+    /// The census used to read `src/main.rs` alone, so it could not see a route mounted by a
+    /// `merge`d sub-router. `src/main.rs` ends with `.merge(billing::router(state.clone()))`, and
+    /// `src/billing/mod.rs` mounts six routes — the payment-provider CRUD, `checkout/*` and BOTH
+    /// inbound payment receivers. Those six were therefore invisible to the 2026-10-05 census that
+    /// built the public allowlist, which is exactly why `POST /api/v1/webhooks/stripe` and
+    /// `/paypal` were neither classified public nor listed: they stayed out of the allowlist by
+    /// omission and answered `401 Authentication required` to a payment provider (measured
+    /// 2026-10-14). Add every module whose `router(...)` is merged into `main.rs` below;
+    /// `merged_routers_are_censused` fails when one is missing.
+    const ROUTE_SOURCES: &[(&str, &str)] = &[
+        ("src/main.rs", include_str!("../main.rs")),
+        ("src/billing/mod.rs", include_str!("../billing/mod.rs")),
+    ];
+
+    fn quoted_after(source: &str, needle: &[u8]) -> Vec<String> {
+        let bytes = source.as_bytes();
         let mut out = Vec::new();
         let mut i = 0usize;
         while i + needle.len() <= bytes.len() {
@@ -350,7 +386,7 @@ mod tests {
                     while k < bytes.len() && bytes[k] != b'"' {
                         k += 1;
                     }
-                    out.push(MAIN[j + 1..k].to_string());
+                    out.push(source[j + 1..k].to_string());
                 }
                 i = j;
             } else {
@@ -358,6 +394,56 @@ mod tests {
             }
         }
         out
+    }
+
+    fn mounted_routes() -> Vec<String> {
+        let mut out = Vec::new();
+        for (_, source) in ROUTE_SOURCES {
+            out.extend(quoted_after(source, b".route("));
+        }
+        out
+    }
+
+    /// A `merge`d sub-router that is not in [`ROUTE_SOURCES`] is invisible to the census — the
+    /// allowlist can then keep rotting beside it, which is how the two billing receivers came to
+    /// answer 401 to Stripe. Fail here instead, at the moment the merge is written.
+    #[test]
+    fn merged_routers_are_censused() {
+        let main = ROUTE_SOURCES
+            .iter()
+            .find(|(name, _)| *name == "src/main.rs")
+            .map(|(_, src)| *src)
+            .expect("src/main.rs must be one of ROUTE_SOURCES");
+        let merged: Vec<String> = main
+            .match_indices(".merge(")
+            .map(|(idx, _)| {
+                let rest = &main[idx + ".merge(".len()..];
+                rest.split(['(', ',', ')'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            })
+            .filter(|m| m.ends_with("::router"))
+            .collect();
+        assert!(
+            !merged.is_empty(),
+            "no merged sub-router found in src/main.rs — this test's own extractor is broken"
+        );
+        for m in merged {
+            let module = m.trim_end_matches("::router").trim_end_matches("::");
+            // A module path resolves to either `src/<module>.rs` or the directory form
+            // `src/<module>/mod.rs` (billing is the latter).
+            let flat = format!("src/{module}.rs");
+            let dir = format!("src/{module}/mod.rs");
+            assert!(
+                ROUTE_SOURCES
+                    .iter()
+                    .any(|(name, _)| *name == flat || *name == dir),
+                "src/main.rs merges {m} but neither {flat} nor {dir} is in ROUTE_SOURCES, so its \
+                 routes are invisible to the public-allowlist census"
+            );
+        }
     }
 
     /// Every committed public template must name a route the router actually mounts. A typo, or an
@@ -476,6 +562,11 @@ mod tests {
             "/api/v1/loyalty/online/visit",
             "/api/v1/loyalty/public/program/some-slug",
             "/api/v1/loyalty/webhook/stripe",
+            // The billing receivers (kanban t_3c98f2b6): a payment provider posts with no credential
+            // of ours, so the signature over the raw body is the only credential there can be. Both
+            // answered 401 to an anonymous POST before this entry — measured live 2026-10-14.
+            "/api/v1/webhooks/stripe",
+            "/api/v1/webhooks/paypal",
             "/api/v1/channels/inbound",
             "/api/v1/treasury/rules",
             "/api/v1/business/0a1b2c3d/stats",
@@ -568,5 +659,38 @@ mod tests {
             &Method::GET,
             "/api/v1/knowledge-base/0a1b2c3d"
         ));
+    }
+
+    /// The billing receivers must answer the PROVIDER, which can present nothing of ours — its only
+    /// credential is the HMAC over the raw body, checked against the destination account's own
+    /// stored signing secret inside the handler (kanban t_3c98f2b6). Measured 2026-10-14: both
+    /// templates were absent from this allowlist, so the deployed app answered an anonymous POST
+    /// `401 Authentication required` and no Stripe/PayPal delivery could ever reach the receiver.
+    /// The negative half is the point of the second loop: making the receiver reachable must not
+    /// make any neighbouring account surface anonymous.
+    #[test]
+    fn billing_webhook_receivers_are_public_and_their_neighbours_are_not() {
+        for path in ["/api/v1/webhooks/stripe", "/api/v1/webhooks/paypal"] {
+            assert!(
+                is_public_request(&Method::POST, path),
+                "POST {path} must reach its handler — the provider has no credential to present"
+            );
+            assert!(
+                is_public_route(path),
+                "{path} must be reachable by the provider's own delivery method"
+            );
+        }
+        for path in [
+            "/api/v1/checkout/create",
+            "/api/v1/checkout/sessions",
+            "/api/v1/payment-providers",
+            "/api/v1/webhook",
+            "/api/v1/webhooks",
+        ] {
+            assert!(
+                !is_public_route(path),
+                "{path} is an account surface and must stay private"
+            );
+        }
     }
 }

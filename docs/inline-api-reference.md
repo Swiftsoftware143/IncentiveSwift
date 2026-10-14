@@ -296,21 +296,21 @@ family.
 | POST | `/provider-keys` | JWT | `provider_keys_handler::upsert_provider_key` | Upsert provider key |
 | DELETE | `/provider-keys/:provider` | JWT | `provider_keys_handler::delete_provider_key` | Delete provider key |
 | GET | `/available-providers` | JWT | `provider_keys_handler::list_available_providers` | Available providers |
-| GET | `/payment-providers` | JWT | `checkout_handler::list_payment_providers` | List payment providers |
-| POST | `/payment-providers` | JWT | `checkout_handler::upsert_payment_provider` | Upsert payment provider |
-| DELETE | `/payment-providers/{provider_type}` | JWT | `checkout_handler::delete_payment_provider` | Delete payment provider |
-| POST | `/checkout/create` | JWT | `checkout_handler::create_checkout_session` | Create checkout session |
-| GET | `/checkout/sessions` | JWT | `checkout_handler::list_checkout_sessions` | List checkout sessions |
+| GET | `/payment-providers` | JWT | `billing::providers::list_payment_providers` | List THIS account's payment providers (account-scoped) |
+| POST | `/payment-providers` | JWT | `billing::providers::upsert_payment_provider` | Upsert THIS account's payment provider |
+| DELETE | `/payment-providers/{provider_type}` | JWT | `billing::providers::delete_payment_provider` | Delete THIS account's payment provider |
+| POST | `/checkout/create` | JWT | `billing::checkout::create_checkout_session` | Create checkout session (answers `501 checkout_not_implemented`) |
+| GET | `/checkout/sessions` | JWT | `billing::checkout::list_checkout_sessions` | List checkout sessions |
 
 ## Webhooks
 
 | Method | Path | Auth | Handler | Description |
 |--------|------|------|---------|-------------|
-| POST | `/webhooks/stripe` | None* | `checkout_handler::stripe_webhook` | Stripe (signature-verified) |
-| POST | `/webhooks/paypal` | None* | `checkout_handler::paypal_webhook` | PayPal (signature-verified) |
+| POST | `/webhooks/stripe` | None* | `billing::webhooks::stripe_webhook` | Stripe receiver. The raw-body HMAC is checked against EVERY active `stripe` workspace's stored signing secret and the event is accepted when one of them verifies it (the endpoint is one shared URL, the rows are per-workspace). The workspace acted on is resolved from the event's own session id against `stripe_checkout_sessions`, never from which secret matched, and the account that verified the delivery is logged as `verified_account`. No active secret signed it → `400 Invalid webhook signature` and nothing is written; no active row of the type → `500`. |
+| POST | `/webhooks/paypal` | None* | `billing::webhooks::paypal_webhook` | PayPal receiver. Requires a `paypal-transmission-id` header and at least one active `paypal` row. **The full PayPal `verify-webhook-signature` call is NOT implemented in this app** — the handler is a stub that records and dispatches a `PAYMENT.CAPTURE.*` event once those two are present, so an unverified delivery is accepted. See `src/billing/webhooks.rs`. |
 | POST | `/channels/inbound` | None | `sms_handler::channel_inbound_webhook` | Telnyx SMS/WhatsApp inbound (chat-funnel routing) |
 
-*Webhook endpoints are public but verify signatures in handler body.
+*Webhook endpoints are public but verify signatures in handler body. Both billing receivers are listed in `src/security/route_policy.rs::PUBLIC_ROUTES` — a payment provider presents no credential of ours, so the signature over the raw body is the credential; until kanban t_3c98f2b6 they were absent from that list and every delivery was answered `401 Authentication required` before reaching the handler.
 
 ## Integration Hub
 
