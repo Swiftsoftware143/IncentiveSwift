@@ -1817,9 +1817,10 @@ const PaymentProviders = () => {
     renderApp();
   };
   if (!st._loaded) { st._loaded = true; load(); }
-  // The DELETE route is a super-admin gate in the handler itself ("Only super admins can delete
-  // payment providers"), so the control is offered only where the API will honour it.
-  const isSuper = !!(API.user && API.user.role === 'super_admin');
+  // The DELETE route removes THIS account's own row (kanban t_27514bae): it was platform-wide
+  // ("DELETE ... WHERE provider_type = $1" behind a super-admin gate) and is now
+  // "WHERE provider_type = $1 AND account_id = <caller>" with no role gate, so the control is
+  // offered wherever the row is — same as Edit.
   const openForm = (row) => {
     st.form = { open: true, edit: !!row, provider_type: row ? row.provider_type : 'stripe',
       api_key: '', webhook_secret: '', base_url: (row && row.base_url) || '',
@@ -1841,7 +1842,7 @@ const PaymentProviders = () => {
     catch (e) { f.busy = false; f.err = (e && e.message) || 'Could not save that provider'; renderApp(); }
   };
   const remove = async (row) => {
-    if (!confirm('Delete this account\'s ' + row.provider_type + ' configuration?')) return;
+    if (!confirm('Delete this workspace\'s ' + row.provider_type + ' configuration? Only your own account\'s configuration is removed.')) return;
     st.busy = true; st.msg = null; renderApp();
     try { await API.del('/payment-providers/' + encodeURIComponent(row.provider_type)); st.msg = 'Removed ' + row.provider_type + '.'; }
     catch (e) { st.msg = 'Not removed: ' + ((e && e.message) || e); }
@@ -1866,9 +1867,8 @@ const PaymentProviders = () => {
             <td class="font-mono text-xs text-gray-500">${r.webhook_secret_masked || 'not set'}</td>
             <td class="text-xs text-gray-500">${r.base_url || 'default'}</td>
             <td>${r.is_active ? html`<span class="badge badge-green">Active</span>` : html`<span class="badge badge-red">Inactive</span>`}</td>
-            <td><button class="btn btn-sm" disabled=${st.busy} onClick=${() => openForm(r)}>Edit</button>${isSuper
-              ? html`<button class="btn btn-sm btn-red" style="margin-left:8px" disabled=${st.busy} onClick=${() => remove(r)}>Delete</button>`
-              : html`<span class="text-xs text-gray-400" style="margin-left:8px">Delete is super-admin only</span>`}</td>
+            <td><button class="btn btn-sm" disabled=${st.busy} onClick=${() => openForm(r)}>Edit</button>
+              <button class="btn btn-sm btn-red" style="margin-left:8px" disabled=${st.busy} onClick=${() => remove(r)}>Delete</button></td>
           </tr>`)}</tbody></table></div>`}
     ${st.form && st.form.open ? PaymentProviderModal({ st, closeForm, submit }) : null}
   </div>`;

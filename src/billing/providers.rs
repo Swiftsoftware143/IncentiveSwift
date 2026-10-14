@@ -3,7 +3,15 @@
 //! Endpoints:
 //!   GET    /api/v1/payment-providers              — list providers
 //!   POST   /api/v1/payment-providers              — upsert provider config
-//!   DELETE /api/v1/payment-providers/:provider_type — delete a provider
+//!   DELETE /api/v1/payment-providers/:provider_type — delete THIS account's provider config
+//!
+//! Scope
+//! -----
+//! All three arms bind the CALLER'S `account_id`, unconditionally — no `role == "admin"` bypass.
+//! The row is the account's own payment configuration: `checkout/create` resolves exactly this
+//! account's active row (`WHERE account_id = $1 AND is_active = true`) and the console presents
+//! the row as "this workspace's". `delete_payment_provider` carried NO account predicate until
+//! kanban t_27514bae (measured live, see the handler).
 //!
 //! At-rest shape
 //! -------------
@@ -401,26 +409,48 @@ pub async fn upsert_payment_provider(
 }
 
 /// DELETE /api/v1/payment-providers/:provider_type
+///
+/// Scoped UNCONDITIONALLY to the caller's `account_id` — no `role == "admin"` bypass. Decided by
+/// measurement, not by taste: the GET/POST twins above are both `WHERE account_id = $1`,
+/// `checkout/create` resolves the account's OWN active row (`WHERE account_id = $1 AND
+/// is_active = true`), and the convention this app already established for every account-scoped
+/// CRUD family is unconditional scoping (`surfaces_handler`, `integration_target_handler`,
+/// `delivery`, `tags`).
+///
+/// Measured live 2026-10-14 on the pre-fix binary, two probe tenants each owning one `stripe` row:
+/// the statement was `DELETE FROM payment_providers WHERE provider_type = $1` — i.e. EVERY
+/// account's row — behind `role != "super_admin" -> 403`. A super-admin session of tenant A
+/// answered 200 and BOTH rows were gone (A=1 B=1 -> 0 0) while a normal operator was refused even
+/// for its OWN row. That is a cross-tenant destructive write reachable from a console row that
+/// presents the configuration as this workspace's. No account on this app holds
+/// `role = 'super_admin'` (9 accounts: 5 company_admin, 2 admin, 1 user, 1 unrecognised), so the
+/// gate left the route dead for every real caller AND kept the platform-wide blast radius for the
+/// one session shape that could reach it.
+///
+/// `rows_affected() == 0 -> 404`: a provider type this account does not own is "not found for this
+/// account", never a silent success (and never another account's row).
 pub async fn delete_payment_provider(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path(provider_type): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    // Super admin gate: only super admins can delete payment providers
-    if auth.role != "super_admin" {
-        return Err(AppError::Forbidden(
-            "Only super admins can delete payment providers".to_string(),
-        ));
-    }
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM payment_providers WHERE provider_type = $1")
-        .bind(&provider_type)
-        .execute(&state.db)
-        .await?;
+    let result = sqlx::query(
+        r#"
+        DELETE FROM payment_providers
+        WHERE provider_type = $1 AND account_id = $2
+        "#,
+    )
+    .bind(&provider_type)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound(format!(
-            "Payment provider not found for type '{}'",
+            "No '{}' payment provider is configured for this account",
             provider_type
         )));
     }
