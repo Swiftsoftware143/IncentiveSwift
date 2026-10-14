@@ -54,7 +54,15 @@ pub async fn stripe_webhook(
         .ok_or_else(|| AppError::BadRequest("Missing stripe-signature header".to_string()))?;
 
     let credentials = lookup_webhook_secrets(&s, "stripe").await?;
-    let verified_for = verify_stripe_signature_any(&body, sig_header, &credentials)?;
+    // Genuine AND not a captured delivery replayed later: the `t=` stamp's age is judged against this
+    // host's clock under the configured tolerance, so a recorded header + body stops being a bearer
+    // credential (kanban t_d9fb9e1b).
+    let verified_for = verify_stripe_signature_any(
+        &body,
+        sig_header,
+        &credentials,
+        s.config.stripe_webhook_tolerance_secs,
+    )?;
     tracing::info!(
         verified_account = %verified_for,
         active_secrets = credentials.len(),

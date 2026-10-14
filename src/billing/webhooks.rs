@@ -67,8 +67,14 @@ pub async fn stripe_webhook(
     // that matched.
     let credentials = lookup_webhook_secrets(&state, "stripe").await?;
 
-    // Verify the signature
-    let verified_for = verify_stripe_signature_any(&body, sig_header, &credentials)?;
+    // Verify the signature — and that the delivery is not a CAPTURED one replayed later: the `t=`
+    // stamp's age is judged against this host's clock under the configured tolerance (t_d9fb9e1b).
+    let verified_for = verify_stripe_signature_any(
+        &body,
+        sig_header,
+        &credentials,
+        state.config.stripe_webhook_tolerance_secs,
+    )?;
     tracing::info!(
         verified_account = %verified_for,
         active_secrets = credentials.len(),
@@ -450,14 +456,27 @@ mod tests {
     // `"{t}.{body}"`. The previous fixture signed the bare body and sent a bare `v1=` header, which
     // is why it could not tell that the receiver this file used to ship refused every real delivery.
 
-    const STAMP: &str = "1492774577";
+    /// A `t=` stamp inside the tolerance in force. The fixture used to pin a 2017 stamp; the freshness
+    /// arm (kanban t_d9fb9e1b) now refuses that, so the tests below carry a live stamp — they are about
+    /// the HEADER shape and the per-account verdict, not about the clock.
+    fn live_stamp() -> i64 {
+        crate::billing::stripe_signature::unix_now() - 1
+    }
+
+    fn tolerance() -> i64 {
+        crate::billing::stripe_signature::DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS
+    }
+
+    fn hmac(payload: &str, secret: &str) -> String {
+        crate::billing::stripe_signature::hmac_hex(payload, secret).unwrap()
+    }
 
     fn sign(payload: &str, secret: &str) -> String {
+        let stamp = live_stamp();
         format!(
             "t={},v1={}",
-            STAMP,
-            crate::billing::stripe_signature::hmac_hex(&format!("{}.{}", STAMP, payload), secret)
-                .unwrap()
+            stamp,
+            hmac(&format!("{}.{}", stamp, payload), secret)
         )
     }
 
@@ -477,15 +496,23 @@ mod tests {
 
         // The SECOND account's secret verifies: before t_3c98f2b6 only whichever row the planner
         // returned first was used, so this delivery was answered 400 "Invalid webhook signature".
-        let verified =
-            verify_stripe_signature_any(payload, &sign(payload, &b.secret), &credentials)
-                .expect("account B's own secret must verify");
+        let verified = verify_stripe_signature_any(
+            payload,
+            &sign(payload, &b.secret),
+            &credentials,
+            tolerance(),
+        )
+        .expect("account B's own secret must verify");
         assert_eq!(verified, b.account_id);
 
         // The first account's secret still verifies (the owner control).
-        let verified =
-            verify_stripe_signature_any(payload, &sign(payload, &a.secret), &credentials)
-                .expect("account A's own secret must verify");
+        let verified = verify_stripe_signature_any(
+            payload,
+            &sign(payload, &a.secret),
+            &credentials,
+            tolerance(),
+        )
+        .expect("account A's own secret must verify");
         assert_eq!(verified, a.account_id);
     }
 
@@ -495,15 +522,23 @@ mod tests {
         let credentials = vec![credential("whsec_account_a"), credential("whsec_account_b")];
 
         // A secret that belongs to NO active row (a rotated/removed account) is refused.
-        let err =
-            verify_stripe_signature_any(payload, &sign(payload, "whsec_unknown"), &credentials)
-                .expect_err("a foreign secret must not verify");
+        let err = verify_stripe_signature_any(
+            payload,
+            &sign(payload, "whsec_unknown"),
+            &credentials,
+            tolerance(),
+        )
+        .expect_err("a foreign secret must not verify");
         assert!(matches!(err, AppError::BadRequest(ref m) if m == "Invalid webhook signature"));
 
         // A signature over DIFFERENT bytes is refused too.
-        let err =
-            verify_stripe_signature_any("{}.", &sign(payload, "whsec_account_a"), &credentials)
-                .expect_err("a signature over other bytes must not verify");
+        let err = verify_stripe_signature_any(
+            "{}.",
+            &sign(payload, "whsec_account_a"),
+            &credentials,
+            tolerance(),
+        )
+        .expect_err("a signature over other bytes must not verify");
         assert!(matches!(err, AppError::BadRequest(_)));
     }
 
@@ -514,13 +549,18 @@ mod tests {
         // What Stripe never sends: a bare `v1=` with no `t=`. There are no signed bytes this app
         // can reproduce, so it must not be accepted (the old receiver demanded exactly this shape,
         // which is the inverse of what a real delivery looks like).
-        let err = verify_stripe_signature_any("{}", "v1=deadbeef", &credentials)
+        let err = verify_stripe_signature_any("{}", "v1=deadbeef", &credentials, tolerance())
             .expect_err("a stamp-less header is not a signed delivery");
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("Missing t=")));
 
         // A stamp with no signature value at all is not a delivery either.
-        let err = verify_stripe_signature_any("{}", &format!("t={}", STAMP), &credentials)
-            .expect_err("a header with no v1= carries no signature");
+        let err = verify_stripe_signature_any(
+            "{}",
+            &format!("t={}", live_stamp()),
+            &credentials,
+            tolerance(),
+        )
+        .expect_err("a header with no v1= carries no signature");
         assert!(matches!(err, AppError::BadRequest(ref m) if m.starts_with("Missing v1=")));
     }
 
@@ -531,12 +571,21 @@ mod tests {
         let credentials = vec![only.clone()];
 
         assert_eq!(
-            verify_stripe_signature_any(payload, &sign(payload, &only.secret), &credentials)
-                .unwrap(),
+            verify_stripe_signature_any(
+                payload,
+                &sign(payload, &only.secret),
+                &credentials,
+                tolerance()
+            )
+            .unwrap(),
             only.account_id
         );
-        assert!(
-            verify_stripe_signature_any(payload, &sign(payload, "other"), &credentials).is_err()
-        );
+        assert!(verify_stripe_signature_any(
+            payload,
+            &sign(payload, "other"),
+            &credentials,
+            tolerance()
+        )
+        .is_err());
     }
 }

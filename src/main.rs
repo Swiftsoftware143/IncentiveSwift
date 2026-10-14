@@ -151,6 +151,15 @@ async fn main() -> anyhow::Result<()> {
         config.body_read_deadline_secs
     );
 
+    // Stripe webhook freshness (kanban t_d9fb9e1b). Printed here for the same reason as the line
+    // above: the number an operator sees at boot is the tolerance BOTH receivers enforce, because
+    // both read this one config field. If every delivery starts landing in the refusal arm, the host
+    // clock is the suspect — and the refusal's own log line carries the age it measured.
+    tracing::info!(
+        "Stripe webhook signature tolerance: {}s on both receivers, a delivery whose t= stamp is further from the host clock than that is refused (STRIPE_WEBHOOK_TOLERANCE_SECS overrides, clamped 30..=86400)",
+        config.stripe_webhook_tolerance_secs
+    );
+
     // Build router
     let app = Router::new()
         // Public routes

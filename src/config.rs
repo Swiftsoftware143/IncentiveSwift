@@ -18,6 +18,13 @@ pub struct AppConfig {
     /// `408` (kanban t_af70c0ca). `BODY_READ_DEADLINE_SECS` beats the default, clamped to
     /// `5..=300` so neither a typo nor a fat finger can shed real traffic.
     pub body_read_deadline_secs: u64,
+    /// How far a Stripe delivery's `t=` stamp may be from this host's clock before the delivery is
+    /// refused (kanban t_d9fb9e1b). `STRIPE_WEBHOOK_TOLERANCE_SECS` beats the default — Stripe's own
+    /// 300 s — and is clamped to `30..=86_400`, so neither a typo nor a fat finger can make every
+    /// genuine delivery stale, or stretch the replay bound into meaninglessness. `main.rs` prints the
+    /// value this returns at boot, so the number an operator sees is the number both receivers
+    /// enforce.
+    pub stripe_webhook_tolerance_secs: i64,
 }
 
 impl AppConfig {
@@ -75,6 +82,20 @@ impl AppConfig {
                 .clamp(
                     crate::body_deadline::MIN_BODY_READ_DEADLINE_SECS,
                     crate::body_deadline::MAX_BODY_READ_DEADLINE_SECS,
+                ),
+
+            // Stripe webhook freshness (kanban t_d9fb9e1b). An unset, unreadable or out-of-range
+            // value falls back to the default and is clamped — the app always boots with a tolerance
+            // it can enforce, and the value it enforces is the value `main.rs` prints.
+            stripe_webhook_tolerance_secs: std::env::var("STRIPE_WEBHOOK_TOLERANCE_SECS")
+                .ok()
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .unwrap_or(
+                    crate::billing::stripe_signature::DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS,
+                )
+                .clamp(
+                    crate::billing::stripe_signature::MIN_STRIPE_SIGNATURE_TOLERANCE_SECS,
+                    crate::billing::stripe_signature::MAX_STRIPE_SIGNATURE_TOLERANCE_SECS,
                 ),
         })
     }
