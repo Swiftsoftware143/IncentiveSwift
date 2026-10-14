@@ -552,5 +552,26 @@ live in <code>tenant_logos</code> (migration <code>zz_is11_tenant_email_branding
 per account, <code>ON DELETE CASCADE</code>. An account with no branding renders byte-identical mail
 to before the feature.</p>
 
+<h2>Email provider (platform-wide)</h2>
+<p>The mail credential every account's transactional mail goes out with &mdash; a new signup's
+credentials, password resets, purchase confirmations, and the lifecycle mail the queue sends &mdash;
+is stored once for the whole installation (<code>admin_settings.email</code>) and is set in the
+console at <strong>Email Provider</strong> (nav: <strong>📧 Email Provider</strong>): the provider
+choice, the from name and address, the provider's endpoint and credentials, then <strong>Save
+provider</strong>. Secrets are stored encrypted and are never shown back in full; leaving a secret box
+as it is keeps the stored value. An account that has saved its own mail server under
+<strong>Settings</strong> sends through that server instead.</p>
+<p><strong>Send test email</strong> on the same screen sends one real message through the saved
+provider &mdash; leave the box empty to send it to your own signed-in address, or type an address to
+aim it at an inbox you can check. An address that provably cannot receive mail is withheld: nothing is
+handed to the provider and the screen says so.</p>
+<p><strong>Last transactional email</strong> is the answer the log cannot give: whether the last mail
+actually left. It is written by the app's own send funnel, so it reflects real customer mail (not only
+your test presses): a green &ldquo;✅ Last email accepted by the provider&rdquo; line with the time,
+subject and recipient, a red &ldquo;❌ Last email was NOT delivered &mdash; the customer received
+nothing&rdquo; line with the provider's own reason, or an explicit withheld line for an address that
+was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
+<code>POST /api/v1/admin/email-settings/test</code> (optional <code>?to=address</code>).</p>
+
 </body>
 </html>
