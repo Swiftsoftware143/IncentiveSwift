@@ -1958,7 +1958,7 @@ const EmailProvider = () => {
   // A withheld send is NOT a failure (2026-10-14). `email::send_email_request` records a
   // reserved/harness recipient as ok:false with a `withheld:` detail, because nothing was
   // attempted — so the line must not tell the operator a customer got nothing.
-  const withheld = !!(st.last && !st.last.ok && /^withheld/i.test(String(st.last.detail || '')));
+  const withheld = !!(st.last && !st.last.ok && /^(withheld|recipient-refused)/i.test(String(st.last.detail || '')));
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Email Provider</h2>
@@ -1974,7 +1974,7 @@ const EmailProvider = () => {
         ? html`<div class="text-sm text-gray-400">No transactional email has been attempted yet on this installation.</div>`
         : html`<div class=${st.last.ok ? 'text-sm text-green-700' : (withheld ? 'text-sm text-amber-700' : 'text-sm text-red-700')}>
             ${st.last.ok ? '✅ Last email accepted by the provider'
-              : withheld ? '⛔ Last email was NOT SENT — the recipient is a reserved/test address, so no customer mail was affected'
+              : withheld ? '⛔ Last email was NOT SENT — the recipient is a reserved/test address that can never receive mail, so nothing was attempted and no customer mail was affected'
               : '❌ Last email was NOT delivered — the customer received nothing'}
             <span class="text-gray-500">· ${st.last.at ? new Date(st.last.at).toLocaleString() : 'time not recorded'} · "${st.last.subject || ''}" to ${st.last.to || ''}</span>
           </div>
