@@ -154,6 +154,31 @@ pub struct TestRecipientQuery {
     pub to: Option<String>,
 }
 
+/// The recipient of an admin test send: an explicit `?to=`, else the caller's OWN sign-in address.
+///
+/// A literal address is NEVER a fallback (test-mail hygiene): an empty sign-in address used to fall
+/// back to a hardcoded inbox, so a test press could mail an address the fleet does not own. It is a
+/// refusal the operator can act on instead, and it says how to aim the test explicitly.
+fn test_recipient(explicit: Option<&str>, own: &str) -> Result<String, AppError> {
+    let picked = explicit
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| own.trim());
+    if picked.is_empty() {
+        return Err(AppError::BadRequest(
+            "No inbox to aim the test at: your sign-in address could not be read, so no message was \
+             sent. Sign in again, or name a recipient explicitly with ?to=<address>."
+                .to_string(),
+        ));
+    }
+    if !picked.contains('@') {
+        return Err(AppError::BadRequest(
+            "That is not a usable email address, so nothing was sent.".to_string(),
+        ));
+    }
+    Ok(picked.to_string())
+}
+
 pub async fn test_email_settings(
     State(state): State<AppState>,
     Query(q): Query<TestRecipientQuery>,
@@ -169,11 +194,7 @@ pub async fn test_email_settings(
         })));
     };
 
-    let to = match q.to.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(explicit) => explicit.to_string(),
-        None if auth.email.trim().is_empty() => "swiftsoftware143@yahoo.com".to_string(),
-        None => auth.email.clone(),
-    };
+    let to = test_recipient(q.to.as_deref(), &auth.email)?;
 
     // The SAME record the customer send funnel writes, so a test press and a real customer mail are
     // read off one line. A recipient that cannot receive mail is WITHHELD by `deliver` (it answers
@@ -226,5 +247,29 @@ pub async fn test_email_settings(
                 "detail": e
             })))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_test_send_never_falls_back_to_a_literal_inbox() {
+        // The live defect: an empty sign-in address fell back to a hardcoded inbox.
+        assert!(test_recipient(None, "").is_err());
+        assert!(test_recipient(None, "   ").is_err());
+        assert!(test_recipient(None, "not-an-address").is_err());
+        assert!(test_recipient(Some("   "), "").is_err());
+        // The caller's own address is the recipient when nothing is named.
+        assert_eq!(
+            test_recipient(None, " probe@example.invalid ").unwrap(),
+            "probe@example.invalid"
+        );
+        // An explicit recipient wins over the caller's own address.
+        assert_eq!(
+            test_recipient(Some("aim@example.invalid"), "me@example.invalid").unwrap(),
+            "aim@example.invalid"
+        );
     }
 }
