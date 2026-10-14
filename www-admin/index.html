@@ -232,6 +232,10 @@ API.put = async (p, b) => _put(p, b).catch(e => { if (e.message && e.message.inc
 API.del = async (p) => _del(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 
 const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
+// A count of 1 must not render the plural noun (the class fixed in CoreSwift's usage readout, the
+// missedcall tenant dashboard and the ADASwift operator console). A loyalty tier needing exactly one
+// point used to read "1 points required".
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // kanban t_4fcbe895 — a deep link to ONE screen (`/admin/#profile`), so the app dashboard's
 // "Profile & password" button lands on the Profile screen instead of the dashboard. Read once at
@@ -1385,7 +1389,7 @@ const LoyaltyPrograms = () => {
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       ${st.tiers.map(t => html`<div class="card" data-tier-id=${t.id} style="border-left:4px solid ${t.color||'#cbd5e1'}">
         <h3 class="font-bold text-lg" data-tier-name>${t.name}</h3>
-        <p class="text-sm text-gray-500"><span data-tier-points>${t.points_required||0}</span> points required</p>
+        <p class="text-sm text-gray-500"><span data-tier-points>${plural(t.points_required||0,'point','points')}</span> required</p>
         <p class="text-xs text-gray-400">${t.requires_approval?'Requires approval':'Auto-approved'} · order ${t.sort_order||0}</p>
         <div class="mt-2"><span class="badge badge-blue" data-tier-tag>${t.reward_tag||''}</span></div>
         <div class="mt-3 flex gap-2"><button class="btn btn-sm btn-outline" data-tier-edit onClick=${() => showTier(t)}>Edit</button><button class="btn btn-sm btn-red" data-tier-del onClick=${() => removeTier(t.id)}>Delete</button></div>
@@ -3453,7 +3457,7 @@ const OpsPanel = ({ panel }) => {
   return html`<div class="ops-panel bg-white border rounded-xl mb-3">
     <div class="flex items-center justify-between px-4 py-2 cursor-pointer" onClick=${() => setOpen(o => !o)}>
       <span class="font-semibold text-gray-800 text-sm">${panel.title}</span>
-      <span class="text-xs text-gray-400">${(panel.actions || []).length} controls ${open ? '\u2212' : '+'}</span>
+      <span class="text-xs text-gray-400">${plural((panel.actions || []).length,'control','controls')} ${open ? '\u2212' : '+'}</span>
     </div>
     ${open && html`<div class="px-4 pb-3 border-t pt-3">
       ${panel.list && !panel.bulk && html`<${OpsList} path=${panel.list} />`}
