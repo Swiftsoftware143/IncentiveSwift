@@ -81,6 +81,9 @@
     <a href="#loyalty-float-rule">Float Rule</a>
     <a href="#points-expiry">Points Expiry</a>
     <a href="#form-sections">Form Sections</a>
+    <a href="#tag-to-free-account">Tag to Free Account</a>
+    <a href="#email-branding">Email Branding</a>
+    <a href="#email-provider">Email Provider</a>
   </div>
 </nav>
 <div class="container">
@@ -505,14 +508,8 @@ GET  /api/v1/admin/credits    — View all tenant credits (admin)</pre>
   </div>
 </section>
 
-<div class="foot">
-  <p><strong>IncentiveSwift</strong> — Admin Guide v2.1</p>
-  <p style="margin-top:0.5rem;font-size:0.8rem;opacity:0.7;">Campaign &amp; Survey Platform Administration</p>
-</div>
-
-</div>
-
-<h2 id="tag-to-free-account">Tag to free account</h2>
+<section id="tag-to-free-account">
+  <h2 class="sec-title"><span class="sec-num">11</span> Tag to free account</h2>
 <p>This is the switch that makes the affiliate tag system actually create accounts. When an
 affiliate tags a lead with one of this app's tags — for example "IncentiveSwift — Free" — IncentiveSwift is told to create a
 <strong>free account</strong> for that lead, using the same name and email the lead was captured
@@ -537,8 +534,10 @@ exist for them.</p>
 <p>FunnelSwift is the hub where affiliates and leads live. Tagging is how a lead is routed to the
 software they are interested in. The account is created here, in the destination app, so the lead
 signs in at the app they actually want - and upgrades on this app's own plans and pricing.</p>
+</section>
 
-<h2>Email branding (per account)</h2>
+<section id="email-branding">
+  <h2 class="sec-title"><span class="sec-num">12</span> Email branding (per account)</h2>
 <p>Every transactional email is rendered through the app's one funnel (the account's
 <code>email_branding</code> document + the <code>tenant_logos</code> row), so the mail a business's
 users receive can carry that business's own logo and display name. The tenant manages it in the
@@ -551,8 +550,10 @@ Storage: the text lives in <code>tenant_settings</code> key <code>email_branding
 live in <code>tenant_logos</code> (migration <code>zz_is11_tenant_email_branding.sql</code>), one row
 per account, <code>ON DELETE CASCADE</code>. An account with no branding renders byte-identical mail
 to before the feature.</p>
+</section>
 
-<h2>Email provider (platform-wide)</h2>
+<section id="email-provider">
+  <h2 class="sec-title"><span class="sec-num">13</span> Email provider (platform-wide)</h2>
 <p>The mail credential every account's transactional mail goes out with &mdash; a new signup's
 credentials, password resets, purchase confirmations, and the lifecycle mail the queue sends &mdash;
 is stored once for the whole installation (<code>admin_settings.email</code>) and is set in the
@@ -572,6 +573,14 @@ subject and recipient, a red &ldquo;❌ Last email was NOT delivered &mdash; the
 nothing&rdquo; line with the provider's own reason, or an explicit withheld line for an address that
 was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
 <code>POST /api/v1/admin/email-settings/test</code> (optional <code>?to=address</code>).</p>
+</section>
+
+<div class="foot">
+  <p><strong>IncentiveSwift</strong> — Admin Guide v2.1</p>
+  <p style="margin-top:0.5rem;font-size:0.8rem;opacity:0.7;">Campaign &amp; Survey Platform Administration</p>
+</div>
+
+</div>
 
 </body>
 </html>
