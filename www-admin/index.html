@@ -317,6 +317,10 @@ const Portfolio = () => {
       const r = await API.post('/admin/impersonate', { account_id: company.account_id || company.id });
       sessionStorage.setItem('impersonate_token', r.token);
       sessionStorage.setItem('impersonate_company', JSON.stringify(company));
+      // kanban t_abecd334 — the session has to be VISIBLE, or the way out is unfindable: the banner
+      // below names the account being viewed and carries the Stop control. Before this the token was
+      // stashed and nothing on screen changed.
+      renderApp();
       window.open('https://incentiveswift.com', '_blank');
     } catch(e) { alert('Impersonation failed: ' + e.message); }
   };
@@ -3706,6 +3710,50 @@ const OpsConsole = () => {
   </div>`;
 };
 
+// ---- IMPERSONATION SESSION: the way out (kanban t_abecd334) --------------------------------------
+// POST /api/v1/admin/impersonate hands this console a token minted FOR THE IMPERSONATED ACCOUNT:
+// its `role` is the TARGET's own role and the JWT carries the operator's id in the `impersonating`
+// claim. The way OUT is POST /api/v1/admin/stop-impersonation, and the caller that needs it is
+// exactly that token — the operator gate refuses every /api/v1/admin/* path to it, with ONE
+// documented exception for this route, keyed on the claim (security::auth::admin_surface_denied_for).
+// So Stop has to present the IMPERSONATION token, not this console's own session token: sending the
+// operator's token would prove nothing about the session that exists.
+const IMPERSONATION_KEYS = ['impersonate_token', 'impersonate_company'];
+function impersonationSession() {
+  try {
+    const token = sessionStorage.getItem('impersonate_token');
+    if (!token) return null;
+    let company = {};
+    try { company = JSON.parse(sessionStorage.getItem('impersonate_company') || '{}') || {}; } catch (e) { company = {}; }
+    return { token: token, company: company || {} };
+  } catch (e) { return null; }
+}
+function endImpersonation() {
+  const s = impersonationSession();
+  if (!s) return;
+  const done = () => {
+    IMPERSONATION_KEYS.forEach(k => { try { sessionStorage.removeItem(k); } catch (e) {} });
+    renderApp();
+  };
+  fetch(window.location.origin + '/api/v1/admin/stop-impersonation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + s.token },
+    body: '{}',
+  }).then(done, done);   // the token is discarded either way — the session ends locally regardless
+}
+window._endImpersonation = endImpersonation;
+function impersonationBanner() {
+  const s = impersonationSession();
+  if (!s) return '';
+  const c = s.company || {};
+  const name = c.name || c.email || c.account_id || 'this account';
+  return html`<div id="imp-banner" class="card" data-impersonation="active"
+    style="display:flex;align-items:center;justify-content:space-between;gap:12px;border-left:4px solid #d97706;background:#fffbeb">
+    <span style="font-size:13px;font-weight:600;color:#92400e">\u26A0\uFE0F Viewing as <span id="imp-name">${name}</span> \u2014 you are impersonating this account</span>
+    <button id="imp-stop" class="btn btn-sm btn-red" onClick=${() => window._endImpersonation()}>Stop impersonating</button>
+  </div>`;
+}
+
 const App = () => {
   if(!API.token) return html`<${LoginView} />`;
 
@@ -4328,6 +4376,7 @@ const ProfileView = () => {
       </div>
     </div>
     <div class="main flex-1 p-6 overflow-auto">
+      ${impersonationBanner()}
       <${CurrentView} />
     </div>
   </div>`;

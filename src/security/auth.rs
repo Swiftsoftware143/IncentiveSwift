@@ -354,6 +354,38 @@ pub fn is_admin_surface(path: &str) -> bool {
     })
 }
 
+/// The ONE operator path an impersonation session must be able to reach: the one that ends it.
+const ADMIN_STOP_IMPERSONATION: &str = "/api/v1/admin/stop-impersonation";
+
+/// The roles the operator-only surfaces admit — ONE list, ONE predicate, so the guard's decision
+/// and the unit tests can never drift apart.
+pub fn is_platform_admin(role: &str) -> bool {
+    role == "admin" || role == "super_admin"
+}
+
+/// True when `path` is the one operator route an impersonation session must be able to call.
+pub fn is_stop_impersonation(path: &str) -> bool {
+    path == ADMIN_STOP_IMPERSONATION
+}
+
+/// The full operator-surface decision, including the single carve-out an impersonation session
+/// needs: `true` means answer 403.
+///
+/// [`is_admin_surface`] stays a pure path test. This adds the one exception that has to exist:
+/// `handlers::admin_handler::impersonate` mints the impersonation JWT with the IMPERSONATED
+/// account's own role (`target_role`), so every `/api/v1/admin/*` path is refused to it — including
+/// `POST /api/v1/admin/stop-impersonation`, whose entire purpose is to end that session. Measured
+/// live on admin.incentiveswift.com (kanban t_abecd334): the impersonation session's own Stop
+/// answered `403 Admin role required`, so an operator could only abandon the session by dropping the
+/// token. The carve-out is exactly ONE path and it requires the `impersonating` claim that only the
+/// impersonate handler sets, so a plain tenant token gains nothing from it or from any sibling.
+pub fn admin_surface_denied_for(path: &str, role: &str, impersonating: bool) -> bool {
+    if impersonating && is_stop_impersonation(path) {
+        return false;
+    }
+    is_admin_surface(path) && !is_platform_admin(role)
+}
+
 /// Auth guard for the operator-only surfaces: `/api/v1/admin/*` and [`OPERATOR_ONLY_PATHS`].
 ///
 /// SECURITY (kanban t_88e535af). Until this pass the console's `adminOnly` nav flag was the ONLY
@@ -406,15 +438,24 @@ pub async fn admin_guard(
         .map(str::to_string)
         .ok_or_else(|| AppError::Unauthorized("Admin authentication required".to_string()))?;
 
-    let role = match validate_api_key(&state, &token).await? {
-        Some(user) => user.role,
-        None => crate::security::jwt::verify_jwt(&token, &state.config.jwt_secret)?
-            .role
-            .clone()
-            .unwrap_or_else(|| "authenticated".to_string()),
+    // The role AND the impersonation claim decide together: the claim is what lets an impersonation
+    // session reach the ONE route that ends it (see [`admin_surface_denied_for`]). An API key
+    // resolves to a role but carries no claim, so it is never impersonating.
+    let (role, impersonating) = match validate_api_key(&state, &token).await? {
+        Some(user) => (user.role, false),
+        None => {
+            let claims = crate::security::jwt::verify_jwt(&token, &state.config.jwt_secret)?;
+            (
+                claims
+                    .role
+                    .clone()
+                    .unwrap_or_else(|| "authenticated".to_string()),
+                claims.impersonating.is_some(),
+            )
+        }
     };
 
-    if role != "admin" && role != "super_admin" {
+    if admin_surface_denied_for(&path, &role, impersonating) {
         return Err(AppError::Forbidden("Admin role required".to_string()));
     }
 
@@ -424,8 +465,9 @@ pub async fn admin_guard(
 #[cfg(test)]
 mod tests {
     use super::{
-        account_gate, is_admin_surface, is_state_changing, issued_key_prefix, unknown_account,
-        AccountGate, KEY_PREFIX_LEN,
+        account_gate, admin_surface_denied_for, is_admin_surface, is_platform_admin,
+        is_state_changing, is_stop_impersonation, issued_key_prefix, unknown_account, AccountGate,
+        KEY_PREFIX_LEN,
     };
     use crate::error::AppError;
     use axum::http::Method;
@@ -500,6 +542,73 @@ mod tests {
             "/api/v1/administrators",
         ] {
             assert!(!is_admin_surface(p), "{p} must stay reachable");
+        }
+    }
+
+    /// The live defect (kanban t_abecd334): an impersonation session could START but not STOP.
+    /// `handlers::admin_handler::impersonate` mints the impersonation JWT with the TARGET account's
+    /// own role, so the token an operator holds while impersonating is never `admin` and the guard
+    /// refused every `/api/v1/admin/*` path — `stop-impersonation` included, before its handler ran.
+    ///
+    /// Both directions of the one carve-out, and the non-impersonation arms, are pinned here so a
+    /// future widening has to change this test too.
+    #[test]
+    fn an_impersonation_session_may_end_itself_and_nothing_else_on_the_operator_surface() {
+        let stop = "/api/v1/admin/stop-impersonation";
+        // The one carve-out: an impersonation token reaches the route that ends it...
+        assert!(!admin_surface_denied_for(stop, "company_admin", true));
+        assert!(!admin_surface_denied_for(stop, "user", true));
+        assert!(is_stop_impersonation(stop));
+        // ...and still reaches NOTHING else on the operator surface — the prefix is not a door.
+        for path in [
+            "/api/v1/admin",
+            "/api/v1/admin/impersonate",
+            "/api/v1/admin/tenants",
+            "/api/v1/admin/portfolio-sync",
+            "/api/v1/admin/allcampaigns",
+            "/api/v1/portfolio-companies",
+            "/api/v1/email-templates",
+        ] {
+            assert!(
+                admin_surface_denied_for(path, "company_admin", true),
+                "an impersonation token must not reach {path}"
+            );
+        }
+        // A NON-impersonation tenant token gains nothing from the carve-out: that is the whole point
+        // of keying on the `impersonating` claim rather than on the path alone.
+        assert!(admin_surface_denied_for(stop, "company_admin", false));
+        assert!(admin_surface_denied_for(stop, "user", false));
+        // The platform admin keeps every door, claim or not.
+        assert!(!admin_surface_denied_for(stop, "admin", false));
+        assert!(!admin_surface_denied_for(stop, "super_admin", false));
+        assert!(!admin_surface_denied_for(
+            "/api/v1/portfolio-companies",
+            "admin",
+            false
+        ));
+        // The carve-out is ONE exact path, not a prefix: no sibling rides in on it.
+        for near in [
+            "/api/v1/admin/stop-impersonation/anything",
+            "/api/v1/admin/stop-impersonate",
+            "/api/v1/admin/stop-impersonation/",
+        ] {
+            assert!(
+                admin_surface_denied_for(near, "company_admin", true),
+                "{near} must not ride the stop-impersonation carve-out"
+            );
+        }
+        // One role list, and it is the narrow one the console's admin surface uses.
+        assert!(is_platform_admin("admin"));
+        assert!(is_platform_admin("super_admin"));
+        for role in [
+            "company_admin",
+            "user",
+            "owner",
+            "impersonated",
+            "ADMIN",
+            "",
+        ] {
+            assert!(!is_platform_admin(role), "{role} is not a platform admin");
         }
     }
 
