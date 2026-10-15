@@ -16,6 +16,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 .row{display:flex;gap:12px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:14px}
 .row .k{width:110px;color:#64748b;flex-shrink:0}
 .row .v{color:#0f172a;word-break:break-word}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px}
+.stat{border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fff}
+.stat .v{font-size:23px;font-weight:700;color:#1e293b}
+.stat .l{font-size:12.5px;color:#64748b;margin-top:3px}
+.act{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:13.5px}
+.act .a-c{color:#0f172a;font-weight:600}
+.act .a-w{color:#64748b}
 </style>
 <link rel="stylesheet" href="/tw.css">
 </head>
@@ -61,6 +68,20 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" style="background:#7c3aed" onclick="location.href='/iqs.html'">🎯 IQS — Qualifying Surveys</button>
       <button class="btn" style="background:#64748b" onclick="location.href='/integrations.html'">🔌 Integrations</button>
     </div>
+  </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your numbers</h2>
+    <!-- Two routes this app already ships had NO caller on any served page: GET /api/v1/dashboard/stats
+         (total_campaigns / total_entries / total_participants / total_points / total_rewards) and
+         GET /api/v1/dashboard/activity (the newest entries). The customer guide has always told the
+         reader the dashboard shows these at a glance, so the page below now renders the server's own
+         figures. Nothing is invented here and nothing is cached for display: every tile is the
+         endpoint's own answer at load. -->
+    <div id="dash-stats" style="color:#64748b;font-size:14px">Loading your numbers&hellip;</div>
+  </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Recent activity</h2>
+    <div id="dash-activity" style="color:#64748b;font-size:14px">Loading recent activity&hellip;</div>
   </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Email branding</h2>
@@ -124,6 +145,8 @@ if (!token) {
   fetchAccount();
   ebLoad();
   pbLoad();
+  loadStats();
+  loadActivity();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
@@ -180,6 +203,76 @@ function fetchAccount() {
     // The cached paint stays on screen; a failed refresh must not blank the panel.
     var el = document.getElementById('account');
     if (el && el.textContent.indexOf('Loading') === 0) el.textContent = 'Could not load your account right now.';
+  });
+}
+
+// ---- Your numbers + recent activity ----------------------------------------------------------
+// Both cards are fed by routes the app already ships (GET /api/v1/dashboard/stats and
+// GET /api/v1/dashboard/activity). Every figure and every row is the server's own answer — no
+// client-side arithmetic, no placeholder copy. An unreachable endpoint says so instead of showing
+// a zero, and an account with no entries reads the empty state in words.
+function dashNum(v) {
+  if (v === null || v === undefined) return '—';
+  var n = Number(v);
+  return isFinite(n) ? n.toLocaleString('en-US') : String(v);
+}
+function dashMsg(id, text, kind) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.style.color = (kind === 'e') ? '#dc2626' : '#64748b';
+  el.textContent = text;
+}
+function loadStats() {
+  fetch(window.location.origin + '/api/v1/dashboard/stats', {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (d) {
+    var el = document.getElementById('dash-stats');
+    if (!el) return;
+    if (!d) { dashMsg('dash-stats', 'Could not load your numbers right now.', 'e'); return; }
+    var tiles = [
+      ['Total campaigns', d.total_campaigns],
+      ['Total entries', d.total_entries],
+      ['Participants', d.total_participants],
+      ['Points issued', d.total_points],
+      ['Rewards given', d.total_rewards]
+    ];
+    var h = '<div class="stats">';
+    for (var i = 0; i < tiles.length; i++) {
+      h += '<div class="stat"><div class="v">' + esc(dashNum(tiles[i][1])) + '</div>'
+        + '<div class="l">' + esc(tiles[i][0]) + '</div></div>';
+    }
+    el.innerHTML = h + '</div>';
+  }).catch(function () {
+    dashMsg('dash-stats', 'Could not load your numbers right now.', 'e');
+  });
+}
+function loadActivity() {
+  fetch(window.location.origin + '/api/v1/dashboard/activity', {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (d) {
+    var el = document.getElementById('dash-activity');
+    if (!el) return;
+    var list = (d && (d.activities || d.data)) || [];
+    if (!list.length) {
+      el.innerHTML = '<p style="color:#64748b;font-size:14px;margin:0">No entries yet. The newest '
+        + 'entries to your campaigns appear here as people take part.</p>';
+      return;
+    }
+    var h = '';
+    for (var i = 0; i < list.length && i < 10; i++) {
+      var a = list[i] || {};
+      var when = String(a.created_at || '').slice(0, 16).replace('T', ' ');
+      h += '<div class="act"><div><span class="a-c">' + esc(a.campaign || '') + '</span>'
+        + ' <span class="a-w">— ' + esc(a.participant || 'Anonymous') + '</span></div>'
+        + '<div class="a-w">' + esc(when) + '</div></div>';
+    }
+    el.innerHTML = h;
+  }).catch(function () {
+    dashMsg('dash-activity', 'Could not load recent activity right now.', 'e');
   });
 }
 
@@ -411,7 +504,7 @@ function pbUpgrade(slug, price, planId) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Plan & billing shows what your plan includes and starts an upgrade when one is available", "Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and starts an upgrade when one is available", "Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=0bc326c56c5e"></script>
