@@ -2282,6 +2282,88 @@ const ContactsView = () => {
   </div>`;
 };
 
+// ---- ANALYTICS ----
+// The app has served four analytics routes since it shipped — `GET /api/v1/analytics/overview`,
+// `/contacts`, `/campaigns`, `/loyalty` (src/handlers/analytics_handler.rs, every query bound to the
+// caller's own account_id) — and NO screen in either console ever called one of them: the only
+// /analytics/* use anywhere in the served pages was Contacts' import/export pair. So this view reads
+// them. Every number names a real answer from one of the four routes; a route that does not answer
+// renders '—', never a fabricated 0, and a total outage says so instead of painting an empty account.
+const AnalyticsView = () => {
+  const st = viewState('analytics', { loaded: false, busy: false, err: '', ov: null, co: null, ca: null, lo: null });
+  const load = async () => {
+    st.busy = true; st.err = '';
+    const one = async (p) => { try { return await API.get(p); } catch (e) { return null; } };
+    const ov = await one('/analytics/overview');
+    const co = await one('/analytics/contacts');
+    const ca = await one('/analytics/campaigns');
+    const lo = await one('/analytics/loyalty');
+    st.ov = ov; st.co = co; st.ca = ca; st.lo = lo;
+    st.busy = false; st.loaded = true;
+    if (!ov && !co && !ca && !lo) st.err = 'The analytics routes did not answer, so nothing is shown here. Reload to try again.';
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; load(); }
+  const num = v => (typeof v === 'number' && isFinite(v)) ? String(v) : '—';
+  const pct = v => (typeof v === 'number' && isFinite(v)) ? (v + '%') : '—';
+  const ov = st.ov || {}, co = st.co || {}, lo = st.lo || {};
+  const campaigns = (st.ca && st.ca.campaigns) || [];
+  const programs = (lo.programs) || [];
+  const tiles = [
+    ['Campaigns', num(ov.total_campaigns)],
+    ['Active campaigns', num(ov.active_campaigns)],
+    ['Contacts', num(ov.total_contacts)],
+    ['Entries', num(ov.total_entries)],
+    ['Wins', num(ov.total_wins)],
+    ['Win rate', pct(ov.win_rate_percent)],
+    ['Loyalty members', num(ov.total_loyalty_members)],
+    ['Points issued', num(ov.total_points_issued)],
+  ];
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Analytics</h2><p class="text-sm text-gray-500">Live counts from this account's own analytics routes — overview, contacts, campaigns and loyalty. Every figure below is an answer from one of them.</p></div>
+      <button class="border rounded px-3 py-1.5 text-sm" onClick=${load}>${st.busy ? 'Refreshing...' : 'Refresh'}</button>
+    </div>
+    ${st.err ? html`<div class="mb-3 text-sm text-red-600 bg-red-50 border rounded px-3 py-2">${st.err}</div>` : null}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      ${tiles.map(t => html`<div class="card p-4"><div class="text-xs text-gray-500">${t[0]}</div><div class="text-2xl font-bold">${t[1]}</div></div>`)}
+    </div>
+    <div class="card overflow-hidden mb-5">
+      <div class="px-4 py-3 border-b text-sm font-medium">Campaign performance <span class="text-gray-400">(${(st.ca && st.ca.total != null ? st.ca.total : campaigns.length)})</span></div>
+      <table class="table w-full">
+        <thead><tr><th>Campaign</th><th>Type</th><th>Status</th><th>Entries</th><th>Unique</th><th>Wins</th><th>Win rate</th></tr></thead>
+        <tbody>
+          ${campaigns.map(c => html`<tr>
+            <td class="font-medium text-sm">${c.name || c.slug || '—'}</td>
+            <td class="text-sm">${String(c.type || '—').replace(/_/g, ' ')}</td>
+            <td class="text-sm">${c.status || '—'}</td>
+            <td class="text-sm">${num(c.total_entries)}</td>
+            <td class="text-sm">${num(c.unique_contacts)}</td>
+            <td class="text-sm">${num(c.total_wins)}</td>
+            <td class="text-sm">${pct(c.win_rate)}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+      ${!campaigns.length ? html`<div class="text-center text-gray-400 py-8">${st.loaded ? 'No campaigns yet' : 'Loading...'}</div>` : null}
+    </div>
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card p-4">
+        <div class="text-sm font-medium mb-2">Contacts</div>
+        <div class="text-sm text-gray-600">New in 30 days: <b>${num(co.new_contacts_30d)}</b></div>
+        <div class="text-sm text-gray-600">Repeat entrants: <b>${num(co.repeat_entriers)}</b> (${pct(co.repeat_entry_rate)} of entrants)</div>
+        <div class="text-sm text-gray-600">Entry growth: <b>${pct(ov.entry_growth_percent)}</b></div>
+        ${(co.top_contacts || []).length ? html`<div class="mt-2 text-sm text-gray-500">Top: ${(co.top_contacts || []).map(t => (t.name || t.email || '—')).join(', ')}</div>` : null}
+      </div>
+      <div class="card p-4">
+        <div class="text-sm font-medium mb-2">Loyalty <span class="text-gray-400">(${num(lo.total_programs)} program(s))</span></div>
+        <div class="text-sm text-gray-600">Members: <b>${num(lo.total_members)}</b> · active in 30 days: <b>${num(lo.active_members_30d)}</b></div>
+        <div class="text-sm text-gray-600">Points issued: <b>${num(lo.total_points_issued)}</b> · redeemed: <b>${num(ov.total_redemptions)}</b></div>
+        ${programs.length ? html`<div class="mt-2 text-sm text-gray-500">${programs.map(p => (p.name || p.slug || '—')).join(', ')}</div>` : null}
+      </div>
+    </div>
+  </div>`;
+};
+
 // ---- API KEYS ----
 const ApiKeysView = () => {
   const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '' });
@@ -4395,6 +4477,7 @@ const ProfileView = () => {
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    { id: 'analytics', label: 'Analytics', icon: '📈' },
     { id: 'profile', label: 'Profile', icon: '👤' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
@@ -4421,7 +4504,7 @@ const ProfileView = () => {
     { id: 'deals', label: 'Deals', icon: '🤝' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
