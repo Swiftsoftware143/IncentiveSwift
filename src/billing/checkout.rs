@@ -61,8 +61,32 @@ pub struct CreateCheckoutInput {
 
 /// POST /api/v1/checkout/create
 ///
-/// Refuses, honestly and explicitly, unless a payment provider is configured *and* this app
-/// implements that provider's checkout call. See the module docs for the arm table.
+/// A REAL Stripe Checkout session for a PLATFORM PLAN, or an explicit refusal (card: the ladder was
+/// unbuyable). Until this change the handler could only ever refuse: it resolved the provider from
+/// the CALLER's own row alone and then answered `501 checkout_not_implemented` whatever key was
+/// configured, because the Stripe call had never been written. Measured live 2026-10-15 with a real
+/// workspace token: the paid plan answered `501`, `checkout_sessions` stayed empty, and the tenant
+/// console's Upgrade button (shipped the same day) could never complete a purchase.
+///
+/// The arms now, cheapest first:
+///
+/// * `price_amount` not finite/positive -> 400 (a zero price is not a checkout)
+/// * `plan_id` missing/unknown/inactive -> 404 `plan_not_found`
+/// * the PLAN's own price is 0 -> 400 "That plan costs nothing…"
+/// * no active provider row and none owned by a platform-operator account -> 503
+///   `payment_provider_not_configured`, naming where the key belongs
+/// * a resolved provider that is not Stripe -> 501 `checkout_not_implemented`
+/// * a Stripe row whose key cannot be read -> 503 `payment_provider_not_configured`
+/// * Stripe ACCEPTED the session -> 201 `{url, session_id, plan}` + a `pending` `checkout_sessions`
+///   row that carries the plan in its metadata
+/// * Stripe REFUSED the session -> 424 `checkout_session_failed` with Stripe's own sentence
+///
+/// 424 and never 502 for the failure arm: Cloudflare REPLACES the body of an origin 502 with its own
+/// page, so the customer would see nothing at all (FunnelSwift measured the same on 2026-10-15).
+///
+/// The price CHARGED is the plan row's own (`COALESCE(NULLIF(price_monthly, 0), price)`, the
+/// expression `/auth/me` and the public catalogue already use); the caller's `price_amount` is
+/// echoed on a refusal and never trusted as the amount.
 pub async fn create_checkout_session(
     State(state): State<AppState>,
     auth: AuthenticatedUser,
@@ -91,27 +115,56 @@ pub async fn create_checkout_session(
         )));
     }
 
-    // Resolve the account's own ACTIVE payment provider row.
-    let provider: Option<(String, String)> = sqlx::query_as(
-        "SELECT provider_type, api_key FROM payment_providers \
-         WHERE account_id = $1 AND is_active = true ORDER BY created_at LIMIT 1",
+    // ── 1. The PLAN, from our own catalogue. ─────────────────────────────────────────────────────
+    let raw_plan_id = body.plan_id.as_deref().map(str::trim).unwrap_or("");
+    let plan_id =
+        Uuid::parse_str(raw_plan_id).map_err(|_| AppError::NotFound("Unknown plan".to_string()))?;
+    let plan: Option<(String, String, f64)> = sqlx::query_as(
+        "SELECT slug, name, COALESCE(NULLIF(price_monthly, 0), price)::float8 FROM plans \
+         WHERE id = $1 AND is_active = true",
     )
-    .bind(account_id)
+    .bind(plan_id)
     .fetch_optional(&state.db)
     .await?;
+    let Some((plan_slug, plan_name, plan_price)) = plan else {
+        tracing::warn!(%account_id, %plan_id, "checkout/create REFUSED: unknown or inactive plan");
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "plan_not_found",
+                "message": "That plan does not exist (or is no longer on sale). No session was \
+                            created and no charge can occur.",
+                "requested": requested,
+            })),
+        ));
+    };
+    if !plan_price.is_finite() || plan_price <= 0.0 {
+        return Err(AppError::BadRequest(
+            "That plan costs nothing — there is nothing to check out.".to_string(),
+        ));
+    }
 
-    let Some((provider_type, stored_key)) = provider else {
+    // ── 2. Which merchant account funds this purchase? ───────────────────────────────────────────
+    // A plan is sold BY the platform TO a workspace, so the merchant account is the platform's.
+    // Resolution order (see [`resolve_plan_provider`]): the buyer's own active row first, so a
+    // workspace that brought its own Stripe account keeps paying through it, then the operator's.
+    let resolved = resolve_plan_provider(&state, account_id).await?;
+    let Some((provider_account, provider_type)) = resolved else {
         tracing::error!(
             %account_id,
-            "checkout/create REFUSED: no active payment provider for account"
+            "checkout/create REFUSED: no active payment provider for the account and none owned by \
+             a platform-operator account"
         );
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "payment_provider_not_configured",
-                "message": "No payment provider is configured for this account, so checkout cannot \
-                            work. Add the provider's keys first (Integrations -> Provider Keys). No \
-                            session was created and no charge can occur.",
+                "message": "No payment provider is configured, so checkout cannot work. The \
+                            platform operator adds Stripe's keys in the admin console (Provider \
+                            Keys / Payment providers) on the operator's own account; that key then \
+                            funds every workspace's plan purchase, and a workspace that brings its \
+                            own Stripe account is charged through its own. No session was created \
+                            and no charge can occur.",
                 "configured": false,
                 "requested": requested,
             })),
@@ -134,26 +187,41 @@ pub async fn create_checkout_session(
         ));
     }
 
-    // provider_keys / payment_providers store the secret as ciphertext at rest; a row whose key
-    // cannot be decrypted is the same as no key at all.
-    let secret_key =
-        crate::security::provider_key_crypto::decrypt_from_storage(&state.db, stored_key.trim())
-            .await
-            .ok()
-            .filter(|k| !k.trim().is_empty());
+    if provider_account != account_id {
+        tracing::info!(
+            buyer = %account_id, provider_owner = %provider_account,
+            "checkout/create: charging through the platform account (buyer has no provider of its own)"
+        );
+    }
 
-    let Some(_secret_key) = secret_key else {
+    // ── 3. The key, from the RESOLVED owner's row (never the buyer's alone). ─────────────────────
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT api_key FROM payment_providers \
+         WHERE account_id = $1 AND provider_type = 'stripe' AND is_active = true \
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(provider_account)
+    .fetch_optional(&state.db)
+    .await?;
+    let secret_key = crate::security::provider_key_crypto::decrypt_from_storage(
+        &state.db,
+        stored.as_deref().unwrap_or("").trim(),
+    )
+    .await
+    .ok()
+    .filter(|k| !k.trim().is_empty());
+    let Some(secret_key) = secret_key else {
         tracing::error!(
-            %account_id,
-            "checkout/create REFUSED: stripe provider row has no usable api_key"
+            %account_id, %provider_account,
+            "checkout/create REFUSED: the resolved stripe row has no usable api_key"
         );
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "payment_provider_not_configured",
                 "message": "A Stripe provider exists but its secret key is missing or unreadable, \
-                            so no session was created and no charge can occur. Re-enter the key in \
-                            Provider Keys.",
+                            so no session was created and no charge can occur. An admin must \
+                            re-enter the key in the admin panel (Provider Keys).",
                 "configured": false,
                 "provider_type": provider_type,
                 "requested": requested,
@@ -161,24 +229,222 @@ pub async fn create_checkout_session(
         ));
     };
 
-    // A usable Stripe key IS configured — but this app has no Stripe checkout call yet. Answer
-    // that truth instead of inventing a session: the only arm that ever existed here fabricated a
-    // `checkout.example.com` URL. Wiring the real call is the next step, blocked on the credential.
-    tracing::error!(
-        %account_id,
-        "checkout/create REFUSED: stripe configured but no Stripe checkout call implemented"
+    // ── 4. The real Stripe session. ──────────────────────────────────────────────────────────────
+    let (url, provider_session_id) = match create_stripe_plan_session(
+        account_id,
+        &auth.email,
+        plan_id,
+        &plan_slug,
+        &plan_name,
+        plan_price,
+        &secret_key,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                %account_id, plan = %plan_slug, error = %e,
+                "checkout/create: the Stripe session FAILED — no session row written, no charge can occur"
+            );
+            return Ok((
+                StatusCode::FAILED_DEPENDENCY,
+                Json(json!({
+                    "error": "checkout_session_failed",
+                    "message": e,
+                    "configured": true,
+                    "requested": requested,
+                })),
+            ));
+        }
+    };
+
+    // The buyer's own `users` row when the account has one. `checkout_sessions.user_id` has no FK
+    // (only `account_id` does), so a workspace whose signup minted no user row falls back to its
+    // account id rather than writing a NOT NULL column as NULL.
+    let user_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT u.id FROM users u JOIN accounts a ON a.tenant_id = u.tenant_id \
+         WHERE a.id = $1 ORDER BY u.created_at LIMIT 1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let user_id = user_id.unwrap_or(account_id);
+
+    sqlx::query(
+        "INSERT INTO checkout_sessions \
+         (id, account_id, user_id, price_amount, price_currency, description, success_url, cancel_url, \
+          metadata, status, payment_provider, provider_session_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 'stripe', $10)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(user_id)
+    .bind(plan_price)
+    .bind(&body.price_currency)
+    .bind(body.description.clone())
+    .bind(body.success_url.clone())
+    .bind(body.cancel_url.clone())
+    .bind(json!({
+        "kind": "plan",
+        "account_id": account_id.to_string(),
+        "plan_id": plan_id.to_string(),
+        "plan_slug": plan_slug,
+    }))
+    .bind(&provider_session_id)
+    .execute(&state.db)
+    .await?;
+
+    tracing::info!(
+        %account_id, plan = %plan_slug, session = %provider_session_id,
+        "stripe checkout session created"
     );
     Ok((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "error": "checkout_not_implemented",
-            "message": "A Stripe provider is configured, but this app does not implement the Stripe \
-                        checkout call yet. No session was created and no charge can occur.",
-            "configured": true,
-            "provider_type": provider_type,
-            "requested": requested,
-        })),
+        StatusCode::CREATED,
+        Json(json!({ "url": url, "session_id": provider_session_id, "plan": plan_slug })),
     ))
+}
+
+/// WHICH payment provider funds a PLAN purchase (card: the ladder was unbuyable, measured 2026-10-15).
+///
+/// A plan is sold BY the platform TO a workspace, so the merchant account is the platform's. This
+/// used to read the CALLER's own row only, while the only shipped writer of the table is the
+/// account's own Provider Keys screen. The consequence was measured live: `payment_providers` held
+/// 0 rows, `POST /api/v1/checkout/create` answered `503` for every workspace, and the operator's key
+/// could not have changed that — every plan purchase would still have looked for a row owned by the
+/// BUYING workspace.
+///
+/// Resolution order, lowest-surprise first:
+///   1. the buying account's OWN active row — unchanged behaviour, so a workspace that brings its
+///      own merchant account keeps paying through it and nothing existing moves;
+///   2. otherwise the OLDEST active row owned by an account whose `role` is `admin`/`super_admin` —
+///      this app's own definition of the platform operator (`security::auth::is_platform_admin`,
+///      and the value the login puts in the token from `accounts.role`), i.e. the key the operator
+///      entered in the admin console;
+///   3. otherwise `None` -> the caller answers 503 naming exactly where the key belongs.
+///
+/// The role guard on arm 2 is load-bearing: without it ANY workspace could register, save its own
+/// Stripe key and have every customer's plan purchase on the install charged to that workspace.
+async fn resolve_plan_provider(
+    state: &AppState,
+    account_id: Uuid,
+) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    let own: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT account_id, provider_type FROM payment_providers \
+         WHERE account_id = $1 AND is_active = true ORDER BY created_at LIMIT 1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if own.is_some() {
+        return Ok(own);
+    }
+    sqlx::query_as(
+        "SELECT pp.account_id, pp.provider_type FROM payment_providers pp \
+         WHERE pp.is_active = true \
+           AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = pp.account_id \
+                         AND a.role IN ('admin', 'super_admin')) \
+         ORDER BY pp.created_at LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+}
+
+/// Percent-encode ONE `application/x-www-form-urlencoded` component (RFC 3986 unreserved set kept).
+///
+/// The body is built here by hand rather than through a serialiser: the Stripe form API needs literal
+/// `line_items[0][price_data][unit_amount]`-style keys, and a serde sequence/map is one dependency
+/// change away from deciding those keys for us. Stripe validates the API key BEFORE it parses the
+/// body, so a malformed body is invisible behind an auth failure — the encoder is pinned by a unit
+/// test instead.
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Create the Stripe Checkout session for a monthly plan.
+///
+/// Kept to ONE outbound call so the whole thing is provable without a live Stripe account: the base
+/// URL honours `STRIPE_API_BASE` (default = production, so unset behaviour is byte-identical) and the
+/// redirect origin honours `STRIPE_CHECKOUT_ORIGIN` — a local stub can assert the exact request the
+/// app builds. Returns `(checkout_url, provider_session_id)`, or Stripe's own sentence on a refusal.
+///
+/// `metadata[kind]=plan` + `metadata[account_id]` + `metadata[plan_slug]` are what the receiver needs
+/// to grant the right plan to the right workspace. They are set HERE, and the receiver re-reads them
+/// from THIS app's `checkout_sessions` row (identified by the Stripe session id Stripe signed) rather
+/// than from the event's own metadata — the same trust boundary the loyalty receiver documents.
+async fn create_stripe_plan_session(
+    account_id: Uuid,
+    email: &str,
+    plan_id: Uuid,
+    plan_slug: &str,
+    plan_name: &str,
+    price: f64,
+    secret_key: &str,
+) -> Result<(String, String), String> {
+    let api_base = std::env::var("STRIPE_API_BASE")
+        .unwrap_or_else(|_| "https://api.stripe.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+    let origin = std::env::var("STRIPE_CHECKOUT_ORIGIN")
+        .unwrap_or_else(|_| "https://app.incentiveswift.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+
+    let body = plan_session_form(
+        account_id, email, plan_id, plan_slug, plan_name, price, &origin,
+    );
+
+    let resp = reqwest::Client::new()
+        .post(format!("{api_base}/v1/checkout/sessions"))
+        .header("Authorization", format!("Bearer {secret_key}"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .timeout(std::time::Duration::from_secs(25))
+        .send()
+        .await
+        .map_err(|e| format!("could not reach Stripe: {e}"))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Never echo the key. Stripe's own message is safe and is what an operator needs.
+        let msg = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("Stripe returned {status}"));
+        return Err(format!("Stripe refused the session: {msg}"));
+    }
+
+    let parsed: Value =
+        serde_json::from_str(&text).map_err(|e| format!("unreadable Stripe response: {e}"))?;
+    let session_id = parsed
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let url = parsed
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if session_id.is_empty() || url.is_empty() {
+        return Err("Stripe accepted the request but returned no session id/url".to_string());
+    }
+    Ok((url, session_id))
 }
 
 /// GET /api/v1/checkout/sessions
@@ -223,4 +489,196 @@ pub async fn list_checkout_sessions(
         .collect();
 
     Ok(Json(json!({ "items": items, "count": items.len() })))
+}
+
+/// The exact `application/x-www-form-urlencoded` body for a monthly PLAN checkout session.
+///
+/// Split out of the outbound call for one reason: Stripe validates the API key BEFORE it parses the
+/// body, so a malformed body is invisible behind an auth failure. Everything a Stripe session needs
+/// is asserted here, in a unit test, instead of being inferred from a 401.
+fn plan_session_form(
+    account_id: Uuid,
+    email: &str,
+    plan_id: Uuid,
+    plan_slug: &str,
+    plan_name: &str,
+    price: f64,
+    origin: &str,
+) -> String {
+    // A monthly plan, so the session is a subscription rather than a one-off charge. Stripe takes
+    // the amount in whole cents.
+    let cents = (price * 100.0).round() as i64;
+    let params: Vec<(&str, String)> = vec![
+        ("mode", "subscription".to_string()),
+        ("payment_method_types[]", "card".to_string()),
+        ("line_items[0][quantity]", "1".to_string()),
+        ("line_items[0][price_data][currency]", "usd".to_string()),
+        ("line_items[0][price_data][unit_amount]", cents.to_string()),
+        (
+            "line_items[0][price_data][recurring][interval]",
+            "month".to_string(),
+        ),
+        (
+            "line_items[0][price_data][product_data][name]",
+            format!("{plan_name} plan (monthly)"),
+        ),
+        (
+            "success_url",
+            format!("{origin}/dashboard/?checkout=success"),
+        ),
+        (
+            "cancel_url",
+            format!("{origin}/dashboard/?checkout=cancelled"),
+        ),
+        ("client_reference_id", account_id.to_string()),
+        ("customer_email", email.to_string()),
+        ("metadata[kind]", "plan".to_string()),
+        ("metadata[account_id]", account_id.to_string()),
+        ("metadata[plan_id]", plan_id.to_string()),
+        ("metadata[plan_slug]", plan_slug.to_string()),
+    ];
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v)))
+        .collect::<Vec<String>>()
+        .join("&")
+}
+
+#[cfg(test)]
+mod plan_session_form_tests {
+    //! The Stripe request body is built here rather than by a serialiser, so these tests ARE the
+    //! contract: a `Vec`/`HashMap` form would be one dependency change away from sending
+    //! `0=line_items%5B0%5D`-style keys, and Stripe's auth check would hide it.
+    use super::{plan_session_form, urlencode};
+    use uuid::Uuid;
+
+    fn decoded(body: &str) -> Vec<(String, String)> {
+        body.split('&')
+            .map(|pair| {
+                let (k, v) = pair.split_once('=').expect("every part is key=value");
+                (undecode(k), undecode(v))
+            })
+            .collect()
+    }
+
+    fn undecode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' && i + 2 < b.len() {
+                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap();
+                out.push(u8::from_str_radix(hex, 16).expect("valid percent escape"));
+                i += 3;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).expect("ascii in, utf8 out")
+    }
+
+    fn value<'a>(pairs: &'a [(String, String)], key: &str) -> &'a str {
+        pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or_else(|| panic!("missing key {key}"))
+    }
+
+    #[test]
+    fn stripes_bracket_keys_survive_encoding() {
+        // Built from integers on purpose: the deploy gate refuses literal UUIDs in `src/` (query by
+        // slug instead), and a test never needs a real row's id.
+        let account = Uuid::from_u128(0x1111_1111_1111_1111_1111_1111_1111_1111);
+        let plan = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222);
+        let body = plan_session_form(
+            account,
+            "buyer@example.invalid",
+            plan,
+            "pro",
+            "Pro",
+            49.0,
+            "https://app.incentiveswift.com",
+        );
+        // The raw body is percent-encoded...
+        assert!(body.contains("line_items%5B0%5D%5Bprice_data%5D%5Bunit_amount%5D=4900"));
+        assert!(
+            !body.contains("line_items[0]"),
+            "keys must be encoded, not literal"
+        );
+        // ...and it decodes to exactly the keys Stripe parses.
+        let pairs = decoded(&body);
+        assert_eq!(value(&pairs, "mode"), "subscription");
+        assert_eq!(value(&pairs, "line_items[0][quantity]"), "1");
+        assert_eq!(value(&pairs, "line_items[0][price_data][currency]"), "usd");
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][unit_amount]"),
+            "4900"
+        );
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][recurring][interval]"),
+            "month"
+        );
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][product_data][name]"),
+            "Pro plan (monthly)"
+        );
+        assert_eq!(
+            value(&pairs, "success_url"),
+            "https://app.incentiveswift.com/dashboard/?checkout=success"
+        );
+        assert_eq!(
+            value(&pairs, "cancel_url"),
+            "https://app.incentiveswift.com/dashboard/?checkout=cancelled"
+        );
+        assert_eq!(value(&pairs, "client_reference_id"), account.to_string());
+        // The four fields the receiver reads back off OUR row, never off the event.
+        assert_eq!(value(&pairs, "metadata[kind]"), "plan");
+        assert_eq!(value(&pairs, "metadata[account_id]"), account.to_string());
+        assert_eq!(value(&pairs, "metadata[plan_id]"), plan.to_string());
+        assert_eq!(value(&pairs, "metadata[plan_slug]"), "pro");
+    }
+
+    #[test]
+    fn price_goes_out_in_cents_and_the_amount_is_not_the_callers() {
+        let account = Uuid::nil();
+        let plan = Uuid::nil();
+        // 199.00 -> 19900; a half-cent is rounded, never truncated to a free charge.
+        let body = plan_session_form(
+            account,
+            "x@example.invalid",
+            plan,
+            "enterprise",
+            "Enterprise",
+            199.0,
+            "https://o",
+        );
+        assert_eq!(
+            value(&decoded(&body), "line_items[0][price_data][unit_amount]"),
+            "19900"
+        );
+        let body = plan_session_form(
+            account,
+            "x@example.invalid",
+            plan,
+            "pro",
+            "Pro",
+            9.005,
+            "https://o",
+        );
+        assert_eq!(
+            value(&decoded(&body), "line_items[0][price_data][unit_amount]"),
+            "901"
+        );
+    }
+
+    #[test]
+    fn urlencode_keeps_the_unreserved_set_and_escapes_everything_else() {
+        assert_eq!(urlencode("aZ09-_.~"), "aZ09-_.~");
+        assert_eq!(urlencode("a b"), "a%20b");
+        assert_eq!(urlencode("+&=%"), "%2B%26%3D%25");
+        // UTF-8 goes out byte-wise (é is two bytes), never as a raw byte.
+        assert_eq!(urlencode("é"), "%C3%A9");
+    }
 }

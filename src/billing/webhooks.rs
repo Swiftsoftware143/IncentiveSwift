@@ -317,6 +317,77 @@ async fn deliver_credentials(
 // Webhook event handlers
 // ---------------------------------------------------------------------------
 
+/// Grant the plan behind a PLAN checkout session this app created, if this event names one.
+///
+/// Returns `true` when the event named one of OUR plan sessions (so the loyalty arm must not also
+/// run), `false` otherwise. Nothing here trusts the event's metadata: the account and the plan come
+/// from `checkout_sessions` — the row WE wrote when the session was created — and the plan is applied
+/// through the same `plans.slug -> plan_tiers.slug -> accounts.plan_tier_id` mapping the operator's
+/// Assign-plan arm uses (`handlers::plans_handler::admin_assign_plan`), because `accounts.plan_tier_id`
+/// is what `/auth/me` and every feature gate read.
+///
+/// `status = 'pending'` in the lookup makes a replayed delivery a no-op: the first one flips the row
+/// to `completed`, so a second event finds nothing and falls through as if it were not ours.
+async fn grant_plan_session(state: &AppState, provider_session_id: &str) -> Result<bool, AppError> {
+    let row = sqlx::query(
+        "SELECT account_id, COALESCE(metadata->>'plan_slug', '') AS plan_slug \
+           FROM checkout_sessions \
+          WHERE provider_session_id = $1 AND payment_provider = 'stripe' \
+            AND COALESCE(metadata->>'kind', '') = 'plan' \
+            AND status = 'pending'",
+    )
+    .bind(provider_session_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+
+    let account_id: Uuid = row.try_get("account_id")?;
+    let plan_slug: String = row.try_get("plan_slug")?;
+
+    // No tier of that slug: grant nothing rather than leave a half-applied plan, and say so.
+    let tier_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1")
+        .bind(&plan_slug)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some(tier_id) = tier_id else {
+        tracing::error!(
+            session = %provider_session_id, plan = %plan_slug,
+            "Stripe plan checkout completed but NO plan_tiers row carries that slug — nothing granted"
+        );
+        return Ok(true);
+    };
+
+    sqlx::query("UPDATE accounts SET plan_tier_id = $1, updated_at = NOW() WHERE id = $2")
+        .bind(tier_id)
+        .bind(account_id)
+        .execute(&state.db)
+        .await?;
+    sqlx::query(
+        "UPDATE checkout_sessions SET status = 'completed', updated_at = NOW() \
+          WHERE provider_session_id = $1 AND status = 'pending'",
+    )
+    .bind(provider_session_id)
+    .execute(&state.db)
+    .await?;
+    tracing::info!(
+        session = %provider_session_id, %account_id, plan = %plan_slug,
+        "Stripe plan checkout completed — the workspace's plan tier was granted"
+    );
+
+    // The referral credit the loyalty door already carries, so a plan bought through this path is
+    // attributed exactly like one the operator granted by hand.
+    if let Some(plan_id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE slug = $1")
+        .bind(&plan_slug)
+        .fetch_optional(&state.db)
+        .await?
+    {
+        crate::handlers::plans_handler::attribute_plan_upgrade(state, account_id, plan_id).await;
+    }
+    Ok(true)
+}
+
 async fn handle_stripe_checkout_completed(state: &AppState, event: &Value) -> Result<(), AppError> {
     tracing::info!("Stripe checkout.session.completed — processing...");
 
@@ -324,6 +395,16 @@ async fn handle_stripe_checkout_completed(state: &AppState, event: &Value) -> Re
     let provider_session_id = session["id"].as_str().unwrap_or("");
     if provider_session_id.is_empty() {
         tracing::warn!("Stripe checkout.session.completed missing session ID");
+        return Ok(());
+    }
+
+    // A PLATFORM PLAN purchase, created by THIS app's own checkout (`billing::checkout`): the account
+    // that pays and the plan to grant are read from OUR `checkout_sessions` row, identified by the
+    // Stripe session id in the signature-verified event — never from the event's own metadata. That is
+    // the same trust boundary the loyalty receiver documents (`handlers::stripe_webhook`), and it is
+    // why a plan session is not silently swallowed by the loyalty arm below, which looks the session
+    // up in a DIFFERENT table.
+    if grant_plan_session(state, provider_session_id).await? {
         return Ok(());
     }
 
