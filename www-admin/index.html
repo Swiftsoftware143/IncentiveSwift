@@ -295,7 +295,7 @@ const Dashboard = () => {
 
 // ---- PORTFOLIO ----
 const Portfolio = () => {
-  const st = viewState('portfolio', { list: [], showModal: false, editItem: null, search: '' });
+  const st = viewState('portfolio', { list: [], showModal: false, editItem: null, search: '', picker: false });
   const load = async () => { try { const data = await API.get('/portfolio-companies'); st.list = (data && data.companies) ? data.companies : (Array.isArray(data) ? data : []); renderApp(); } catch(e) { try { const data2 = await API.get('/portfolio-companies'); st.list = (data2 && data2.companies) ? data2.companies : (Array.isArray(data2) ? data2 : []); renderApp(); } catch(e2) { console.error(e2); } } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -311,29 +311,23 @@ const Portfolio = () => {
     try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
   };
   const remove = async (id) => { if(!confirm('Delete this portfolio company?')) return; await API.del('/portfolio-companies/' + id); load(); };
-  const impersonate = async (company) => {
-    if(!confirm('Impersonate as ' + company.name + '?')) return;
-    try {
-      const r = await API.post('/admin/impersonate', { account_id: company.account_id || company.id });
-      sessionStorage.setItem('impersonate_token', r.token);
-      sessionStorage.setItem('impersonate_company', JSON.stringify(company));
-      // kanban t_abecd334 — the session has to be VISIBLE, or the way out is unfindable: the banner
-      // below names the account being viewed and carries the Stop control. Before this the token was
-      // stashed and nothing on screen changed.
-      renderApp();
-      window.open('https://incentiveswift.com', '_blank');
-    } catch(e) { alert('Impersonation failed: ' + e.message); }
-  };
+  // kanban t_3f5aab99 — the per-row "🔑 Impersonate" button that used to live here is GONE, and this
+  // is why: it posted `company.account_id || company.id`, and `GET /portfolio-companies` selects
+  // `WHERE account_id = <caller>`, so every row it could ever show belongs to the OPERATOR. The button
+  // could only start a session as the operator themselves (JWT role stayed `admin`) — a support
+  // session for a real tenant was unreachable from the console. The screen's Impersonate control is
+  // now the header button below, which opens the account picker (`ImpersonateAccounts`).
 
   const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()) || (c.slug||'').toLowerCase().includes(st.search.toLowerCase()) || (c.domain||'').toLowerCase().includes(st.search.toLowerCase()));
 
   return html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Company</button></div></div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button id="pf-impersonate" class="btn btn-sm btn-blue" title="Start a support session as another account" onClick=${() => { st.picker = !st.picker; renderApp(); }}>🔑 Impersonate an account</button><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Company</button></div></div>
+    ${st.picker && html`<${ImpersonateAccounts} />`}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td><td class="text-gray-500">${c.slug || c.domain || '-'}</td>
-          <td><button class="btn btn-sm btn-blue" onClick=${() => impersonate(c)} title="Impersonate">🔑 Impersonate</button><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No portfolio companies yet.</td></tr>`}
       </tbody></table>
@@ -3125,6 +3119,10 @@ const OPS_PANELS = [
 "title": "4 \u00b7 Tenants",
 "list": "/admin/tenants",
 "bulk": "tenant-delete",
+// kanban t_3f5aab99 — this panel is where the operator FINDS an account, so it also carries the
+// impersonation picker (`ImpersonateAccounts`). Nothing else on this panel changes: the mass-delete
+// table below is untouched, and both controls are rendered only for the panel that declares them.
+"impersonate": "tenant",
 "actions": [
 {
 "label": "Delete tenant",
@@ -3697,6 +3695,7 @@ const OpsPanel = ({ panel }) => {
     ${open && html`<div class="px-4 pb-3 border-t pt-3">
       ${panel.list && !panel.bulk && html`<${OpsList} path=${panel.list} />`}
       ${panel.bulk === 'tenant-delete' && html`<${BulkTenantDelete} />`}
+      ${panel.impersonate === 'tenant' && html`<${ImpersonateAccounts} />`}
       ${(panel.actions || []).map(a => html`<${OpsAction} act=${a} />`)}
     </div>`}
   </div>`;
@@ -3753,6 +3752,97 @@ function impersonationBanner() {
     <button id="imp-stop" class="btn btn-sm btn-red" onClick=${() => window._endImpersonation()}>Stop impersonating</button>
   </div>`;
 }
+
+// ---- CHOOSING THE ACCOUNT TO IMPERSONATE (kanban t_3f5aab99) -------------------------------------
+// `POST /api/v1/admin/impersonate` has always accepted ANY account id and mints a token carrying THAT
+// account's own role — but the console's only Impersonate control sat on the Portfolio screen and
+// posted the ROW's own account_id. `GET /portfolio-companies` is scoped `WHERE account_id = <caller>`,
+// so every row it can render belongs to the operator: the button could only ever start a session as
+// the operator themselves (role stayed `admin`), and a support session for a real tenant was
+// unreachable from the console. This picker is the missing half — the operator CHOOSES the account.
+// It reads the account list from `GET /api/v1/admin/tenants` (the same read the Tenants panel and the
+// Provisioning screen already make) and stores the token under the same two sessionStorage keys the
+// banner and the Stop control (t_abecd334) read, so the way out is unchanged.
+async function startImpersonation(target) {
+  const id = (target && (target.id || target.account_id)) || '';
+  if (!id) return null;
+  const label = (target && (target.name || target.email)) || id;
+  if (!confirm('Impersonate ' + label + '?')) return null;
+  const r = await API.post('/admin/impersonate', { account_id: id });
+  try {
+    sessionStorage.setItem('impersonate_token', r.token);
+    sessionStorage.setItem('impersonate_company', JSON.stringify({
+      id: id, account_id: id,
+      name: (target && target.name) || '', email: (target && target.email) || '',
+      role: ((r && r.impersonating) || {}).role || '',
+    }));
+  } catch (e) {}
+  renderApp();
+  try { window.open('https://incentiveswift.com', '_blank'); } catch (e) {}
+  return r;
+}
+
+// The picker. Used by BOTH Impersonate entry points — the Portfolio screen's header button and the
+// Tenants panel of the Operator Console — so there is exactly one account list and one call shape.
+// The operator's OWN account is listed but cannot be picked: a session as yourself is not a support
+// session (the token's role stays `admin`, which is what made the old button misleading).
+const ImpersonateAccounts = () => {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(null);
+  const load = async () => {
+    setErr(null);
+    try { const d = await API.get('/admin/tenants'); setRows((d && d.tenants) || []); }
+    catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
+  };
+  useEffect(() => { load(); }, []);
+  const list = rows || [];
+  const meId = (S.me && S.me.id) || '';
+  const needle = (q || '').trim().toLowerCase();
+  const shown = needle
+    ? list.filter(r => ((r.name || '') + ' ' + (r.email || '') + ' ' + (r.id || '')).toLowerCase().includes(needle))
+    : list;
+  const go = async (r) => {
+    setBusy(r.id); setMsg(null);
+    try { await startImpersonation(r); setMsg({ ok: true, text: 'Session started as ' + ((r.name || r.email) || r.id) }); }
+    catch (e) { setMsg({ ok: false, text: 'Impersonation failed: ' + ((e && e.message) || e) }); }
+    setBusy('');
+  };
+  return html`<div class="ops-action border rounded-lg p-2 mb-2 bg-gray-50" data-impersonate-picker="1">
+    <div class="flex flex-wrap items-center gap-2 mb-2">
+      <span class="text-xs font-semibold text-gray-700">Impersonate an account (support session)</span>
+      <input id="imp-picker-search" class="border rounded px-2 py-1 text-sm" style="width:280px"
+        placeholder="Search name, email or id..." value=${q} onInput=${e => setQ(e.target.value)} />
+      <button class="px-2 py-0.5 rounded border text-xs" disabled=${!!busy} onClick=${load}>reload</button>
+      ${msg && html`<span class="text-xs ${msg.ok ? 'text-green-700' : 'text-red-600'}">${msg.text}</span>`}
+    </div>
+    ${err ? html`<div class="text-xs text-red-600">${err}</div>`
+      : !rows ? html`<div class="text-xs text-gray-400">loading...</div>`
+      : html`<div class="overflow-auto" style="max-height:260px">
+        <table class="ops-table text-xs w-full border-collapse">
+          <thead><tr>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">name</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">email</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">plan</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">id</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">session</th>
+          </tr></thead>
+          <tbody>${shown.slice(0, 100).map(r => html`<tr class="imp-picker-row" data-account-id=${r.id}>
+            <td class="border-b px-2 py-1">${r.name || ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}</td>
+            <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
+            <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
+            <td class="border-b px-2 py-1">${r.id === meId
+              ? html`<span class="text-gray-400" style="font-size:11px">your own account</span>`
+              : html`<button class="btn btn-sm btn-blue imp-go" data-account-id=${r.id}
+                  disabled=${busy === r.id} onClick=${() => go(r)}>${busy === r.id ? '...' : '🔑 Impersonate'}</button>`}</td>
+          </tr>`)}</tbody>
+        </table></div>
+        <div class="text-xs text-gray-500 mt-1">${shown.length} of ${list.length} account(s) — pick the account you need to support. The banner at the top of the screen names the session; Stop impersonating ends it.</div>`}
+  </div>`;
+};
 
 const App = () => {
   if(!API.token) return html`<${LoginView} />`;
