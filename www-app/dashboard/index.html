@@ -54,6 +54,28 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <div id="account" style="color:#64748b;font-size:14px">Loading your account…</div>
   </div>
   <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Profile picture</h2>
+    <!-- The account's own face, on the customer's OWN dashboard. The other five apps let a tenant set
+         their picture from their dashboard; here the upload lived only on the Profile screen inside
+         the admin console, so a customer had to leave their dashboard to change it. This drives the
+         SAME two endpoints that screen drives - POST|DELETE /api/v1/auth/avatar - so there is one
+         store (`user_avatars`) and one writer, never two. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">The picture that appears beside your name on this dashboard and in the console. PNG, JPEG, GIF or WebP, up to 2&nbsp;MB. Leave it unset and your initial is shown instead.</p>
+    <div id="pp-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+      <div style="min-width:200px">
+        <div style="font-size:12px;color:#64748b;margin-bottom:6px">Current picture</div>
+        <img id="pp-prev" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:none;border:1px solid #e2e8f0;background:#fff">
+        <span id="pp-ph" class="uav-ph" style="width:56px;height:56px;font-size:22px">?</span>
+        <input id="pp-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn" onclick="ppUpload()">Upload picture</button>
+      <button class="btn" id="pp-rm" style="background:#64748b;display:none" onclick="ppRemove()">Remove picture</button>
+    </div>
+  </div>
+  <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Dashboard</h2>
     <p style="color:#64748b;font-size:14px;margin:0">Welcome to IncentiveSwift. Your user portal is active.</p>
     <p style="color:#64748b;font-size:14px;margin:8px 0 0">Your admin console manages your campaigns, loyalty programs, leads, tags, API keys and settings.</p>
@@ -167,6 +189,8 @@ function paintAccount(u) {
     ph.style.display = 'flex';
     ph.textContent = (String(nm) + '?').charAt(0).toUpperCase();
   }
+  // The Profile picture card shows the same face; paint it from this one answer.
+  ppSet(u.avatar_url || '', (String(nm) + '?').charAt(0).toUpperCase());
   var rows = [
     ['Name', u.name || '—'],
     ['Email', u.email || '—'],
@@ -297,6 +321,75 @@ function doLogout() {
 // for the name + colour (validated server-side), and POST|DELETE /api/v1/settings/branding/logo for
 // the logo bytes (the only writer of `logo_url`). A save NEVER sends `logo_url`, so it cannot
 // un-reference a logo that is still stored.
+// ---- Profile picture --------------------------------------------------------------------------
+// The account's own face, driven from the customer's dashboard. POST /api/v1/auth/avatar takes the
+// image as multipart/form-data (field `file`) or as the raw body, magic-byte sniffed, 2 MB cap;
+// DELETE removes it and /auth/me stops advertising a picture. No URL is stored by this page: the
+// response's avatar_url repaints both the card and the header, and a reload re-derives it from
+// /auth/me (the single writer of the derived URL).
+function ppMsg(t, kind) {
+  var m = document.getElementById('pp-msg');
+  if (!m) return;
+  m.style.color = (kind === 'e') ? '#dc2626' : (kind === 's' ? '#16a34a' : '#64748b');
+  m.textContent = t;
+}
+function ppAuth() { return { 'Authorization': 'Bearer ' + token }; }
+function ppUrl(u) {
+  if (!u) return '';
+  return (u.indexOf('http://') === 0 || u.indexOf('https://') === 0) ? u : window.location.origin + u;
+}
+function initialOf() {
+  var u = null;
+  try { u = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) {}
+  var nm = (u && (u.name || u.email)) || '?';
+  return (String(nm) + '?').charAt(0).toUpperCase();
+}
+function ppSet(u, initial) {
+  var im = document.getElementById('pp-prev');
+  var ph = document.getElementById('pp-ph');
+  var rm = document.getElementById('pp-rm');
+  if (im) { if (u) { im.src = ppUrl(u); im.style.display = 'block'; } else { im.style.display = 'none'; im.removeAttribute('src'); } }
+  if (ph) { ph.style.display = u ? 'none' : 'flex'; if (!u && initial) ph.textContent = initial; }
+  if (rm) rm.style.display = u ? '' : 'none';
+  // The header badge carries the same picture: repaint it from this one answer, never a second call.
+  var av = document.getElementById('uav'), hp = document.getElementById('uavph');
+  if (av && hp) {
+    if (u) { av.src = ppUrl(u); av.style.display = 'block'; hp.style.display = 'none'; }
+    else { av.style.display = 'none'; hp.style.display = 'flex'; if (initial) hp.textContent = initial; }
+  }
+}
+function ppUpload() {
+  var f = document.getElementById('pp-file');
+  var file = (f && f.files) ? f.files[0] : null;
+  if (!file) { ppMsg('Choose an image first', 'e'); return; }
+  if (file.size > 2031616) { ppMsg('That image is too large - 2 MB maximum', 'e'); return; }
+  var fd = new FormData(); fd.append('file', file, file.name || 'picture');
+  ppMsg('Uploading\u2026', 'i');
+  fetch(window.location.origin + '/api/v1/auth/avatar', { method: 'POST', headers: ppAuth(), body: fd })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function (d) { ppSet(d.avatar_url || '', initialOf()); if (f) f.value = ''; ppMsg('Picture updated', 's'); })
+    .catch(function (e) { ppMsg((e && e.message) || 'Upload failed', 'e'); });
+}
+function ppRemove() {
+  if (!confirm('Remove your profile picture?')) return;
+  ppMsg('Removing\u2026', 'i');
+  fetch(window.location.origin + '/api/v1/auth/avatar', { method: 'DELETE', headers: ppAuth() })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function () { ppSet('', initialOf()); ppMsg('Picture removed', 's'); })
+    .catch(function (e) { ppMsg((e && e.message) || 'Could not remove the picture', 'e'); });
+}
 function ebMsg(t, kind) {
   var m = document.getElementById('eb-msg');
   if (!m) return;
