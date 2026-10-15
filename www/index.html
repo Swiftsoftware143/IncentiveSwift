@@ -301,6 +301,30 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
 })();
 </script>
 
+<!-- kanban t_1762f2c4 - the fixed consent bar (z-index 99999) sat over the footer's legal row, so a
+     real click on Terms/Privacy/Refunds landed on the bar and the link never navigated (measured in
+     Chromium at the bottom of the page: elementFromPoint returned the bar). While the bar is on
+     screen the footer reserves exactly its measured height - so the 139-162px wrap at 390 wide is
+     covered too - and the reservation is dropped the moment the bar is accepted, declined or
+     removed, leaving the footer unchanged for a visitor who answers. Raising the links' z-index
+     above the bar stays forbidden. -->
+<script>
+(function(){
+  var bar=function(){return document.getElementById('cookie-banner')||document.getElementById('cookie-consent');};
+  var fit=function(){
+    var b=bar(), f=document.querySelector('footer');
+    if(!f) return;
+    var h=b?b.getBoundingClientRect().height:0;
+    f.style.paddingBottom=h>0?(Math.ceil(h)+24)+'px':'';
+  };
+  var b=bar();
+  try{ if(b) new MutationObserver(fit).observe(b,{attributes:true,attributeFilter:['style']});
+       new MutationObserver(fit).observe(document.body,{childList:true}); }catch(e){}
+  window.addEventListener('resize',fit);
+  window.addEventListener('load',fit);
+  fit();
+})();
+</script>
 </body>
 
 <!-- MODAL SCRIPTS -->
