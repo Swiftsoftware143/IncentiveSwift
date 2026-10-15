@@ -315,15 +315,17 @@ pub async fn coreswift_lists(
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("CoreSwift unreachable: {e}")))?;
+        .map_err(|e| AppError::UpstreamRefused(format!("CoreSwift unreachable: {e}")))?;
 
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or_else(|_| json!({ "lists": [] }));
 
     if !status.is_success() {
-        return Err(AppError::Internal(format!(
-            "CoreSwift returned {status}: {}",
-            serde_json::to_string(&body).unwrap_or_default()
+        let detail = serde_json::to_string(&body).unwrap_or_default();
+        tracing::warn!("CoreSwift refused the lists request: {status} {detail}");
+        return Err(AppError::UpstreamRefused(format!(
+            "CoreSwift returned {status} — the stored key was refused, or the CoreSwift URL is \
+             wrong. Hub said: {detail}"
         )));
     }
 

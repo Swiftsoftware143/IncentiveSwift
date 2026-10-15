@@ -47,6 +47,20 @@ pub enum AppError {
     #[error("Payload too large: {0}")]
     PayloadTooLarge(String),
 
+    /// 424 — an integration PARTNER was reached and refused (or could not be reached).
+    ///
+    /// WHY 424 AND NOT 500: `GET /api/v1/integrations/coreswift/lists` mapped the hub's refusal
+    /// onto [`AppError::Internal`], whose arm LOGS the reason and answers the caller a bare
+    /// "Internal server error" — measured live 2026-10-15: a tenant whose stored key CoreSwift
+    /// refuses clicked "Test — fetch lists" and got `{"code":500,"error":"Internal server
+    /// error"}`, indistinguishable from our own server breaking and impossible to act on. 424
+    /// Failed Dependency means exactly "the action depended on another action and that action
+    /// failed", it carries the partner's own words, and being a 4xx Cloudflare passes the body
+    /// through verbatim (CF REPLACES an origin 502/504 body with its own page). Same class fixed
+    /// in FunnelSwift (fbf7753) and missedcallrespondr (5d1d858).
+    #[error("Upstream refused: {0}")]
+    UpstreamRefused(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -64,6 +78,8 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),
+            // 424, and the provider's own sentence is the body — see the variant's doc.
+            AppError::UpstreamRefused(msg) => (StatusCode::FAILED_DEPENDENCY, msg.clone()),
             AppError::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "Rate limit exceeded".to_string(),
