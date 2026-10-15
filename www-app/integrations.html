@@ -121,7 +121,7 @@ function cardHtml(p){
   var h = '<div class="card' + (pinned?' pinned':'') + '" data-provider="'+esc(p.key)+'">';
   h += '<div style="display:flex;justify-content:space-between;align-items:center">';
   h += '<h2 style="font-size:16px;font-weight:600;margin:0">'+esc(p.name)+(pinned?'<span class="badge rec">Recommended</span>':'')+'</h2>';
-  h += '<span class="badge '+(on?'ok':'no')+'">'+(on?'Connected':'Not connected')+'</span></div>';
+  h += '<span class="status-badge badge '+(on?'ok':'no')+'">'+(on?'Key on file':'Not connected')+'</span></div>';
   h += '<p class="muted" style="margin:8px 0 0">'+esc(p.description||'')+'</p>';
 
   if (on) {
@@ -169,6 +169,21 @@ function out(card, text, isErr){
   el.style.color = isErr ? '#991b1b' : '#166534';
 }
 
+/* The card badge must agree with the sentence under it. A stored key is not a working key, so
+   the badge says "Key on file" until a LIVE probe accepts it, and "Key rejected" when a live
+   probe refuses it. Nothing here claims a connection that was never made. */
+function badge(card, text, isBad){
+  /* Resolve the CURRENT card by provider. The Connect flow re-renders the grid (load()) before
+     the probe answers, so the element wire() captured is detached by then and an update written
+     into it is invisible. */
+  var prov = card && card.getAttribute('data-provider');
+  var live = prov ? document.querySelector('.card[data-provider="' + prov + '"]') : null;
+  var b = (live || card).querySelector('.status-badge');   // NOT '.badge' — the first .badge is
+  if (!b) return;                                          // the 'Recommended' pill in the title
+  b.textContent = text;
+  b.className = 'status-badge badge ' + (isBad ? 'no' : 'ok');
+}
+
 function wire(card){
   var provider = card.getAttribute('data-provider');
   var keyEl = card.querySelector('.key-field');
@@ -179,7 +194,10 @@ function wire(card){
   if (t) t.onclick = async function(){
     t.disabled = true; var old = t.textContent; t.innerHTML = '<span class="spinner"></span>';
     try { var d = await api('/provider-keys/'+encodeURIComponent(provider)+'/test', 'POST', {});
-          out(card, (d && d.message) || 'Tested', !(d && d.ok)); }
+          out(card, (d && d.message) || 'Tested', !(d && d.ok));
+          /* only a LIVE verdict may move the badge — live:false means no probe exists, which
+             is not evidence either way, so the stored label stands. */
+          if (d && d.live === true) badge(card, d.ok === true ? 'Connected' : 'Key rejected', d.ok !== true); }
     catch(e){ out(card, e.message, true); }
     t.disabled = false; t.textContent = old;
   };
@@ -192,7 +210,24 @@ function wire(card){
     if (Object.keys(m).length) body.metadata = m;
     if (!body.api_key) { out(card, 'Paste a key first', true); return; }
     c.disabled = true; c.innerHTML = '<span class="spinner"></span> Connecting…';
-    try { await api('/provider-keys', 'POST', body); msg('Connected ' + provider, 'ok'); await load(); }
+    try {
+      await api('/provider-keys', 'POST', body);
+      // A STORED key is not a WORKING key. This said "Connected <provider>" and nothing else, so a
+      // credential the far side rejects read as a live integration until a later sync or test failed,
+      // with nothing linking the two. Run the same live probe the Test button uses and report ITS
+      // verdict: `live:false` means no probe exists for that provider, which is said plainly rather
+      // than dressed up as a working connection.
+      await load();
+      try {
+        var d = await api('/provider-keys/'+encodeURIComponent(provider)+'/test', 'POST', {});
+        if (d && d.live === true && d.ok === true) msg('Connected ' + provider + ' — the key was accepted', 'ok');
+        else if (d && d.live === true) msg(provider + ' key saved, but the connection test failed: ' + ((d && d.message) || 'no detail'), 'err');
+        else msg(provider + ' key saved. ' + ((d && d.message) || 'Credential stored — no live probe for this provider'), 'ok');
+        /* Keep the badge honest next to the sentence above: an accepted probe means Connected,
+           a live refusal means Key rejected, and no probe at all leaves the stored-key label. */
+        if (d && d.live === true) badge(card, d.ok === true ? 'Connected' : 'Key rejected', d.ok !== true);
+      } catch(e) { msg(provider + ' key saved, but the live test could not be run: ' + e.message, 'err'); }
+    }
     catch(e){ out(card, e.message, true); c.disabled = false; c.textContent = 'Connect'; }
   };
 
