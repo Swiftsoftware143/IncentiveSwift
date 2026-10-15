@@ -16,7 +16,10 @@ use crate::handlers::tri_state::double_option;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::Response,
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -1203,18 +1206,93 @@ pub async fn list_submissions(
 // File upload
 // ---------------------------------------------------------------------------
 
+/// Largest IQS asset this route accepts — the file-type question's own contract
+/// (`iqs_validation::validate_file` documents `max_size_mb: 10`).
+pub const MAX_ASSET_BYTES: usize = 10 * 1024 * 1024;
+
+/// Multipart envelope headroom: the filed bytes are bounded by [`MAX_ASSET_BYTES`], and axum's
+/// body limit must be a little larger or a legitimate part at the cap is refused before the
+/// handler ever sees it (each part carries its own headers, boundary and CRLFs).
+pub const ASSET_ENVELOPE_BYTES: usize = MAX_ASSET_BYTES + 64 * 1024;
+
+/// Content types this route will ever render INLINE from its own origin.
+///
+/// A file-type question takes arbitrary documents, so the stored type is the CALLER'S declaration.
+/// A safelist at serve time is what stops an uploaded `.html`/SVG from becoming script running on
+/// `app.incentiveswift.com` — the stored declaration is never trusted as a rendering decision.
+const INLINE_SAFE_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+];
+
+/// The type to store for an upload: the caller's declaration reduced to its base type, lowercased,
+/// bounded, and refused outright if it is not a well-formed `type/subtype`. Anything else is stored
+/// as an opaque binary rather than echoed back into a header.
+fn normalise_declared_type(declared: &str) -> String {
+    let base = declared
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let well_formed = !base.is_empty()
+        && base.len() <= 100
+        && base.matches('/').count() == 1
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '+' | '.' | '_'));
+    if well_formed {
+        base
+    } else {
+        "application/octet-stream".to_string()
+    }
+}
+
+/// May `content_type` be rendered inline by the browser?
+fn inline_safe(content_type: &str) -> bool {
+    INLINE_SAFE_TYPES.contains(&normalise_declared_type(content_type).as_str())
+}
+
+/// A filename that is safe to place inside a `Content-Disposition` header: printable ASCII only,
+/// no quote/backslash/semicolon/slash (header-injection and path shapes), bounded length.
+fn safe_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\\' | ';' | '/'))
+        .take(120)
+        .collect();
+    if cleaned.is_empty() {
+        "download".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// POST /api/v1/iqs/upload — upload a file for a file-type question.
-/// Returns the public URL of the uploaded file.
+///
+/// Returns the public URL of the stored file. The BYTES live in `iqs_assets` (migration
+/// `zz_is13`) and are streamed back by [`get_asset`]: this container binds only its release binary
+/// and `migrations/`, so a file written at run time lives inside the container, dies on the next
+/// recreate, and no host webroot could serve it either — the same storage decision `user_avatars`
+/// (`zz_is12`) and `tenant_logos` (`zz_is11`) already made.
+///
+/// FIXED 2026-10-15 (cron `default`): the older implementation wrote with
+/// `std::fs::File::create("/var/www/incentiveswift-app/uploads/…")`, a path that does not exist in
+/// this container (`/var/www` is absent, and `File::create` does not create parents), so EVERY call
+/// answered 500 `Failed to save file: No such file or directory (os error 2)` — measured live
+/// 2026-10-15 10:38 UTC. Its returned URL (`https://app.incentiveswift.com/uploads/<name>`) was not
+/// served by anything either: that host's `/uploads/` answers the SPA shell. Scoped to the uploading
+/// account so deleting an account takes its assets with it (the FK's ON DELETE CASCADE).
 pub async fn upload_file(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<Value>, AppError> {
-    use std::io::Write;
-    use uuid::Uuid;
-
-    let upload_dir = "/var/www/incentiveswift-app/uploads";
-    let public_url_base = "https://app.incentiveswift.com/uploads";
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
 
     let mut file_urls = Vec::new();
 
@@ -1223,8 +1301,14 @@ pub async fn upload_file(
         .await
         .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
     {
-        let file_name = field.file_name().unwrap_or("unknown").to_string();
-        let content_type = field
+        let file_name: String = field
+            .file_name()
+            .unwrap_or("unknown")
+            .to_string()
+            .chars()
+            .take(255)
+            .collect();
+        let declared = field
             .content_type()
             .unwrap_or("application/octet-stream")
             .to_string();
@@ -1233,46 +1317,106 @@ pub async fn upload_file(
             .await
             .map_err(|e| AppError::BadRequest(format!("Failed to read file: {}", e)))?;
 
-        // Validate file size (max 10MB)
-        let max_size: usize = 10 * 1024 * 1024;
-        if data.len() > max_size {
+        if data.is_empty() {
+            return Err(AppError::BadRequest(format!(
+                "File '{}' is empty",
+                file_name
+            )));
+        }
+        if data.len() > MAX_ASSET_BYTES {
             return Err(AppError::BadRequest(format!(
                 "File '{}' exceeds maximum size of 10MB",
                 file_name
             )));
         }
 
-        // Generate unique filename
-        let ext = std::path::Path::new(&file_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("bin");
-        let stored_name = format!(
-            "{}-{}.{}",
-            Uuid::new_v4(),
-            slugify(file_name.trim_end_matches(&format!(".{}", ext))),
-            ext
-        );
-        let file_path = format!("{}/{}", upload_dir, stored_name);
-        let public_url = format!("{}/{}", public_url_base, stored_name);
+        let content_type = normalise_declared_type(&declared);
+        let id = Uuid::new_v4();
 
-        // Write file
-        let mut f = std::fs::File::create(&file_path)
-            .map_err(|e| AppError::Internal(format!("Failed to save file: {}", e)))?;
-        f.write_all(&data)
-            .map_err(|e| AppError::Internal(format!("Failed to write file: {}", e)))?;
+        sqlx::query(
+            "INSERT INTO iqs_assets (id, account_id, original_name, content_type, size_bytes, bytes) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(id)
+        .bind(account_id)
+        .bind(&file_name)
+        .bind(&content_type)
+        .bind(data.len() as i32)
+        .bind(data.as_ref())
+        .execute(&state.db)
+        .await?;
 
         file_urls.push(json!({
+            "id": id,
             "original_name": file_name,
             "content_type": content_type,
             "size": data.len(),
-            "url": public_url,
+            "url": format!("https://app.incentiveswift.com/api/v1/iqs/assets/{id}"),
         }));
     }
 
-    Ok(Json(json!({
-        "data": if file_urls.len() == 1 { file_urls.into_iter().next().unwrap() } else { json!(file_urls) }
-    })))
+    if file_urls.is_empty() {
+        return Err(AppError::BadRequest(
+            "No file part was received".to_string(),
+        ));
+    }
+
+    let data = if file_urls.len() == 1 {
+        file_urls.into_iter().next().unwrap_or(Value::Null)
+    } else {
+        json!(file_urls)
+    };
+
+    Ok(Json(json!({ "data": data })))
+}
+
+/// GET /api/v1/iqs/assets/:id — stream a stored IQS asset back.
+///
+/// PUBLIC by design (the same reasoning as the profile picture): the URL is what a file-type
+/// question's answer stores and what a respondent or the operator's console then opens — a link
+/// carries no bearer token. It is addressed by an unguessable uuid, returns exactly one stored
+/// file, and 404s otherwise.
+///
+/// The served type is decided HERE, not by the upload: only [`INLINE_SAFE_TYPES`] are rendered
+/// (`inline`), everything else is an opaque `application/octet-stream` download with the original
+/// name, and `nosniff` is pinned either way — so an uploaded document can never be executed as
+/// markup on this origin.
+pub async fn get_asset(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let asset_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::NotFound("No such asset".to_string()))?;
+
+    let row: Option<(String, String, Vec<u8>)> =
+        sqlx::query_as("SELECT content_type, original_name, bytes FROM iqs_assets WHERE id = $1")
+            .bind(asset_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let (content_type, original_name, bytes) =
+        row.ok_or_else(|| AppError::NotFound("No such asset".to_string()))?;
+
+    let inline = inline_safe(&content_type);
+    let served_type = if inline {
+        normalise_declared_type(&content_type)
+    } else {
+        "application/octet-stream".to_string()
+    };
+    let disposition = if inline {
+        "inline".to_string()
+    } else {
+        format!("attachment; filename=\"{}\"", safe_filename(&original_name))
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, served_type)
+        .header(header::CONTENT_DISPOSITION, disposition)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CACHE_CONTROL, "private, max-age=300")
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(format!("Could not build the asset response: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1311,4 +1455,64 @@ fn slugify(name: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declared_types_are_reduced_to_a_well_formed_base() {
+        assert_eq!(normalise_declared_type("image/png"), "image/png");
+        assert_eq!(normalise_declared_type("IMAGE/PNG"), "image/png");
+        assert_eq!(
+            normalise_declared_type("image/jpeg; charset=binary"),
+            "image/jpeg"
+        );
+        assert_eq!(normalise_declared_type(""), "application/octet-stream");
+        assert_eq!(
+            normalise_declared_type("nonsense"),
+            "application/octet-stream"
+        );
+        // A CRLF or a quote is not part of a media type: neither may reach a response header.
+        assert_eq!(
+            normalise_declared_type("image/png\r\nX-Evil: 1"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            normalise_declared_type("text/plain\""),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn only_the_safelist_is_rendered_inline() {
+        assert!(inline_safe("image/png"));
+        assert!(inline_safe("image/jpeg; q=1"));
+        assert!(inline_safe("application/pdf"));
+        // The stored type is the CALLER'S declaration, so these — the scriptable ones — must always
+        // come back as an opaque download instead of rendering on this origin.
+        assert!(!inline_safe("text/html"));
+        assert!(!inline_safe("image/svg+xml"));
+        assert!(!inline_safe("application/javascript"));
+        assert!(!inline_safe("text/xml"));
+        assert!(!inline_safe("application/octet-stream"));
+    }
+
+    #[test]
+    fn a_download_filename_cannot_break_out_of_the_header() {
+        assert_eq!(safe_filename("report.pdf"), "report.pdf");
+        assert_eq!(safe_filename("a\"b\\c;d/e.txt"), "abcde.txt");
+        assert_eq!(safe_filename("\r\nSet-Cookie: x=1"), "Set-Cookie:x=1");
+        assert_eq!(safe_filename("../../etc/passwd"), "....etcpasswd");
+        assert_eq!(safe_filename(""), "download");
+    }
+
+    #[test]
+    fn the_body_limit_leaves_room_for_multipart_overhead() {
+        // The filed bytes are capped at 10 MB, so the axum body limit must be a little larger or a
+        // legitimate part at the cap is refused 413 before the handler ever sees it.
+        assert_eq!(MAX_ASSET_BYTES, 10 * 1024 * 1024);
+        assert!(ASSET_ENVELOPE_BYTES > MAX_ASSET_BYTES);
+    }
 }

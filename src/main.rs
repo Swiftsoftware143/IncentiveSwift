@@ -1389,10 +1389,22 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/iqs/funnels/:id/submissions",
             get(handlers::iqs_handler::list_submissions),
         )
-        // File upload (image-choice question assets)
+        // File upload (image-choice question assets). The body limit is raised for THIS route only:
+        // axum's default is 2 MB while a file-type question's contract allows 10 MB
+        // (`iqs_handler::MAX_ASSET_BYTES`), so without this layer a legitimate 3 MB upload answered
+        // 413 before the handler ever ran.
         .route(
             "/api/v1/iqs/upload",
-            post(handlers::iqs_handler::upload_file),
+            post(handlers::iqs_handler::upload_file).layer(axum::extract::DefaultBodyLimit::max(
+                handlers::iqs_handler::ASSET_ENVELOPE_BYTES,
+            )),
+        )
+        // The stored asset's READ, addressed by the unguessable row uuid. Public by the same rule as
+        // the profile picture: the stored answer is a URL that a respondent or the operator's console
+        // opens, and a link carries no bearer token. Its WRITE twin above stays private.
+        .route(
+            "/api/v1/iqs/assets/:id",
+            get(handlers::iqs_handler::get_asset),
         )
         // Request-body read deadline (kanban t_af70c0ca). Mounted as the FIRST `.layer()` of this
         // chain, i.e. INNERMOST — in axum the first `.layer()` applied is the one closest to the

@@ -104,6 +104,15 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // twin (`POST /api/v1/auth/avatar`) is deliberately NOT here: uploading a picture is an
     // authenticated act on the caller's own account.
     "/api/v1/auth/avatar/:user_id",
+    // --- a stored IQS asset's READ (cron `default`, 2026-10-15) -------------------
+    // The file-type question's answer stores the URL this route serves, and a respondent (or the
+    // operator reading the submission) opens it as a plain link — which carries no bearer token, so
+    // a token-gated asset would simply never open. It returns exactly one stored file, keyed by an
+    // unguessable uuid, and 404s otherwise. The bytes are caller-supplied, so what is served INLINE
+    // is decided by a safelist at serve time (`handlers::iqs_handler::INLINE_SAFE_TYPES`) with
+    // `nosniff` pinned; anything else is an opaque `application/octet-stream` download. Its WRITE
+    // twin (`POST /api/v1/iqs/upload`) is deliberately NOT here: uploading is an authenticated act.
+    "/api/v1/iqs/assets/:id",
     // --- participant / player surfaces (the campaign's own audience) -------------
     "/api/v1/play/:id",
     "/api/v1/play/:id/dashboard",

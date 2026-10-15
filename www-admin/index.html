@@ -212,8 +212,11 @@ const API = (() => {
   const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), ...(b === undefined ? {} : {body:JSON.stringify(b)})}).then(handle);
   const put = (p, b) => fetch(base + p, {method:'PUT', headers:headers(), body:JSON.stringify(b)}).then(handle);
   const del = (p) => fetch(base + p, {method:'DELETE', headers:headers()}).then(handle);
+  // A `multipart/form-data` route must NOT be handed a Content-Type: the browser has to set the
+  // multipart boundary itself. Same auth header and same error handling as `post`.
+  const postForm = (p, fd) => fetch(base + p, {method:'POST', headers: token ? { 'Authorization': 'Bearer ' + token } : {}, body: fd}).then(handle);
   return {
-    login, get, post, put, del,
+    login, get, post, put, del, postForm,
     get token(){ return token; },
     get user(){ return user; },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('is_token', t); sessionStorage.setItem('is_user', JSON.stringify(u)); },
@@ -3449,7 +3452,7 @@ const OPS_PANELS = [
 ,
 {"id": "email-ops", "title": "12 · Email delivery & templates", "list": "/email-templates/merge-fields", "actions": [{"label": "Email settings (read)", "method": "GET", "path": "/admin/email-settings"}, {"label": "Email settings (save)", "method": "PUT", "path": "/admin/email-settings", "json": true, "fields": ["json"], "hint": "{\"provider\":\"smtp\",\"from_email\":\"you@example.com\"}"}, {"label": "Send test email", "method": "POST", "path": "/admin/email-settings/test"}, {"label": "Resend an entry", "method": "POST", "path": "/delivery/resend", "json": true, "fields": ["json"], "hint": "{\"entry_id\":\"...\"}"}]}
 ,
-{"id": "iqs-campaign", "title": "13 · IQS funnels on a campaign", "actions": [{"label": "Campaign IQS questions", "method": "GET", "path": "/campaigns/:slug/iqs-questions", "fields": ["slug"]}, {"label": "Upload IQS file", "method": "POST", "path": "/iqs/upload", "json": true, "fields": ["json"]}]}
+{"id": "iqs-campaign", "title": "13 · IQS funnels on a campaign", "actions": [{"label": "Campaign IQS questions", "method": "GET", "path": "/campaigns/:slug/iqs-questions", "fields": ["slug"]}, {"label": "Upload IQS asset", "method": "POST", "path": "/iqs/upload", "multipart": true, "fields": [], "note": "pick any file up to 10 MB \u2014 the returned url is what a file-type question stores"}]}
 ,
 {"id": "surfaces-kiosk", "title": "14 · Surfaces (kiosk page: /tablet-demo.html)", "list": "/surfaces", "actions": [{"label": "Update surface", "method": "PUT", "path": "/surfaces/:id", "json": true, "fields": ["id", "json"]}, {"label": "Delete surface", "method": "DELETE", "path": "/surfaces/:id", "fields": ["id"]}]}
 ,
@@ -3578,7 +3581,13 @@ const OpsAction = ({ act }) => {
       (act.fields || []).forEach(f => { if (path.indexOf(':' + f) >= 0) path = path.replace(':' + f, encodeURIComponent((v[f] || '').trim())); });
       if (path.indexOf(':') >= 0) throw new Error('missing path parameter: ' + path);
       let body;
-      if (act.json) { body = JSON.parse((v.json || '{}').trim() || '{}'); }
+      if (act.multipart) {
+        const f = v.upload;
+        if (!f) throw new Error('Choose a file first');
+        body = new FormData();
+        body.append('file', f, f.name || 'upload');
+      }
+      else if (act.json) { body = JSON.parse((v.json || '{}').trim() || '{}'); }
       else if (act.method === 'GET' || act.method === 'DELETE') { body = undefined; }
       else {
         body = {};
@@ -3590,6 +3599,7 @@ const OpsAction = ({ act }) => {
         });
       }
       const r = act.method === 'GET' ? await OPSAPI.get(path)
+        : act.multipart ? await OPSAPI.postForm(path, body)
         : act.method === 'POST' ? await OPSAPI.post(path, body || {})
         : act.method === 'PUT' ? await OPSAPI.put(path, body || {})
         : await OPSAPI.del(path);
@@ -3604,6 +3614,10 @@ const OpsAction = ({ act }) => {
         <input class="border rounded px-2 py-1 text-sm ops-f-${f}" style=${f === 'json' ? 'min-width:420px;font-family:monospace' : ''}
           value=${v[f] || ''} onInput=${e => setV(s => Object.assign({}, s, { [f]: e.target.value }))} />
       </label>`)}
+      ${act.multipart && html`<label class="text-xs text-gray-600 flex flex-col">
+        <span>file</span>
+        <input type="file" class="text-xs ops-f-file" onChange=${e => setV(s => Object.assign({}, s, { upload: (e.target.files || [])[0] || null }))} />
+      </label>`}
       <button class="px-3 py-1 rounded bg-indigo-600 text-white text-sm disabled:opacity-50" disabled=${busy} onClick=${go}>
         ${busy ? '...' : (act.label || act.method)}</button>
       ${res && html`<span class="text-xs ${res.ok ? 'text-green-700' : 'text-red-600'}">${res.ok ? 'OK' : 'ERROR'}</span>`}
