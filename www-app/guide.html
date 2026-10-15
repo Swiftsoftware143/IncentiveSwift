@@ -725,10 +725,11 @@
 
       <h3>Setting Up Marketing Boost</h3>
       <ol class="step-list">
-        <li><strong>Go to Provider Keys</strong><p>Navigate to <strong>Integrations</strong> → <strong>Provider Keys</strong> and add your Marketing Boost API key.</p></li>
-        <li><strong>Create Integration</strong><p>In the Integration Hub, add a new target of type <strong>Marketing Boost</strong>. Enter your Offer ID in the metadata section.</p></li>
-        <li><strong>Link to Campaign</strong><p>Open a campaign, scroll to Integrations, and toggle the Marketing Boost integration on. Optionally set a per-campaign Offer ID override.</p></li>
-        <li><strong>Done</strong><p>Every time a user wins or enters that campaign, the integration fires automatically with the configured Offer ID.</p></li>
+        <li><strong>Go to Provider Keys</strong><p>Navigate to <strong>Integrations</strong> → <strong>Provider Keys</strong> and add your Marketing Boost API key (provider <strong>marketing_boost</strong>).</p></li>
+        <li><strong>Open the campaign</strong><p>On <strong>Campaigns</strong>, press <strong>Marketing Boost</strong> on the campaign you want to send for. The panel reads that campaign's current settings first, so it never shows you another campaign's configuration.</p></li>
+        <li><strong>Choose the incentive</strong><p>Tick <em>Send a Marketing Boost incentive for this campaign</em> and pick one: <strong>Dining voucher</strong> ($25 / $50 / $100 / $200), <strong>Hotel savings card</strong> ($100 / $200 / $300 / $500), or <strong>Vacation incentive</strong> — which needs a <strong>Destination (Offer ID)</strong>: press <strong>Load list</strong> to read the destinations your own Marketing Boost account offers, or type the id. <strong>Sender</strong> and <strong>Business</strong> are optional and fall back to your Provider Keys row.</p></li>
+        <li><strong>Choose when it sends</strong><p>Tick <em>the player wins</em> and/or <em>the player redeems a reward</em>, then press <strong>Save Marketing Boost</strong>.</p></li>
+        <li><strong>Done</strong><p>Every time that campaign resolves on a ticked event, Marketing Boost is dispatched for that player's contact details. An entry with no email address is skipped and written to the platform log, never sent to the vendor.</p></li>
       </ol>
 
       <h3>Key Resolution Chain</h3>
