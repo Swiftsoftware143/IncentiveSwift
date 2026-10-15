@@ -91,6 +91,18 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
     </div>
   </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Plan &amp; billing</h2>
+    <!-- The plan ladder, read from the server (GET /api/v1/plans — the very catalogue the marketing
+         pricing page serves, so the console can never quote a price the site does not), with the plan
+         this workspace is ON taken from GET /api/v1/auth/me. Upgrading POSTs /api/v1/checkout/create
+         and shows the SERVER's own answer: a session URL when a payment provider is live, and
+         otherwise its refusal sentence verbatim. A price or a promise is never written in this page. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">What this workspace is on, what each plan includes, and the way up. Prices are the ones your plan records carry.</p>
+    <div id="pb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <div id="pb-current" style="font-size:13.5px;color:#334155;margin:0 0 14px">Loading your plan&hellip;</div>
+    <div id="pb-plans" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
+  </div>
 </div>
 <script>
 var TOKEN_KEY = 'is_token';
@@ -100,6 +112,9 @@ var STORE_KEY = 'ws_fs_token';
 // put in localStorage ('ws_fs_token') when sessionStorage is empty in a fresh tab.
 var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(STORE_KEY);
 var user = null;
+// Plan-ladder state. Declared HERE, above the boot block: `paintAccount()` (called at boot) writes
+// `PB.plan`, so a declaration further down the file would throw and abort the boot.
+var PB = { plans: null, plan: null, busy: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 if (!token) {
@@ -108,10 +123,13 @@ if (!token) {
   paintAccount(user || {});
   fetchAccount();
   ebLoad();
+  pbLoad();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
 function paintAccount(u) {
+  PB.plan = u.plan || null;
+  if (PB.plans) pbRender();
   var nm = u.name || u.email || 'Your account';
   var plan = u.plan_name || (u.plan && u.plan.name) || 'Free';
   var nameEl = document.getElementById('userName');
@@ -264,12 +282,136 @@ function ebRemove() {
     })
     .catch(function (e) { ebMsg((e && e.message) || 'Could not remove the logo', 'e'); });
 }
+
+// ---- Plan & billing ------------------------------------------------------------------------
+// GET /api/v1/plans is the PUBLIC catalogue (the marketing pricing page reads the same rows), so
+// every price on screen is the server's. The current plan comes from GET /api/v1/auth/me, already
+// fetched for the account panel above. The upgrade POSTs /api/v1/checkout/create and prints the
+// server's reply: it redirects to the returned session URL when a provider is configured, and
+// otherwise shows the server's own refusal sentence — nothing here invents a price or a promise.
+// PB (the plan-ladder state) is declared with the page's other globals, above the boot block.
+function pbAuth() { return { 'Authorization': 'Bearer ' + token }; }
+function pbMsg(t, kind) {
+  var m = document.getElementById('pb-msg');
+  if (!m) return;
+  m.style.color = (kind === 'e') ? '#dc2626' : (kind === 's' ? '#16a34a' : '#64748b');
+  m.textContent = t;
+}
+function pbPrice(n) { return '$' + (Math.round(Number(n) * 100) / 100); }
+function pbLimit(v) {
+  if (v === null || v === undefined) return '\u2014';
+  var n = Number(v);
+  if (!isFinite(n)) return String(v);
+  return (n === 0) ? 'None' : (n >= 1000000 ? 'Unlimited' : String(n));
+}
+function pbPlanLimits(p) {
+  if (!p) return '';
+  var bits = [];
+  if (p.max_campaigns !== undefined) bits.push(pbLimit(p.max_campaigns) + ' campaigns');
+  if (p.max_entries_per_month !== undefined) bits.push(pbLimit(p.max_entries_per_month) + ' entries/month');
+  if (p.features && typeof p.features === 'object') {
+    if (p.features.max_leads !== undefined) bits.push(pbLimit(p.features.max_leads) + ' leads');
+    if (p.features.max_tags !== undefined) bits.push(pbLimit(p.features.max_tags) + ' tags');
+  }
+  return bits.join(' \u00b7 ');
+}
+function pbFeatureLabel(k) {
+  var m = { basic_leads: 'Basic leads', unlimited_leads: 'Unlimited leads', basic_tags: 'Basic tags',
+            advanced_tags: 'Advanced tags', dual_routing: 'Dual routing', multi_tenant: 'Multi-tenant',
+            white_label: 'White label', priority_support: 'Priority support' };
+  return m[k] || String(k).replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
+}
+function pbLoad() {
+  fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var list = (d && (d.plans || d.data)) || [];
+      list = list.filter(function (p) { return p && p.is_active !== false; });
+      list.sort(function (a, b) { return Number(a.monthly_price || 0) - Number(b.monthly_price || 0); });
+      PB.plans = list;
+      pbRender();
+    })
+    .catch(function () { pbMsg('Could not load the plan list right now.', 'e'); });
+}
+function pbRender() {
+  var cur = PB.plan || {};
+  var curSlug = cur.slug || '';
+  var curEl = document.getElementById('pb-current');
+  if (curEl) {
+    curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || 'Free') + '</span>'
+      + (pbPlanLimits(cur) ? ' <span style="color:#64748b">\u2014 ' + esc(pbPlanLimits(cur)) + '</span>' : '');
+  }
+  var wrap = document.getElementById('pb-plans');
+  if (!wrap) return;
+  var plans = PB.plans || [];
+  if (!plans.length) { wrap.innerHTML = '<div style="color:#64748b;font-size:13px">No plans are published yet.</div>'; return; }
+  var h = '';
+  for (var i = 0; i < plans.length; i++) {
+    var p = plans[i];
+    var isCur = (p.slug || '') === curSlug;
+    var price = Number(p.monthly_price || 0);
+    var feats = (p.features && p.features.length) ? p.features : [];
+    var fh = '';
+    for (var j = 0; j < feats.length && j < 6; j++) { fh += '<li style="padding:2px 0">' + esc(pbFeatureLabel(feats[j])) + '</li>'; }
+    var action = isCur
+      ? '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>'
+      : (price > 0
+          ? '<button class="btn btn-sm" style="margin-top:10px" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + price + '" data-pb-id="' + esc(p.id || '') + '">Upgrade to ' + esc(p.name || p.slug) + '</button>'
+          : '<button class="btn btn-sm" style="margin-top:10px;background:#64748b" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="0" data-pb-id="' + esc(p.id || '') + '">Switch to ' + esc(p.name || p.slug) + '</button>');
+    h += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fff">'
+      + '<div style="font-weight:600;color:#1e293b">' + esc(p.name || p.slug) + '</div>'
+      + '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:6px 0">' + pbPrice(price) + '<span style="font-size:12px;font-weight:400;color:#64748b">/month</span></div>'
+      + '<ul style="list-style:none;padding:0;margin:0;font-size:13px;color:#475569">' + fh + '</ul>'
+      + action + '</div>';
+  }
+  wrap.innerHTML = h;
+  var btns = wrap.querySelectorAll('[data-pb-upgrade]');
+  for (var k = 0; k < btns.length; k++) {
+    btns[k].addEventListener('click', function () {
+      pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), this.getAttribute('data-pb-name'));
+    });
+  }
+}
+function pbUpgrade(slug, price, planId) {
+  if (PB.busy) return;
+  PB.busy = true;
+  pbMsg('Starting checkout\u2026', 'i');
+  fetch(window.location.origin + '/api/v1/checkout/create', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, pbAuth()),
+    body: JSON.stringify({
+      price_amount: price,
+      price_currency: 'usd',
+      description: (slug || 'plan') + ' plan (monthly)',
+      plan_id: planId || null,
+      success_url: window.location.origin + '/dashboard/?checkout=success',
+      cancel_url: window.location.origin + '/dashboard/?checkout=cancelled'
+    })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      PB.busy = false;
+      if (r.ok) {
+        var u = d && (d.url || d.checkout_url || d.session_url);
+        if (u) { pbMsg('Opening secure checkout\u2026', 's'); window.location.href = u; return; }
+        pbMsg((d && d.message) || 'The checkout session was created.', 's');
+        return;
+      }
+      // The server explains its own refusal (which provider, what is missing). That sentence is
+      // written for whoever configures the provider, so it is shown verbatim AND prefixed with one
+      // customer-facing line — the customer is not the person who adds keys, and a raw operator
+      // instruction on their screen reads like something they broke.
+      var detail = (d && d.message) ? (' ' + d.message) : '';
+      pbMsg('Upgrades are not open on this workspace yet.' + detail, 'e');
+    });
+  }).catch(function (e) { PB.busy = false; pbMsg((e && e.message) || 'Checkout could not start.', 'e'); });
+}
 </script>
 <script>
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company and the plan you are on) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Plan & billing shows what your plan includes and starts an upgrade when one is available", "Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=0bc326c56c5e"></script>
