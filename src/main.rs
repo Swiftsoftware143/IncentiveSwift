@@ -833,7 +833,8 @@ async fn main() -> anyhow::Result<()> {
         // this container binds no path a run-time upload could survive in; see the migration.
         .route(
             "/api/v1/auth/avatar",
-            post(crate::handlers::auth_handler::upload_avatar),
+            post(crate::handlers::auth_handler::upload_avatar)
+                .delete(crate::handlers::auth_handler::delete_avatar),
         )
         .route(
             "/api/v1/auth/avatar/:user_id",

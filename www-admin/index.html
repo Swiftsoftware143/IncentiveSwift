@@ -4147,6 +4147,34 @@ const ProfileView = () => {
     renderApp();
   };
 
+  // The REMOVAL twin of uploadAvatar (kanban t_0358054d). The upload only ever REPLACES the row
+  // (`ON CONFLICT (user_id) DO UPDATE` on the server), so before this control existed a picture
+  // could be swapped for another one but never taken down: an operator who wanted their initials
+  // back had no way to ask. The account's own email-branding logo has had its own Remove button
+  // since it shipped; the profile did not. It is an authenticated DELETE on the caller's OWN
+  // account — there is no id in the path to spoof — and it is idempotent on the server, so a second
+  // press is a no-op rather than an error.
+  const removeAvatar = async () => {
+    if (!me.avatar_url) { st.avKind = 'err'; st.avMsg = 'There is no picture to remove'; renderApp(); return; }
+    if (!window.confirm('Remove your profile picture?')) return;
+    st.avKind = 'info'; st.avMsg = 'Removing…'; renderApp();
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/auth/avatar', {
+        method: 'DELETE', headers: { 'Authorization': 'Bearer ' + API.token },
+      });
+      const t = await r.text();
+      let d = null; try { d = JSON.parse(t); } catch (x) {}
+      if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+      st.avKind = 'ok'; st.avMsg = 'Picture removed';
+      // `avatar_url` is DERIVED from the user_avatars row by /auth/me, so the screen re-reads it
+      // instead of guessing: the initials placeholder comes back and this very button is painted
+      // away again (the render below is what reveals/withdraws it), in place, with no tab reopen.
+      await load();
+      return;
+    } catch (e) { st.avKind = 'err'; st.avMsg = e.message || 'Remove failed'; }
+    renderApp();
+  };
+
   // The NEW password and its confirmation first, the CURRENT password UNDERNEATH as the check,
   // then Save — the order the fleet profile contract specifies.
   const changePw = async () => {
@@ -4182,6 +4210,7 @@ const ProfileView = () => {
           <input type="file" id="pf-file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:12px" />
           <p class="text-xs text-gray-400" style="margin:4px 0 6px">PNG, JPEG, GIF or WebP, up to 2 MB.</p>
           <button class="btn btn-sm" onClick=${uploadAvatar}>Upload picture</button>
+          ${me.avatar_url ? html`<button class="btn btn-sm" style="margin-left:6px" onClick=${removeAvatar}>Remove picture</button>` : null}
           <span style=${avMsgStyle}>${st.avMsg}</span>
         </div>
       </div>
