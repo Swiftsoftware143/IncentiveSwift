@@ -671,7 +671,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '' });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -805,6 +805,96 @@ const Campaigns = () => {
     } catch (e) { st.deliveryErr = e.message; }
     renderApp();
   };
+  // ── Marketing Boost: the per-campaign direct-API config ──────────────────────
+  // The app's live send path reads campaigns.config['marketing_boost']
+  // (handlers/campaign_integrations.rs::fire_marketing_boost_with_override); the app's own refusal
+  // text sends the operator to "a campaign's Marketing Boost tab"; the served guide documents a
+  // per-campaign setup. None of it was reachable: no screen called GET|PUT
+  // /api/v1/campaigns/:slug/marketing-boost, and GET /api/v1/marketing-boost/destinations (the
+  // account's own Offer ID catalogue) had no caller either. This panel is that tab. Amounts and
+  // trigger names are the ones the sender itself validates and matches on.
+  const BOOST_TYPES = [
+    { value: 'dining_voucher', label: 'Dining voucher', amounts: [25, 50, 100, 200], defaultAmount: 50 },
+    { value: 'hotel_savings_card', label: 'Hotel savings card', amounts: [100, 200, 300, 500], defaultAmount: 200 },
+    { value: 'vacation_incentive', label: 'Vacation incentive', amounts: null, defaultAmount: null },
+  ];
+  const boostTypeRow = () => BOOST_TYPES.filter(t => t.value === st.boostType)[0] || null;
+  const openBoost = async (item) => {
+    st.boostItem = item; st.boostCfg = null; st.boostLoaded = false;
+    st.boostOn = false; st.boostType = 'dining_voucher'; st.boostAmount = '50'; st.boostDest = '';
+    st.boostSender = ''; st.boostBusiness = ''; st.boostWin = true; st.boostRedeem = true;
+    st.boostDests = null; st.boostDestsErr = ''; st.boostErr = ''; st.boostSaved = '';
+    renderApp();
+    try {
+      const slug = item.slug || item.id;
+      const d = await API.get('/campaigns/' + slug + '/marketing-boost');
+      const b = (d && d.marketing_boost) || null;
+      st.boostCfg = b;
+      if (b && b.enabled) {
+        st.boostOn = true;
+        if (b.incentive_type) st.boostType = b.incentive_type;
+        const row = boostTypeRow();
+        if (b.amount !== undefined && b.amount !== null) st.boostAmount = String(b.amount);
+        else if (row && row.defaultAmount) st.boostAmount = String(row.defaultAmount);
+        if (b.destination !== undefined && b.destination !== null) st.boostDest = String(b.destination);
+        st.boostSender = b.sender || '';
+        st.boostBusiness = b.business || '';
+        const ev = Array.isArray(b.trigger_events) ? b.trigger_events : ['on_win', 'on_redeem'];
+        st.boostWin = ev.indexOf('on_win') >= 0;
+        st.boostRedeem = ev.indexOf('on_redeem') >= 0;
+      }
+    } catch (e) {
+      st.boostErr = 'Could not read this campaign Marketing Boost config: ' + e.message;
+    }
+    st.boostLoaded = true; renderApp();
+  };
+  const closeBoost = () => {
+    st.boostItem = null; st.boostCfg = null; st.boostDests = null; st.boostSaved = ''; st.boostErr = '';
+    renderApp();
+  };
+  const loadBoostDests = async () => {
+    st.boostDests = null; st.boostDestsErr = ''; renderApp();
+    try {
+      const d = await API.get('/marketing-boost/destinations');
+      st.boostDests = (d && d.destinations) || [];
+      if (d && d.sender && !st.boostSender) st.boostSender = d.sender;
+    } catch (e) { st.boostDestsErr = e.message; }
+    renderApp();
+  };
+  const saveBoost = async () => {
+    st.boostErr = ''; st.boostSaved = ''; renderApp();
+    const slug = st.boostItem.slug || st.boostItem.id;
+    const body = { enabled: !!st.boostOn };
+    if (st.boostOn) {
+      const row = boostTypeRow();
+      if (!row) { st.boostErr = 'Pick an incentive type.'; renderApp(); return; }
+      body.incentive_type = st.boostType;
+      body.trigger_events = [];
+      if (st.boostWin) body.trigger_events.push('on_win');
+      if (st.boostRedeem) body.trigger_events.push('on_redeem');
+      if (!body.trigger_events.length) { st.boostErr = 'Pick at least one trigger (win or redeem).'; renderApp(); return; }
+      if (st.boostSender.trim()) body.sender = st.boostSender.trim();
+      if (st.boostBusiness.trim()) body.business = st.boostBusiness.trim();
+      if (st.boostType === 'vacation_incentive') {
+        const dest = parseInt(st.boostDest, 10);
+        if (!(dest > 0)) { st.boostErr = 'A vacation incentive needs a destination (Offer ID). Load the list, or type the id.'; renderApp(); return; }
+        body.destination = dest;
+      } else {
+        const amt = parseInt(st.boostAmount, 10);
+        if (row.amounts.indexOf(amt) < 0) { st.boostErr = 'Pick a valid amount: ' + row.amounts.join(' / ') + '.'; renderApp(); return; }
+        body.amount = amt;
+      }
+    }
+    try {
+      const r = await API.put('/campaigns/' + slug + '/marketing-boost', body);
+      st.boostCfg = (r && r.marketing_boost) || null;
+      st.boostSaved = st.boostOn
+        ? 'Saved. This campaign dispatches ' + body.incentive_type + ' on ' + body.trigger_events.join(' and ') + '.'
+        : 'Saved. Marketing Boost is off for this campaign.';
+      load();
+    } catch (e) { st.boostErr = e.message; }
+    renderApp();
+  };
   const deliveryTargetList = (leg) => {
     const sel = st.deliveryLegs[leg].webhooks || [];
     if (st.deliveryTargets === null) return html`<div class="text-xs text-gray-400">Loading webhook targets…</div>`;
@@ -844,7 +934,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span></td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
       </tbody></table>
@@ -1037,6 +1127,49 @@ const Campaigns = () => {
         <div class="flex gap-2 justify-end mt-4">
           <button class="btn btn-outline" id="deliveryClose" onClick=${closeDelivery}>Close</button>
           <button class="btn" id="deliverySave" onClick=${saveDelivery}>Save delivery</button>
+        </div>
+      </div>
+    </div>`}
+    ${st.boostItem && html`<div class="modal" id="boostModal" onClick=${e => e.target === e.currentTarget && (closeBoost())}>
+      <div class="modal-content" style="max-width:760px">
+        <h3 class="text-lg font-bold mb-1">Marketing Boost — ${st.boostItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">Email/SMS dispatch through Marketing Boost when this campaign resolves. Saved into this campaign own config, beside your IQS and CoreSwift keys, which are left untouched. The API key is the one on your Marketing Boost row in the Integration Center.</p>
+        ${!st.boostLoaded && html`<div class="text-xs text-gray-400" id="boostLoading">Reading the current config...</div>`}
+        ${st.boostErr && html`<div class="text-red-500 text-sm mb-3" id="boostErr">${st.boostErr}</div>`}
+        ${st.boostSaved && html`<div class="text-xs text-green-600 mb-3" id="boostSaved">${st.boostSaved}</div>`}
+        ${st.boostLoaded && html`<div>
+          <label class="flex items-center gap-2 text-sm mb-3"><input type="checkbox" id="boostOn" checked=${st.boostOn} onChange=${e => { st.boostOn = e.target.checked; st.boostSaved = ''; renderApp(); }} /> Send a Marketing Boost incentive for this campaign</label>
+          ${st.boostOn && html`<div>
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="text-xs font-medium block mb-1 text-gray-500">Incentive</label>
+                <select class="input" id="boostType" onChange=${e => { st.boostType = e.target.value; const r = boostTypeRow(); st.boostAmount = (r && r.defaultAmount) ? String(r.defaultAmount) : ''; st.boostDest = ''; st.boostSaved = ''; renderApp(); }}>
+                  ${BOOST_TYPES.map(t => html`<option value=${t.value} selected=${st.boostType === t.value}>${t.label}</option>`)}
+                </select></div>
+              ${st.boostType === 'vacation_incentive'
+                ? html`<div><label class="text-xs font-medium block mb-1 text-gray-500">Destination (Offer ID)</label>
+                    <div class="flex gap-2"><input class="input" id="boostDest" placeholder="e.g. 41" value=${st.boostDest} onInput=${e => { st.boostDest = e.target.value; }} /><button class="btn btn-outline" id="boostLoadDests" onClick=${loadBoostDests}>Load list</button></div>
+                    ${st.boostDestsErr && html`<div class="text-xs text-amber-600 mt-1" id="boostDestsErr">Marketing Boost did not answer: ${st.boostDestsErr}</div>`}
+                    ${st.boostDests && html`<div class="text-xs mt-1"><select class="input" id="boostDestPick" onChange=${e => { if (e.target.value) { st.boostDest = e.target.value; renderApp(); } }}><option value="">${st.boostDests.length} destination${st.boostDests.length === 1 ? '' : 's'} on this account</option>${st.boostDests.map(d => html`<option value=${String(d.id)}>${d.id} - ${d.name}${d.country ? ' (' + d.country + ')' : ''}</option>`)}</select></div>`}
+                  </div>`
+                : html`<div><label class="text-xs font-medium block mb-1 text-gray-500">Amount</label>
+                    <select class="input" id="boostAmount" onChange=${e => { st.boostAmount = e.target.value; st.boostSaved = ''; renderApp(); }}>
+                      ${(boostTypeRow() ? boostTypeRow().amounts : []).map(a => html`<option value=${String(a)} selected=${String(a) === st.boostAmount}>$${a}</option>`)}
+                    </select></div>`}
+            </div>
+            <div class="grid grid-cols-2 gap-3 mt-3">
+              <div><label class="text-xs font-medium block mb-1 text-gray-500">Sender (optional)</label><input class="input" id="boostSender" placeholder="your sender id from Marketing Boost" value=${st.boostSender} onInput=${e => { st.boostSender = e.target.value; }} /></div>
+              <div><label class="text-xs font-medium block mb-1 text-gray-500">Business (optional)</label><input class="input" id="boostBusiness" placeholder="your business id from Marketing Boost" value=${st.boostBusiness} onInput=${e => { st.boostBusiness = e.target.value; }} /></div>
+            </div>
+            <div class="mt-3"><label class="text-xs font-medium block mb-1 text-gray-500">Send it when</label>
+              <label class="flex items-center gap-2 text-xs"><input type="checkbox" id="boostWin" checked=${st.boostWin} onChange=${e => { st.boostWin = e.target.checked; st.boostSaved = ''; renderApp(); }} /> the player wins</label>
+              <label class="flex items-center gap-2 text-xs"><input type="checkbox" id="boostRedeem" checked=${st.boostRedeem} onChange=${e => { st.boostRedeem = e.target.checked; st.boostSaved = ''; renderApp(); }} /> the player redeems a reward</label>
+            </div>
+            <div class="text-xs text-gray-400 mt-3">The contact comes from the entry that triggered this. An entry with no email address is skipped and logged, never sent to the vendor.</div>
+          </div>`}
+        </div>`}
+        <div class="flex gap-2 justify-end mt-4">
+          <button class="btn btn-outline" id="boostClose" onClick=${closeBoost}>Close</button>
+          <button class="btn" id="boostSave" onClick=${saveBoost}>Save Marketing Boost</button>
         </div>
       </div>
     </div>`}
