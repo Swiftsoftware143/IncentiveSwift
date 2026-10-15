@@ -53,6 +53,15 @@
 //! to it, and the two receivers are listed in [`PUBLIC_ROUTES`] beside the loyalty one — a payment
 //! provider presents no credential of ours, so the signature over the raw body is the credential.
 //!
+//! # One Stripe address, not two (kanban t_b474bd74)
+//!
+//! `POST /api/v1/loyalty/webhook/stripe` was the second inbound Stripe receiver and its entry is
+//! GONE from the list below, because the route itself is gone. Stripe issues a distinct signing
+//! secret per registered ENDPOINT while `payment_providers` stores one signing secret per
+//! `(account_id, provider_type)`, so the second address could never be authenticated by the key the
+//! console accepts. `POST /api/v1/webhooks/stripe` now completes every Stripe flow (platform plan,
+//! loyalty plan, subscription cancellation) and is the app's only Stripe address.
+//!
 //! # Adding a route
 //!
 //! Leave it out of both lists and it is private. Do NOT add an entry unless the route must answer a
@@ -155,7 +164,6 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/loyalty/public/program/:slug",
     "/api/v1/loyalty/secret-code/verify",
     // --- inbound webhooks (their own signature / shared key is the credential) --
-    "/api/v1/loyalty/webhook/stripe",
     // The billing receivers (kanban t_3c98f2b6). A payment provider delivers with NO credential of
     // ours — the HMAC over the raw body, verified against the account's own stored signing secret,
     // IS the credential (src/billing/webhooks.rs). They were reachable before this middleware
@@ -475,6 +483,30 @@ mod tests {
         }
     }
 
+    /// The second Stripe address is GONE, and this is the leg that keeps it gone (kanban
+    /// t_b474bd74). It was `POST /api/v1/loyalty/webhook/stripe`: a second inbound receiver, while
+    /// Stripe issues one signing secret per registered ENDPOINT and `payment_providers` stores one
+    /// signing secret per account — so the second address could never be authenticated by the key
+    /// the console accepts. The loyalty-plan arms now run inside the ONE Stripe address, and the
+    /// path must be neither mounted nor reachable anonymously: a Stripe endpoint still pointed at it
+    /// must get a refusal at the edge, not a receiver that silently drops the purchase.
+    #[test]
+    fn the_retired_second_stripe_address_is_not_mounted_and_not_public() {
+        const RETIRED: &str = "/api/v1/loyalty/webhook/stripe";
+        assert!(
+            !mounted_routes().iter().any(|m| m == RETIRED),
+            "the router still mounts {RETIRED} — the one-signing-secret model cannot authenticate it"
+        );
+        assert!(
+            !is_public_route(RETIRED),
+            "{RETIRED} must not be in the public allowlist once the route is retired"
+        );
+        assert!(
+            is_public_route("/api/v1/webhooks/stripe"),
+            "the ONE Stripe address must stay reachable — it carries every Stripe flow now"
+        );
+    }
+
     /// The allowlist has no duplicates — a copy-paste mistake here is invisible in production but
     /// makes the census above meaningless.
     #[test]
@@ -570,7 +602,9 @@ mod tests {
             "/api/v1/loyalty/checkin",
             "/api/v1/loyalty/online/visit",
             "/api/v1/loyalty/public/program/some-slug",
-            "/api/v1/loyalty/webhook/stripe",
+            // `/api/v1/loyalty/webhook/stripe` was here until kanban t_b474bd74 retired the second
+            // Stripe address (one signing secret per account cannot authenticate two endpoints).
+            // The ONE Stripe address now completes the loyalty-plan purchase too.
             // The billing receivers (kanban t_3c98f2b6): a payment provider posts with no credential
             // of ours, so the signature over the raw body is the only credential there can be. Both
             // answered 401 to an anonymous POST before this entry — measured live 2026-10-14.

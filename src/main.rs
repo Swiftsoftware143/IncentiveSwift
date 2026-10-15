@@ -426,10 +426,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/subscribe",
             post(handlers::loyalty_plans::subscribe),
         )
-        .route(
-            "/api/v1/loyalty/webhook/stripe",
-            post(handlers::stripe_webhook::stripe_webhook),
-        )
+        // POST /api/v1/loyalty/webhook/stripe was RETIRED here (kanban t_b474bd74): it was a SECOND
+        // Stripe address, and Stripe issues one signing secret PER ENDPOINT while this app stores one
+        // signing secret per account (`payment_providers_account_provider_type_key UNIQUE
+        // (account_id, provider_type)`), so the second address could never be verified by the key the
+        // console accepts and the loyalty-plan purchase was silently dead at whichever address the
+        // operator's one Stripe endpoint did not point at. The loyalty-plan arms now run inside the
+        // ONE Stripe address, `POST /api/v1/webhooks/stripe` (`billing::webhooks`), which dispatches a
+        // `checkout.session.completed` to the arm that owns the session id it names: platform plan
+        // (`checkout_sessions`, kind=plan) or loyalty plan (`stripe_checkout_sessions`).
         // Treasury / ledger
         .route(
             "/api/v1/admin/treasury/summary",

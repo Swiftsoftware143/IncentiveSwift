@@ -348,11 +348,14 @@ pub async fn deduct_credits(
 // held a single `top_up` row.
 //
 // Credits here are a PLAN ALLOWANCE (`features::credit_limit` over `tier_features`) plus the loyalty
-// ZC pool that the live `POST /api/v1/loyalty/webhook/stripe` funds — nothing sells credits, and no
+// ZC pool that the live loyalty-plan purchase funds — nothing sells credits, and no
 // served page promises to (checked: no top-up / "buy credits" text in any served root or repo front
 // end). The live payments path is the loyalty plan subscription checkout
-// (`handlers::loyalty_plans::subscribe`), which owns that webhook (`handlers::stripe_webhook`), and
-// `stripe_checkout_sessions` is ITS table — so the table and its two live readers stay.
+// (`handlers::loyalty_plans::subscribe`), whose completion arrives at the ONE Stripe address
+// (`POST /api/v1/webhooks/stripe`) and is handled by its loyalty arm
+// (`handlers::stripe_webhook::complete_loyalty_session`) — the plan's own second Stripe address was
+// retired by kanban t_b474bd74 — and `stripe_checkout_sessions` is ITS table, so the table and its
+// two live readers stay.
 //
 /// POST /api/v1/admin/credits/adjust — admin adjusts a user's credits
 pub async fn admin_adjust_credits(

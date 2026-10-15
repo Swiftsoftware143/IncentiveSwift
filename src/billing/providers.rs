@@ -508,6 +508,14 @@ pub struct WebhookSecretRow {
 /// key is skipped at error level with its account id (never the value). If that leaves NO usable
 /// credential, the lookup fails, so a misconfigured provider is loud instead of silent.
 ///
+/// The failure is a `503` carrying a REASON SLUG — `<provider>_webhook_secret_not_configured` when
+/// no active row exists at all, `<provider>_webhook_secret_unreadable` when rows exist but none is
+/// usable (kanban t_b474bd74). It used to be `AppError::Internal`, which answers a bare
+/// `500 "Internal server error"`: a payment provider cannot act on that, Stripe retries a 5xx
+/// forever, and the operator is told nothing. Every sibling fleet receiver answers the same
+/// condition the same way (FunnelSwift `stripe_webhook_secret_not_configured`), so the two apps
+/// agree on what an unconfigured receiver says.
+///
 /// Re-exported from `billing` so the webhook receivers share this lookup.
 pub async fn lookup_webhook_secrets(
     state: &AppState,
@@ -523,9 +531,8 @@ pub async fn lookup_webhook_secrets(
     .await?;
 
     if rows.is_empty() {
-        return Err(AppError::Internal(format!(
-            "No active {} payment provider configured",
-            provider_type
+        return Err(AppError::ServiceUnavailable(not_configured_reason(
+            provider_type,
         )));
     }
 
@@ -562,11 +569,28 @@ pub async fn lookup_webhook_secrets(
     }
 
     if usable.is_empty() {
-        return Err(AppError::Internal(format!(
-            "{} payment provider rows are active but none carries a usable webhook secret",
-            provider_type
-        )));
+        return Err(AppError::ServiceUnavailable(unusable_reason(provider_type)));
     }
 
     Ok(usable)
+}
+
+/// The reason slug a receiver answers when NO active `<provider>` row exists at all.
+///
+/// The vocabulary is the sibling fleet receivers' own: FunnelSwift's Stripe receiver refuses the
+/// same condition with `stripe_webhook_secret_not_configured`, so a delivery to either app reads
+/// the same way (kanban t_b474bd74). Kept in ONE place so the two arms below cannot drift apart —
+/// and, because it is a slug and not the stored value, it is safe to return to an unauthenticated
+/// caller.
+fn not_configured_reason(provider_type: &str) -> String {
+    format!("{}_webhook_secret_not_configured", provider_type)
+}
+
+/// The reason slug for the OTHER configuration arm: rows exist, but not one of them carries a
+/// usable secret (every one is blank, or none decrypts under the current master key).
+///
+/// A different slug on purpose — "nothing is configured" and "what is configured cannot be read"
+/// need different fixes, and only this one means the master key (or a hand-written row) is wrong.
+fn unusable_reason(provider_type: &str) -> String {
+    format!("{}_webhook_secret_unreadable", provider_type)
 }

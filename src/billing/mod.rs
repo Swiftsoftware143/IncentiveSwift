@@ -9,10 +9,12 @@
 //!   POST /api/v1/webhooks/stripe                -> webhooks::stripe
 //!   POST /api/v1/webhooks/paypal                -> webhooks::paypal
 //!
-//! `stripe_signature` is the ONE parse-and-verify for a `Stripe-Signature` header, shared by both
-//! Stripe receivers in this app: `webhooks::stripe_webhook` (the payment receiver) and
-//! `handlers::stripe_webhook::stripe_webhook` (the loyalty-plan receiver). Two receivers must not
-//! be able to disagree about the header or about the bytes Stripe signed (kanban t_1b8d96f6).
+//! `stripe_signature` is the ONE parse-and-verify for a `Stripe-Signature` header, used by the ONE
+//! Stripe receiver in this app: `billing::webhooks::stripe_webhook`. It completes every Stripe flow
+//! — the platform-plan checkout, the loyalty-plan checkout (the two arms in
+//! `handlers::stripe_webhook`) and a loyalty subscription's cancellation — because Stripe issues one
+//! signing secret per registered endpoint while this app stores one signing secret per account
+//! (kanban t_b474bd74). There is no second receiver left to disagree with it.
 
 use crate::state::AppState;
 use axum::{

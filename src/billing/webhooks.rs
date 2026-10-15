@@ -1,8 +1,22 @@
 //! Webhook handlers for Stripe and PayPal.
 //!
 //! Endpoints:
-//!   POST /api/v1/webhooks/stripe  — Stripe webhook receiver
+//!   POST /api/v1/webhooks/stripe  — Stripe webhook receiver (the ONE Stripe address)
 //!   POST /api/v1/webhooks/paypal  — PayPal webhook receiver
+//!
+//! The ONE Stripe address (kanban t_b474bd74)
+//! -----------------------------------------
+//! This app had TWO Stripe receivers: this one and `POST /api/v1/loyalty/webhook/stripe`
+//! (`handlers::stripe_webhook`). Both authenticated against the same rows — and the console (and
+//! the table: `UNIQUE (account_id, provider_type)`) stores exactly ONE signing secret per account,
+//! while Stripe issues a DISTINCT signing secret per registered endpoint. One secret therefore
+//! authenticated at most one of the two addresses, so an operator who pasted the key the console
+//! asked for still had one flow silently dead. The two-receiver model is reduced to ONE address:
+//! `POST /api/v1/webhooks/stripe` completes EVERY Stripe flow for the account — the platform-plan
+//! checkout (`checkout_sessions`, `grant_plan_session` below), the loyalty-plan checkout
+//! (`stripe_checkout_sessions`, `handlers::stripe_webhook::complete_loyalty_session`) and a
+//! loyalty subscription's cancellation (`cancel_loyalty_subscription`). One endpoint, one signing
+//! secret, both purchases.
 //!
 //! Multi-account verification (kanban t_3c98f2b6)
 //! ---------------------------------------------
@@ -35,10 +49,11 @@ use uuid::Uuid;
 // Re-export these for use outside billing (e.g. admin handler)
 pub use crate::billing::providers::{lookup_webhook_secrets, WebhookSecretRow};
 
-/// The ONE parse-and-verify for a `Stripe-Signature` header, shared with the loyalty-plan receiver
-/// (`handlers::stripe_webhook`) so two receivers cannot disagree about the header or about the bytes
-/// Stripe signed. See the module for the header shape and for why the bare-body HMAC that used to
-/// live here could never accept a genuine delivery (kanban t_1b8d96f6).
+/// The ONE parse-and-verify for a `Stripe-Signature` header. The loyalty-plan arms that used to sit
+/// behind their own door are called from this receiver now, so there is no second verdict on the
+/// header anywhere in the app to disagree with this one. See the module for the header shape and
+/// for why the bare-body HMAC that used to live here could never accept a genuine delivery
+/// (kanban t_1b8d96f6).
 use crate::billing::stripe_signature::verify_stripe_signature_any;
 
 // ---------------------------------------------------------------------------
@@ -49,7 +64,12 @@ use crate::billing::stripe_signature::verify_stripe_signature_any;
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// POST /api/v1/webhooks/stripe
+/// POST /api/v1/webhooks/stripe — the ONE Stripe address for this app (kanban t_b474bd74).
+///
+/// Authenticates the delivery once, then hands the event to the arm that owns the session row its
+/// own id resolves to. One endpoint completes every Stripe flow, because Stripe's own model is one
+/// signing secret per registered endpoint while this app stores one signing secret per account: the
+/// platform-plan checkout, the loyalty-plan checkout, and a loyalty subscription's cancellation.
 pub async fn stripe_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -89,23 +109,35 @@ pub async fn stripe_webhook(
 
     tracing::info!("Received Stripe webhook: type={}", event_type);
 
-    // Handle the event
-    match event_type {
-        "checkout.session.completed" => {
-            handle_stripe_checkout_completed(&state, &event).await?;
+    // Handle the event. Which arm owns it is decided by the session row its own id resolves to —
+    // never by anything in the body — so ONE address can complete both checkouts this app creates
+    // without either arm being able to move a workspace the other one owns.
+    let outcome = match event_type {
+        "checkout.session.completed" => handle_stripe_checkout_completed(&state, &event).await?,
+        // The loyalty-plan arms live beside their sibling (`handlers::stripe_webhook`): the
+        // cancellation resolves its workspace from the signed event's own subscription id.
+        "customer.subscription.deleted" => {
+            crate::handlers::stripe_webhook::cancel_loyalty_subscription(&state, &event).await?
         }
         "payment_intent.succeeded" => {
             handle_stripe_payment_succeeded(&state, &event).await?;
+            "accepted"
         }
         "payment_intent.payment_failed" => {
             handle_stripe_payment_failed(&state, &event).await?;
+            "accepted"
         }
         _ => {
             tracing::debug!("Unhandled Stripe event type: {}", event_type);
+            "ignored_unhandled_event_type"
         }
-    }
+    };
 
-    Ok(Json(json!({ "status": "received" })))
+    // 200 for anything the signature authenticated, INCLUDING the no-op outcomes: the provider
+    // presents a real delivery and must not be told to retry a body that can never change. The
+    // outcome names the arm that ran, so the effect of a delivery is observable without reading the
+    // log (the loyalty receiver used to answer exactly this way, kanban t_1b8d96f6).
+    Ok(Json(json!({ "status": "received", "outcome": outcome })))
 }
 
 /// POST /api/v1/webhooks/paypal
@@ -391,24 +423,52 @@ async fn grant_plan_session(state: &AppState, provider_session_id: &str) -> Resu
     Ok(true)
 }
 
-async fn handle_stripe_checkout_completed(state: &AppState, event: &Value) -> Result<(), AppError> {
+/// `checkout.session.completed`, dispatched to the arm that owns the session the event names.
+///
+/// ONE Stripe address (kanban t_b474bd74) means a single event may belong to either checkout this
+/// app creates, so the arms are tried in order and the FIRST one that recognizes the session id
+/// owns the event:
+///
+/// 1. `grant_plan_session` — a PLATFORM PLAN purchase (`checkout_sessions`, `kind = 'plan'`);
+/// 2. `handlers::stripe_webhook::complete_loyalty_session` — a LOYALTY-PLAN purchase
+///    (`stripe_checkout_sessions`);
+/// 3. the generic `checkout_sessions` update plus credential delivery (the arm that predates both).
+///
+/// Each of them reads the workspace and the plan from OUR OWN row named by the signature-verified
+/// session id, never from the event's metadata, so no arm can be steered by the request body. The
+/// returned outcome names the arm that ran (or why nothing moved) and is echoed to the caller.
+/// `None` from the loyalty arm means "not one of ours", so the generic arm still gets its turn —
+/// an `ignored_*` outcome from it is OURS and must not be reinterpreted by a later arm.
+async fn handle_stripe_checkout_completed(
+    state: &AppState,
+    event: &Value,
+) -> Result<&'static str, AppError> {
     tracing::info!("Stripe checkout.session.completed — processing...");
 
     let session = &event["data"]["object"];
     let provider_session_id = session["id"].as_str().unwrap_or("");
     if provider_session_id.is_empty() {
         tracing::warn!("Stripe checkout.session.completed missing session ID");
-        return Ok(());
+        return Ok("ignored_missing_session_id");
     }
 
     // A PLATFORM PLAN purchase, created by THIS app's own checkout (`billing::checkout`): the account
     // that pays and the plan to grant are read from OUR `checkout_sessions` row, identified by the
     // Stripe session id in the signature-verified event — never from the event's own metadata. That is
-    // the same trust boundary the loyalty receiver documents (`handlers::stripe_webhook`), and it is
-    // why a plan session is not silently swallowed by the loyalty arm below, which looks the session
-    // up in a DIFFERENT table.
+    // the same trust boundary the loyalty arm documents (`handlers::stripe_webhook`), and it is why a
+    // plan session is not silently swallowed by the loyalty arm below, which looks the session up in
+    // a DIFFERENT table.
     if grant_plan_session(state, provider_session_id).await? {
-        return Ok(());
+        return Ok("plan_granted");
+    }
+
+    // A LOYALTY-PLAN purchase, created by `handlers::loyalty_plans::subscribe` — the flow that used
+    // to be delivered to its own Stripe address and was silently DROPPED here when the operator
+    // pointed their one Stripe endpoint at this receiver (kanban t_b474bd74).
+    if let Some(outcome) =
+        crate::handlers::stripe_webhook::complete_loyalty_session(state, event).await?
+    {
+        return Ok(outcome);
     }
 
     // Update checkout_sessions
@@ -462,9 +522,14 @@ async fn handle_stripe_checkout_completed(state: &AppState, event: &Value) -> Re
                 tracing::warn!("Credential delivery failed for {}: {}", email_str, e);
             }
         }
+        return Ok("session_completed");
     }
 
-    Ok(())
+    tracing::debug!(
+        session = %provider_session_id,
+        "Stripe checkout.session.completed names no session of ours — nothing moved"
+    );
+    Ok("ignored_unknown_session")
 }
 
 async fn handle_stripe_payment_succeeded(

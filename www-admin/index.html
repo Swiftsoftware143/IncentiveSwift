@@ -1986,7 +1986,7 @@ const PaymentProviders = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Payment Providers</h2>
-        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are stored encrypted and are never shown back in full; the webhook signing secret authenticates this workspace's own inbound payment events.</p></div>
+        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are stored encrypted and are never shown back in full; the webhook signing secret authenticates this workspace's own inbound payment events. Point <strong>one</strong> Stripe webhook endpoint at <code>/api/v1/webhooks/stripe</code> &mdash; that single address delivers every Stripe event for you, a plan purchase and a loyalty-plan purchase alike, and it is the only one this app can verify.</p></div>
       <button class="btn btn-sm btn-green" disabled=${st.busy} onClick=${() => openForm(null)}>+ Add provider</button>
     </div>
     ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
@@ -2024,7 +2024,7 @@ const PaymentProviderModal = ({ st, closeForm, submit }) => {
           <input class=${inp} type="password" autocomplete="new-password" value=${f.api_key} onInput=${e => { f.api_key = e.target.value; }} /></div>
         <div><label class="block text-xs font-medium mb-1">Webhook signing secret${f.edit ? ' (leave blank to keep the stored one)' : ''}</label>
           <input class=${inp} type="password" autocomplete="new-password" value=${f.webhook_secret} onInput=${e => { f.webhook_secret = e.target.value; }} />
-          <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the endpoint is shared, every workspace's secret is checked, and an event can only ever act on the session it names. Stripe shows it beside the endpoint's signing secret.</div></div>
+          <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the address is shared, every workspace's secret is checked, and an event can only ever act on the session it names. In Stripe, add <strong>one</strong> webhook endpoint pointed at <code>/api/v1/webhooks/stripe</code> and paste its signing secret here: Stripe issues a different secret per endpoint, and this field holds one, so a second endpoint could never be verified.</div></div>
         <div><label class="block text-xs font-medium mb-1">Base URL (optional)</label>
           <input class=${inp} placeholder="https://api.stripe.com" value=${f.base_url} onInput=${e => { f.base_url = e.target.value; }} /></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — this workspace's own row is the one your checkout and inbound payment events use</label>

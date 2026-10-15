@@ -22,8 +22,8 @@ pub struct AppConfig {
     /// refused (kanban t_d9fb9e1b). `STRIPE_WEBHOOK_TOLERANCE_SECS` beats the default — Stripe's own
     /// 300 s — and is clamped to `30..=86_400`, so neither a typo nor a fat finger can make every
     /// genuine delivery stale, or stretch the replay bound into meaninglessness. `main.rs` prints the
-    /// value this returns at boot, so the number an operator sees is the number both receivers
-    /// enforce.
+    /// value this returns at boot, so the number an operator sees is the number the receiver
+    /// enforces (there is ONE Stripe receiver since kanban t_b474bd74).
     pub stripe_webhook_tolerance_secs: i64,
 }
 
