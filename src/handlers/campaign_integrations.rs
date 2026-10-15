@@ -327,6 +327,51 @@ pub async fn set_marketing_boost(
 ) -> Result<Json<Value>, AppError> {
     let campaign = campaign_for_caller(&state, &slug, &user).await?;
 
+    // A config that can never fire is refused at WRITE time instead of being stored and silently
+    // never sent: the sender only logs `unknown incentive_type` (or a vendor amount refusal) at send
+    // time, so a typo here looked exactly like a campaign that simply never had a winner. The
+    // accepted values are the ones `fire_marketing_boost_with_override` matches on and
+    // `delivery::direct_api::marketing_boost` validates. A legacy webhook-only config stays allowed.
+    if body.enabled {
+        let incentive = body
+            .incentive_type
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if incentive.is_empty() {
+            let hook = body.webhook_url.as_deref().unwrap_or("").trim().to_string();
+            if hook.is_empty() {
+                return Err(AppError::BadRequest(
+                    "Marketing Boost needs an incentive_type (dining_voucher, hotel_savings_card, \
+                     vacation_incentive) or a webhook_url — a config with neither can never fire."
+                        .to_string(),
+                ));
+            }
+        } else {
+            let valid_amounts: &[u32] = match incentive.as_str() {
+                "dining_voucher" => &[25, 50, 100, 200],
+                "hotel_savings_card" => &[100, 200, 300, 500],
+                "vacation_incentive" => &[],
+                other => {
+                    return Err(AppError::BadRequest(format!(
+                        "Unknown Marketing Boost incentive_type '{}'. Valid: dining_voucher, \
+                         hotel_savings_card, vacation_incentive.",
+                        other
+                    )))
+                }
+            };
+            if let Some(amount) = body.amount {
+                if !valid_amounts.is_empty() && !valid_amounts.contains(&amount) {
+                    return Err(AppError::BadRequest(format!(
+                        "Marketing Boost {} accepts amounts {:?}, not {}.",
+                        incentive, valid_amounts, amount
+                    )));
+                }
+            }
+        }
+    }
+
     // Build the marketing_boost block
     let boost = if body.enabled {
         let mut m = serde_json::Map::new();
