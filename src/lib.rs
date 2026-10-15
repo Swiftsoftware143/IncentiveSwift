@@ -37,6 +37,10 @@ pub mod image_store;
 pub mod iqs_validation;
 mod lifecycle_emails;
 pub mod mechanics;
+// Attribution for a workspace a test harness mints through the public signup
+// (`X-Swift-Harness`, kanban t_4a744754). Declared here as well as in `main.rs` because the
+// integration tests build the LIB, and the module structure of the two must stay identical.
+pub mod probe_harness;
 pub mod security;
 mod smtp;
 pub mod state;

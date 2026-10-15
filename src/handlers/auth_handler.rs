@@ -62,10 +62,21 @@ pub struct RegisterInput {
 }
 
 /// POST /api/v1/auth/register — self-service signup, assigns Free plan.
+///
+/// `headers` is here for ONE reason: the served signup is the fleet's only anonymous door that
+/// mints a workspace, so it is the only door that records the `X-Swift-Harness` marker a test
+/// harness may send (kanban t_4a744754). A `HeaderMap` is a `FromRequestParts` extractor, so it
+/// must be listed BEFORE the `Json` body extractor, which consumes the request.
 pub async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<RegisterInput>,
 ) -> Result<Json<Value>, AppError> {
+    // Attribution for a workspace this route is about to mint, from the `X-Swift-Harness` request
+    // HEADER only — never the body (client-controlled data the flow writes into customer-visible
+    // columns) and never a query field. `None` for every ordinary customer signup, so a real
+    // account is byte-identical to what it was before the column existed.
+    let probe_harness = crate::probe_harness::from_headers(&headers);
     // ── Address boundary (kanban t_d7ef4a88, class t_4722a331) ─────────────────────────────
     // FIRST, before any SELECT and long before any INSERT. `accounts.email` is both the login
     // identity and the only address the generated-credentials mail can ever reach; the handler
@@ -109,6 +120,7 @@ pub async fn register(
             password: &plaintext_password,
             // The self-serve signup is always the platform's own free tier, never a setting.
             entry_plan_slug: "free",
+            probe_harness: probe_harness.as_deref(),
         },
     )
     .await

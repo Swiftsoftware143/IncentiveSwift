@@ -472,6 +472,11 @@ pub async fn handle_provision_free_account(
             name: &full_name,
             password: &password,
             entry_plan_slug: &entry_plan_slug,
+            // DELIBERATELY `None`: this is an AUTHENTICATED machine door (`INTERNAL_SYNC_KEY`,
+            // reached by FunnelSwift when a lead is tagged), not the served signup. Only the
+            // anonymous signup records the `X-Swift-Harness` marker (kanban t_4a744754), so a
+            // workspace this door mints stays byte-identical to what it minted before.
+            probe_harness: None,
         },
     )
     .await?;

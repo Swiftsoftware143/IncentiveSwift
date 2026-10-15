@@ -268,7 +268,10 @@ async fn deliver_credentials(
         let hash = hash_password(&temp_password)?;
         let account_id = Uuid::new_v4();
 
-        // Insert account with tenant_id = self (standalone tenant)
+        // Insert account with tenant_id = self (standalone tenant).
+        // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this is the paid-checkout
+        // credential path (a provider-signed payment webhook), not the served, unauthenticated
+        // signup — the only door the `X-Swift-Harness` marker belongs to.
         sqlx::query(
             "INSERT INTO accounts (id, name, email, password_hash, slug, role, tenant_id, purchase_pin)
              VALUES ($1, $2, $3, $4, $5, 'company_admin', $6, '0000')"

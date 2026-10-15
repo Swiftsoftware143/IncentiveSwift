@@ -64,6 +64,12 @@ pub struct MintRequest<'a> {
     /// The tier an account is seated on. Must resolve to an ACTIVE `plan_tiers` row with
     /// `price_monthly = 0` or the mint is refused.
     pub entry_plan_slug: &'a str,
+    /// The `X-Swift-Harness` marker, when the door that called this mint is the SERVED,
+    /// unauthenticated signup and the caller sent one (kanban t_4a744754). Read from the request
+    /// HEADER only (`crate::probe_harness::from_headers`) — never from the body and never from a
+    /// query field. `None` mints a row byte-identical to every row minted before the column
+    /// existed, which is what every authenticated door passes.
+    pub probe_harness: Option<&'a str>,
 }
 
 /// The tier id a mint will be seated on, or `None` when this app has no such free, active tier.
@@ -131,8 +137,8 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     // pass it, so the loser must be told the truth — the same Conflict step 1 returns — instead of
     // the 500 a raw `?` turned the unique violation into.
     let account_insert = sqlx::query(
-        r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug, purchase_pin)
-           VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000')"#,
+        r#"INSERT INTO accounts (id, name, email, password_hash, role, plan_tier_id, tenant_id, slug, purchase_pin, probe_harness)
+           VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000', $8)"#,
     )
     .bind(account_id)
     .bind(req.name)
@@ -141,6 +147,7 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     .bind(plan_tier_id)
     .bind(account_id) // tenant_id = self (standalone workspace)
     .bind(&slug)
+    .bind(req.probe_harness)
     .execute(&mut *tx)
     .await;
     if let Err(e) = account_insert {

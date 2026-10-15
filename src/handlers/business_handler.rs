@@ -143,6 +143,10 @@ pub async fn register_business(
         .collect();
 
     let now = chrono::Utc::now();
+    // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this door is authenticated by
+    // `X-Internal-Key` (a machine-to-machine call from a Multi-Directory site), not the served
+    // signup, so it is not the anonymous door the marker exists for. Recording a marker here would
+    // attribute a real directory partner's business account to fleet machinery.
     sqlx::query(
         r#"INSERT INTO accounts (id, email, name, role, slug, credits_balance, credits_lifetime_used, created_at)
            VALUES ($1, $2, $3, 'company_admin', $4, 0, 0, $5)"#
