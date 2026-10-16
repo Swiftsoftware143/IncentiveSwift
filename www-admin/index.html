@@ -245,7 +245,30 @@ const API = (() => {
   };
 })();
 
-const S = { view: 'dashboard', loading: false, error: null, views: {} };
+// ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
+// The server is the only authority on the session: a request that CARRIED a bearer and came back 401
+// means the stored session is dead (its 7 days are up, or it was revoked). Before this guard every
+// panel on this console failed with the API's own sentence while the signed-in shell stayed painted
+// and NOTHING offered a way back in (measured in real Chromium on admin.incentiveswift.com,
+// browser-run/is-session-expiry-proof.js). It is ONE funnel, so it also covers the panels that call
+// the API with their own fetch (the credential TEST button, the analytics export, the avatar pair).
+// API.logout() retires the operator token AND any open support session, and the App renders its
+// LoginView whenever there is no token. A sign-in request carries no bearer, so a wrong password
+// still reaches the user as the API's own sentence.
+const __rawFetch = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  const carried = !!(opts && opts.headers && (opts.headers.Authorization || opts.headers.authorization));
+  return __rawFetch(url, opts).then(function (r) {
+    if (r.status === 401 && carried && String(url).indexOf('/api/') >= 0) {
+      API.logout();
+      S.sessionEnded = true; S.error = null;
+      renderApp();
+    }
+    return r;
+  });
+};
+
+const S = { view: 'dashboard', loading: false, error: null, sessionEnded: false, views: {} };
 // Wrap API to catch 402 upgrade prompts
 const _get = API.get, _post = API.post, _put = API.put, _del = API.del;
 API.get = async (p) => _get(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
@@ -273,7 +296,7 @@ const LoginView = () => {
   // so the old `let email = '', pw = ''` blanked BOTH fields on every attempt.
   const f = viewState('login_form', { email: '', pw: '' });
   const submit = async (e) => { e.preventDefault(); S.loading = true; S.error = null; renderApp();
-    try { const r = await API.login(f.email, f.pw); API.setAuth(r.token, r.user); f.email = ''; f.pw = ''; S.view = 'dashboard'; } catch(err) { S.error = err.message; }
+    try { const r = await API.login(f.email, f.pw); API.setAuth(r.token, r.user); S.sessionEnded = false; f.email = ''; f.pw = ''; S.view = 'dashboard'; } catch(err) { S.error = err.message; }
     S.loading = false; renderApp();
   };
   return html`<div class="flex items-center justify-center min-h-screen w-full">
@@ -286,6 +309,7 @@ const LoginView = () => {
       <form onSubmit=${submit} class="space-y-4">
         <div><label class="text-sm font-medium text-gray-600 block mb-1">Email</label><input type="email" class="input" value=${f.email} onInput=${e => f.email = e.target.value} placeholder="admin@company.com" required /></div>
         <div><label class="text-sm font-medium text-gray-600 block mb-1">Password</label><input type="password" class="input" value=${f.pw} onInput=${e => f.pw = e.target.value} placeholder="......" required /></div>
+        ${S.sessionEnded && html`<div class="text-amber-800 text-sm bg-amber-50 p-2 rounded-lg">Your session ended, so you were signed out. Sign in again to carry on.</div>`}
         ${S.error && html`<div class="text-red-600 text-sm bg-red-50 p-2 rounded-lg">${S.error}</div>`}
         <button type="submit" class="btn w-full">Sign In</button>
       </form>

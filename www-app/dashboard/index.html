@@ -175,6 +175,22 @@ var PB = { plans: null, plan: null, busy: false };
 var USAGE = { data: null, err: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
+// ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
+// The server is the only authority on the session: a request that CARRIED a bearer and came back 401
+// means the stored session is dead (its 7 days are up, or it was revoked). Before this guard every
+// card on this page failed with an "HTTP 401"-shaped message while the dashboard stayed painted and
+// NOTHING offered a way back in (measured in real Chromium on app.incentiveswift.com/dashboard/,
+// browser-run/is-session-expiry-proof.js). The hand-off is this page's OWN sign-out path — the same
+// keys, the same canonical /login — with one query flag so the sign-in page can say why.
+var __rawFetch = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  var carried = !!(opts && opts.headers && (opts.headers.Authorization || opts.headers.authorization));
+  return __rawFetch(url, opts).then(function (r) {
+    if (r.status === 401 && carried && String(url).indexOf('/api/') >= 0) doLogout(true);
+    return r;
+  });
+};
+
 if (!token) {
   window.location.href = '/';
 } else {
@@ -384,7 +400,7 @@ function loadUsage() {
   });
 }
 
-function doLogout() {
+function doLogout(ended) {
   // kanban t_f5a8e9cb — Sign Out used to clear only the sessionStorage pair, so it signed nobody
   // out: this app's own login writes the 24h bearer to localStorage 'ws_fs_token', and the app
   // shell at '/' re-adopts that key behind GET /api/v1/auth/me, republishes the session and
@@ -397,7 +413,7 @@ function doLogout() {
     localStorage.removeItem(k);
   });
   sessionStorage.removeItem(USER_KEY);
-  window.location.href = '/login';
+  window.location.href = ended ? '/login?expired=1' : '/login';
 }
 // ---- Email branding ------------------------------------------------------------------------
 // The customer half of the tenant_settings document under key "email_branding". The same two

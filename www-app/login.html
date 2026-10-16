@@ -24,6 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 .msg{padding:10px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
 .msg.e{background:#fee2e2;color:#991b1b;display:block}
 .msg.i{color:#6366f1;display:block}
+.msg.n{background:#fef3c7;color:#92400e;display:block}
 .lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px}
 .lk a{color:#6366f1}
 </style>
@@ -39,6 +40,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 <div class="lk"><a href="/forgot-password.html">Forgot password?</a><br><a href="/admin/">Admin console — campaigns, loyalty, leads</a></div>
 </div>
 <script>
+/* A session the server refused asks for this page with ?expired=1 (the console's own 401 arm),
+   so the person is told WHY they are signing in again instead of being dropped here silently. */
+if (/[?&]expired=1/.test(window.location.search)) {
+  var nm = document.getElementById('m'); nm.className = 'msg n';
+  nm.textContent = 'Your session ended, so you were signed out. Sign in again to carry on.';
+}
 function L(){
 var e=document.getElementById("e").value.trim(),p=document.getElementById("p").value,m=document.getElementById("m"),b=document.getElementById("b");
 if(!e||!p){m.className="msg e";m.textContent="Enter email and password";return}
