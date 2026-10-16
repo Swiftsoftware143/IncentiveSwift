@@ -100,6 +100,22 @@ pub async fn free_tiers(db: &PgPool) -> Result<Vec<(String, String)>, AppError> 
 pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAccount, AppError> {
     // ── 1. one address, one login ──────────────────────────────────────────────────────────────
     // `login` resolves an account by `lower(email)`, so the duplicate test must too.
+    //
+    // The NAME is bounded first, because this is the ONE writer both doors pass through (the
+    // served signup at `auth_handler::register` and the cross-app tag door at
+    // `tag_provision_handler`), and `accounts.name` is TEXT — so an over-long name used to store
+    // silently. That is the same defect the profile screen hit as a raw 500, with a quieter face:
+    // the console header prints it, and `update_profile` now caps the field at 255, so a stored
+    // 5000-character name could not be re-saved at all. Refused with the field and the cap named;
+    // measured LIVE 2026-10-16: 0 of the 9 live accounts carry a longer field, so nothing existing
+    // is affected.
+    crate::security::display_name::check_len(
+        req.name,
+        crate::security::display_name::MAX_PROFILE_FIELD_CHARS,
+        "name",
+    )
+    .map_err(AppError::BadRequest)?;
+
     let existing: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
             .bind(req.email)
