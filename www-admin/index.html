@@ -3720,6 +3720,28 @@ const OPS_PANELS = [
 {"id": "tag-provisioning", "title": "23 · Tag provisioning (free accounts from FunnelSwift tags)", "list": "/admin/provisioning-config", "actions": [{"label": "Turn tag provisioning on / off and pick the entry plan", "method": "PUT", "path": "/admin/provisioning-config", "json": true, "fields": ["json"], "hint": "{\"enabled\":true,\"entry_plan_slug\":\"free\"}   — ON by default: the door ships open, so a FunnelSwift tag mints a free account immediately; set enabled=false to close it (the door then refuses with 403 and creates nothing). entry_plan_slug must be one of this app's own free, active plan tiers (the free_plans list is shown above)."}, {"label": "Read the settings", "method": "GET", "path": "/admin/provisioning-config"}]}
 ];
 
+// kanban cron — a probe account is not a customer, and this list could not say so.
+//
+// Every sibling console (CoreSwift CRM, FunnelSwift, WorkflowSwift, ADASwift, missedcallrespondr)
+// badges an owner address no customer can hold; this one listed the account with a bare email, so a
+// fleet-minted probe workspace sat in the operator's list looking exactly like an unrecognised
+// signup — measured live 2026-10-15: `CS Walk9 ...'s Workspace` / `probe-...@example.invalid` sat in
+// CoreSwift's tenant list, and IncentiveSwift is the app whose `accounts` table is where self-serve
+// AND probe signups land (see test-tenant-sweep.py).
+//
+// Two arms, the fleet-wide shape:
+//   * the reserved TLDs (RFC 2606/6761: .invalid/.example/.test/.local, plus example.com/.net/.org);
+//   * the fleet's own probe/tooling domains (`swiftsoftware.dev`, `sw.dev`, `local.<app>`,
+//     `maxxspace.com` — the fleet's probe-inbox provider is the only thing that serves it).
+// `swiftsoftware.com` is deliberately NOT listed: it is the operator's own real address.
+const RESERVED_OWNER_RE = /@(?:[^@]*\.)?(?:invalid|example|test|local)$|@(?:[^@]*\.)?example\.(?:com|net|org)$/i;
+const FLEET_PROBE_OWNER_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev|maxxspace\.com)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
+function isProbeOwner(addr) {
+  const a = String(addr || '');
+  return RESERVED_OWNER_RE.test(a) || FLEET_PROBE_OWNER_RE.test(a);
+}
+const probeBadge = () => html` <span class="badge badge-yellow" title="a reserved or fleet-probe address — a probe, not a customer">probe</span>`;
+
 // kanban t_9f3d85dc — MASS TENANT CLEANUP.
 //
 // The Tenants panel listed the accounts but offered no way to act on more than one at a time:
@@ -3794,7 +3816,7 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
-            <td class="border-b px-2 py-1">${r.email || ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}${isProbeOwner(r.email) ? probeBadge() : ''}</td>
             <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
@@ -3808,7 +3830,7 @@ const BulkTenantDelete = () => {
         <p class="text-sm text-gray-600 mb-2">This removes the account and everything it owns — campaigns,
           entries, loyalty programs, contacts, keys and saved credentials. It cannot be undone.</p>
         <div class="text-xs mb-3" style="font-family:monospace;max-height:160px;overflow:auto">
-          ${chosen.map((r) => html`<div>${r.name || r.email} — ${r.email} — ${r.id}</div>`)}</div>
+          ${chosen.map((r) => html`<div>${r.name || r.email} — ${r.email}${isProbeOwner(r.email) ? ' [probe]' : ''} — ${r.id}</div>`)}</div>
         <div class="flex gap-2">
           <button class="btn btn-red btn-sm" disabled=${busy} onClick=${run}>Delete ${sel.length} tenant(s)</button>
           <button class="btn btn-outline btn-sm" onClick=${() => setConfirming(false)}>Cancel</button>
@@ -4077,7 +4099,7 @@ const ImpersonateAccounts = () => {
           </tr></thead>
           <tbody>${shown.slice(0, 100).map(r => html`<tr class="imp-picker-row" data-account-id=${r.id}>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
-            <td class="border-b px-2 py-1">${r.email || ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}${isProbeOwner(r.email) ? probeBadge() : ''}</td>
             <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
             <td class="border-b px-2 py-1">${r.id === meId
