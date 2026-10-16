@@ -1948,7 +1948,7 @@ const ledgerTab = html`<div>
 // "stored encrypted" whatever the row held, and the masked string cannot tell a stored credential
 // from an empty slot (the mask is `***` for both) — hence `_set` beside `_sealed`.
 const ppPostureCell = (set, sealed) => !set
-  ? html`<span class="text-gray-400">&mdash;</span>`
+  ? html`<span class="text-gray-400">—</span>`
   : (sealed ? html`<span class="badge badge-green" data-pp="sealed">encrypted</span>`
             : html`<span class="badge badge-red" data-pp="plain">in the clear</span>`);
 const PaymentProviders = () => {
