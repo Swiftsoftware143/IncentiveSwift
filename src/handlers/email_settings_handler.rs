@@ -24,6 +24,39 @@ fn is_masked(v: &str) -> bool {
     v.is_empty() || v.chars().all(|c| c == '•' || c == '*')
 }
 
+/// The non-empty credential fields a stored mail row can carry: the two the panel writes, plus the
+/// legacy names this app's own DB CHECK constraint also recognises.
+const CREDENTIAL_FIELDS: [&str; 4] = ["api_key", "smtp_password", "password", "pass"];
+
+/// `(credential_present, sealed)` for a STORED `admin_settings.email` row, read from the row's own
+/// bytes instead of from the decrypted config.
+///
+/// `configured` says a provider is stored. It does NOT say the copy in the database is encrypted:
+/// the row can be restored from a dump taken before sealing, or written by hand, and this app only
+/// seals such a row on its next start. The console printed "Secrets are stored encrypted" as a flat
+/// claim until 2026-10-16; both facts are now MEASURED here, through the same predicate the storage
+/// layer uses, so the panel cannot disagree with the database. Fleet contract: WorkflowSwift's
+/// `stored_credential_present`/`stored_credential_sealed` and CoreSwift's `stored`/`sealed`.
+fn at_rest_posture(raw: &Value) -> (bool, bool) {
+    let mut present = false;
+    let mut all_sealed = true;
+    for field in CREDENTIAL_FIELDS {
+        let Some(v) = raw.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        let v = v.trim();
+        if v.is_empty() {
+            continue;
+        }
+        present = true;
+        if !crate::security::provider_key_crypto::is_encrypted(v) {
+            all_sealed = false;
+        }
+    }
+    // Nothing saved is not "sealed" either — there is no copy to describe.
+    (present, present && all_sealed)
+}
+
 async fn load_row(state: &AppState) -> Option<Value> {
     sqlx::query_scalar::<_, Value>(
         "SELECT COALESCE(value, '{}'::jsonb) FROM admin_settings WHERE key = 'email'",
@@ -52,6 +85,11 @@ pub async fn get_email_settings(
     .ok()
     .flatten();
 
+    // Measured BEFORE the masking below rewrites the credential fields: the posture has to be read
+    // off the stored row, and the mask is what replaces it in the response.
+    let stored = value.clone().unwrap_or_else(|| json!({}));
+    let (credential_present, sealed) = at_rest_posture(&stored);
+
     let mut out = value.unwrap_or_else(|| json!({}));
     if let Some(obj) = out.as_object_mut() {
         if obj.contains_key("api_key") {
@@ -75,6 +113,9 @@ pub async fn get_email_settings(
         "provider": cfg.as_ref().map(|c| c.provider.clone()).unwrap_or_default(),
         "providers": email_provider::available(),
         "last_send": last_send,
+        // At-rest posture of the SAVED row, PRINTED rather than asserted (kanban t_d1fcda7e).
+        "credential_present": credential_present,
+        "sealed": sealed,
     })))
 }
 
@@ -270,6 +311,36 @@ mod tests {
         assert_eq!(
             test_recipient(Some("aim@example.invalid"), "me@example.invalid").unwrap(),
             "aim@example.invalid"
+        );
+    }
+
+    #[test]
+    fn at_rest_posture_reads_the_stored_row_and_can_say_no() {
+        // Nothing saved: no credential, so not sealed either.
+        assert_eq!(at_rest_posture(&json!({})), (false, false));
+        assert_eq!(
+            at_rest_posture(&json!({"api_key": "", "smtp_password": "   "})),
+            (false, false)
+        );
+        // A legacy plaintext row: present and NOT sealed — the arm the old panel could not state.
+        assert_eq!(
+            at_rest_posture(&json!({"api_key": "SG.plaintext"})),
+            (true, false)
+        );
+        // A sealed row: present and sealed.
+        assert_eq!(
+            at_rest_posture(&json!({"api_key": "enc:v1:AAAA"})),
+            (true, true)
+        );
+        // One plaintext field beside a sealed one makes the row NOT sealed.
+        assert_eq!(
+            at_rest_posture(&json!({"api_key": "enc:v1:AAAA", "smtp_password": "hunter2"})),
+            (true, false)
+        );
+        // The legacy field names are credentials too.
+        assert_eq!(
+            at_rest_posture(&json!({"password": "hunter2"})),
+            (true, false)
         );
     }
 }

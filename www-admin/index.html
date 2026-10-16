@@ -154,7 +154,7 @@ window.appGuidePages = {
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
   integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
-  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret this workspace's inbound payment events are verified with — every workspace's own secret authenticates its own deliveries. The keys are stored encrypted and are never shown back in full.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use", "Test a key before you rely on it"] },
+  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret this workspace's inbound payment events are verified with — every workspace's own secret authenticates its own deliveries. The keys are never shown back in full; the Encrypted column states whether the saved copy is encrypted at rest.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use", "Test a key before you rely on it"] },
   tags:           { title: "Tags", desc: "Labels that group your contacts. A system tag can also trigger other actions, such as creating a free account in another app.", actions: ["Create a tag", "Apply a tag to contacts"] },
   leads:          { title: "Leads", desc: "The people your campaigns have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
   contacts:       { title: "Contacts", desc: "Everyone on your list, collected in one place.", actions: ["Search your contacts", "Open a contact"] },
@@ -1943,6 +1943,14 @@ const ledgerTab = html`<div>
 // now NO screen anywhere in this console called any of them — so an account could not connect the
 // payment provider its own checkout path and webhook receivers use. David's rule: a backend route
 // with no UI is a DEFECT, not a feature.
+// At-rest posture of a payment provider's SAVED credential (kanban t_d1fcda7e). Measured by the API
+// from the ciphertext COLUMN, never asserted by this page: until 2026-10-16 the header above claimed
+// "stored encrypted" whatever the row held, and the masked string cannot tell a stored credential
+// from an empty slot (the mask is `***` for both) — hence `_set` beside `_sealed`.
+const ppPostureCell = (set, sealed) => !set
+  ? html`<span class="text-gray-400">&mdash;</span>`
+  : (sealed ? html`<span class="badge badge-green" data-pp="sealed">encrypted</span>`
+            : html`<span class="badge badge-red" data-pp="plain">in the clear</span>`);
 const PaymentProviders = () => {
   const st = viewState('payment_providers_view', { list: null, err: null, busy: false, msg: null, form: null, test: null });
   const load = async () => {
@@ -2013,7 +2021,7 @@ const PaymentProviders = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Payment Providers</h2>
-        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are stored encrypted and are never shown back in full; the webhook signing secret authenticates this workspace's own inbound payment events. Point <strong>one</strong> Stripe webhook endpoint at <code>/api/v1/webhooks/stripe</code> &mdash; that single address delivers every Stripe event for you, a plan purchase and a loyalty-plan purchase alike, and it is the only one this app can verify.</p></div>
+        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are never shown back in full, and the Encrypted column states whether the saved copy is encrypted at rest; the webhook signing secret authenticates this workspace's own inbound payment events. Point <strong>one</strong> Stripe webhook endpoint at <code>/api/v1/webhooks/stripe</code> &mdash; that single address delivers every Stripe event for you, a plan purchase and a loyalty-plan purchase alike, and it is the only one this app can verify.</p></div>
       <button class="btn btn-sm btn-green" disabled=${st.busy} onClick=${() => openForm(null)}>+ Add provider</button>
     </div>
     ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
@@ -2022,11 +2030,12 @@ const PaymentProviders = () => {
     ${st.list === null ? html`<div class="card text-center text-gray-400 py-8">Loading...</div>`
       : rows.length === 0 ? html`<div class="card text-center text-gray-400 py-8">No payment provider is connected yet. Add your Stripe or PayPal keys so checkout and the inbound payment webhooks can work.</div>`
       : html`<div class="card p-0 overflow-hidden"><table class="table">
-          <thead><tr><th>Provider</th><th>Secret key</th><th>Webhook secret</th><th>Base URL</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Provider</th><th>Secret key</th><th>Webhook secret</th><th>Encrypted</th><th>Base URL</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>${rows.map(r => html`<tr>
             <td class="font-medium">${r.provider_type}</td>
             <td class="font-mono text-xs text-gray-500">${r.api_key_masked || 'not set'}</td>
             <td class="font-mono text-xs text-gray-500">${r.webhook_secret_masked || 'not set'}</td>
+            <td class="text-xs whitespace-nowrap" data-pp-posture>key ${ppPostureCell(r.api_key_set, r.api_key_sealed)} webhook ${ppPostureCell(r.webhook_secret_set, r.webhook_secret_sealed)}</td>
             <td class="text-xs text-gray-500">${r.base_url || 'default'}</td>
             <td>${r.is_active ? html`<span class="badge badge-green">Active</span>` : html`<span class="badge badge-red">Inactive</span>`}</td>
             <td><button class="btn btn-sm" disabled=${st.busy} onClick=${() => testKey(r.provider_type, '')}>Test stored key</button>
@@ -2081,7 +2090,7 @@ const PaymentProviderModal = ({ st, closeForm, submit, testKey }) => {
 // (`email::send_email_request`, the choke point every transactional type passes through) and by the
 // test button below, and is read back from `GET /api/v1/admin/email-settings`.
 const EmailProvider = () => {
-  const st = viewState('email-provider', { cfg: null, providers: [], last: null, configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '' });
+  const st = viewState('email-provider', { cfg: null, providers: [], last: null, configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '', credentialPresent: false, sealed: false });
   // `api_key` / `smtp_password` come back MASKED (••••••••) when a value is stored; the server keeps
   // the stored secret when it reads the mask back, so sending the field unchanged never clears it.
   const TEXT_FIELDS = [['from_name', 'From name'], ['from_address', 'From address'], ['domain', 'Mailgun domain'], ['api_url', 'Provider API URL'], ['smtp_host', 'SMTP host'], ['smtp_port', 'SMTP port'], ['smtp_username', 'SMTP username']];
@@ -2094,6 +2103,10 @@ const EmailProvider = () => {
       st.provider = d.provider || st.cfg.provider || 'smtp';
       if (!st.cfg.provider) st.cfg.provider = st.provider;
       st.last = d.last_send || null;
+      // Measured by the API off the STORED row; `configured` says a provider is saved, it does not
+      // say the copy in the database is encrypted. Both facts are shown, neither is assumed.
+      st.credentialPresent = d.credential_present === true;
+      st.sealed = d.sealed === true;
       st.err = null;
     } catch (e) { st.err = e.message; }
     renderApp();
@@ -2166,7 +2179,11 @@ const EmailProvider = () => {
       </div>
       <div class="flex items-center gap-2 mt-4">
         <button class="btn" disabled=${st.busy} onClick=${save}>${st.busy ? 'Saving...' : 'Save provider'}</button>
-        <span class="text-xs text-gray-400">Secrets are stored encrypted and are never shown back in full.</span>
+        <span class="text-xs text-gray-400">Secrets are never shown back in full; the badge says whether the saved copy is encrypted at rest.</span>
+        ${st.credentialPresent ? (st.sealed
+          ? html`<span class="badge badge-green" data-email-posture="sealed">🔒 encrypted at rest</span>`
+          : html`<span class="badge badge-red" data-email-posture="plain">⚠ stored in the clear</span>`)
+        : html`<span class="text-xs text-gray-400" data-email-posture="none">no credential saved yet</span>`}
       </div>
     </div>
     <div class="card">

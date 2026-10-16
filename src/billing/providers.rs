@@ -325,6 +325,16 @@ pub async fn list_payment_providers(
             "api_key_masked": mask(&plain_key),
             "webhook_secret_masked": mask(&plain_webhook),
             "base_url": row.get::<Option<String>, _>("base_url"),
+            // At-rest posture of the SAVED copies, measured off the ciphertext COLUMN (kanban
+            // t_d1fcda7e) and never off the decrypted value above: `is_encrypted` is the same
+            // predicate the write path seals with, so the console's Encrypted column cannot claim
+            // more than the database actually holds. `_set` is reported beside it because the mask
+            // is `***` for BOTH a short credential and an empty slot, so a page cannot tell
+            // "configured" from "absent" by the masked string alone.
+            "api_key_set": !stored_key.trim().is_empty(),
+            "webhook_secret_set": !stored_webhook.trim().is_empty(),
+            "api_key_sealed": is_encrypted(stored_key.trim()),
+            "webhook_secret_sealed": is_encrypted(stored_webhook.trim()),
             "metadata": row.get::<Option<serde_json::Value>, _>("metadata"),
             "is_active": row.get::<bool, _>("is_active"),
             "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
