@@ -578,6 +578,13 @@ async function loadSubs(id) {
 
 document.getElementById('logout').onclick = () => {
   sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user');
+  // kanban t_e687199c — the operator console also runs on THIS origin (app.incentiveswift.com/admin/
+  // is an nginx alias of admin.incentiveswift.com's console), so a support session started there is
+  // held in THIS origin's sessionStorage. Signing out on this page must end it too: measured live,
+  // the 349 B `impersonate_token` survived this Sign Out and the tab landed on /login with it still
+  // in storage — a live credential for the impersonated account, one tab-load away from the banner
+  // and its Stop control. The session is a stateless JWT, so dropping the keys ends it.
+  sessionStorage.removeItem('impersonate_token'); sessionStorage.removeItem('impersonate_company');
   localStorage.removeItem('is_token'); localStorage.removeItem('ws_fs_token'); localStorage.removeItem('is_user'); location.href = '/';
 };
 

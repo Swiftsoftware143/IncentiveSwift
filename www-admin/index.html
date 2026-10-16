@@ -196,6 +196,13 @@ const showUpgradePrompt = (msg) => {
 };
 
 
+// ---- the support session's two storage keys, declared ONCE (kanban t_e687199c) -------------------
+// `impersonate_token` / `impersonate_company` are what "a support session is open" means to this
+// console: the picker writes them (startImpersonation), the banner and the Stop control read them
+// (impersonationSession). The list sits above the API because the console's logout has to drop them
+// too, and a second copy of the key names is exactly how those two would drift apart.
+const IMPERSONATION_KEYS = ['impersonate_token', 'impersonate_company'];
+
 const API = (() => {
   const base = window.location.origin + '/api/v1';
   let token = sessionStorage.getItem('is_token');
@@ -223,7 +230,18 @@ const API = (() => {
     // kanban t_8a6160c9 — when this console runs on the customer app host (app.incentiveswift.com/admin/,
     // an nginx alias of this same file) it adopts localStorage 'ws_fs_token' — see the block at the end
     // of this file — so signing out has to retire that key as well, or the next load silently re-adopts it.
-    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user'); try { localStorage.removeItem('ws_fs_token'); } catch (e) {} }
+    //
+    // kanban t_e687199c — a logout ends EVERY session this console holds, not just the operator's own.
+    // It used to leave the SUPPORT session the impersonate picker opened in sessionStorage
+    // (IMPERSONATION_KEYS), measured live in real Chromium on admin.incentiveswift.com: after clicking
+    // the real Logout control the 349 B `impersonate_token` was still in storage, GET /api/v1/auth/me
+    // with it answered 200 as the impersonated account (role business_user, `impersonating` = the
+    // operator), and the banner with its Stop control was back on the next sign-in. The support session
+    // is a stateless JWT whose documented way out is the caller dropping the token, so dropping the key
+    // here IS ending it — no server call is owed.
+    logout(){ token = null; user = null; sessionStorage.removeItem('is_token'); sessionStorage.removeItem('is_user');
+              IMPERSONATION_KEYS.forEach(k => { try { sessionStorage.removeItem(k); } catch (e) {} });
+              try { localStorage.removeItem('ws_fs_token'); } catch (e) {} }
   };
 })();
 
@@ -4002,7 +4020,8 @@ const OpsConsole = () => {
 // documented exception for this route, keyed on the claim (security::auth::admin_surface_denied_for).
 // So Stop has to present the IMPERSONATION token, not this console's own session token: sending the
 // operator's token would prove nothing about the session that exists.
-const IMPERSONATION_KEYS = ['impersonate_token', 'impersonate_company'];
+// The keys this session lives under are declared ONCE, above the API block (kanban t_e687199c), so
+// the logout and this section can never hold two different lists.
 function impersonationSession() {
   try {
     const token = sessionStorage.getItem('impersonate_token');
