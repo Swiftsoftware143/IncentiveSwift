@@ -4,6 +4,9 @@
 //!   GET  /api/v1/payment-providers              -> providers::list
 //!   POST /api/v1/payment-providers              -> providers::upsert
 //!   DELETE /api/v1/payment-providers/:type       -> providers::delete
+//!   POST /api/v1/payment-providers/:type/test    -> checkout::test_payment_provider
+//!                                                  (the operator's own read-only key check,
+//!                                                  kanban t_14081cea)
 //!   POST /api/v1/checkout/create                -> checkout::create
 //!   GET  /api/v1/checkout/sessions              -> checkout::list
 //!   POST /api/v1/webhooks/stripe                -> webhooks::stripe
@@ -41,6 +44,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/api/v1/payment-providers/:provider_type",
             delete(providers::delete_payment_provider),
+        )
+        // kanban t_14081cea — the operator's own key check. A read-only Stripe call that answers
+        // whether a key works BEFORE a customer finds out for them.
+        .route(
+            "/api/v1/payment-providers/:provider_type/test",
+            post(checkout::test_payment_provider),
         )
         // Checkout Sessions
         .route(

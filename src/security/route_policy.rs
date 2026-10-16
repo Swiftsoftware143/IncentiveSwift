@@ -554,6 +554,10 @@ mod tests {
             "/api/v1/internal/portfolio-sync",
             "/api/v1/internal/tag-provision",
             "/api/v1/checkout/create",
+            // The operator's own payment-key check (kanban t_14081cea): it reads a stored credential
+            // and can call Stripe with one supplied in the body, so it stays behind the caller's own
+            // session like every other payment-provider route. It is NOT in PUBLIC_METHOD_ROUTES.
+            "/api/v1/payment-providers/stripe/test",
             // The knowledge base path carries a public READ and a private WRITE, so the path
             // itself must stay method-blind-private (kanban t_61be5ccc); the read is reached
             // through PUBLIC_METHOD_ROUTES and is asserted in

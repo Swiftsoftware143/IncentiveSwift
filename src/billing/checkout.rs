@@ -29,9 +29,13 @@
 
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
+use crate::security::provider_key_crypto::{decrypt_from_storage, mask};
 use crate::state::AppState;
 use axum::http::StatusCode;
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
@@ -302,6 +306,222 @@ pub async fn create_checkout_session(
     Ok((
         StatusCode::CREATED,
         Json(json!({ "url": url, "session_id": provider_session_id, "plan": plan_slug })),
+    ))
+}
+
+// ═════════════════════ Verifying the operator's payment key ═════════════════════
+//
+// kanban t_14081cea. Until this route existed, this app's ONLY way to learn that a payment key was
+// wrong, truncated or from another account was for a CUSTOMER to press Upgrade and receive the 424
+// that carries Stripe's refusal. `payment_providers` is empty here (measured 2026-10-16: 0 rows), so
+// every purchase refuses `payment_provider_not_configured` — and an operator pasting a key had no way
+// to check it before it mattered. This route makes the key verifiable at the moment it is pasted.
+//
+// The check is a READ: Stripe's `GET /v1/balance`. It moves no money and creates no Stripe object.
+//
+// One body shape, `{ "api_key": "<key>" }`, and both arms are useful:
+//   * `api_key` non-empty -> test THAT key. It is never stored, never logged and never echoed (only
+//     `mask`-ed), so a typo cannot overwrite a working credential the way a Save would. This is the
+//     "Test key" button beside Save.
+//   * `api_key` empty/absent -> test the key STORED for this account, resolved exactly as a purchase
+//     resolves it (`resolve_plan_provider`: the account's own active row first, then the platform
+//     operator's). This is the per-row "Test stored key" button.
+//
+// The refusal arms are the buy path's own arms, so this route can never claim to have verified
+// something `checkout/create` would not sell through.
+//
+// Every refusal is a 4xx class JSON body, never a 502: a CDN replaces a 502 body and the operator
+// would lose the reason, which is the same rule `create_checkout_session` follows.
+pub async fn test_payment_provider(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path(provider_type): Path<String>,
+    payload: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let provider = provider_type.trim().to_ascii_lowercase();
+    let supplied = payload
+        .as_ref()
+        .and_then(|j| j.0.get("api_key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let (key, source) = if !supplied.is_empty() {
+        (supplied, "supplied")
+    } else {
+        let resolved = resolve_plan_provider(&state, account_id).await?;
+        let Some((owner_account, owner_provider)) = resolved else {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "ok": false,
+                    "error": "payment_provider_not_configured",
+                    "reason": "payment_provider_not_configured",
+                    "message": "No payment provider is stored for this account or for the platform \
+                                operator, so there is no stored key to test. Paste a key and press \
+                                Test key, or save one first.",
+                })),
+            ));
+        };
+        if provider != owner_provider.to_ascii_lowercase() {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "ok": false,
+                    "error": "payment_provider_not_stored",
+                    "reason": "payment_provider_not_stored",
+                    "provider": provider,
+                    "message": format!(
+                        "The stored provider for this account is '{owner_provider}', not \
+                         '{provider}', so there is no '{provider}' key to test."
+                    ),
+                })),
+            ));
+        }
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT api_key FROM payment_providers \
+             WHERE account_id = $1 AND provider_type = $2 AND is_active = true \
+             ORDER BY created_at LIMIT 1",
+        )
+        .bind(owner_account)
+        .bind(&owner_provider)
+        .fetch_optional(&state.db)
+        .await?;
+        // Read through the SAME at-rest decryption the buy path uses: a row whose key is unreadable
+        // (wrong/absent PROVIDER_KEY_ENC_SECRET) is "nothing to test", not a 500.
+        let plain = decrypt_from_storage(&state.db, stored.as_deref().unwrap_or("").trim())
+            .await
+            .ok()
+            .unwrap_or_default();
+        if plain.trim().is_empty() {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "ok": false,
+                    "error": "payment_provider_not_configured",
+                    "reason": "payment_provider_not_configured",
+                    "provider": provider,
+                    "message": format!(
+                        "The stored '{owner_provider}' provider row carries no readable key, so \
+                         there is nothing to test. Paste the key and press Save first."
+                    ),
+                })),
+            ));
+        }
+        (plain.trim().to_string(), "stored")
+    };
+
+    // Stay in step with `create_checkout_session`: whatever that arm will not sell through, this one
+    // must not claim to have verified.
+    if provider != "stripe" {
+        return Ok((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "ok": false,
+                "error": "checkout_not_implemented",
+                "reason": "checkout_not_implemented",
+                "provider": provider,
+                "message": format!(
+                    "'{provider}' cannot be verified: only Stripe is implemented for checkout in \
+                     this app, so a key for any other provider would be accepted here and then fail \
+                     at the buy button."
+                ),
+            })),
+        ));
+    }
+
+    let api_base = std::env::var("STRIPE_API_BASE")
+        .unwrap_or_else(|_| "https://api.stripe.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+    let masked = mask(&key);
+
+    let sent = reqwest::Client::new()
+        .get(format!("{api_base}/v1/balance"))
+        .bearer_auth(&key)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await;
+    let resp = match sent {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(provider = %provider, key_source = source, error = %e,
+                "payment key test could not reach the provider");
+            return Ok((
+                StatusCode::FAILED_DEPENDENCY,
+                Json(json!({
+                    "ok": false,
+                    "error": "provider_unreachable",
+                    "reason": "provider_unreachable",
+                    "provider": provider,
+                    "key_source": source,
+                    "api_key_masked": masked,
+                    "message": format!("Could not reach Stripe at all: {e}"),
+                })),
+            ));
+        }
+    };
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        // Stripe's /v1/balance answers `{ "object": "balance", "livemode": <bool>, ... }`. Only
+        // `livemode` is read, and reporting it is most of the value: a TEST-mode key is a working key
+        // that will never charge anybody, and mistaking one for the other is the exact mistake this
+        // route exists to prevent.
+        let live = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.get("livemode").and_then(|b| b.as_bool()));
+        let message = match live {
+            Some(true) => {
+                "Stripe accepted the key and it is a LIVE key — a real customer can be charged."
+                    .to_string()
+            }
+            Some(false) => "Stripe accepted the key but it is a TEST-mode key — no customer will \
+                            ever be charged. Replace it with the live key before selling."
+                .to_string(),
+            None => "Stripe accepted the key.".to_string(),
+        };
+        tracing::info!(provider = %provider, key_source = source, "payment key verified");
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "provider": provider,
+                "key_source": source,
+                "livemode": live,
+                "api_key_masked": masked,
+                "message": message,
+            })),
+        ));
+    }
+
+    // Never echo the key. Stripe's own sentence is safe and is the whole point of the route.
+    let msg = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("Stripe returned {status}"));
+    tracing::warn!(provider = %provider, key_source = source, http = %status,
+        "payment key was REFUSED by the provider");
+    Ok((
+        StatusCode::FAILED_DEPENDENCY,
+        Json(json!({
+            "ok": false,
+            "error": "provider_refused",
+            "reason": "provider_refused",
+            "provider": provider,
+            "key_source": source,
+            "api_key_masked": masked,
+            "message": format!("Stripe refused the key: {msg}"),
+        })),
     ))
 }
 
