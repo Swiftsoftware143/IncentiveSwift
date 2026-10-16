@@ -109,12 +109,17 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     // 5000-character name could not be re-saved at all. Refused with the field and the cap named;
     // measured LIVE 2026-10-16: 0 of the 9 live accounts carry a longer field, so nothing existing
     // is affected.
-    crate::security::display_name::check_len(
-        req.name,
-        crate::security::display_name::MAX_PROFILE_FIELD_CHARS,
-        "name",
-    )
-    .map_err(AppError::BadRequest)?;
+    // A BLANK name is refused here too, and the value this returns is what gets bound. `check_len`
+    // let a blank through (a blank is legal for the CLEARABLE profile fields it was written for),
+    // so this door answered 200 to `POST /api/v1/auth/register {"name":"   "}` and stored a
+    // 3-space name — the console header and the welcome mail's greeting were then empty and the
+    // row looked exactly like a real one. `normalize_name` is the SAME arm `update_profile`
+    // (auth_handler.rs:596) already enforces, and it returns the TRIMMED value the caller must
+    // bind. Measured LIVE 2026-10-16: exactly 1 blank-name account fleet-wide (the probe that
+    // found this) and 0 carrying control characters, so the tightened arm changes nothing that
+    // already exists.
+    let name =
+        crate::security::display_name::normalize_name(req.name).map_err(AppError::BadRequest)?;
 
     let existing: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM accounts WHERE lower(email) = $1")
@@ -157,7 +162,7 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
            VALUES ($1, $2, $3, $4, 'company_admin', $5, $6, $7, '0000', $8)"#,
     )
     .bind(account_id)
-    .bind(req.name)
+    .bind(&name)
     .bind(req.email)
     .bind(&password_hash)
     .bind(plan_tier_id)
