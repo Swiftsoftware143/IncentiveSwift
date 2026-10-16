@@ -102,6 +102,17 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <div id="dash-stats" style="color:#64748b;font-size:14px">Loading your numbers&hellip;</div>
   </div>
   <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your usage</h2>
+    <!-- GET /api/v1/me/usage had NO caller on any served page (measured 2026-10-16: the route
+         existed, answered this workspace's own live counts, and rendered nowhere). The allowance
+         beside each figure is the plan's own limit, read from the `plan` object GET /api/v1/auth/me
+         returns - the SAME object the plan ladder at the bottom of this page renders - so the number
+         a customer reads here and the number the gate applies come from one row. No limit and no
+         count is written into this page. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">What this workspace is using right now, beside the allowance your plan carries. The counts are the server's own, read fresh on every load.</p>
+    <div id="usage-out" style="color:#64748b;font-size:14px">Loading your usage&hellip;</div>
+  </div>
+  <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Recent activity</h2>
     <div id="dash-activity" style="color:#64748b;font-size:14px">Loading recent activity&hellip;</div>
   </div>
@@ -158,6 +169,10 @@ var user = null;
 // Plan-ladder state. Declared HERE, above the boot block: `paintAccount()` (called at boot) writes
 // `PB.plan`, so a declaration further down the file would throw and abort the boot.
 var PB = { plans: null, plan: null, busy: false };
+// Declared HERE for the same reason as PB: `paintAccount()` (called at boot) repaints the usage
+// card, so a `var USAGE` further down the file would throw `Cannot read properties of undefined`
+// and abort the boot before the dashboard painted (measured in Chromium, 2026-10-16).
+var USAGE = { data: null, err: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 if (!token) {
@@ -169,12 +184,15 @@ if (!token) {
   pbLoad();
   loadStats();
   loadActivity();
+  loadUsage();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
 function paintAccount(u) {
   PB.plan = u.plan || null;
   if (PB.plans) pbRender();
+  // The usage card shows a count beside the plan's allowance, so it repaints once the plan is read.
+  if (USAGE.data) renderUsage();
   var nm = u.name || u.email || 'Your account';
   var plan = u.plan_name || (u.plan && u.plan.name) || 'Free';
   var nameEl = document.getElementById('userName');
@@ -297,6 +315,72 @@ function loadActivity() {
     el.innerHTML = h;
   }).catch(function () {
     dashMsg('dash-activity', 'Could not load recent activity right now.', 'e');
+  });
+}
+
+// ---- Your usage -------------------------------------------------------------------------------
+// The workspace's own live counts from GET /api/v1/me/usage, beside the plan's own allowances.
+// The allowance for a key comes from the `plan` object on GET /api/v1/auth/me (`max_campaigns`
+// top-level, `max_leads` / `max_tags` under `features`) - one source, the same one the plan ladder
+// below renders. A plan that has not been read yet shows the count with "no limit set" rather than
+// a guess, and the card repaints when the plan arrives (see paintAccount).
+function usageLimitFor(usageKey) {
+  var p = PB.plan || null;
+  if (!p) return undefined; // the plan has not been read yet - never invent a limit
+  if (usageKey === 'campaigns') return p.max_campaigns;
+  var f = (p.features && typeof p.features === 'object' && !Array.isArray(p.features)) ? p.features : null;
+  return f ? f[usageKey] : undefined;
+}
+function usageLimitLabel(v) {
+  if (v === undefined || v === null) return 'no limit set';
+  var n = Number(v);
+  if (!isFinite(n)) return 'no limit set';
+  if (n < 0) return 'unlimited';
+  if (n === 0) return 'none on your plan';
+  return n.toLocaleString('en-US');
+}
+function renderUsage() {
+  var el = document.getElementById('usage-out');
+  if (!el) return;
+  if (USAGE.err) { dashMsg('usage-out', 'Could not load your usage right now.', 'e'); return; }
+  var d = USAGE.data;
+  if (!d) { el.textContent = 'Loading your usage\u2026'; return; }
+  var rows = [
+    ['Campaigns', d.campaigns, usageLimitFor('campaigns')],
+    ['Leads', d.leads, usageLimitFor('max_leads')],
+    ['Tags', d.tags, usageLimitFor('max_tags')]
+  ];
+  var h = '<div class="stats">';
+  var over = [];
+  for (var i = 0; i < rows.length; i++) {
+    var used = rows[i][1];
+    var n = (rows[i][2] === undefined || rows[i][2] === null) ? null : Number(rows[i][2]);
+    var label = esc(rows[i][0]) + ' \u2014 of ' + esc(usageLimitLabel(rows[i][2]));
+    if (n !== null && isFinite(n) && n > 0 && Number(used) > n) {
+      label += ' \u26a0 over your plan limit';
+      over.push(rows[i][0].toLowerCase());
+    }
+    h += '<div class="stat"><div class="v">' + esc(dashNum(used)) + '</div><div class="l">' + label + '</div></div>';
+  }
+  h += '</div>';
+  if (over.length) {
+    h += '<p style="color:#b45309;font-size:13px;margin:12px 0 0">This workspace is above its plan\'s '
+      + esc(over.join(' and ')) + ' allowance. Nothing already here is removed \u2014 the count is live. '
+      + 'The way up is in Plan &amp; billing at the bottom of this page.</p>';
+  }
+  el.innerHTML = h;
+}
+function loadUsage() {
+  fetch(window.location.origin + '/api/v1/me/usage', {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    return r.ok ? r.json() : null;
+  }).then(function (d) {
+    USAGE.data = d;
+    renderUsage();
+  }).catch(function () {
+    USAGE.err = true;
+    renderUsage();
   });
 }
 
