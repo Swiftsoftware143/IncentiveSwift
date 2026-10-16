@@ -583,11 +583,32 @@ pub async fn update_profile(
     // A blank NAME would leave the console header and every "signed in as" line empty, so it is
     // refused rather than stored. `company` and `username` may legitimately be cleared, so an empty
     // value is written for them (COALESCE only keeps a field the caller did not send at all).
-    if let Some(name) = body.name.as_deref() {
-        if name.trim().is_empty() {
-            return Err(AppError::BadRequest("Name cannot be empty".to_string()));
+    //
+    // LENGTH, before the write: `accounts.company` and `accounts.username` are `varchar(255)` and
+    // `accounts.name` is TEXT, and none of the three was checked — so a 300-character company or
+    // username reached the UPDATE, Postgres refused it with 22001, and the caller got a bare
+    // `500 {"code":500,"error":"Internal server error"}` while a 5000-character name stored
+    // silently. Measured LIVE 2026-10-16 (company=300 -> 500, username=300 -> 500, name=5000 -> 200
+    // stored); see `security::display_name`. All three are now refused at the door with the field
+    // and the cap named, so the operator's screen shows something actionable.
+    let name = match body.name.as_deref() {
+        Some(raw) => {
+            Some(crate::security::display_name::normalize_name(raw).map_err(AppError::BadRequest)?)
         }
-    }
+        None => None,
+    };
+    crate::security::display_name::check_len(
+        body.company.as_deref().unwrap_or(""),
+        crate::security::display_name::MAX_PROFILE_FIELD_CHARS,
+        "company",
+    )
+    .map_err(AppError::BadRequest)?;
+    crate::security::display_name::check_len(
+        body.username.as_deref().unwrap_or(""),
+        crate::security::display_name::MAX_PROFILE_FIELD_CHARS,
+        "username",
+    )
+    .map_err(AppError::BadRequest)?;
 
     // ONE statement, so a request carrying name + company + username either lands whole or not at
     // all; `updated_at` is stamped here (nothing else in this app writes these columns).
@@ -601,7 +622,7 @@ pub async fn update_profile(
                                updated_at = NOW()
            WHERE id = $4"#,
     )
-    .bind(body.name.as_deref().map(str::trim))
+    .bind(name.as_deref())
     .bind(body.username.as_deref().map(str::trim))
     .bind(body.company.as_deref().map(str::trim))
     .bind(account_uuid)
