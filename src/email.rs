@@ -214,9 +214,15 @@ async fn send_inline(
             // name. It used to hand over a 36-character code with no destination AND sign itself
             // "SwiftSoftware" — a company the customer has never heard of, on a mail that otherwise
             // belongs to IncentiveSwift (fixed 2026-10-13, cron `default`).
+            // CORRECTED 2026-10-16 (cron `default`): the destination it was given was `/login`, and
+            // that page has NO code field — its "Forgot password?" link goes to /forgot-password.html,
+            // which asks for the ADDRESS and mails ANOTHER code. The page that accepts the code is
+            // /reset-password (input id="t", prefilled from `?token=`). The 1-hour validity stated
+            // here is correct for THIS app (auth_handler::forgot_password mints Duration::hours(1)),
+            // so it is left alone.
             let body = format!(
-                "Your password reset code is: {}\n\nOpen {}/login and click \"Forgot password?\", then enter the code above to choose a new password.\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- The {} Team",
-                token, app_url, app_name
+                "Your password reset code is: {}\n\nOpen {}/reset-password?token={} to choose a new password - the code is filled in for you. If the form does not open, go to {}/reset-password and paste the code above.\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- The {} Team",
+                token, app_url, token, app_url, app_name
             );
             Ok(("Password Reset Request".to_string(), body, String::new()))
         }
