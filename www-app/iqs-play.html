@@ -754,7 +754,7 @@ if (!match) {
   }
 
   function renderLoading(msg) {
-    appEl.innerHTML = `<div class="card" style="text-align:center;padding:48px"><div class="spinner"></div><p style="color:var(--text2);margin-top:16px">${msg}</p></div>`;
+    appEl.innerHTML = `<div class="card" style="text-align:center;padding:48px"><div class="spinner"></div><p style="color:var(--text2);margin-top:16px">${escHtml(msg)}</p></div>`;
   }
 
   function renderError() {
