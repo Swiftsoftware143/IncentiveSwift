@@ -20,6 +20,9 @@ use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 
+/// `offers.name` is `character varying(255)` (live `information_schema`, 2026-10-17).
+const OFFER_NAME_CHARS: usize = 255;
+
 // ── Data Models ──
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -51,43 +54,24 @@ pub struct UpdateOfferRequest {
 
 // ── Auth Helper ──
 
-/// Resolve the tenant_id for the authenticated user.
-/// - super_admin / admin: read from path param (they specify tenant_id)
-/// - company_admin: derive from their own account
-fn resolve_tenant_id(user: &AuthenticatedUser) -> Result<String, AppError> {
-    if user.role == "super_admin" || user.role == "admin" {
-        // For super_admin/admin, they pass tenant_id as query param or we leave it open
-        // We'll handle differently — they can see all, but for CRUD they act on their own tenant
-        // unless they pass a tenant_id query param
-        Ok(user.account_id.clone())
-    } else {
-        // company_admin — derive from their account
-        Ok(user.account_id.clone())
-    }
-}
-
-/// Look up the actual tenant UUID from the authenticated user's account.
-async fn get_tenant_id(state: &AppState, user: &AuthenticatedUser) -> Result<Uuid, AppError> {
-    let user_uuid = Uuid::parse_str(&user.account_id)
-        .map_err(|_| AppError::BadRequest("Invalid user account ID".into()))?;
-
-    let tenant_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT tenant_id FROM accounts WHERE id = $1")
-            .bind(user_uuid)
-            .fetch_optional(&state.db)
-            .await?;
-
-    match tenant_id {
-        Some(tid) => Ok(tid),
-        None => {
-            // For super_admin without a tenant, use their own account_id
-            if user.role == "super_admin" || user.role == "admin" {
-                Ok(user_uuid)
-            } else {
-                Err(AppError::NotFound("Tenant not found for user".into()))
-            }
-        }
-    }
+/// The ACCOUNT id every offer is scoped to.
+///
+/// `offers.tenant_id` is a foreign key to **`accounts(id)`** (`offers_tenant_id_fkey`, live
+/// `pg_get_constraintdef` 2026-10-17), not to `tenants(id)`. This function used to resolve
+/// `accounts.tenant_id` — a `tenants.id` — and bind THAT into the column, so every write failed the
+/// foreign key and every read filtered on a value no row can hold. Measured LIVE on this app with a
+/// real operator credential (2026-10-17):
+///
+///   POST /api/v1/admin/offers {"name":"Probe control two",…}  -> 500, log:
+///       insert or update on table "offers" violates foreign key constraint "offers_tenant_id_fkey"
+///   GET  /api/v1/admin/offers                                 -> 200 {"offers":[]} (a row can never match)
+///
+/// The redemption path already treats the column as an account id
+/// (`loyalty_v2::redeem` → `WHERE id = $1 AND tenant_id = $2` bound to `business_account_id`), so the
+/// caller's own account id is the value the rest of the app means by this column.
+fn get_tenant_id(_state: &AppState, user: &AuthenticatedUser) -> Result<Uuid, AppError> {
+    Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user account ID".into()))
 }
 
 // ── Handler ──
@@ -98,7 +82,7 @@ pub async fn list_offers(
     State(s): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = get_tenant_id(&s, &user).await?;
+    let tenant_id = get_tenant_id(&s, &user)?;
 
     let offers = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
@@ -117,12 +101,16 @@ pub async fn create_offer(
     user: AuthenticatedUser,
     Json(req): Json<CreateOfferRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = get_tenant_id(&s, &user).await?;
+    let tenant_id = get_tenant_id(&s, &user)?;
 
     // Validate input
     if req.name.trim().is_empty() {
         return Err(AppError::BadRequest("Offer name is required".into()));
     }
+    // `offers.name` is varchar(255): without this the INSERT came back 22001 and the caller saw a
+    // bare 500 "Internal server error" (measured live 2026-10-17 with a 400-character name).
+    crate::security::display_name::check_len(req.name.trim(), OFFER_NAME_CHARS, "name")
+        .map_err(AppError::UnprocessableEntity)?;
     if req.discount_percent <= 0 || req.discount_percent > 100 {
         return Err(AppError::BadRequest(
             "Discount percent must be between 1 and 100".into(),
@@ -166,7 +154,7 @@ pub async fn get_offer(
     user: AuthenticatedUser,
     Path(offer_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = get_tenant_id(&s, &user).await?;
+    let tenant_id = get_tenant_id(&s, &user)?;
 
     let offer = sqlx::query_as::<_, Offer>(
         "SELECT id, tenant_id, name, discount_percent, cap_dollars, active, created_at, updated_at
@@ -188,7 +176,7 @@ pub async fn update_offer(
     Path(offer_id): Path<Uuid>,
     Json(req): Json<UpdateOfferRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = get_tenant_id(&s, &user).await?;
+    let tenant_id = get_tenant_id(&s, &user)?;
 
     // Verify offer exists and belongs to tenant
     let existing =
@@ -204,6 +192,8 @@ pub async fn update_offer(
         if name.trim().is_empty() {
             return Err(AppError::BadRequest("Offer name cannot be empty".into()));
         }
+        crate::security::display_name::check_len(name.trim(), OFFER_NAME_CHARS, "name")
+            .map_err(AppError::UnprocessableEntity)?;
         sqlx::query("UPDATE offers SET name = $1 WHERE id = $2")
             .bind(name.trim())
             .bind(offer_id)
@@ -270,7 +260,7 @@ pub async fn delete_offer(
     user: AuthenticatedUser,
     Path(offer_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
-    let tenant_id = get_tenant_id(&s, &user).await?;
+    let tenant_id = get_tenant_id(&s, &user)?;
 
     let existing =
         sqlx::query_as::<_, (Uuid,)>("SELECT id FROM offers WHERE id = $1 AND tenant_id = $2")
