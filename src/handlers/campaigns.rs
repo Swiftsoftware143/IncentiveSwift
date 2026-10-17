@@ -3,6 +3,7 @@
 use crate::access::feature_gate;
 use crate::db::campaigns::{self, Campaign, IqsGate};
 use crate::error::AppError;
+use crate::features;
 use crate::handlers::tri_state::double_option;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -289,6 +290,16 @@ pub async fn create_campaign(
         )));
     }
 
+    // The plan's CAMPAIGN allowance, enforced on the creation door (measured 2026-10-17, cron
+    // `default`): the Free tier advertises `max_campaigns = 1`, `/me/usage` counts against it, and
+    // `enforce_feature_limit` already guards `max_tags` — but nothing on this path read the number,
+    // so an account at 1/1 created a SECOND campaign and answered 200. Same call, same key
+    // vocabulary and the same 402 sentence as the tags door, so the operator is told which limit
+    // was hit and what raises it. Unlimited tiers (-1) and tier-less accounts pass untouched, and
+    // the UPDATE path is deliberately NOT gated: an account at its cap can still edit what it has.
+    features::enforce_feature_limit(&state.db, &user.account_id, "max_campaigns", "Campaigns")
+        .await?;
+
     // A creation request may gate the new campaign in the same INSERT (kanban t_6c8d8e40). This
     // field used to be accepted and silently dropped — the same "write that cannot happen" the PUT
     // clear was. A campaign that does not exist yet can never be the funnel's current holder, so
@@ -466,6 +477,12 @@ pub async fn clone_campaign(
     // Derive a fresh, collision-checked namespace (the unique index is the backstop).
     let new_tag_namespace =
         campaigns::clone_tag_namespace(&state.db, &account_id, &original.tag_namespace).await?;
+
+    // A CLONE is a new campaign, so it spends the same allowance the create door does (measured
+    // 2026-10-17: this INSERT had no gate either, so an account at its cap could clone its way past
+    // the limit). Refused before the INSERT, and the foreign-slug 404 above still answers first.
+    features::enforce_feature_limit(&state.db, &user.account_id, "max_campaigns", "Campaigns")
+        .await?;
 
     sqlx::query(
         r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty)
