@@ -4740,6 +4740,113 @@ const ProfileView = () => {
   </div>`;
 };
 
+
+// ---- OFFERS (redemption offers) -------------------------------------------------------------
+// Backend: GET|POST /api/v1/admin/offers, PUT|DELETE /api/v1/admin/offers/:id. Until this screen the
+// Offers CRUD was reachable only by hand (a backend route with no UI is a defect), and its writers
+// were broken as well: they bound a `tenants.id` into `offers.tenant_id`, a column that FK-references
+// `accounts(id)` — so every create answered 500 and every list came back empty (fixed in
+// `offers_handler::get_tenant_id`, measured 2026-10-17). This screen is the front half.
+const Offers = () => {
+  const st = viewState('offers', { list: [], loaded: false, saving: false, msg: '', err: '',
+                                   show: false, editId: null, name: '', discount: 10, cap: 5 });
+  const load = async () => {
+    try { const d = await API.get('/admin/offers'); st.list = d.offers || []; st.err = ''; }
+    catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; load(); }
+
+  const open = (o) => {
+    st.editId = o ? o.id : null;
+    st.name = o ? o.name : '';
+    st.discount = o ? o.discount_percent : 10;
+    st.cap = o ? o.cap_dollars : 5;
+    st.show = true; st.msg = ''; st.err = ''; renderApp();
+  };
+  const close = () => { st.show = false; st.err = ''; renderApp(); };
+
+  const save = async () => {
+    st.saving = true; st.err = ''; st.msg = ''; renderApp();
+    const body = { name: (st.name || '').trim(), discount_percent: Number(st.discount), cap_dollars: Number(st.cap) };
+    try {
+      if (st.editId) await API.put('/admin/offers/' + st.editId, body);
+      else await API.post('/admin/offers', body);
+      st.msg = st.editId ? 'Offer saved.' : 'Offer created — it can be applied to a redemption now.';
+      st.show = false;
+      await load();
+    } catch (e) { st.err = e.message; }
+    st.saving = false; renderApp();
+  };
+
+  const setActive = async (o, active) => {
+    st.err = ''; st.msg = ''; renderApp();
+    try { await API.put('/admin/offers/' + o.id, { active: active });
+          st.msg = active ? 'Offer is active again.' : 'Offer deactivated — it can no longer be redeemed.';
+          await load(); }
+    catch (e) { st.err = e.message; renderApp(); }
+  };
+
+  const remove = async (o) => {
+    if (!confirm('Deactivate "' + o.name + '"? A redemption can no longer be applied to it.')) return;
+    st.err = ''; st.msg = ''; renderApp();
+    try { await API.del('/admin/offers/' + o.id); st.msg = 'Offer deactivated.'; await load(); }
+    catch (e) { st.err = e.message; renderApp(); }
+  };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-bold">Offers</h2>
+      <button class="btn btn-sm" onClick=${() => open(null)}>New offer</button>
+    </div>
+    <p class="text-sm text-gray-500 mb-4">An offer is what a customer's loyalty credits can be spent on:
+      a percentage off, capped at a dollar amount per redemption.</p>
+    ${st.msg && html`<div class="text-sm p-2 rounded-lg mb-3" style="background:#ecfdf5;color:#065f46">${st.msg}</div>`}
+    ${st.err && html`<div class="text-sm p-2 rounded-lg mb-3" style="background:#fef2f2;color:#b91c1c">${st.err}</div>`}
+
+    ${st.show && html`<div class="card mb-4">
+      <h3 class="text-base font-semibold mb-3">${st.editId ? 'Edit offer' : 'New offer'}</h3>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="of-name">Name</label>
+        <input class="input" id="of-name" value=${st.name} onInput=${e => { st.name = e.target.value; }} placeholder="Free coffee" />
+      </div>
+      <div class="flex gap-3">
+        <div class="mb-3" style="flex:1">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="of-pct">Discount %</label>
+          <input class="input" id="of-pct" type="number" min="1" max="100" value=${st.discount} onInput=${e => { st.discount = e.target.value; }} />
+        </div>
+        <div class="mb-3" style="flex:1">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="of-cap">Cap per redemption ($)</label>
+          <input class="input" id="of-cap" type="number" min="1" value=${st.cap} onInput=${e => { st.cap = e.target.value; }} />
+        </div>
+      </div>
+      <button class="btn" disabled=${st.saving} onClick=${save}>${st.saving ? 'Saving…' : 'Save offer'}</button>
+      <button class="btn btn-outline" style="margin-left:8px" onClick=${close}>Cancel</button>
+    </div>`}
+
+    <div class="card">
+      ${st.list.length === 0 ? html`<div class="text-sm text-gray-400">No offers yet — "New offer" adds the first one.</div>`
+      : html`<table class="table">
+        <thead><tr><th>Name</th><th>Discount</th><th>Cap</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${st.list.map(o => html`<tr>
+            <td>${o.name}</td>
+            <td>${o.discount_percent}%</td>
+            <td>$${o.cap_dollars}</td>
+            <td>${o.active ? html`<span class="badge badge-green">Active</span>` : html`<span class="badge badge-red">Inactive</span>`}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-sm btn-outline" onClick=${() => open(o)}>Edit</button>
+              ${o.active
+                ? html`<button class="btn btn-sm btn-red" style="margin-left:6px" onClick=${() => remove(o)}>Deactivate</button>`
+                : html`<button class="btn btn-sm btn-green" style="margin-left:6px" onClick=${() => setActive(o, true)}>Reactivate</button>`}
+            </td>
+          </tr>`)}
+        </tbody>
+      </table>`}
+    </div>
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
@@ -4769,9 +4876,10 @@ const ProfileView = () => {
     { id: 'knowledge-base', label: 'Knowledge Base', icon: '📚' },
     { id: 'call-logs', label: 'Call Logs', icon: '📞' },
     { id: 'deals', label: 'Deals', icon: '🤝' },
+    { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
