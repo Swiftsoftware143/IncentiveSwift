@@ -43,11 +43,14 @@ use axum::{extract::State, http::HeaderMap, Json};
 use rand::Rng;
 use serde_json::{json, Value};
 use sqlx::Row;
+use std::time::Duration;
 use tracing;
 use uuid::Uuid;
 
 // Re-export these for use outside billing (e.g. admin handler)
-pub use crate::billing::providers::{lookup_webhook_secrets, WebhookSecretRow};
+pub use crate::billing::providers::{
+    lookup_paypal_verification, lookup_webhook_secrets, PaypalVerifyRow, WebhookSecretRow,
+};
 
 /// The ONE parse-and-verify for a `Stripe-Signature` header. The loyalty-plan arms that used to sit
 /// behind their own door are called from this receiver now, so there is no second verdict on the
@@ -141,35 +144,111 @@ pub async fn stripe_webhook(
 }
 
 /// POST /api/v1/webhooks/paypal
+///
+/// PayPal deliveries are authenticated by PAYPAL, not by an HMAC this app holds: the transmission
+/// headers are only the INPUT to `POST /v1/notifications/verify-webhook-signature`, and the verdict
+/// is that call's `verification_status`.
+///
+/// Until this receiver was fixed it skipped that call entirely. Measured live 2026-10-17: with one
+/// active `paypal` row it answered `200 {"status":"received"}` to a signature PayPal never issued,
+/// flipped the pending `checkout_sessions` row the body named to `completed`, and minted an account
+/// for whatever payer address the body carried. That is a forged-payment hole on a public route.
+///
+/// It now FAILS CLOSED, and every refusal names its own cause so an operator can act on it:
+///
+/// | condition                                   | answer |
+/// |---------------------------------------------|--------|
+/// | a transmission header is missing             | `400` naming the header |
+/// | no active `paypal` row at all                | `503 paypal_webhook_secret_not_configured` (unchanged) |
+/// | a row exists but cannot verify anything      | `424 paypal_webhook_not_verifiable` |
+/// | PayPal says the delivery is not authentic    | `400 paypal_webhook_signature_invalid` |
+/// | PayPal could not be reached to ask           | `424 paypal_webhook_verification_unavailable` |
+///
+/// Nothing is acted on — no session is completed, no account is minted — until a row's own
+/// credentials have obtained a `SUCCESS` verdict for THIS body.
 pub async fn paypal_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
 ) -> Result<Json<Value>, AppError> {
-    // PayPal requires transmission headers for verification
-    let _transmission_id = headers
-        .get("paypal-transmission-id")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::BadRequest("Missing paypal-transmission-id header".to_string()))?;
+    let header = |name: &str| -> Result<String, AppError> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::BadRequest(format!(
+                    "Missing {name} header — a PayPal delivery cannot be verified without it"
+                ))
+            })
+    };
+    let transmission_id = header("paypal-transmission-id")?;
+    let transmission_time = header("paypal-transmission-time")?;
+    let transmission_sig = header("paypal-transmission-sig")?;
+    let cert_url = header("paypal-cert-url")?;
+    let auth_algo = header("paypal-auth-algo")?;
 
-    // The receiver needs an active "paypal" row to exist before it will look at the event; the
-    // verification itself is the stub below. Loading EVERY active row (not one arbitrary row) keeps
-    // the presence check account-independent (kanban t_3c98f2b6).
+    // The pre-existing "this app takes no PayPal deliveries" answer stays exactly as it was, so an
+    // operator who has configured nothing sees the same slug they always have.
     let _secrets = lookup_webhook_secrets(&state, "paypal").await?;
 
-    // Full PayPal webhook verification requires a POST to PayPal's verify-webhook-signature API.
-    // This is a stub — production should implement the full verification flow.
-    tracing::info!("PayPal webhook received (basic validation only)");
+    let rows = lookup_paypal_verification(&state).await?;
+    if rows.is_empty() {
+        return Err(AppError::UpstreamRefused(
+            "paypal_webhook_not_verifiable: an active PayPal row exists but carries no \
+             client_id:client_secret in its API key or no metadata.webhook_id, so this delivery \
+             cannot be authenticated with PayPal. Add both, then re-enable PayPal checkout."
+                .to_string(),
+        ));
+    }
 
-    // Parse the event payload
+    // Parsed only after a row exists that can judge it; parsing has no effect of its own.
     let event: Value = serde_json::from_str(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid webhook payload: {}", e)))?;
 
+    let mut verified_for: Option<Uuid> = None;
+    let mut transport_error: Option<AppError> = None;
+    for row in &rows {
+        match paypal_verify_delivery(
+            &state,
+            row,
+            &transmission_id,
+            &transmission_time,
+            &transmission_sig,
+            &cert_url,
+            &auth_algo,
+            &event,
+        )
+        .await
+        {
+            Ok(true) => {
+                verified_for = Some(row.account_id);
+                break;
+            }
+            // PayPal answered, and the answer was "not authentic": try the next account's row.
+            Ok(false) => continue,
+            // Could not ask at all. Remember it: if no other row can authenticate the delivery,
+            // this is the honest answer (the provider gets a 424 and retries), never a 200.
+            Err(e) => transport_error = Some(e),
+        }
+    }
+    let verified_for = match (verified_for, transport_error) {
+        (Some(account), _) => account,
+        (None, Some(e)) => return Err(e),
+        (None, None) => {
+            return Err(AppError::BadRequest(
+                "paypal_webhook_signature_invalid: PayPal did not confirm this delivery"
+                    .to_string(),
+            ))
+        }
+    };
+
+    tracing::info!(%verified_for, "PayPal webhook signature verified by PayPal");
+
     let event_type = event["event_type"].as_str().unwrap_or("unknown");
+    tracing::info!("Received verified PayPal webhook: type={}", event_type);
 
-    tracing::info!("Received PayPal webhook: type={}", event_type);
-
-    // Handle the event
     match event_type {
         "CHECKOUT.ORDER.APPROVED" | "PAYMENT.CAPTURE.COMPLETED" => {
             handle_paypal_payment_completed(&state, &event).await?;
@@ -182,7 +261,91 @@ pub async fn paypal_webhook(
         }
     }
 
-    Ok(Json(json!({ "status": "received" })))
+    Ok(Json(json!({ "status": "received", "verified": true })))
+}
+
+/// Ask PayPal whether THIS body was signed with `transmission_sig` for `row`'s webhook.
+///
+/// Returns `Ok(true)` only on `verification_status == "SUCCESS"`; `Ok(false)` when PayPal answered
+/// and refused; `Err` when the question could not be put to PayPal at all (transport, credentials,
+/// timeout). The caller never treats an `Err` as a pass.
+async fn paypal_verify_delivery(
+    state: &AppState,
+    row: &PaypalVerifyRow,
+    transmission_id: &str,
+    transmission_time: &str,
+    transmission_sig: &str,
+    cert_url: &str,
+    auth_algo: &str,
+    event: &Value,
+) -> Result<bool, AppError> {
+    let base = row
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api-m.paypal.com".to_string());
+    let base = base.trim_end_matches('/').to_string();
+
+    let token_response = state
+        .http_client
+        .post(format!("{base}/v1/oauth2/token"))
+        .basic_auth(&row.client_id, Some(&row.client_secret))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("grant_type=client_credentials")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::UpstreamRefused(format!(
+                "paypal_webhook_verification_unavailable: could not reach PayPal's OAuth endpoint ({e})"
+            ))
+        })?;
+    if !token_response.status().is_success() {
+        let status = token_response.status();
+        return Err(AppError::UpstreamRefused(format!(
+            "paypal_webhook_verification_unavailable: PayPal refused the stored API credentials (HTTP {status})"
+        )));
+    }
+    let token: Value = token_response.json().await.map_err(|e| {
+        AppError::UpstreamRefused(format!(
+            "paypal_webhook_verification_unavailable: unreadable OAuth answer ({e})"
+        ))
+    })?;
+    let access_token = token["access_token"].as_str().unwrap_or("");
+    if access_token.is_empty() {
+        return Err(AppError::UpstreamRefused(
+            "paypal_webhook_verification_unavailable: PayPal returned no access token".to_string(),
+        ));
+    }
+
+    let payload = json!({
+        "auth_algo": auth_algo,
+        "cert_url": cert_url,
+        "transmission_id": transmission_id,
+        "transmission_sig": transmission_sig,
+        "transmission_time": transmission_time,
+        "webhook_id": row.webhook_id,
+        "webhook_event": event,
+    });
+    let verify_response = state
+        .http_client
+        .post(format!("{base}/v1/notifications/verify-webhook-signature"))
+        .bearer_auth(access_token)
+        .json(&payload)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::UpstreamRefused(format!(
+                "paypal_webhook_verification_unavailable: could not reach PayPal's verification endpoint ({e})"
+            ))
+        })?;
+    let status = verify_response.status();
+    let answer: Value = verify_response.json().await.unwrap_or_else(|_| json!({}));
+    if !status.is_success() {
+        tracing::warn!(%status, answer = %answer, "PayPal verification call refused");
+        return Ok(false);
+    }
+    Ok(answer["verification_status"].as_str() == Some("SUCCESS"))
 }
 
 // ---------------------------------------------------------------------------

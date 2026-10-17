@@ -585,6 +585,96 @@ pub async fn lookup_webhook_secrets(
     Ok(usable)
 }
 
+/// One active PayPal row, in the shape PayPal's own `verify-webhook-signature` API needs it.
+///
+/// PayPal's inbound delivery cannot be authenticated with a shared HMAC the way Stripe's can: the
+/// signature is an RSA signature over `transmissionId|timestamp|webhookId|crc32(body)` made with a
+/// certificate PayPal issues, and the ONLY supported verdict is PayPal's own API answer for
+/// `{auth_algo, cert_url, transmission_id, transmission_sig, transmission_time, webhook_id,
+/// webhook_event}`. So the receiver needs three per-account values: the API credentials
+/// (`api_key`, stored as `client_id:client_secret`), the webhook id PayPal issued when the operator
+/// registered this app's URL (`metadata.webhook_id`), and optionally the API host (`base_url`, for
+/// a sandbox row; unset means live `https://api-m.paypal.com`).
+///
+/// A row missing any of them cannot authenticate anything, so it is SKIPPED loudly rather than
+/// returned half-populated — a delivery must never be judged against a partial configuration.
+pub struct PaypalVerifyRow {
+    pub account_id: Uuid,
+    pub client_id: String,
+    pub client_secret: String,
+    pub webhook_id: String,
+    pub base_url: Option<String>,
+}
+
+/// Every ACTIVE PayPal row that carries enough configuration to authenticate a delivery.
+///
+/// Returns an EMPTY vector (not an error) when rows exist but none is usable, so the receiver can
+/// answer a `424` naming what is missing instead of the `503` that means "no provider at all". The
+/// receiver calls [`lookup_webhook_secrets`] first for the not-configured arm, so the two answers
+/// stay distinct: 503 = this app takes no PayPal deliveries; 424 = it has a row, but that row
+/// cannot verify one, and believing the event instead would be a forged-payment hole.
+pub async fn lookup_paypal_verification(
+    state: &AppState,
+) -> Result<Vec<PaypalVerifyRow>, AppError> {
+    let rows = sqlx::query(
+        "SELECT account_id, api_key, base_url, metadata FROM payment_providers \
+         WHERE provider_type = 'paypal' AND is_active = true \
+         ORDER BY created_at, id",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut usable: Vec<PaypalVerifyRow> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let account_id: Uuid = row.get("account_id");
+        let stored_key: String = row.get::<Option<String>, _>("api_key").unwrap_or_default();
+        let base_url: Option<String> = row.get("base_url");
+        let metadata: Option<Value> = row.get("metadata");
+        let webhook_id = metadata
+            .as_ref()
+            .and_then(|m| m.get("webhook_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        let plain_key = match decrypt_from_storage(&state.db, stored_key.trim()).await {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!(%account_id, error = %e,
+                    "active PayPal row's api_key could not be decrypted — skipped for verification");
+                continue;
+            }
+        };
+        // `client_id:client_secret` is the one shape PayPal's OAuth endpoint accepts from a
+        // server; a key without the colon cannot mint a token, so it cannot verify anything.
+        let (client_id, client_secret) = match plain_key.split_once(':') {
+            Some((id, secret)) if !id.trim().is_empty() && !secret.trim().is_empty() => {
+                (id.trim().to_string(), secret.trim().to_string())
+            }
+            _ => {
+                tracing::warn!(%account_id,
+                    "active PayPal row's api_key is not 'client_id:client_secret' — skipped for verification");
+                continue;
+            }
+        };
+        if webhook_id.is_empty() {
+            tracing::warn!(%account_id,
+                "active PayPal row carries no metadata.webhook_id — skipped for verification");
+            continue;
+        }
+        usable.push(PaypalVerifyRow {
+            account_id,
+            client_id,
+            client_secret,
+            webhook_id,
+            base_url: base_url.filter(|b| !b.trim().is_empty()),
+        });
+    }
+
+    Ok(usable)
+}
+
 /// The reason slug a receiver answers when NO active `<provider>` row exists at all.
 ///
 /// The vocabulary is the sibling fleet receivers' own: FunnelSwift's Stripe receiver refuses the
