@@ -4742,7 +4742,10 @@ const ProfileView = () => {
 
 
 // ---- OFFERS (redemption offers) -------------------------------------------------------------
-// Backend: GET|POST /api/v1/admin/offers, PUT|DELETE /api/v1/admin/offers/:id. Until this screen the
+// Backend: GET|POST /api/v1/offers, PUT|DELETE /api/v1/offers/:id (tenant-scoped) — the admin
+// alias at /api/v1/admin/offers stays for operators, but a `company_admin` was refused there by
+// `admin_guard`, which is why a real customer saw `403` on this screen (measured 2026-10-17). Until
+// this screen the
 // Offers CRUD was reachable only by hand (a backend route with no UI is a defect), and its writers
 // were broken as well: they bound a `tenants.id` into `offers.tenant_id`, a column that FK-references
 // `accounts(id)` — so every create answered 500 and every list came back empty (fixed in
@@ -4751,7 +4754,7 @@ const Offers = () => {
   const st = viewState('offers', { list: [], loaded: false, saving: false, msg: '', err: '',
                                    show: false, editId: null, name: '', discount: 10, cap: 5 });
   const load = async () => {
-    try { const d = await API.get('/admin/offers'); st.list = d.offers || []; st.err = ''; }
+    try { const d = await API.get('/offers'); st.list = d.offers || []; st.err = ''; }
     catch (e) { st.err = e.message; }
     renderApp();
   };
@@ -4770,8 +4773,8 @@ const Offers = () => {
     st.saving = true; st.err = ''; st.msg = ''; renderApp();
     const body = { name: (st.name || '').trim(), discount_percent: Number(st.discount), cap_dollars: Number(st.cap) };
     try {
-      if (st.editId) await API.put('/admin/offers/' + st.editId, body);
-      else await API.post('/admin/offers', body);
+      if (st.editId) await API.put('/offers/' + st.editId, body);
+      else await API.post('/offers', body);
       st.msg = st.editId ? 'Offer saved.' : 'Offer created — it can be applied to a redemption now.';
       st.show = false;
       await load();
@@ -4781,7 +4784,7 @@ const Offers = () => {
 
   const setActive = async (o, active) => {
     st.err = ''; st.msg = ''; renderApp();
-    try { await API.put('/admin/offers/' + o.id, { active: active });
+    try { await API.put('/offers/' + o.id, { active: active });
           st.msg = active ? 'Offer is active again.' : 'Offer deactivated — it can no longer be redeemed.';
           await load(); }
     catch (e) { st.err = e.message; renderApp(); }
@@ -4790,7 +4793,7 @@ const Offers = () => {
   const remove = async (o) => {
     if (!confirm('Deactivate "' + o.name + '"? A redemption can no longer be applied to it.')) return;
     st.err = ''; st.msg = ''; renderApp();
-    try { await API.del('/admin/offers/' + o.id); st.msg = 'Offer deactivated.'; await load(); }
+    try { await API.del('/offers/' + o.id); st.msg = 'Offer deactivated.'; await load(); }
     catch (e) { st.err = e.message; renderApp(); }
   };
 

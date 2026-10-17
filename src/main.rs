@@ -592,6 +592,25 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::offers_handler::update_offer)
                 .delete(handlers::offers_handler::delete_offer),
         )
+        // TENANT-SCOPED Offers CRUD (measured live 2026-10-17). The SAME handlers, reachable by the
+        // business the offers belong to. Why the twin is needed: `security::auth::admin_guard`
+        // refuses every `/api/v1/admin/*` path to a caller whose role is not `admin`/`super_admin`,
+        // and `company_admin` is exactly the role a self-service signup gets
+        // (`handlers::auth_handler::register`) — so the console's Offers screen answered
+        // `403 GET /api/v1/admin/offers` for EVERY real customer (reproduced by the operator-console
+        // scan on a fresh probe account), while the handlers themselves carried no role logic.
+        // Writes are now restricted to the account owner inside the handlers; the tenant is always
+        // derived from the caller's own token, so these paths can never address another business.
+        .route(
+            "/api/v1/offers",
+            get(handlers::offers_handler::list_offers).post(handlers::offers_handler::create_offer),
+        )
+        .route(
+            "/api/v1/offers/:id",
+            get(handlers::offers_handler::get_offer)
+                .put(handlers::offers_handler::update_offer)
+                .delete(handlers::offers_handler::delete_offer),
+        )
         // Authenticated routes
         .route(
             "/api/v1/campaigns",

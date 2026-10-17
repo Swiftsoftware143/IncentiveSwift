@@ -74,6 +74,32 @@ fn get_tenant_id(_state: &AppState, user: &AuthenticatedUser) -> Result<Uuid, Ap
         .map_err(|_| AppError::BadRequest("Invalid user account ID".into()))
 }
 
+/// Roles that may CHANGE the account's offers.
+///
+/// `company_admin` is the role a self-service signup receives
+/// (`handlers::auth_handler::register`), i.e. the business owner the offers belong to;
+/// `admin` / `super_admin` are the platform operators. A plain `user` / `business_user`
+/// member of the account may READ its offer list (it is their own business's offers) but
+/// not rewrite them.
+///
+/// Why this lives in the handler and not in a router layer (measured 2026-10-17): these
+/// endpoints were reachable only under `/api/v1/admin/*`, which
+/// `security::auth::admin_guard` refuses to a `company_admin` with 403 — so the console's
+/// Offers screen failed for EVERY real customer while the handlers themselves had no role
+/// logic at all. The tenant-scoped paths below fix the reachability; this guard keeps the
+/// write side to the owner.
+const OFFER_WRITER_ROLES: [&str; 3] = ["company_admin", "admin", "super_admin"];
+
+fn require_offer_writer(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if OFFER_WRITER_ROLES.contains(&user.role.as_str()) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Only the account owner can change this account's offers".into(),
+        ))
+    }
+}
+
 // ── Handler ──
 
 /// GET /api/v1/admin/offers — list all offers for the authenticated tenant
@@ -101,6 +127,7 @@ pub async fn create_offer(
     user: AuthenticatedUser,
     Json(req): Json<CreateOfferRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    require_offer_writer(&user)?;
     let tenant_id = get_tenant_id(&s, &user)?;
 
     // Validate input
@@ -176,6 +203,7 @@ pub async fn update_offer(
     Path(offer_id): Path<Uuid>,
     Json(req): Json<UpdateOfferRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    require_offer_writer(&user)?;
     let tenant_id = get_tenant_id(&s, &user)?;
 
     // Verify offer exists and belongs to tenant
@@ -260,6 +288,7 @@ pub async fn delete_offer(
     user: AuthenticatedUser,
     Path(offer_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
+    require_offer_writer(&user)?;
     let tenant_id = get_tenant_id(&s, &user)?;
 
     let existing =
