@@ -286,15 +286,46 @@ async fn usage_or_zero(db: &PgPool, account_id: Uuid, feature_key: &str) -> i64 
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
     let Ok(account_id) = account_uuid(account_id) else {
         tracing::error!("me/usage: the authenticated account id is not a uuid");
-        return serde_json::json!({ "campaigns": 0, "leads": 0, "tags": 0 });
+        return serde_json::json!({ "campaigns": 0, "leads": 0, "tags": 0, "entries_this_month": 0 });
     };
     let campaigns = usage_or_zero(db, account_id, "max_campaigns").await;
     let leads = usage_or_zero(db, account_id, "max_leads").await;
     let tags = usage_or_zero(db, account_id, "max_tags").await;
+    // The allowance `plan_tiers.max_entries_per_month` is advertised to the customer (the plan
+    // ladder prints "100 entries/month" on Free) and the customer console had no figure to put
+    // beside it: this payload named only campaigns/leads/tags, so the one paid allowance a tenant
+    // cannot see the usage of was the entries window (kanban cron 2026-10-17). Measured before the
+    // change: `GET /api/v1/me/usage` answered `{"campaigns":2,"leads":0,"tags":0}` — no entries key
+    // at all, while `plan.max_entries_per_month` was on `/auth/me` (Free 100 / Pro 10000 /
+    // Enterprise -1). The window is the CALENDAR MONTH the column names, not the lifetime count
+    // `count_usage("max_entries")` returns.
+    let entries_this_month = entries_this_month(db, account_id).await;
     serde_json::json!({
         "campaigns": campaigns,
         "leads": leads,
-        "tags": tags
+        "tags": tags,
+        "entries_this_month": entries_this_month
+    })
+}
+
+/// Entries the account's own campaigns took in the current calendar month — the window
+/// `plan_tiers.max_entries_per_month` names.
+///
+/// `count_usage("max_entries")` counts every entry the account ever took (no month predicate), so
+/// it cannot answer this question; this is the same join with `date_trunc('month', now())` applied
+/// to the entry's own `created_at`. A count failure is a display figure, not an authorization
+/// decision: it degrades to 0 with a log line rather than 500-ing the dashboard.
+async fn entries_this_month(db: &PgPool, account_id: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM entries e JOIN campaigns c ON c.id = e.campaign_id \
+         WHERE c.account_id = $1 AND e.created_at >= date_trunc('month', now())",
+    )
+    .bind(account_id)
+    .fetch_one(db)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::error!("me/usage: could not count entries this month: {e}");
+        0
     })
 }
 
