@@ -2008,6 +2008,7 @@ const PaymentProviders = () => {
   const openForm = (row) => {
     st.form = { open: true, edit: !!row, provider_type: row ? row.provider_type : 'stripe',
       api_key: '', webhook_secret: '', base_url: (row && row.base_url) || '',
+      webhook_id: (row && row.metadata && row.metadata.webhook_id) || '',
       is_active: row ? row.is_active !== false : true, err: null, busy: false };
     st.msg = null; renderApp();
   };
@@ -2022,6 +2023,11 @@ const PaymentProviders = () => {
     // so a box the operator did not type into is left OUT of the body entirely.
     if ((f.api_key || '').trim()) body.api_key = f.api_key.trim();
     if ((f.webhook_secret || '').trim()) body.webhook_secret = f.webhook_secret.trim();
+    // PayPal's inbound receiver authenticates a delivery with PAYPAL's own verify-webhook-signature
+    // call, which needs the webhook id PayPal issues when the operator registers this app's URL.
+    // It is stored in `metadata.webhook_id`; a blank box is omitted so an edit that only changes the
+    // base URL never erases the id already saved.
+    if (pt === 'paypal' && (f.webhook_id || '').trim()) body.metadata = { webhook_id: f.webhook_id.trim() };
     try { await API.post('/payment-providers', body); st.msg = 'Saved the ' + pt + ' configuration.'; st.form = null; await load(); }
     catch (e) { f.busy = false; f.err = (e && e.message) || 'Could not save that provider'; renderApp(); }
   };
@@ -2107,6 +2113,9 @@ const PaymentProviderModal = ({ st, closeForm, submit, testKey }) => {
           <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the address is shared, every workspace's secret is checked, and an event can only ever act on the session it names. In Stripe, add <strong>one</strong> webhook endpoint pointed at <code>/api/v1/webhooks/stripe</code> and paste its signing secret here: Stripe issues a different secret per endpoint, and this field holds one, so a second endpoint could never be verified.</div></div>
         <div><label class="block text-xs font-medium mb-1">Base URL (optional)</label>
           <input class=${inp} placeholder="https://api.stripe.com" value=${f.base_url} onInput=${e => { f.base_url = e.target.value; }} /></div>
+        <div><label class="block text-xs font-medium mb-1">PayPal webhook ID (PayPal only)</label>
+          <input class=${inp} placeholder="e.g. 1JE25837SA3087940" value=${f.webhook_id} onInput=${e => { f.webhook_id = e.target.value; }} />
+          <div class="text-xs text-gray-400 mt-1">PayPal issues this when you register the webhook URL. PayPal's inbound events are authenticated by asking PayPal whether a delivery's signature is real, and that question needs this id, so without it an inbound PayPal event is <strong>refused</strong> (424) rather than acted on — an unverified event must never complete a payment or create an account. Also put the REST credentials in Secret key as <code>client_id:client_secret</code>.</div></div>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — this workspace's own row is the one your checkout and inbound payment events use</label>
         ${f.err ? html`<div class="text-sm text-red-700">${f.err}</div>` : null}
       </div>
