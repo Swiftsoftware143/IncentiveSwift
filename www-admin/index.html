@@ -3799,7 +3799,19 @@ function isProbeOwner(addr) {
   const a = String(addr || '');
   return RESERVED_OWNER_RE.test(a) || FLEET_PROBE_OWNER_RE.test(a);
 }
-const probeBadge = () => html` <span class="badge badge-yellow" title="a reserved or fleet-probe address — a probe, not a customer">probe</span>`;
+// The AUTHORITATIVE arm (kanban t_c13803ad): `accounts.probe_harness` is written at signup by the
+// door that minted the account, so a non-empty value names a harness even when the owner address
+// looks ordinary. Before this the list could only GUESS from the address, so a harness that signed
+// up with an ordinary-looking address rendered as an ordinary customer. The address arms stay as a
+// FALLBACK for accounts minted before the column existed — the column simply outranks them.
+const probeHarnessOf = (row) => String((row && row.probe_harness) || '').trim();
+const probeBadgeAddr = () => html` <span class="badge badge-yellow" title="a reserved or fleet-probe address — a probe, not a customer">probe</span>`;
+const probeBadge = probeBadgeAddr;
+function probeBadgeFor(row, addr) {
+  const harness = probeHarnessOf(row);
+  if (harness) return html` <span class="badge badge-yellow" title=${`minted by the "${harness}" test harness — a probe, not a customer`}>probe</span>`;
+  return isProbeOwner(addr) ? probeBadgeAddr() : '';
+}
 
 // kanban t_9f3d85dc — MASS TENANT CLEANUP.
 //
@@ -3875,7 +3887,7 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
-            <td class="border-b px-2 py-1">${r.email || ''}${isProbeOwner(r.email) ? probeBadge() : ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
             <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
@@ -3889,7 +3901,7 @@ const BulkTenantDelete = () => {
         <p class="text-sm text-gray-600 mb-2">This removes the account and everything it owns — campaigns,
           entries, loyalty programs, contacts, keys and saved credentials. It cannot be undone.</p>
         <div class="text-xs mb-3" style="font-family:monospace;max-height:160px;overflow:auto">
-          ${chosen.map((r) => html`<div>${r.name || r.email} — ${r.email}${isProbeOwner(r.email) ? ' [probe]' : ''} — ${r.id}</div>`)}</div>
+          ${chosen.map((r) => html`<div>${r.name || r.email} — ${r.email}${(probeHarnessOf(r) || isProbeOwner(r.email)) ? ' [probe]' : ''} — ${r.id}</div>`)}</div>
         <div class="flex gap-2">
           <button class="btn btn-red btn-sm" disabled=${busy} onClick=${run}>Delete ${sel.length} tenant(s)</button>
           <button class="btn btn-outline btn-sm" onClick=${() => setConfirming(false)}>Cancel</button>
@@ -4159,7 +4171,7 @@ const ImpersonateAccounts = () => {
           </tr></thead>
           <tbody>${shown.slice(0, 100).map(r => html`<tr class="imp-picker-row" data-account-id=${r.id}>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
-            <td class="border-b px-2 py-1">${r.email || ''}${isProbeOwner(r.email) ? probeBadge() : ''}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
             <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
             <td class="border-b px-2 py-1">${r.id === meId

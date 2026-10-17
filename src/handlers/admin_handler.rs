@@ -348,7 +348,8 @@ pub async fn list_all_tenants(
             COALESCE(pt.name, 'No Plan') as plan_name,
             COALESCE(pt.id::text, '') as plan_id,
             COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
-            u.user_count
+            u.user_count,
+            COALESCE(a.probe_harness, '') as probe_harness
         FROM accounts a
         LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
         LEFT JOIN (
@@ -374,6 +375,12 @@ pub async fn list_all_tenants(
             let plan_id: String = row.get("plan_id");
             let price_monthly: f64 = row.get("price_monthly");
             let user_count: i64 = row.get("user_count");
+            // The AUTHORITATIVE harness attribution (kanban t_4a744754): written at signup by the
+            // door that minted the account. Published so the operator's list can badge a harness
+            // row instead of GUESSING from its address — a harness that signed up with an
+            // ordinary-looking address read as a customer. COALESCEd to '' so a pre-column row is
+            // empty, never null.
+            let probe_harness: String = row.get("probe_harness");
             json!({
                 "id": id.to_string(),
                 "name": name.unwrap_or_default(),
@@ -382,6 +389,7 @@ pub async fn list_all_tenants(
                 "plan_id": plan_id,
                 "price_monthly": price_monthly,
                 "user_count": user_count,
+                "probe_harness": probe_harness,
             })
         })
         .collect();
