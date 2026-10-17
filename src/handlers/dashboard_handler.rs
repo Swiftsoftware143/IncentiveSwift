@@ -148,8 +148,9 @@ pub async fn list_leads(
 /// order; every row carries 0 today, so the price ladder decides.
 pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
-        r#"SELECT id, name, slug, price::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description, features, NULL::text as how_it_works
-           FROM plans ORDER BY sort_order ASC NULLS LAST, price ASC NULLS LAST, name ASC"#,
+        r#"SELECT id, name, slug, ROUND(price)::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description, features, NULL::text as how_it_works
+           FROM plans WHERE is_active = true
+           ORDER BY sort_order ASC NULLS LAST, price ASC NULLS LAST, name ASC"#,
     ).fetch_all(&state.db).await?;
     let mut plans: Vec<Value> = Vec::new();
     for row in &rows {

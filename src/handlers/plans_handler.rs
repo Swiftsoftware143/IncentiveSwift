@@ -23,6 +23,14 @@ use uuid::Uuid;
 // (`POST /api/v1/internal/affiliate/upgrade-event`, x-internal-key) is the live cross-app call and
 // is untouched.
 /// A plan record.
+///
+/// TWO price columns, ONE number. `plans.price` is what the customer catalogue serves
+/// (`dashboard_handler::list_public_plans` -> `monthly_price`); `plans.price_monthly` is what this
+/// admin CRUD round-trips. Live rows carried `price` = 0/49/199 with `price_monthly` = 0 on every
+/// row, so the operator's Plans panel showed $0 for two plans the pricing page sold at $49/$199,
+/// and an edit was written to the column the page ignores — measured 2026-10-17, kanban fix in this
+/// commit. Every read here now returns `COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly`
+/// and every write sets BOTH columns, so the panel and the page can no longer disagree.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Plan {
     pub id: Uuid,
@@ -121,7 +129,9 @@ pub async fn list_plans(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plans = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description, price_monthly, price_yearly,
+        r#"SELECT id, name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans
            WHERE is_active = true
@@ -145,8 +155,8 @@ pub async fn create_plan(
     let features = body.features.unwrap_or_else(|| json!({}));
 
     sqlx::query(
-        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
+        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price, price_yearly, features, is_active, sort_order, payment_provider)
+           VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10)"#
     )
     .bind(id)
     .bind(&body.name)
@@ -162,7 +172,9 @@ pub async fn create_plan(
     .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description, price_monthly, price_yearly,
+        r#"SELECT id, name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
@@ -338,7 +350,9 @@ pub async fn get_plan(
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid plan ID".to_string()))?;
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description, price_monthly, price_yearly,
+        r#"SELECT id, name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
@@ -362,7 +376,9 @@ pub async fn update_plan(
 
     // Get existing plan
     let existing = sqlx::query(
-        r#"SELECT name, slug, description, price_monthly, price_yearly,
+        r#"SELECT name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider
            FROM plans WHERE id = $1"#,
     )
@@ -391,7 +407,7 @@ pub async fn update_plan(
     sqlx::query(
         r#"UPDATE plans SET
                name = $1, slug = $2, description = $3,
-               price_monthly = $4, price_yearly = $5,
+               price_monthly = $4, price = $4, price_yearly = $5,
                features = $6, is_active = $7, sort_order = $8,
                payment_provider = $9, updated_at = now()
            WHERE id = $10"#,
@@ -410,7 +426,9 @@ pub async fn update_plan(
     .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description, price_monthly, price_yearly,
+        r#"SELECT id, name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
@@ -463,7 +481,9 @@ pub async fn admin_update_plan_features(
         .await?;
 
     let plan = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description, price_monthly, price_yearly,
+        r#"SELECT id, name, slug, description,
+                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
+                  price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
