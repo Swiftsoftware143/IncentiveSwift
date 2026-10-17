@@ -1296,6 +1296,11 @@ pub async fn set_secret_code(
         .trim()
         .to_uppercase();
 
+    // Same `varchar(64)` column, on the programme screen's single-code path: an over-long code
+    // reached the upsert and answered a bare 500. `check_len` passes the empty clear-code case.
+    crate::security::display_name::check_len(&code, 64, "secret_code")
+        .map_err(AppError::UnprocessableEntity)?;
+
     if code.is_empty() {
         sqlx::query(
             "UPDATE loyalty_secret_codes SET is_active = false

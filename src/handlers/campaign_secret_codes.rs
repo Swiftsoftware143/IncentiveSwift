@@ -13,6 +13,13 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+/// `campaign_secret_codes.code` is `varchar(64)` (live `information_schema` 2026-10-17). Both
+/// writers bind the caller's code straight in and map every database error to `Internal`, so an
+/// over-long code is a bare 500 rather than a field the operator can fix. The same defect was
+/// measured on the sibling `loyalty_secret_codes` writer the same day; this one is behind a
+/// plan-gated create, so it is guarded by the column's own width rather than by a live probe.
+const CAMPAIGN_SECRET_CODE_CHARS: usize = 64;
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct CampaignSecretCode {
     pub id: Uuid,
@@ -204,6 +211,8 @@ pub async fn create_secret_code(
     // caller-supplied campaign id (an absent id surfaced as a raw 23503 -> 500).
     let campaign = scoped_campaign(&app, &campaign_id, &user).await?;
     let code = body.code.trim().to_uppercase();
+    crate::security::display_name::check_len(&code, CAMPAIGN_SECRET_CODE_CHARS, "code")
+        .map_err(crate::error::AppError::UnprocessableEntity)?;
     let points = body.points.unwrap_or(100);
     match sqlx::query_as::<_, CampaignSecretCode>(
         "INSERT INTO campaign_secret_codes (campaign_id,code,points,max_uses,expires_at)
@@ -249,6 +258,10 @@ pub async fn update_secret_code(
     // the instruction itself: spoken-and-null clears, absent keeps, a value sets.
     let set_expires_at = b.expires_at.is_some();
     let expires_at = b.expires_at.flatten();
+    if let Some(ref code) = b.code {
+        crate::security::display_name::check_len(code, CAMPAIGN_SECRET_CODE_CHARS, "code")
+            .map_err(crate::error::AppError::UnprocessableEntity)?;
+    }
     let sc = sqlx::query_as::<_, CampaignSecretCode>(
         "UPDATE campaign_secret_codes SET
          code=COALESCE($1,code),points=COALESCE($2,points),

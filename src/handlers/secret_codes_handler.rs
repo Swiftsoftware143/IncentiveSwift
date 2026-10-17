@@ -13,6 +13,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+/// `loyalty_secret_codes.code` is `varchar(64)` and `description` is `varchar(255)`, read from the
+/// live `information_schema` 2026-10-17. Only the MINIMUM code length was checked, so an
+/// over-long code or description reached the INSERT and the operator's screen answered
+/// `500 {"code":500,"error":"Internal server error"}` — measured LIVE 2026-10-17 (a 100-character
+/// code and a 300-character description both; the short-code control answered 200).
+const SECRET_CODE_CHARS: usize = 64;
+const SECRET_CODE_DESC_CHARS: usize = 255;
+
 /// Secret code record from DB
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SecretCode {
@@ -73,6 +81,14 @@ pub async fn create_secret_code(
             "Code must be at least 3 characters".to_string(),
         ));
     }
+    crate::security::display_name::check_len(&code_upper, SECRET_CODE_CHARS, "code")
+        .map_err(AppError::UnprocessableEntity)?;
+    crate::security::display_name::check_len(
+        body.description.as_deref().unwrap_or(""),
+        SECRET_CODE_DESC_CHARS,
+        "description",
+    )
+    .map_err(AppError::UnprocessableEntity)?;
 
     // Find the first program (admin-level, so for now use first active program)
     let program_id = if let Some(pid) = &body.program_id {
