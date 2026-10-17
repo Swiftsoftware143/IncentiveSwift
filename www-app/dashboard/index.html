@@ -50,7 +50,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
     <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
          sign-in page had cached). It is now the account's real row, read from /api/v1/auth/me, with
-         the REAL plan name and a way into the Profile screen. -->
+         the REAL plan name and the inline editor for name, company, username and password. -->
     <div id="account" style="color:#64748b;font-size:14px">Loading your account…</div>
   </div>
   <div class="card">
@@ -235,9 +235,105 @@ function paintAccount(u) {
   for (var i = 0; i < rows.length; i++) {
     h += '<div class="row"><span class="k">' + rows[i][0] + '</span><span class="v">' + (i === 3 ? rows[i][1] : esc(rows[i][1])) + '</span></div>';
   }
-  h += '<p style="margin:14px 0 0"><a class="btn" style="text-decoration:none;display:inline-block" href="/admin/#profile">👤 Profile &amp; password</a>'
-     + ' <span style="font-size:12.5px;color:#64748b">Change your name, company, picture or the password you sign in with.</span></p>';
+  h += '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Your details</div>'
+     + '<div id="acctMsg" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<label for="acctName" style="display:block;font-size:12px;color:#64748b;margin:0 0 3px">Name</label>'
+     + '<input id="acctName" maxlength="120" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<label for="acctCompany" style="display:block;font-size:12px;color:#64748b;margin:10px 0 3px">Company</label>'
+     + '<input id="acctCompany" maxlength="255" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<label for="acctUsername" style="display:block;font-size:12px;color:#64748b;margin:10px 0 3px">Username</label>'
+     + '<input id="acctUsername" maxlength="100" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<div style="margin-top:12px"><button class="btn btn-sm" onclick="acctSave()">Save details</button></div>'
+     + '</div>'
+     + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Password</div>'
+     + '<div id="pwMsg" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<label for="pwCur" style="display:block;font-size:12px;color:#64748b;margin:0 0 3px">Current password</label>'
+     + '<input id="pwCur" type="password" autocomplete="current-password" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<label for="pwNew" style="display:block;font-size:12px;color:#64748b;margin:10px 0 3px">New password (at least 8 characters)</label>'
+     + '<input id="pwNew" type="password" autocomplete="new-password" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<label for="pwConfirm" style="display:block;font-size:12px;color:#64748b;margin:10px 0 3px">Confirm new password</label>'
+     + '<input id="pwConfirm" type="password" autocomplete="new-password" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<div style="margin-top:12px"><button class="btn btn-sm" onclick="pwSave()">Change password</button>'
+     + ' <a href="/admin/#profile" style="font-size:12.5px;color:#2563eb;text-decoration:none;margin-left:10px">Open the console</a></div>'
+     + '</div>';
   document.getElementById('account').innerHTML = h;
+  acctFill(u);
+}
+
+// ── INLINE PROFILE EDITOR ────────────────────────────────────────────────────────────────────────
+// The dashboard used to hand the customer a LINK into the admin console to change their own name,
+// company or password. These two forms drive the same two routes that console drives
+// (PUT /auth/profile, PUT /auth/password) from the page the customer is already on.
+var ACCT_FILLED = false;
+function acctSet(id, v) { var el = document.getElementById(id); if (el) el.value = (v == null ? '' : String(v)); }
+function acctNote(id, t, kind) {
+  var el = document.getElementById(id); if (!el) return;
+  el.textContent = t;
+  el.style.color = kind === 'e' ? '#b91c1c' : (kind === 'ok' ? '#15803d' : '#64748b');
+}
+function acctFill(u) {
+  if (ACCT_FILLED || !u) return;
+  acctSet('acctName', u.name); acctSet('acctCompany', u.company); acctSet('acctUsername', u.username);
+  ACCT_FILLED = true;
+}
+function acctSave() {
+  var name = (document.getElementById('acctName').value || '').trim();
+  var company = (document.getElementById('acctCompany').value || '').trim();
+  var username = (document.getElementById('acctUsername').value || '').trim();
+  if (!name) { acctNote('acctMsg', 'Your name cannot be blank.', 'e'); return; }
+  acctNote('acctMsg', 'Saving…', 'i');
+  fetch(window.location.origin + '/api/v1/auth/profile', {
+    method: 'PUT',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: JSON.stringify({ name: name, company: company, username: username })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = {}; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error(d.message || d.error || ('HTTP ' + r.status));
+      // The PUT answers {status, user}; re-read the account instead of trusting the write's echo,
+      // so the header, the rows and the form all repaint from what the SERVER now holds.
+      ACCT_FILLED = false;
+      fetch(window.location.origin + '/api/v1/auth/me', {
+        headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+      }).then(function (rr) { return rr.ok ? rr.json() : null; }).then(function (me) {
+        var u2 = me && me.user;
+        if (u2) {
+          user = u2;
+          try { sessionStorage.setItem(USER_KEY, JSON.stringify(u2)); } catch (e) {}
+          paintAccount(u2);
+        }
+        acctNote('acctMsg', 'Saved.', 'ok');
+      }).catch(function () { acctNote('acctMsg', 'Saved.', 'ok'); });
+    });
+  }).catch(function (e) { acctNote('acctMsg', e.message || 'Could not save your details', 'e'); });
+}
+function pwSave() {
+  var cur = document.getElementById('pwCur').value || '';
+  var nw = document.getElementById('pwNew').value || '';
+  var cf = document.getElementById('pwConfirm').value || '';
+  if (nw !== cf) { acctNote('pwMsg', 'The new passwords do not match.', 'e'); return; }
+  if (nw.length < 8) { acctNote('pwMsg', 'New password must be at least 8 characters.', 'e'); return; }
+  acctNote('pwMsg', 'Saving…', 'i');
+  // __rawFetch, not fetch: this page installs a wrapper that signs the user OUT on ANY 401 that
+  // carried a bearer — and a mistyped current password answers 401 by contract. Going through the
+  // wrapper would turn a typo into a sign-out and lose what they typed; the raw call lets the
+  // server's own sentence ("Current password is incorrect") sit beside the field.
+  __rawFetch(window.location.origin + '/api/v1/auth/password', {
+    method: 'PUT',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: JSON.stringify({ current_password: cur, new_password: nw })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = {}; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error(d.message || d.error || ('HTTP ' + r.status));
+      document.getElementById('pwCur').value = '';
+      document.getElementById('pwNew').value = '';
+      document.getElementById('pwConfirm').value = '';
+      acctNote('pwMsg', 'Password updated.', 'ok');
+    });
+  }).catch(function (e) { acctNote('pwMsg', e.message || 'Could not change the password', 'e'); });
 }
 
 function esc(s) {
@@ -344,6 +440,9 @@ function usageLimitFor(usageKey) {
   var p = PB.plan || null;
   if (!p) return undefined; // the plan has not been read yet - never invent a limit
   if (usageKey === 'campaigns') return p.max_campaigns;
+  // The paid allowance `plan_tiers.max_entries_per_month` is top-level on the /auth/me plan
+  // object (the plan ladder already prints it), so it is read from the same row.
+  if (usageKey === 'max_entries_per_month') return p.max_entries_per_month;
   var f = (p.features && typeof p.features === 'object' && !Array.isArray(p.features)) ? p.features : null;
   return f ? f[usageKey] : undefined;
 }
@@ -364,7 +463,10 @@ function renderUsage() {
   var rows = [
     ['Campaigns', d.campaigns, usageLimitFor('campaigns')],
     ['Leads', d.leads, usageLimitFor('max_leads')],
-    ['Tags', d.tags, usageLimitFor('max_tags')]
+    ['Tags', d.tags, usageLimitFor('max_tags')],
+    // GET /api/v1/me/usage now reports the CALENDAR-MONTH entries count, the window the
+    // allowance is named for, so the one paid limit that had no figure beside it does.
+    ['Entries this month', d.entries_this_month, usageLimitFor('max_entries_per_month')]
   ];
   var h = '<div class="stats">';
   var over = [];
@@ -697,7 +799,7 @@ function pbUpgrade(slug, price, planId) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, picture and password live on the Profile screen inside the console.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and starts an upgrade when one is available", "Open Profile to set your name, company, picture or password", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and starts an upgrade when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=0bc326c56c5e"></script>
