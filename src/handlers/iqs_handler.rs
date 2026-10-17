@@ -176,6 +176,28 @@ pub struct UpdateRuleInput {
     pub is_active: Option<bool>,
 }
 
+/// `iqs_funnels` column widths, measured from the LIVE `information_schema` 2026-10-17:
+/// `name`/`slug`/`source_tag` are `varchar(255)`, `funnel_type` `varchar(50)`, `status`
+/// `varchar(20)`. Neither writer checked any of them, so a 300-character funnel name — or an
+/// explicit over-long slug, or a 300-character generated one, since `slugify` derives the slug from
+/// the name — reached the INSERT and the operator's screen answered
+/// `500 {"code":500,"error":"Internal server error"}` (measured LIVE 2026-10-17 on a probe
+/// account). Refused at the door instead, with the field and its width named.
+const FUNNEL_NAME_CHARS: usize = 255;
+const FUNNEL_SLUG_CHARS: usize = 255;
+const FUNNEL_TYPE_CHARS: usize = 50;
+const FUNNEL_SOURCE_TAG_CHARS: usize = 255;
+const FUNNEL_STATUS_CHARS: usize = 20;
+
+/// Refuse any funnel text a column cannot hold, before the write.
+fn check_funnel_text(pairs: &[(&str, &str, usize)]) -> Result<(), AppError> {
+    for (label, value, cap) in pairs {
+        crate::security::display_name::check_len(value, *cap, label)
+            .map_err(AppError::UnprocessableEntity)?;
+    }
+    Ok(())
+}
+
 /// One answer in a submission.
 #[derive(Deserialize)]
 pub struct AnswerBody {
@@ -245,6 +267,16 @@ pub async fn create_funnel(
     let id = Uuid::new_v4();
     let slug = body.slug.unwrap_or_else(|| slugify(&body.name));
     let funnel_type = body.funnel_type.unwrap_or_else(|| "survey".to_string());
+    check_funnel_text(&[
+        ("name", &body.name, FUNNEL_NAME_CHARS),
+        ("slug", &slug, FUNNEL_SLUG_CHARS),
+        ("funnel_type", &funnel_type, FUNNEL_TYPE_CHARS),
+        (
+            "source_tag",
+            body.source_tag.as_deref().unwrap_or(""),
+            FUNNEL_SOURCE_TAG_CHARS,
+        ),
+    ])?;
     let theme = body.theme.unwrap_or_else(|| {
         json!({
             "preset": "dark_modern",
@@ -351,6 +383,18 @@ pub async fn update_funnel(
     let theme = body.theme.unwrap_or(existing.theme);
     let config = body.config.unwrap_or(existing.config);
     let slug = body.slug.unwrap_or(existing.slug);
+
+    check_funnel_text(&[
+        ("name", &name, FUNNEL_NAME_CHARS),
+        ("slug", &slug, FUNNEL_SLUG_CHARS),
+        ("funnel_type", &funnel_type, FUNNEL_TYPE_CHARS),
+        ("status", &status, FUNNEL_STATUS_CHARS),
+        (
+            "source_tag",
+            source_tag.as_deref().unwrap_or(""),
+            FUNNEL_SOURCE_TAG_CHARS,
+        ),
+    ])?;
 
     sqlx::query(
         r#"UPDATE iqs_funnels
@@ -1460,6 +1504,25 @@ fn slugify(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 300-character funnel name and slug that answered a bare `500 Internal server error` on
+    /// the LIVE app 2026-10-17 are refused by NAME now, so the console can point at the field the
+    /// operator typed rather than showing a server fault.
+    #[test]
+    fn an_over_long_funnel_field_is_refused_by_name() {
+        let long = "A".repeat(300);
+        let err = check_funnel_text(&[("name", &long, FUNNEL_NAME_CHARS)]).unwrap_err();
+        assert!(
+            matches!(&err, AppError::UnprocessableEntity(m) if m.contains("name") && m.contains("255")),
+            "unexpected refusal: {err:?}"
+        );
+        // A generated slug is derived from the name, so the same refusal must catch it too.
+        let err = check_funnel_text(&[("slug", &long, FUNNEL_SLUG_CHARS)]).unwrap_err();
+        assert!(matches!(&err, AppError::UnprocessableEntity(_)));
+        // The control: values the columns hold are still accepted.
+        assert!(check_funnel_text(&[("name", "Spring survey", FUNNEL_NAME_CHARS)]).is_ok());
+        assert!(check_funnel_text(&[("funnel_type", "survey", FUNNEL_TYPE_CHARS)]).is_ok());
+    }
 
     #[test]
     fn declared_types_are_reduced_to_a_well_formed_base() {

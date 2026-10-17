@@ -47,6 +47,20 @@ pub enum AppError {
     #[error("Payload too large: {0}")]
     PayloadTooLarge(String),
 
+    /// 422 — the body parsed and the caller is allowed to write, but a FIELD cannot be stored as
+    /// sent, so the write is refused with the field and its width named.
+    ///
+    /// WHY NOT 400: the fleet's newer writers (FunnelSwift `handlers/lead_handler.rs`, ADASwift
+    /// `clients`) answer 422 for exactly this, and the served consoles distinguish "I mistyped"
+    /// from "that value is too long". WHY NOT 500: before this variant an over-long value reached
+    /// the INSERT and [`AppError::Database`] answered `500 {"code":500,"error":"Internal server
+    /// error"}` — measured LIVE on this app 2026-10-17 on a fresh probe account for an IQS funnel
+    /// name/slug, an API-key label, a knowledge-base title, and a contact with neither an email nor
+    /// a phone. Nothing the operator could act on, and every one of them looked like the app was
+    /// broken.
+    #[error("Unprocessable: {0}")]
+    UnprocessableEntity(String),
+
     /// 424 — an integration PARTNER was reached and refused (or could not be reached).
     ///
     /// WHY 424 AND NOT 500: `GET /api/v1/integrations/coreswift/lists` mapped the hub's refusal
@@ -96,6 +110,7 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),
+            AppError::UnprocessableEntity(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             // 503, and the REASON travels to the caller: this is a configuration refusal, not a
             // defect, and the answer must name what is missing (kanban t_b474bd74).
             AppError::ServiceUnavailable(msg) => {

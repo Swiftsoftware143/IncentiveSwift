@@ -280,6 +280,14 @@ pub async fn create_article(
     if title.is_empty() {
         return Err(AppError::BadRequest("A title is required".to_string()));
     }
+    // `knowledge_base.title` is `varchar(255)`: a 300-character title reached the INSERT and the
+    // author's screen answered a bare 500 (measured LIVE 2026-10-17).
+    crate::security::display_name::check_len(
+        &title,
+        crate::security::display_name::COLUMN_CHARS,
+        "title",
+    )
+    .map_err(AppError::UnprocessableEntity)?;
     let slug = slugify(&title, body.slug.as_deref());
     let id = Uuid::new_v4();
     let tid: Option<Uuid> = owner_for_new(&user, id);
@@ -329,6 +337,13 @@ pub async fn update_article(
             )))
         }
     };
+    // The same width on the edit path (the title is bound from the body, not COALESCEd away).
+    crate::security::display_name::check_len(
+        body.title.trim(),
+        crate::security::display_name::COLUMN_CHARS,
+        "title",
+    )
+    .map_err(AppError::UnprocessableEntity)?;
     let res = sqlx::query(
         r#"UPDATE knowledge_base
               SET audience     = $2,

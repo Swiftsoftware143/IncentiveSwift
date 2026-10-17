@@ -133,6 +133,26 @@ pub async fn create_contact(
 ) -> Result<Json<Value>, AppError> {
     let account_id = caller_account(&user)?;
     let input = body_to_input(body);
+
+    // `contacts` carries `CHECK (email IS NOT NULL OR phone IS NOT NULL)`. A new-contact form with
+    // neither reached the INSERT and answered a bare 500 (measured LIVE 2026-10-17), which reads as
+    // the server breaking rather than as a field the operator still has to fill in.
+    let has_email = input
+        .email
+        .as_deref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    let has_phone = input
+        .phone
+        .as_deref()
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if !has_email && !has_phone {
+        return Err(AppError::UnprocessableEntity(
+            "email or phone: a contact needs at least one of them".to_string(),
+        ));
+    }
+
     let contact = contacts::create_contact(&state.db, &account_id, &input, "console").await?;
     Ok(Json(json!({
         "contact": contact,

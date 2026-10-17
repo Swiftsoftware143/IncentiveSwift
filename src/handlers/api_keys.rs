@@ -210,6 +210,14 @@ pub async fn create_api_key(
     let id = Uuid::new_v4();
     let (full_key, prefix, key_hash) = generate_api_key()?;
     let name = body.name.unwrap_or_else(|| "default".to_string());
+    // `api_keys.name` is `varchar(255)` and the label comes straight from the panel, so a long one
+    // reached the INSERT and answered a bare 500 (measured LIVE 2026-10-17).
+    crate::security::display_name::check_len(
+        &name,
+        crate::security::display_name::COLUMN_CHARS,
+        "name",
+    )
+    .map_err(AppError::UnprocessableEntity)?;
     let permissions = body.permissions.unwrap_or_else(|| json!([]));
 
     sqlx::query(
@@ -269,6 +277,14 @@ pub async fn update_api_key(
     .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
 
     let name = body.name.unwrap_or_else(|| existing.get("name"));
+    // Same column, on the rename path (measured LIVE 2026-10-17: create answered 500, so the
+    // rename shared the defect).
+    crate::security::display_name::check_len(
+        &name,
+        crate::security::display_name::COLUMN_CHARS,
+        "name",
+    )
+    .map_err(AppError::UnprocessableEntity)?;
     let permissions = body
         .permissions
         .unwrap_or_else(|| existing.get("permissions"));
