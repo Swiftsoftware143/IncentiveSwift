@@ -72,11 +72,12 @@ pub async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterInput>,
 ) -> Result<Json<Value>, AppError> {
-    // Attribution for a workspace this route is about to mint, from the `X-Swift-Harness` request
-    // HEADER only — never the body (client-controlled data the flow writes into customer-visible
-    // columns) and never a query field. `None` for every ordinary customer signup, so a real
-    // account is byte-identical to what it was before the column existed.
-    let probe_harness = crate::probe_harness::from_headers(&headers);
+    // Attribution for a workspace this route is about to mint (extended 2026-10-17): the
+    // `X-Swift-Harness` HEADER names the harness when the caller sends one; otherwise the
+    // recipient's own harness/reserved domain decides (`probe_harness::for_signup`, which reuses
+    // `security::probe_addr` — the predicate that suppresses those sends). Neither arm reads the
+    // body, and a real customer's domain matches neither, so their account row is unchanged.
+    // (Computed below, once the address has been normalised.)
     // ── Address boundary (kanban t_d7ef4a88, class t_4722a331) ─────────────────────────────
     // FIRST, before any SELECT and long before any INSERT. `accounts.email` is both the login
     // identity and the only address the generated-credentials mail can ever reach; the handler
@@ -85,6 +86,9 @@ pub async fn register(
     // validates, and the normalised value is what is checked, derived from, stored, put in the
     // token and mailed.
     let email = email_addr::normalize(&body.email).map_err(AppError::BadRequest)?;
+    // Harness attribution for the account this door is about to mint — the header arm names the
+    // harness, the address arm derives it from the recipient's own harness/reserved domain.
+    let probe_harness = crate::probe_harness::for_signup(&headers, &email);
     // A supplied password is still honoured, but it is no longer required: the generated one below is
     // what David's model asks for, and it is what the credential email binds.
     if !body.password.is_empty() && body.password.len() < 6 {
