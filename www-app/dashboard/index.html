@@ -257,9 +257,28 @@ function paintAccount(u) {
      + '<input id="pwConfirm" type="password" autocomplete="new-password" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
      + '<div style="margin-top:12px"><button class="btn btn-sm" onclick="pwSave()">Change password</button>'
      + ' <a href="/admin/#profile" style="font-size:12.5px;color:#2563eb;text-decoration:none;margin-left:10px">Open the console</a></div>'
+     + '</div>'
+     // ── SIGN-IN EMAIL (kanban t_6b2702e3) ───────────────────────────────────────────────────────
+     // The address above used to be read-only here. Moving it is a TWO-ARM flow on purpose: this form
+     // only ASKS (POST /api/v1/auth/email-change), which writes a pending row and mails a link to the
+     // NEW address; nothing moves until the person who controls that mailbox opens the link. That is
+     // what stops a typo from locking a customer out of their own account.
+     + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Sign-in email</div>'
+     + '<div style="font-size:12.5px;color:#64748b;margin:0 0 8px;line-height:1.5">Your sign-in address is '
+     + '<strong id="ecCurrent" style="color:#334155">—</strong>. To move it, enter the new address and we will email a '
+     + 'confirmation link to it. Your current address keeps working until you open that link.</div>'
+     + '<div id="ecMsg" role="status" aria-live="polite" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<label for="ecNew" style="display:block;font-size:12px;color:#64748b;margin:0 0 3px">New email address</label>'
+     + '<input id="ecNew" type="email" maxlength="254" autocomplete="email" placeholder="you@yourcompany.com" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<div style="margin-top:12px"><button class="btn btn-sm" id="ecSendBtn" onclick="ecSend()">Send confirmation link</button></div>'
      + '</div>';
   document.getElementById('account').innerHTML = h;
   acctFill(u);
+  // The sign-in-email block quotes the address the SERVER holds (this row), so the customer always
+  // sees which address a confirmation link would MOVE, not just the one they are typing.
+  var ecCur = document.getElementById('ecCurrent');
+  if (ecCur) ecCur.textContent = u.email || '—';
 }
 
 // ── INLINE PROFILE EDITOR ────────────────────────────────────────────────────────────────────────
@@ -334,6 +353,42 @@ function pwSave() {
       acctNote('pwMsg', 'Password updated.', 'ok');
     });
   }).catch(function (e) { acctNote('pwMsg', e.message || 'Could not change the password', 'e'); });
+}
+
+// Ask for a change of sign-in address (kanban t_6b2702e3). Posts the NEW address; the API writes a
+// pending row and mails a confirmation link TO IT, and `accounts.email` does not move until that link
+// is opened. A refusal (not an address, already your address, address taken, mail could not be sent)
+// lands beside the field instead of signing the customer out, so this uses __rawFetch for the same
+// reason pwSave does. A reserved test address answers `delivered:false` — the server withheld the
+// send — and the sentence it returns says so plainly.
+function ecSend() {
+  var inp = document.getElementById('ecNew');
+  var v = ((inp || {}).value || '').trim();
+  var btn = document.getElementById('ecSendBtn');
+  if (!v) { acctNote('ecMsg', 'Enter the new email address.', 'e'); return; }
+  if (v.indexOf('@') < 1 || v.indexOf('.') < 0) { acctNote('ecMsg', 'That does not look like an email address.', 'e'); return; }
+  acctNote('ecMsg', 'Sending…', 'i');
+  if (btn) btn.disabled = true;
+  __rawFetch(window.location.origin + '/api/v1/auth/email-change', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: JSON.stringify({ new_email: v })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = {}; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error(d.message || d.error || ('HTTP ' + r.status));
+      return d;
+    });
+  }).then(function (d) {
+    if (inp) inp.value = '';
+    if (d && d.delivered === false) {
+      acctNote('ecMsg', d.message || 'That address cannot receive mail, so nothing was sent.', 'e');
+      return;
+    }
+    acctNote('ecMsg', (d && d.message) || 'Check the new address for the confirmation link.', 'ok');
+  }).catch(function (e) {
+    acctNote('ecMsg', e.message || 'Could not start the change.', 'e');
+  }).then(function () { if (btn) btn.disabled = false; });
 }
 
 function esc(s) {

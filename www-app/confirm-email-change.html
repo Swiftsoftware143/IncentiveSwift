@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Confirm your new sign-in email — IncentiveSwift</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px}
+.c{background:#fff;border-radius:12px;padding:40px;width:440px;max-width:95vw;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.c h1{font-size:22px;color:#1e1b4b;margin-bottom:4px}
+.c p.sub{font-size:13px;color:#64748b;margin-bottom:18px;line-height:1.55}
+.msg{padding:11px 13px;border-radius:8px;font-size:13.5px;margin-top:12px;display:none;line-height:1.5}
+.msg.e{background:#fee2e2;color:#991b1b;display:block}
+.msg.o{background:#d1fae5;color:#065f46;display:block}
+.msg.i{color:#4f46e5;display:block;background:#eef2ff}
+.lk{margin-top:18px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px;text-align:center}
+.lk a{color:#6366f1}
+.lk a.btn{display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:600;font-size:14px}
+</style>
+</head>
+<body>
+<div class="c">
+<h1>Confirm your new sign-in email</h1>
+<p class="sub" id="lede">Checking your confirmation link&hellip;</p>
+<div id="m" class="msg" role="status" aria-live="polite"></div>
+<div class="lk" id="lk"><a href="/login">&larr; Back to sign in</a></div>
+</div>
+<script>
+/* kanban t_6b2702e3 — the SECOND arm of the sign-in-address change.
+   This page is opened from a mailbox, so it carries no session: the token in the URL IS the
+   credential. It posts that token once, anonymously, to /api/v1/auth/email-change/confirm, and the
+   server moves accounts.email for the row that token names. The link works once — a second open (or
+   a reload) answers "invalid or has expired", which is what stops a forwarded mail from being reused. */
+(function () {
+  var m = document.getElementById('m'),
+      lede = document.getElementById('lede'),
+      lk = document.getElementById('lk');
+  function show(cls, text) { m.className = 'msg ' + cls; m.textContent = text; }
+  var token = '';
+  try { token = (new URLSearchParams(window.location.search).get('token') || '').trim(); } catch (e) {}
+  if (!token) {
+    lede.textContent = 'This link is incomplete.';
+    show('e', 'The confirmation code is missing from the link. Open the link from your email again, or ask for a new one from Your account on your dashboard.');
+    return;
+  }
+  fetch('/api/v1/auth/email-change/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+      return d || {};
+    });
+  }).then(function (d) {
+    lede.textContent = 'Done.';
+    show('o', (d && d.message) || 'Your sign-in address has been changed.');
+    lk.innerHTML = '<a class="btn" href="/login">Go to sign in</a>';
+  }).catch(function (e) {
+    lede.textContent = 'That link did not work.';
+    show('e', (e && e.message) || 'That confirmation link is invalid or has expired.');
+  });
+})();
+</script>
+</body>
+</html>
