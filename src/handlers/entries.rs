@@ -3,9 +3,14 @@
 use crate::db::{campaigns, contacts, entries};
 use crate::delivery::{payload::ContactPayload, payload::DeliveryPayload, webhook};
 use crate::error::AppError;
+use crate::handlers::campaigns::campaign_for_caller;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::{Path, Query, State},
+    http::HeaderMap,
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -893,4 +898,58 @@ pub async fn test_entry_webhook(
             "error": e.to_string().chars().take(200).collect::<String>(),
         }))),
     }
+}
+
+/// Query for the campaign entries read.
+#[derive(Deserialize)]
+pub struct CampaignEntriesQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+/// GET /api/v1/campaigns/{slug}/entries — the operator's reader for the entries their campaign
+/// captured, entry-form answers included (kanban t_7cb597c4).
+///
+/// WHY THIS EXISTS. The card's gap: operators define per-campaign entry-form questions
+/// (Campaigns -> Fields -> `campaign_custom_fields`), the public `/play/<slug>` renders them and the
+/// answers land in `entries.answers._custom` — and nothing read them back. The only entries reader in
+/// the app was `get_entries_for_contact`, a participant's own history, so the person who wrote the
+/// question could not see a single answer to it. A write with no reader is a defect, not a feature.
+///
+/// SCOPING. `campaign_for_caller` resolves the slug against the CALLER's own account (operators may
+/// read any campaign; a tenant reads only its own), so a slug that belongs to another account answers
+/// 404 exactly like a slug that does not exist. The returned rows are that campaign's entries only —
+/// the query is keyed on the resolved `campaign.id`, never on a caller-supplied id.
+///
+/// SHAPE. `entries[]` carries the participant's name/address/phone/business (the entry stores
+/// `contact_id` alone), the whole `answers` document, score/outcome, delivery state and the UTM
+/// source. `fields[]` carries the field definitions IN FORM ORDER, so the screen can label the values
+/// (`{"key":"company_size","label":"Company size","type":"select"}`) instead of showing raw keys.
+/// `answered` counts the entries that actually carry an `_custom` document — the operator's real
+/// question ("did people answer the question I added?") answers with two numbers.
+pub async fn list_campaign_entries(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(slug): Path<String>,
+    Query(query): Query<CampaignEntriesQuery>,
+) -> Result<Json<Value>, AppError> {
+    let campaign = campaign_for_caller(&state, &slug, &user).await?;
+
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    let rows = entries::list_entries_for_campaign(&state.db, &campaign.id, limit, offset).await?;
+    let fields = entries::list_entry_fields_for_campaign(&state.db, &campaign.id).await?;
+    let total = entries::count_entries_for_campaign(&state.db, &campaign.id).await?;
+    let answered = entries::count_entries_with_custom_answers(&state.db, &campaign.id).await?;
+
+    Ok(Json(json!({
+        "campaign": { "id": campaign.id, "slug": campaign.slug, "name": campaign.name },
+        "fields": fields,
+        "entries": rows,
+        "total": total,
+        "answered": answered,
+        "limit": limit,
+        "offset": offset,
+    })))
 }

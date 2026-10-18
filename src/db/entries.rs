@@ -133,6 +133,119 @@ pub struct EntryWithCampaign {
     pub tag_namespace: String,
 }
 
+/// One entry of ONE campaign as the OPERATOR reads it — the participant's identity beside the
+/// answers they gave (kanban t_7cb597c4).
+///
+/// Before this existed the only reader of `entries` was `get_entries_for_contact` (a participant's
+/// own history), so the operator who DEFINED a per-campaign entry-form question could never see the
+/// answer to it: the value was stored in `entries.answers._custom` and read by nothing. The columns
+/// here are the read side of that write — name/address from `contacts` because the entry carries
+/// `contact_id` alone, and the whole `answers` document so a field that was deleted after the entry
+/// was taken still shows its stored value.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct CampaignEntryRow {
+    pub id: Uuid,
+    pub contact_id: Uuid,
+    pub answers: JsonValue,
+    pub score: Option<i32>,
+    pub outcome: Option<String>,
+    pub delivered: bool,
+    pub delivered_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub utm_source: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub contact_name: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_phone: Option<String>,
+    pub contact_business: Option<String>,
+}
+
+/// One entry-form field the operator defined for a campaign (the label side of `answers._custom`).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct CampaignEntryField {
+    pub field_key: String,
+    pub field_label: String,
+    pub field_type: String,
+}
+
+/// The entries of one campaign, newest first, with the participant attached.
+///
+/// The caller must have resolved the campaign against the caller's OWN account first
+/// (`campaign_for_caller`) — this helper takes a `campaign_id` and trusts it, so it is never a
+/// tenancy boundary on its own.
+pub async fn list_entries_for_campaign(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<CampaignEntryRow>, AppError> {
+    let rows = sqlx::query_as::<_, CampaignEntryRow>(
+        r#"SELECT e.id, e.contact_id, e.answers, e.score, e.outcome,
+                  e.delivered, e.delivered_at, e.utm_source, e.created_at,
+                  NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '') AS contact_name,
+                  c.email AS contact_email,
+                  c.phone AS contact_phone,
+                  c.business_name AS contact_business
+           FROM entries e
+           LEFT JOIN contacts c ON c.id = e.contact_id
+           WHERE e.campaign_id = $1
+           ORDER BY e.created_at DESC
+           LIMIT $2 OFFSET $3"#,
+    )
+    .bind(campaign_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Total entries on one campaign (the pager's denominator).
+pub async fn count_entries_for_campaign(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+) -> Result<i64, AppError> {
+    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entries WHERE campaign_id = $1")
+        .bind(campaign_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(total)
+}
+
+/// How many entries on this campaign carry at least one entry-form answer (`answers ? '_custom'`).
+/// The screen uses it to say "N of M answered the questions you added", which is the fact the
+/// operator needs and cannot get from a full answers dump.
+pub async fn count_entries_with_custom_answers(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+) -> Result<i64, AppError> {
+    let total = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM entries WHERE campaign_id = $1 AND answers ? '_custom'",
+    )
+    .bind(campaign_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(total)
+}
+
+/// The entry-form fields the operator defined for this campaign, in the order the form shows them.
+pub async fn list_entry_fields_for_campaign(
+    pool: &PgPool,
+    campaign_id: &Uuid,
+) -> Result<Vec<CampaignEntryField>, AppError> {
+    let rows = sqlx::query_as::<_, CampaignEntryField>(
+        r#"SELECT field_key, field_label, field_type
+           FROM campaign_custom_fields
+           WHERE campaign_id = $1
+           ORDER BY sort_order, field_label"#,
+    )
+    .bind(campaign_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 /// Get all entries for a contact with campaign info.
 pub async fn get_entries_for_contact(
     pool: &PgPool,

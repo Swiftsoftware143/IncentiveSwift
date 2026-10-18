@@ -533,6 +533,10 @@ mod tests {
         for p in [
             "/api/v1/campaigns",
             "/api/v1/campaigns/some-slug",
+            // The operator's entry reader (kanban t_7cb597c4): it returns participants' names and
+            // the answers they gave, so it must never answer anonymously. Its PUBLIC twin is
+            // `POST /api/v1/entries` (the capture), which stays in PUBLIC_ROUTES.
+            "/api/v1/campaigns/some-slug/entries",
             "/api/v1/campaigns/some-slug/integrations",
             "/api/v1/contacts",
             "/api/v1/settings",

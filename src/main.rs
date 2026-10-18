@@ -1241,6 +1241,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/campaigns/:slug/wins/:win_id/redeem",
             post(handlers::spin_handler::redeem_win),
         )
+        // The operator's ENTRY reader (kanban t_7cb597c4): the answers captured by the entry-form
+        // fields this campaign defines. Private by default (route_policy), scoped in the handler by
+        // `campaign_for_caller`, and it is the read side of `POST /api/v1/entries`.
+        .route(
+            "/api/v1/campaigns/:slug/entries",
+            get(handlers::entries::list_campaign_entries),
+        )
         // Custom fields routes
         .route(
             "/api/v1/campaigns/:slug/custom-fields",

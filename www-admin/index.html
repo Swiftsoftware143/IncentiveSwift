@@ -5149,7 +5149,7 @@ const WinsRedemptions = () => {
 
   return html`<div>
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-bold">🏆 Wins &amp; Redemptions</h2>
+      <h2 class="text-xl font-bold">🏆 Wins & Redemptions</h2>
       <button class="btn btn-sm btn-outline" onClick=${() => load(st.slug, st.filter)}>Reload</button>
     </div>
 
@@ -5217,6 +5217,142 @@ const WinsRedemptions = () => {
     </div>
   </div>`;
 };
+/* ── ENTRIES & ANSWERS ───────────────────────────────────────────────────────────────────────────
+   The reader for what the entry form captured (kanban t_7cb597c4). An operator defines per-campaign
+   questions from Campaigns -> Fields; the public /play/<slug> renders them and the answers are
+   stored on the entry as `answers._custom`. Nothing read them back: the only entries reader in the
+   product was a PARTICIPANT's own history, so the person who wrote the question could not see a
+   single answer to it — a write with no reader. GET /api/v1/campaigns/:slug/entries answers with the
+   campaign's fields IN FORM ORDER plus its entries, so each value can be labelled with the question
+   the operator actually typed instead of a raw key. */
+const EntriesAnswers = () => {
+  const st = viewState('entries', { campaigns: [], slug: '', entries: [], fields: [], total: 0, answered: 0, err: '', loaded: false });
+
+  const load = async (slug) => {
+    const use = slug || st.slug;
+    if (!use) { renderApp(); return; }
+    st.err = '';
+    try {
+      const d = await API.get('/campaigns/' + use + '/entries?limit=200');
+      st.entries = Array.isArray(d.entries) ? d.entries : [];
+      st.fields = Array.isArray(d.fields) ? d.fields : [];
+      st.total = d.total != null ? d.total : st.entries.length;
+      st.answered = d.answered != null ? d.answered : 0;
+    } catch (e) { st.err = e.message; st.entries = []; st.fields = []; st.total = 0; st.answered = 0; }
+    renderApp();
+  };
+  const loadCampaigns = async () => {
+    try {
+      const d = await API.get('/campaigns');
+      st.campaigns = Array.isArray(d) ? d : (d.campaigns || []);
+      if (!st.slug && st.campaigns.length) st.slug = st.campaigns[0].slug;
+      await load(st.slug);
+    } catch (e) { st.err = e.message; renderApp(); }
+  };
+  const pick = (slug) => { st.slug = slug; renderApp(); load(slug); };
+  if (!st.loaded) { st.loaded = true; loadCampaigns(); }
+
+  const who = (e) => {
+    const name = String(e.contact_name || '').trim();
+    const email = String(e.contact_email || '').trim();
+    const phone = String(e.contact_phone || '').trim();
+    const biz = String(e.contact_business || '').trim();
+    return html`<div>
+      ${name ? html`<div class="text-sm">${name}</div>` : null}
+      ${!name && !email ? html`<div class="text-xs text-gray-400">contact ${String(e.contact_id || '').slice(0, 8)}… has no address on file</div>` : null}
+      ${email ? html`<div class="text-xs text-gray-500">${email}</div>` : null}
+      ${phone ? html`<div class="text-xs text-gray-500">${phone}</div>` : null}
+      ${biz ? html`<div class="text-xs text-gray-400">${biz}</div>` : null}
+    </div>`;
+  };
+
+  /* The answers as (question, value) pairs, in the order the form asks them. A field the operator
+     DELETED after the entry was taken still has a stored answer, so its key is listed at the end
+     rather than silently dropped — hiding data a participant gave would be the same defect in the
+     other direction. */
+  const answersOf = (e) => {
+    const doc = (e.answers && typeof e.answers === 'object' && !Array.isArray(e.answers)) ? e.answers : {};
+    const custom = (doc._custom && typeof doc._custom === 'object' && !Array.isArray(doc._custom)) ? doc._custom : {};
+    const defined = {};
+    const rows = [];
+    (st.fields || []).forEach(f => {
+      defined[f.field_key] = true;
+      const v = custom[f.field_key];
+      const blank = v === null || v === undefined || String(v).trim() === '';
+      if (!blank) rows.push({ label: f.field_label || f.field_key, value: String(v) });
+    });
+    Object.keys(custom).forEach(k => {
+      if (defined[k]) return;
+      const v = custom[k];
+      if (v === null || v === undefined || String(v).trim() === '') return;
+      rows.push({ label: k, value: String(v) });
+    });
+    return rows;
+  };
+
+  const th = 'text-xs font-medium text-gray-500 text-left px-2 py-1';
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-bold">📝 Entries & Answers</h2>
+      <button class="btn btn-sm btn-outline" onClick=${() => load(st.slug)}>Reload</button>
+    </div>
+
+    <div class="card mb-4" style="padding:12px 14px">
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="text-xs text-gray-500">Campaign</label>
+        <select class="input" style="max-width:320px" value=${st.slug} onChange=${e => pick(e.target.value)}>
+          ${st.campaigns.length === 0 && html`<option value="">No campaigns yet</option>`}
+          ${st.campaigns.map(c => html`<option value=${c.slug} selected=${c.slug === st.slug}>${c.name}</option>`)}
+        </select>
+        <span class="text-xs text-gray-300">|</span>
+        <span class="text-xs text-gray-500" id="entriesCount">${st.total} entr${st.total === 1 ? 'y' : 'ies'} on this campaign · ${st.answered} answered your questions</span>
+      </div>
+      <div class="text-xs text-gray-500 mt-2">
+        ${st.fields.length === 0
+          ? 'This campaign has no extra questions yet, so an entry shows the participant and the standard fields only. Add questions from Campaigns → Fields and every answer lands here, under the question you wrote, the moment someone submits.'
+          : 'Each answer below was given by a participant on your public entry form. Questions appear in the order the form asks them.'}
+      </div>
+    </div>
+
+    ${st.err ? html`<div class="card mb-4 text-sm" style="border-left:4px solid #dc2626;padding:10px 14px;color:#991b1b">Could not load entries: ${st.err}</div>` : null}
+
+    <div class="card">
+      ${st.entries.length === 0
+        ? html`<div class="text-center text-gray-400 py-10 text-sm">No entries on this campaign yet. A row appears here the moment someone submits the public entry form.</div>`
+        : html`<table class="w-full text-sm">
+        <thead><tr>
+          <th class=${th}>When</th>
+          <th class=${th}>Participant</th>
+          <th class=${th}>Answers to your questions</th>
+          <th class=${th}>Result</th>
+          <th class=${th}>Delivery</th>
+        </tr></thead>
+        <tbody>
+          ${st.entries.map(e => {
+            const rows = answersOf(e);
+            const result = [e.score != null ? 'Score ' + e.score : '', e.outcome || ''].filter(x => x).join(' · ');
+            return html`<tr class="border-t border-gray-100">
+              <td class="px-2 py-2 text-gray-500" style="white-space:nowrap">${e.created_at ? new Date(e.created_at).toLocaleString() : '—'}</td>
+              <td class="px-2 py-2">${who(e)}</td>
+              <td class="px-2 py-2">
+                ${rows.length === 0
+                  ? html`<span class="text-xs text-gray-400">${(st.fields || []).length === 0 ? 'no questions on this campaign' : 'did not answer'}</span>`
+                  : html`<div>${rows.map(r => html`<div class="text-sm"><span class="text-xs text-gray-500">${r.label}:</span> ${r.value}</div>`)}</div>`}
+              </td>
+              <td class="px-2 py-2 text-gray-600">${result || html`<span class="text-xs text-gray-400">—</span>`}</td>
+              <td class="px-2 py-2">
+                ${e.delivered
+                  ? html`<span class="badge badge-green">Sent</span>${e.delivered_at ? html`<div class="text-xs text-gray-400">${new Date(e.delivered_at).toLocaleDateString()}</div>` : null}`
+                  : html`<span class="badge badge-yellow">Not sent</span>`}
+              </td>
+            </tr>`;
+          })}
+        </tbody>
+      </table>`}
+    </div>
+  </div>`;
+};
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
@@ -5226,6 +5362,7 @@ const WinsRedemptions = () => {
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'wins', label: 'Wins & Redemptions', icon: '🏆' },
+    { id: 'entries', label: 'Entries & Answers', icon: '📝' },
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
     { id: 'payment-providers', label: 'Payment Providers', icon: '💳', adminOnly: true },
@@ -5250,7 +5387,7 @@ const WinsRedemptions = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, wins: WinsRedemptions, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
