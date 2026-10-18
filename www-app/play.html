@@ -82,6 +82,12 @@ label.opt:hover{border-color:var(--brand)}
       <input id="lastName" type="text" autocomplete="family-name">
       <label for="email">Email</label>
       <input id="email" type="email" autocomplete="email" required>
+      <!-- The campaign's own extra questions (cron 2026-10-18). `campaign_custom_fields` could be
+           written through its API but no player ever saw the fields, so a defined field reached
+           nobody. They are rendered by renderCustomFields() from `custom_fields` on
+           GET /api/v1/play/<slug>, sit under name + email on purpose, and their values travel with
+           the submission (`answers._custom`) to the entry the visitor creates. -->
+      <div id="customFields"></div>
       <div class="consent" id="consentRow" style="display:none">
         <input id="consent" type="checkbox">
         <label for="consent" style="margin:0;font-weight:400">I agree to be contacted about this promotion.</label>
@@ -166,6 +172,77 @@ label.opt:hover{border-color:var(--brand)}
   function varLabel(name) {
     var s = name.replace(/_/g, ' ');
     return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // ---- The campaign's own entry-form fields ----------------------------------------------
+  // Filled from `custom_fields` on GET /api/v1/play/<slug> (the only public read of
+  // campaign_custom_fields) and submitted with the entry as `answers._custom`, keyed by the
+  // operator's own `field_key`. Nothing is rendered when the campaign defines none, so a campaign
+  // without fields looks exactly as it did before this existed.
+  var customFields = [];
+
+  function renderCustomFields() {
+    var host = el('customFields');
+    if (!host) { return; }
+    host.innerHTML = '';
+    if (!customFields.length) { return; }
+    customFields.forEach(function (f, i) {
+      var id = 'cf' + i;
+      var lab = document.createElement('label');
+      lab.setAttribute('for', id);
+      lab.textContent = f.field_label + (f.required ? ' *' : '');
+      host.appendChild(lab);
+      var input;
+      if (f.field_type === 'select' || f.field_type === 'checkbox') {
+        var opts = Array.isArray(f.options) ? f.options : [];
+        if (f.field_type === 'select') {
+          input = document.createElement('select');
+          var blank = document.createElement('option');
+          blank.value = ''; blank.textContent = 'Choose…';
+          input.appendChild(blank);
+          opts.forEach(function (o) {
+            var op = document.createElement('option');
+            op.value = o; op.textContent = o;
+            input.appendChild(op);
+          });
+        } else {
+          input = document.createElement('select');
+          var first = document.createElement('option');
+          first.value = ''; first.textContent = 'Choose…';
+          input.appendChild(first);
+          opts.forEach(function (o) {
+            var op = document.createElement('option');
+            op.value = o; op.textContent = o;
+            input.appendChild(op);
+          });
+        }
+      } else if (f.field_type === 'textarea') {
+        input = document.createElement('textarea');
+        input.rows = 3;
+        input.style.cssText = 'border:1px solid #cbd5e1;border-radius:8px;padding:10px 14px;width:100%;font-size:15px;font-family:inherit;margin-bottom:14px';
+      } else {
+        input = document.createElement('input');
+        input.type = f.field_type === 'email' ? 'email' : (f.field_type === 'phone' ? 'tel' : 'text');
+      }
+      input.id = id;
+      input.setAttribute('data-cf-key', f.field_key);
+      host.appendChild(input);
+    });
+  }
+
+  // Returns the values keyed by field_key, or null when a REQUIRED field is blank (the caller shows
+  // one message and never posts a half-answered form).
+  function collectCustomFields() {
+    var out = {}, missing = false;
+    customFields.forEach(function (f, i) {
+      var node = el('cf' + i);
+      if (!node) { return; }
+      var v = (node.value || '').trim();
+      if (f.required && !v) { missing = true; return; }
+      if (v) { out[f.field_key] = v; }
+    });
+    if (missing) { return null; }
+    return out;
   }
 
   function renderCalculatorInputs() {
@@ -405,6 +482,8 @@ label.opt:hover{border-color:var(--brand)}
       campaign = res.data.campaign;
       applyTheme(res.data.theme);
       config = res.data.config || {};
+      customFields = Array.isArray(res.data.custom_fields) ? res.data.custom_fields : [];
+      renderCustomFields();
       renderCalculatorInputs();
       if (res.data.company && res.data.company.name) { el('businessName').textContent = 'by ' + res.data.company.name; }
       document.title = campaign.name + ' — Play';
@@ -433,6 +512,15 @@ label.opt:hover{border-color:var(--brand)}
     }
 
     var url, body;
+    // The campaign's own fields are collected ONCE for every mechanic whose submission accepts
+    // `answers` (entries, spin, raffle). A required field left blank stops the submit here.
+    var cfVals = collectCustomFields();
+    if (cfVals === null) {
+      el('error').textContent = 'Please answer the highlighted question' + (customFields.length > 1 ? 's' : '') + ' before submitting.';
+      el('error').style.display = 'block';
+      return;
+    }
+    var cfAnswers = Object.keys(cfVals).length ? { _custom: cfVals } : null;
     if (campaign.type === 'quiz' && quizQuestions.length) {
       // POST /api/v1/quiz/<campaign_id>/submit takes {contact:{...}, answers:[{question_id,
       // value}], source:{utm_*}} — the ANSWERS the visitor gave, never a score: the server
@@ -515,6 +603,11 @@ label.opt:hover{border-color:var(--brand)}
         }
         body.answers = answers;
       }
+    }
+    // Attach the visitor's extra answers. `answers` is a free-form jsonb on the entry, the spin and
+    // the raffle, so the operator's fields are stored WITH the entry rather than in a side table.
+    if (cfAnswers) {
+      body.answers = Object.assign({}, body.answers || {}, cfAnswers);
     }
 
     var original = btn.textContent;

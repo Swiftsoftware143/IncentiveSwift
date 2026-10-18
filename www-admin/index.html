@@ -716,7 +716,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '' });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' } });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -781,6 +781,81 @@ const Campaigns = () => {
     renderApp();
   };
   const closeEmbed = () => { st.embedItem = null; st.embed = null; st.embedErr = ''; st.embedCopied = ''; renderApp(); };
+  // ── Entry-form fields (cron 2026-10-18) ────────────────────────────────────────────────
+  // `campaign_custom_fields` and its full CRUD API (list/create/update/delete/reorder) shipped with
+  // NO screen and NO reader: an operator could not define a field, and the served player never asked
+  // for one, so the table was write-only. This panel is the definition half. The player half is
+  // GET /api/v1/play/<slug>, which now carries `custom_fields`, and /play/<slug> renders them under
+  // name + email and posts the values with the entry — so a field defined here reaches a customer.
+  const FIELD_TYPES = ['text', 'email', 'phone', 'textarea', 'select', 'checkbox'];
+  // `field_key` is the stable column name on the entry (the label can be re-worded later), so it is
+  // derived once from the label at creation and never edited afterwards.
+  const fieldKey = (label) => {
+    const k = String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+    return k || ('field_' + Date.now().toString(36));
+  };
+  const loadFields = async () => {
+    try {
+      const d = await API.get('/campaigns/' + st.fieldsItem.slug + '/custom-fields');
+      st.fields = (d && Array.isArray(d.fields)) ? d.fields : [];
+      st.fieldsErr = '';
+    } catch (e) { st.fieldsErr = e.message; }
+    renderApp();
+  };
+  const openFields = async (item) => {
+    st.fieldsItem = item; st.fields = null; st.fieldsErr = ''; st.fieldsSaved = '';
+    st.fieldsForm = { field_label: '', field_type: 'text', required: false, options: '' };
+    renderApp();
+    await loadFields();
+  };
+  const closeFields = () => { st.fieldsItem = null; st.fields = null; st.fieldsErr = ''; st.fieldsSaved = ''; renderApp(); };
+  const addField = async () => {
+    const label = String(st.fieldsForm.field_label || '').trim();
+    if (!label) { st.fieldsErr = 'Give the field a label your customer will read.'; renderApp(); return; }
+    const options = String(st.fieldsForm.options || '').split(',').map(s => s.trim()).filter(Boolean);
+    try {
+      await API.post('/campaigns/' + st.fieldsItem.slug + '/custom-fields', {
+        field_key: fieldKey(label),
+        field_label: label,
+        field_type: st.fieldsForm.field_type,
+        required: !!st.fieldsForm.required,
+        sort_order: (st.fields || []).length,
+        options: options
+      });
+      st.fieldsSaved = 'Field added — it is live on the entry page now';
+      st.fieldsErr = '';
+      st.fieldsForm = { field_label: '', field_type: 'text', required: false, options: '' };
+      await loadFields();
+    } catch (e) { st.fieldsErr = e.message; renderApp(); }
+  };
+  const toggleFieldRequired = async (f) => {
+    try {
+      await API.put('/campaigns/' + st.fieldsItem.slug + '/custom-fields/' + f.id, { required: !f.required });
+      await loadFields();
+    } catch (e) { st.fieldsErr = e.message; renderApp(); }
+  };
+  const removeField = async (f) => {
+    if (!confirm('Delete the field "' + f.field_label + '"?')) return;
+    try {
+      await API.del('/campaigns/' + st.fieldsItem.slug + '/custom-fields/' + f.id);
+      st.fieldsSaved = 'Field deleted';
+      await loadFields();
+    } catch (e) { st.fieldsErr = e.message; renderApp(); }
+  };
+  // Order is the operator's, and reorder writes the WHOLE list: the server numbers rows by the
+  // position they arrive in, so a partial list would silently renumber only the rows it named.
+  const moveField = async (i, delta) => {
+    const list = (st.fields || []).slice();
+    const j = i + delta;
+    if (j < 0 || j >= list.length) return;
+    const tmp = list[i]; list[i] = list[j]; list[j] = tmp;
+    try {
+      await API.put('/campaigns/' + st.fieldsItem.slug + '/custom-fields/reorder', { field_ids: list.map(f => f.id) });
+      st.fields = list; st.fieldsSaved = 'Order saved';
+      await loadFields();
+    } catch (e) { st.fieldsErr = e.message; renderApp(); }
+  };
+
   const createWidget = async () => {
     try {
       // No body: POST /api/v1/campaigns/:slug/widget-snippet is a bodyless action route
@@ -979,7 +1054,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span></td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
       </tbody></table>
@@ -1156,6 +1231,45 @@ const Campaigns = () => {
           ${st.embedCopied && html`<div class="text-xs text-green-600" id="embedCopied">✓ Copied the ${st.embedCopied === 'direct' ? 'direct link' : st.embedCopied === 'iframe' ? 'iframe embed' : 'widget script'}</div>`}
         </div>`}
         <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="embedClose" onClick=${closeEmbed}>Close</button></div>
+      </div>
+    </div>`}
+    ${st.fieldsItem && html`<div class="modal" id="fieldsModal" onClick=${e => e.target === e.currentTarget && closeFields()}>
+      <div class="modal-content" style="max-width:720px">
+        <h3 class="text-lg font-bold mb-1">Entry form fields — ${st.fieldsItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">Extra questions your customer answers on this campaign's own entry page, under the name and email. They are saved with the entry the player sends.</p>
+        ${st.fieldsErr && html`<div class="text-red-500 text-sm mb-3" id="fieldsErr">${st.fieldsErr}</div>`}
+        ${st.fieldsSaved && html`<div class="text-xs text-green-600 mb-3" id="fieldsSaved">✓ ${st.fieldsSaved}</div>`}
+        ${!st.fields && !st.fieldsErr && html`<div class="text-gray-400 text-sm" id="fieldsLoading">Reading this campaign's fields…</div>`}
+        ${st.fields && (st.fields.length === 0
+          ? html`<div class="text-xs text-gray-500 mb-2" id="fieldsNone">No extra fields yet — the entry form asks for name and email only.</div>`
+          : html`<table class="w-full text-sm" id="fieldsTable"><thead><tr class="text-left text-xs text-gray-500"><th class="py-1">Label</th><th>Type</th><th>Required</th><th></th></tr></thead><tbody>
+              ${st.fields.map((f, i) => html`<tr data-field-id=${f.id} data-field-key=${f.field_key}>
+                <td class="py-1">${f.field_label} <span class="text-xs text-gray-400">${f.field_key}</span></td>
+                <td>${f.field_type}</td>
+                <td><input type="checkbox" checked=${!!f.required} onChange=${() => toggleFieldRequired(f)} /></td>
+                <td class="text-right">
+                  <button class="btn btn-sm btn-outline" data-move-up=${f.id} disabled=${i === 0} onClick=${() => moveField(i, -1)}>↑</button>
+                  <button class="btn btn-sm btn-outline" data-move-down=${f.id} disabled=${i === st.fields.length - 1} onClick=${() => moveField(i, 1)}>↓</button>
+                  <button class="btn btn-sm btn-red" data-field-del=${f.id} onClick=${() => removeField(f)}>Delete</button>
+                </td></tr>`)}
+            </tbody></table>`)}
+        <div class="mt-4 pt-3" style="border-top:1px solid #e2e8f0">
+          <label class="text-sm font-semibold">Add a field</label>
+          <div class="flex gap-2 mt-2 items-end">
+            <div style="flex:2"><label class="text-xs text-gray-500">Label your customer reads</label>
+              <input class="input" id="fieldLabel" value=${st.fieldsForm.field_label} placeholder="Company size" onInput=${e => { st.fieldsForm.field_label = e.target.value; }} /></div>
+            <div style="flex:1"><label class="text-xs text-gray-500">Type</label>
+              <select class="input" id="fieldType" onChange=${e => { st.fieldsForm.field_type = e.target.value; renderApp(); }}>
+                ${FIELD_TYPES.map(t => html`<option value=${t} selected=${st.fieldsForm.field_type === t}>${t}</option>`)}
+              </select></div>
+            <div><label class="text-xs text-gray-500">Required</label><br/>
+              <input type="checkbox" id="fieldRequired" checked=${!!st.fieldsForm.required} onChange=${e => { st.fieldsForm.required = e.target.checked; }} /></div>
+          </div>
+          ${(st.fieldsForm.field_type === 'select' || st.fieldsForm.field_type === 'checkbox') && html`<div class="mt-2"><label class="text-xs text-gray-500">Choices, comma separated</label>
+            <input class="input" id="fieldOptions" value=${st.fieldsForm.options} placeholder="1-10, 11-50, 51+" onInput=${e => { st.fieldsForm.options = e.target.value; }} /></div>`}
+          <div class="flex justify-end mt-3"><button class="btn btn-primary" id="fieldAdd" onClick=${addField}>Add field</button></div>
+        </div>
+        <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="fieldsClose" onClick=${closeFields}>Close</button></div>
       </div>
     </div>`}
     ${st.deliveryItem && html`<div class="modal" id="deliveryModal" onClick=${e => e.target === e.currentTarget && (closeDelivery())}>

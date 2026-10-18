@@ -584,6 +584,40 @@ pub async fn get_play_view(
         "company": company_info,
     });
 
+    // The tenant's own entry-form fields (cron 2026-10-18). `campaign_custom_fields` and its CRUD
+    // API shipped with NO reader: the table could be written, the player never asked for it, so a
+    // field an operator defined reached no customer. This projection is the read side the served
+    // /play/<slug> page consumes; `public_config`'s precedent applies — nothing is exposed unless
+    // the campaign actually defines fields, so an ordinary campaign returns exactly the payload it
+    // returned before. Order is the operator's own `sort_order`, then creation.
+    let custom_fields: Vec<Value> = sqlx::query_scalar(
+        r#"SELECT jsonb_build_object(
+                     'field_key',   field_key,
+                     'field_label', field_label,
+                     'field_type',  field_type,
+                     'required',    required,
+                     'options',     COALESCE(to_jsonb(options), '[]'::jsonb))
+             FROM campaign_custom_fields
+            WHERE campaign_id = $1
+            ORDER BY sort_order, created_at"#,
+    )
+    .bind(cid)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_else(|e| {
+        // A read failure must not break the player: an entry form without its extra fields is
+        // still a working campaign, exactly as it was before this projection existed.
+        tracing::warn!(
+            campaign = %cid,
+            error = %e,
+            "campaign custom fields could not be read — serving the form without them"
+        );
+        Vec::new()
+    });
+    if !custom_fields.is_empty() {
+        payload["custom_fields"] = json!(custom_fields);
+    }
+
     // Grouped presentation order for the long-form qualifier. `config.sections` is an
     // ORDERING-ONLY overlay: it never touches scoring, outcomes, tags, redirects or the
     // webhook. It is exposed ONLY when the campaign actually defines sections, so a
