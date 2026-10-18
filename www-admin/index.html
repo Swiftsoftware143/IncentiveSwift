@@ -2178,7 +2178,7 @@ const PaymentProviderModal = ({ st, closeForm, submit, testKey }) => {
 // (`email::send_email_request`, the choke point every transactional type passes through) and by the
 // test button below, and is read back from `GET /api/v1/admin/email-settings`.
 const EmailProvider = () => {
-  const st = viewState('email-provider', { cfg: null, providers: [], last: null, configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '', credentialPresent: false, sealed: false });
+  const st = viewState('email-provider', { cfg: null, providers: [], last: null, log: [], configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '', credentialPresent: false, sealed: false });
   // `api_key` / `smtp_password` come back MASKED (••••••••) when a value is stored; the server keeps
   // the stored secret when it reads the mask back, so sending the field unchanged never clears it.
   const TEXT_FIELDS = [['from_name', 'From name'], ['from_address', 'From address'], ['domain', 'Mailgun domain'], ['api_url', 'Provider API URL'], ['smtp_host', 'SMTP host'], ['smtp_port', 'SMTP port'], ['smtp_username', 'SMTP username']];
@@ -2191,6 +2191,11 @@ const EmailProvider = () => {
       st.provider = d.provider || st.cfg.provider || 'smtp';
       if (!st.cfg.provider) st.cfg.provider = st.provider;
       st.last = d.last_send || null;
+      // The HISTORY beside the one-slot line above: a credentials mail refused at signup
+      // stays readable here after any later mail succeeds. A failed read must never break
+      // the screen, so it degrades to an empty list.
+      try { const l = await API.get('/admin/email-log'); st.log = (l && l.sends) || []; }
+      catch (e) { st.log = []; }
       // Measured by the API off the STORED row; `configured` says a provider is saved, it does not
       // say the copy in the database is encrypted. Both facts are shown, neither is assumed.
       st.credentialPresent = d.credential_present === true;
@@ -2245,6 +2250,15 @@ const EmailProvider = () => {
             <span class="text-gray-500">· ${st.last.at ? new Date(st.last.at).toLocaleString() : 'time not recorded'} · "${st.last.subject || ''}" to ${st.last.to || ''}</span>
           </div>
           ${(!st.last.ok && st.last.detail) ? html`<div class=${'text-sm mt-1 ' + (withheld ? 'text-amber-700' : 'text-red-700')}>${st.last.detail}</div>` : null}`}
+    </div>
+    <div class="card mb-4">
+      <h3 class="font-semibold mb-2">Recent sends</h3>
+      <p class="text-sm text-gray-500 mb-2">The last 50 transactional emails this installation attempted. The line above answers only "what happened to the most recent one" — this history keeps a credentials mail that failed at signup visible after any later mail succeeds.</p>
+      ${(!st.log || !st.log.length)
+        ? html`<div class="text-sm text-gray-400">No sends recorded yet.</div>`
+        : html`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-gray-500"><th class="py-1 pr-3">When</th><th class="py-1 pr-3">To</th><th class="py-1 pr-3">Subject</th><th class="py-1">Outcome</th></tr></thead><tbody>
+            ${st.log.map(s => html`<tr class="border-t"><td class="py-1 pr-3 text-gray-500">${s.at ? new Date(s.at).toLocaleString() : ''}</td><td class="py-1 pr-3">${s.to || ''}</td><td class="py-1 pr-3">${s.subject || ''}</td><td class=${"py-1 " + (s.status === "sent" ? "text-green-700" : (s.status === "withheld" ? "text-amber-700" : "text-red-700"))}>${s.status === "sent" ? "sent" : (s.status === "withheld" ? "withheld" : "failed")}${s.detail ? html`<div class="text-xs text-gray-500">${s.detail}</div>` : null}</td></tr>`)}
+          </tbody></table></div>`}
     </div>
     <div class="card mb-4">
       <h3 class="font-semibold mb-2">Provider</h3>
