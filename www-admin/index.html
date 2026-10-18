@@ -152,6 +152,7 @@ window.appGuidePages = {
   dashboard:      { title: "Dashboard", desc: "Your numbers at a glance \u2014 campaigns, participants and activity in one place.", actions: ["Scan recent activity", "Jump into a campaign"] },
   campaigns:      { title: "Campaigns", desc: "Your incentive campaigns \u2014 the games and forms customers play (quizzes, spin wheels, scratch cards and more).", actions: ["Create a campaign", "Open one to edit it", "Publish it"] },
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
+  wins:           { title: "Wins & Redemptions", desc: "Everyone who has won a prize in a campaign, with the redemption code they were shown and whether you have honoured it yet.", actions: ["Pick a campaign", "Read the code the winner was shown", "Mark a win redeemed when you hand the prize over"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
   integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
   "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret this workspace's inbound payment events are verified with — every workspace's own secret authenticates its own deliveries. The keys are never shown back in full; the Encrypted column states whether the saved copy is encrypted at rest.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use", "Test a key before you rely on it"] },
@@ -4949,6 +4950,136 @@ const Offers = () => {
   </div>`;
 };
 
+/* ── WINS & REDEMPTIONS ─────────────────────────────────────────────────────────────────────────
+   GET /api/v1/campaigns/:slug/wins and POST /api/v1/campaigns/:slug/wins/:win_id/redeem have
+   existed since the spin mechanic landed, and no screen in this console ever called either one
+   (cron 2026-10-18). A participant who wins is shown a redemption code; the code lives only in the
+   campaign_wins row, so the operator holding that voucher had no way to find the win or to record
+   it as honoured — a backend pair with no UI, which is a defect. This screen is the way in, and it
+   reads the winner's own name and address from the API (the row carries contact_id alone). */
+const WinsRedemptions = () => {
+  const st = viewState('wins', { campaigns: [], slug: '', wins: [], total: 0, filter: 'open', busy: '', msg: '', err: '', loaded: false });
+
+  const load = async (slug, filter) => {
+    const use = slug || st.slug;
+    if (!use) { renderApp(); return; }
+    st.err = '';
+    try {
+      const flt = filter || st.filter;
+      const d = await API.get('/campaigns/' + use + '/wins?limit=200' + (flt === 'redeemed' ? '&redeemed_only=true' : ''));
+      st.wins = Array.isArray(d.wins) ? d.wins : [];
+      st.total = d.total != null ? d.total : st.wins.length;
+    } catch (e) { st.err = e.message; st.wins = []; }
+    renderApp();
+  };
+  const loadCampaigns = async () => {
+    try {
+      const d = await API.get('/campaigns');
+      st.campaigns = Array.isArray(d) ? d : (d.campaigns || []);
+      if (!st.slug && st.campaigns.length) st.slug = st.campaigns[0].slug;
+      await load(st.slug, st.filter);
+    } catch (e) { st.err = e.message; renderApp(); }
+  };
+  const pick = (slug) => { st.slug = slug; st.msg = ''; renderApp(); load(slug, st.filter); };
+  const setFilter = (f) => { st.filter = f; st.msg = ''; renderApp(); load(st.slug, f); };
+  const redeem = async (w) => {
+    if (!confirm('Mark "' + (w.prize_label || 'this prize') + '" as redeemed? Do this when you hand the prize over — it records the win as honoured and the code can no longer be claimed twice.')) return;
+    st.busy = w.id; st.msg = ''; st.err = ''; renderApp();
+    try {
+      await API.post('/campaigns/' + st.slug + '/wins/' + w.id + '/redeem', {});
+      st.msg = 'Marked redeemed — the win now shows as honoured.';
+    } catch (e) { st.err = e.message; }
+    st.busy = ''; renderApp();
+    await load(st.slug, st.filter);
+  };
+  const copy = async (code) => {
+    try { await navigator.clipboard.writeText(code); st.msg = 'Copied ' + code + ' to the clipboard.'; }
+    catch (e) { st.msg = 'Copy failed — the code is ' + code + '.'; }
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; loadCampaigns(); }
+
+  const who = (w) => {
+    const name = String(w.contact_name || '').trim();
+    const email = String(w.contact_email || '').trim();
+    if (name && email) return html`<div class="text-sm">${name}</div><div class="text-xs text-gray-500">${email}</div>`;
+    if (email) return html`<div class="text-sm">${email}</div>`;
+    if (name) return html`<div class="text-sm">${name}</div>`;
+    return html`<div class="text-xs text-gray-400">contact ${String(w.contact_id || '').slice(0, 8)}… has no address on file</div>`;
+  };
+  const outstanding = st.wins.filter(w => !w.redeemed).length;
+  const th = 'text-xs font-medium text-gray-500 text-left px-2 py-1';
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-bold">🏆 Wins &amp; Redemptions</h2>
+      <button class="btn btn-sm btn-outline" onClick=${() => load(st.slug, st.filter)}>Reload</button>
+    </div>
+
+    <div class="card mb-4" style="padding:12px 14px">
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="text-xs text-gray-500">Campaign</label>
+        <select class="input" style="max-width:320px" value=${st.slug} onChange=${e => pick(e.target.value)}>
+          ${st.campaigns.length === 0 && html`<option value="">No campaigns yet</option>`}
+          ${st.campaigns.map(c => html`<option value=${c.slug} selected=${c.slug === st.slug}>${c.name}</option>`)}
+        </select>
+        <span class="text-xs text-gray-300">|</span>
+        <button class="btn btn-sm ${st.filter === 'open' ? 'btn-green' : 'btn-outline'}" onClick=${() => setFilter('open')}>Outstanding</button>
+        <button class="btn btn-sm ${st.filter === 'redeemed' ? 'btn-green' : 'btn-outline'}" onClick=${() => setFilter('redeemed')}>Redeemed</button>
+        <span class="text-xs text-gray-500 ml-2">${st.total} win${st.total === 1 ? '' : 's'} on this campaign · ${outstanding} outstanding on this page</span>
+      </div>
+      <div class="text-xs text-gray-500 mt-2">
+        A winner is shown a redemption code the moment they win. Find that code here, hand the prize
+        over, then press <b>Mark redeemed</b> — the record is what stops the same code being honoured
+        twice. A win whose contact was deleted still appears, so the history stays complete.
+      </div>
+    </div>
+
+    ${st.err ? html`<div class="card mb-4 text-sm" style="border-left:4px solid #dc2626;padding:10px 14px;color:#991b1b">Could not load wins: ${st.err}</div>` : null}
+    ${st.msg ? html`<div class="card mb-4 text-sm" style="border-left:4px solid #059669;padding:10px 14px;color:#065f46">${st.msg}</div>` : null}
+
+    <div class="card">
+      ${st.wins.length === 0
+        ? html`<div class="text-center text-gray-400 py-10 text-sm">${st.filter === 'redeemed'
+            ? 'No win has been marked redeemed on this campaign yet.'
+            : 'No wins on this campaign yet. A row appears here the moment a participant wins a prize.'}</div>`
+        : html`<table class="w-full text-sm">
+        <thead><tr>
+          <th class=${th}>When</th>
+          <th class=${th}>Winner</th>
+          <th class=${th}>Prize</th>
+          <th class=${th}>Code the winner was shown</th>
+          <th class=${th}>Status</th>
+          <th class=${th}></th>
+        </tr></thead>
+        <tbody>
+          ${st.wins.map(w => html`<tr class="border-t border-gray-100">
+            <td class="px-2 py-2 text-gray-500" style="white-space:nowrap">${w.created_at ? new Date(w.created_at).toLocaleString() : '—'}</td>
+            <td class="px-2 py-2">${who(w)}</td>
+            <td class="px-2 py-2">
+              <div>${w.prize_label || '—'}</div>
+              <div class="text-xs text-gray-400">${w.prize_type || ''}${w.was_pity ? ' · pity win' : ''}</div>
+            </td>
+            <td class="px-2 py-2">
+              <code style="font-size:12px">${w.redemption_code || '—'}</code>
+              ${w.redemption_code ? html`<button class="btn btn-sm btn-outline" style="margin-left:6px;padding:0 6px" onClick=${() => copy(w.redemption_code)}>copy</button>` : null}
+            </td>
+            <td class="px-2 py-2">
+              ${w.redeemed
+                ? html`<span class="badge badge-green">Redeemed</span><div class="text-xs text-gray-400">${w.redeemed_at ? new Date(w.redeemed_at).toLocaleDateString() : ''}</div>`
+                : html`<span class="badge badge-yellow">Outstanding</span>`}
+            </td>
+            <td class="px-2 py-2" style="white-space:nowrap">
+              ${w.redeemed
+                ? html`<span class="text-xs text-gray-400">honoured</span>`
+                : html`<button class="btn btn-sm btn-green" disabled=${st.busy === w.id} onClick=${() => redeem(w)}>${st.busy === w.id ? 'Saving…' : 'Mark redeemed'}</button>`}
+            </td>
+          </tr>`)}
+        </tbody>
+      </table>`}
+    </div>
+  </div>`;
+};
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
@@ -4957,6 +5088,7 @@ const Offers = () => {
     { id: 'profile', label: 'Profile', icon: '👤' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
+    { id: 'wins', label: 'Wins & Redemptions', icon: '🏆' },
     { id: 'loyalty', label: 'Loyalty Programs', icon: '⭐' },
     { id: 'integration', label: 'Integration Center', icon: '🔗', adminOnly: false },
     { id: 'payment-providers', label: 'Payment Providers', icon: '💳', adminOnly: true },
@@ -4981,7 +5113,7 @@ const Offers = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, wins: WinsRedemptions, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.

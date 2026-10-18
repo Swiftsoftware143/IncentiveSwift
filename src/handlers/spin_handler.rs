@@ -98,6 +98,11 @@ pub struct CampaignWinRow {
     pub redeemed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub redemption_code: Option<String>,
+    /// WHO won, alongside the code (cron 2026-10-18). The stored row carries only `contact_id`,
+    /// which is useless to an operator holding a voucher at the counter: honouring a code means
+    /// knowing whose code it is. Joined in here so the Wins screen does not need N+1 reads.
+    pub contact_email: Option<String>,
+    pub contact_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -704,12 +709,15 @@ pub async fn list_wins(
 
     let wins: Vec<CampaignWinRow> = if query.redeemed_only.unwrap_or(false) {
         sqlx::query_as::<_, CampaignWinRow>(
-            r#"SELECT id, entry_id, contact_id, campaign_id, prize_id, prize_label,
-                      prize_type, streak_when_won, was_pity, redeemed, redeemed_at, created_at,
-                      redemption_code
-               FROM campaign_wins
-               WHERE campaign_id = $1 AND redeemed = true
-               ORDER BY created_at DESC
+            r#"SELECT w.id, w.entry_id, w.contact_id, w.campaign_id, w.prize_id, w.prize_label,
+                      w.prize_type, w.streak_when_won, w.was_pity, w.redeemed, w.redeemed_at,
+                      w.created_at, w.redemption_code,
+                      c.email AS contact_email,
+                      NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '') AS contact_name
+               FROM campaign_wins w
+               LEFT JOIN contacts c ON c.id = w.contact_id
+               WHERE w.campaign_id = $1 AND w.redeemed = true
+               ORDER BY w.created_at DESC
                LIMIT $2 OFFSET $3"#,
         )
         .bind(campaign.id)
@@ -719,12 +727,15 @@ pub async fn list_wins(
         .await?
     } else {
         sqlx::query_as::<_, CampaignWinRow>(
-            r#"SELECT id, entry_id, contact_id, campaign_id, prize_id, prize_label,
-                      prize_type, streak_when_won, was_pity, redeemed, redeemed_at, created_at,
-                      redemption_code
-               FROM campaign_wins
-               WHERE campaign_id = $1
-               ORDER BY created_at DESC
+            r#"SELECT w.id, w.entry_id, w.contact_id, w.campaign_id, w.prize_id, w.prize_label,
+                      w.prize_type, w.streak_when_won, w.was_pity, w.redeemed, w.redeemed_at,
+                      w.created_at, w.redemption_code,
+                      c.email AS contact_email,
+                      NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '') AS contact_name
+               FROM campaign_wins w
+               LEFT JOIN contacts c ON c.id = w.contact_id
+               WHERE w.campaign_id = $1
+               ORDER BY w.created_at DESC
                LIMIT $2 OFFSET $3"#,
         )
         .bind(campaign.id)
