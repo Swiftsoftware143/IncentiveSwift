@@ -760,6 +760,56 @@ function pbRender() {
     });
   }
 }
+function pbPlanName(slug) {
+  var list = PB.plans || [];
+  for (var i = 0; i < list.length; i++) { if ((list[i].slug || '') === slug) return list[i].name || slug; }
+  return slug || 'this';
+}
+// The upgrade request path (added 2026-10-18): a support ticket, the same path the admin console's
+// own Plan screen names. Nothing here promises a price change; the operator performs the switch.
+function pbAsk(slug, price, detail) {
+  var m = document.getElementById('pb-msg');
+  if (!m) return;
+  var name = pbPlanName(slug);
+  m.style.color = '#334155';
+  m.innerHTML = 'Checkout is not open for this workspace yet, so our team completes the switch for you.'
+    + ' <button class="btn btn-sm" id="pb-ask-btn" style="margin-left:6px">Request the '
+    + esc(name) + ' upgrade</button>';
+  var btn = document.getElementById('pb-ask-btn');
+  if (btn) btn.addEventListener('click', function () { pbRequest(slug, price, btn); });
+}
+function pbRequest(slug, price, btn) {
+  if (PB.busy) return;
+  PB.busy = true;
+  var name = pbPlanName(slug);
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending\u2026'; }
+  fetch(window.location.origin + '/api/v1/support-tickets', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, pbAuth()),
+    body: JSON.stringify({
+      subject: 'Upgrade request: ' + name + ' plan',
+      description: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from'
+        + ' the dashboard. Self-serve checkout is not open yet, so the switch has to be made by the team.',
+      priority: 'normal',
+      category: 'billing'
+    })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      PB.busy = false;
+      if (r.ok) {
+        pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.', 's');
+        return;
+      }
+      if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' upgrade'; }
+      pbMsg('The request could not be sent' + ((d && d.message) ? ': ' + d.message : ' (error ' + r.status + ')') + '. Please try again.', 'e');
+    });
+  }).catch(function (e) {
+    PB.busy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' upgrade'; }
+    pbMsg((e && e.message) || 'The request could not be sent.', 'e');
+  });
+}
 function pbUpgrade(slug, price, planId) {
   if (PB.busy) return;
   PB.busy = true;
@@ -790,6 +840,17 @@ function pbUpgrade(slug, price, planId) {
       // customer-facing line — the customer is not the person who adds keys, and a raw operator
       // instruction on their screen reads like something they broke.
       var detail = (d && d.message) ? (' ' + d.message) : '';
+      var code = (d && d.error) || '';
+      if (code === 'payment_provider_not_configured' || code === 'checkout_not_implemented') {
+        // NO SELF-SERVE CHECKOUT IS OPEN (measured live 2026-10-18: `payment_providers` holds 0
+        // rows, so every press answered 503 payment_provider_not_configured). A buy button that
+        // can only fail is the defect this console already retired elsewhere, and the console's
+        // own Plan screen sends upgrades to a Support Ticket ("we will switch you over"). So this
+        // page offers the SAME real path: one press files a billing ticket naming the plan, which
+        // lands in the operator's Support Tickets list.
+        pbAsk(slug, price, detail);
+        return;
+      }
       pbMsg('Upgrades are not open on this workspace yet.' + detail, 'e');
     });
   }).catch(function (e) { PB.busy = false; pbMsg((e && e.message) || 'Checkout could not start.', 'e'); });
