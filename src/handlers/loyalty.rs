@@ -170,7 +170,14 @@ pub async fn approve_reward(
         )));
     }
 
-    let approved_by = body.approved_by.and_then(|s| Uuid::parse_str(&s).ok());
+    // The actor is recorded even when the caller sends no `approved_by`: the account that
+    // performed the approval IS the identity this app holds (`accounts.id` is the id a token
+    // carries and the id `/auth/me` returns as `user.id`). Before, the console's button sent no
+    // body, so `approved_by` stayed NULL and a redemption carried no record of who settled it.
+    let approved_by = body
+        .approved_by
+        .and_then(|s| Uuid::parse_str(&s).ok())
+        .or(Some(account_id));
 
     // Update to approved
     loyalty::update_reward_status(&state.db, &reward_id, "approved", approved_by.as_ref()).await?;

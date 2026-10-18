@@ -1485,7 +1485,7 @@ const LoyaltyPrograms = () => {
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
     if (t==='Tiers') refreshTiers();
-    if (t==='Rewards') loadRewards();
+    if (t==='Rewards') { loadRewards(); loadEarned(); }
     if (t==='Pledges') loadPledges();
     if (t==='Referrals') loadReferrals();
     if (t==='Credits') loadCredits();
