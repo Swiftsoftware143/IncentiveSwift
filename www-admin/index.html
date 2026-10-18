@@ -716,7 +716,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' } });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -854,6 +854,27 @@ const Campaigns = () => {
       st.fields = list; st.fieldsSaved = 'Order saved';
       await loadFields();
     } catch (e) { st.fieldsErr = e.message; renderApp(); }
+  };
+
+  // ── Duplicate a campaign (cron 2026-10-18) ─────────────────────────────────────────────
+  // POST /api/v1/campaigns/<slug>/clone has existed with no button: an operator setting up a second
+  // promotion had to rebuild the theme, delivery config, prize pool and entry-form fields by hand.
+  // The copy lands as a DRAFT with a fresh tag namespace, so it is inert until the operator
+  // publishes it, and the entry-form fields now come with it (the server copies
+  // campaign_custom_fields too). Refusals are shown in the operator's own words — the 403 for a
+  // plan at its campaign cap says so, and says nothing about a broken button.
+  const cloneCampaign = async (item) => {
+    if (!confirm('Make a draft copy of "' + item.name + '"?')) return;
+    st.cloneMsg = ''; st.cloneErr = '';
+    try {
+      const d = await API.post('/campaigns/' + item.slug + '/clone');
+      const copy = (d && d.campaign) || {};
+      st.cloneMsg = 'Copied as "' + (copy.name || (item.name + ' (Copy)')) + '" — it is a draft, publish it when you are ready.';
+      await load();
+    } catch (e) {
+      st.cloneErr = e.message;
+      renderApp();
+    }
   };
 
   const createWidget = async () => {
@@ -1048,13 +1069,15 @@ const Campaigns = () => {
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
+    ${st.cloneMsg && html`<div class="text-xs mb-3" style="color:#15803d" id="cloneSaved">✓ ${st.cloneMsg}</div>`}
+    ${st.cloneErr && html`<div class="text-xs mb-3 text-red-500" id="cloneErr">${st.cloneErr}</div>`}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span></td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
       </tbody></table>

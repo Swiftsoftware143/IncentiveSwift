@@ -504,6 +504,32 @@ pub async fn clone_campaign(
     .execute(&state.db)
     .await?;
 
+    // The copy must carry the SOURCE's entry-form fields (cron 2026-10-18): they live in
+    // `campaign_custom_fields`, not in `campaigns.config`, so an INSERT of the campaign alone
+    // produced a clone that silently asked its customers for none of the questions the original
+    // asked. New row ids, the operator's own order and labels kept, and the expiry of the source's
+    // pointer decided per field — a clone is a new campaign, so nothing is shared between them.
+    // A failure here is not fatal to the clone: an operator who can see a campaign missing its
+    // extra questions can add them back, whereas a half-finished clone they cannot see is worse.
+    if let Err(e) = sqlx::query(
+        r#"INSERT INTO campaign_custom_fields
+                (id, campaign_id, field_key, field_label, field_type, sort_order, required, options)
+           SELECT gen_random_uuid(), $1, field_key, field_label, field_type, sort_order, required, options
+             FROM campaign_custom_fields WHERE campaign_id = $2"#,
+    )
+    .bind(new_id)
+    .bind(original.id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!(
+            campaign = %new_id,
+            source = %original.id,
+            error = %e,
+            "campaign cloned without its entry-form fields"
+        );
+    }
+
     let cloned = campaigns::get_campaign_by_slug(&state.db, &new_slug).await?;
     Ok(Json(json!({ "campaign": cloned })))
 }
