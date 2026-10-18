@@ -458,7 +458,15 @@ pub async fn me(
                   t.name as plan_name,
                   t.slug as plan_slug,
                   COALESCE((
-                      SELECT jsonb_object_agg(f.key, COALESCE(tf.limit_value, 0))
+                      -- An included BOOLEAN feature carries NO limit_value (the row is
+                      -- enabled=true, limit_value NULL), so the old COALESCE turned every one of
+                      -- them into 0 — i.e. /auth/me told the console that an Enterprise account
+                      -- (measured LIVE 2026-10-18: 25 such rows on that tier) had all_mechanics,
+                      -- custom_domains, white_label, widget_embed, delivery_webhook ... switched
+                      -- OFF while `tier_features.enabled` said otherwise. `1` is the map's "yes";
+                      -- a numeric feature keeps its own limit (-1 = unlimited), and a feature that
+                      -- is not enabled is still absent from the map entirely.
+                      SELECT jsonb_object_agg(f.key, CASE WHEN tf.limit_value IS NULL THEN 1 ELSE tf.limit_value END)
                       FROM tier_features tf
                       JOIN features f ON f.id = tf.feature_id
                       WHERE tf.tier_id = t.id AND tf.enabled
@@ -734,7 +742,15 @@ pub async fn update_profile(
                   t.name as plan_name,
                   t.slug as plan_slug,
                   COALESCE((
-                      SELECT jsonb_object_agg(f.key, COALESCE(tf.limit_value, 0))
+                      -- An included BOOLEAN feature carries NO limit_value (the row is
+                      -- enabled=true, limit_value NULL), so the old COALESCE turned every one of
+                      -- them into 0 — i.e. /auth/me told the console that an Enterprise account
+                      -- (measured LIVE 2026-10-18: 25 such rows on that tier) had all_mechanics,
+                      -- custom_domains, white_label, widget_embed, delivery_webhook ... switched
+                      -- OFF while `tier_features.enabled` said otherwise. `1` is the map's "yes";
+                      -- a numeric feature keeps its own limit (-1 = unlimited), and a feature that
+                      -- is not enabled is still absent from the map entirely.
+                      SELECT jsonb_object_agg(f.key, CASE WHEN tf.limit_value IS NULL THEN 1 ELSE tf.limit_value END)
                       FROM tier_features tf
                       JOIN features f ON f.id = tf.feature_id
                       WHERE tf.tier_id = t.id AND tf.enabled

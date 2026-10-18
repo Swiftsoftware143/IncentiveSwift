@@ -148,9 +148,31 @@ pub async fn list_leads(
 /// order; every row carries 0 today, so the price ladder decides.
 pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let rows = sqlx::query(
-        r#"SELECT id, name, slug, ROUND(price)::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description, features, NULL::text as how_it_works
-           FROM plans WHERE is_active = true
-           ORDER BY sort_order ASC NULLS LAST, price ASC NULLS LAST, name ASC"#,
+        r#"-- WHAT A PLAN INCLUDES is read from the canonical entitlement model, never from `plans.features`.
+           -- Measured LIVE 2026-10-18: this app's `plans.features` still carried FunnelSwift's
+           -- vocabulary ("basic_leads", "unlimited_leads", "advanced_tags", "dual_routing",
+           -- "multi_tenant"), so the tenant's Plan & Pricing screen advertised features this product
+           -- does not have — while the SAME screen's "your current plan" card listed the real
+           -- IncentiveSwift keys from /auth/me (mechanic_quiz, mechanic_spin_wheel, ...) — two halves
+           -- of one screen contradicting each other. The entitlement model is
+           -- `plan_tiers` -> `tier_features` -> `features`, the same tables every runtime gate reads
+           -- (features.rs), joined here by slug. The legacy array stays as the fallback for a `plans`
+           -- row whose slug has no tier.
+           SELECT p.id, p.name, p.slug, ROUND(p.price)::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description,
+                  COALESCE((
+                      SELECT jsonb_agg(CASE WHEN tf.limit_value IS NULL THEN f.label
+                                            WHEN tf.limit_value < 0 THEN f.label
+                                                 || CASE WHEN f.label ILIKE 'Unlimited%' THEN '' ELSE ' - unlimited' END
+                                            ELSE f.label || ' - ' || tf.limit_value::text END
+                                       ORDER BY f.category NULLS LAST, f.label)
+                      FROM plan_tiers pt
+                      JOIN tier_features tf ON tf.tier_id = pt.id AND tf.enabled
+                      JOIN features f ON f.id = tf.feature_id
+                      WHERE lower(pt.slug) = lower(p.slug)
+                  ), p.features) as features,
+                  NULL::text as how_it_works
+           FROM plans p WHERE p.is_active = true
+           ORDER BY p.sort_order ASC NULLS LAST, p.price ASC NULLS LAST, p.name ASC"#,
     ).fetch_all(&state.db).await?;
     let mut plans: Vec<Value> = Vec::new();
     for row in &rows {
