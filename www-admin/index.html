@@ -4623,6 +4623,10 @@ const ProfileView = () => {
     nameDraft: null, companyDraft: null,
     avMsg: '', avKind: 'info', pwMsg: '', pwKind: 'info',
     np: '', np2: '', cp: '',
+    // Sign-in address change (kanban t_6b2702e3): the typed address, and the sentence the server
+    // hands back after a request. `delivered:false` means the address is a reserved test address,
+    // so the message says "no mail was sent" rather than "check your inbox".
+    newEmail: '', mailMsg: '', mailKind: 'info', mailBusy: false,
   });
 
   // ONE reader of the profile: /auth/me. It also feeds the sidebar header (`S.me`), so the name,
@@ -4642,6 +4646,8 @@ const ProfileView = () => {
     (st.avKind === 'err' ? '#dc2626' : (st.avKind === 'ok' ? '#059669' : '#64748b'));
   const pwMsgStyle = 'margin-left:8px;font-size:12px;color:' +
     (st.pwKind === 'err' ? '#dc2626' : (st.pwKind === 'ok' ? '#059669' : '#64748b'));
+  const mailMsgStyle = 'margin-left:8px;font-size:12px;color:' +
+    (st.mailKind === 'err' ? '#dc2626' : (st.mailKind === 'ok' ? '#059669' : '#64748b'));
 
   const saveProfile = async () => {
     const n = String(st.nameDraft == null ? (me.name || '') : st.nameDraft).trim();
@@ -4660,6 +4666,29 @@ const ProfileView = () => {
       st.savedErr = false; st.saved = 'Saved';
     } catch (e) { st.savedErr = true; st.saved = e.message || 'Could not save'; }
     st.saving = false; renderApp();
+  };
+
+  // A customer who changes company, or whose domain changes, has no way to move their SIGN-IN
+  // address: the field above is read-only. Two sibling apps (FunnelSwift, WorkflowSwift) already
+  // ship the two-arm flow, so this is the same contract, not a new one — POST the new address, the
+  // server mails a link to it, and `accounts.email` moves only when that link is opened. Nothing is
+  // disabled while a request is pending: the customer can retype and resend, and the server retires
+  // the previous link when it does.
+  const requestEmailChange = async () => {
+    const v = String(st.newEmail || '').trim();
+    const cur = String(me.email || '').toLowerCase();
+    if (!v) { st.mailKind = 'err'; st.mailMsg = 'Enter the address you want to sign in with'; renderApp(); return; }
+    if (v.toLowerCase() === cur) { st.mailKind = 'err'; st.mailMsg = 'That is already your sign-in address'; renderApp(); return; }
+    st.mailBusy = true; st.mailKind = 'info'; st.mailMsg = 'Sending…'; renderApp();
+    try {
+      const d = await API.post('/auth/email-change', { new_email: v });
+      // `delivered:false` is the reserved-test-address arm: the request was recorded but no mail
+      // was sent. That is information, not a success — colour it neutral and say so.
+      st.mailKind = (d && d.delivered === false) ? 'info' : 'ok';
+      st.mailMsg = (d && d.message) || 'Check the new address for a confirmation link.';
+      if (!d || d.delivered !== false) st.newEmail = '';
+    } catch (e) { st.mailKind = 'err'; st.mailMsg = e.message || 'Could not send the confirmation link'; }
+    st.mailBusy = false; renderApp();
   };
 
   const uploadAvatar = async () => {
@@ -4766,7 +4795,14 @@ const ProfileView = () => {
       <div class="mb-3">
         <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-email">Email</label>
         <input class="input" id="pf-email" value=${me.email || ''} disabled style="background:#f8fafc;color:#94a3b8" />
-        <p class="text-xs text-gray-400" style="margin-top:4px">Your sign-in address cannot be changed here.</p>
+        <p class="text-xs text-gray-400" style="margin-top:4px">This is the address you sign in with.</p>
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-newmail">Change sign-in email</label>
+          <input class="input" id="pf-newmail" type="email" autocomplete="email" value=${st.newEmail || ''} onInput=${e => { st.newEmail = e.target.value; }} placeholder="you@yourcompany.com" />
+          <p class="text-xs text-gray-400" style="margin:4px 0 6px">We send a confirmation link to the NEW address. Nothing changes until you open it — your current address keeps working.</p>
+          <button class="btn btn-sm" onClick=${requestEmailChange} disabled=${st.mailBusy}>${st.mailBusy ? 'Sending…' : 'Send confirmation link'}</button>
+          <span style=${mailMsgStyle}>${st.mailMsg}</span>
+        </div>
       </div>
       <button class="btn" onClick=${saveProfile} disabled=${st.saving}>${st.saving ? 'Saving…' : 'Save'}</button>
       <span style=${'margin-left:8px;font-size:12px;color:' + (st.savedErr ? '#dc2626' : '#059669')}>${st.saved}</span>

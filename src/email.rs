@@ -167,6 +167,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         "welcome" | "welcome_credentials" => format!("Welcome to {}!", app_name),
         "purchase_confirmed" => "Payment Received — Thank You!".to_string(),
         "password_reset" => "Password Reset Request".to_string(),
+        // The sign-in address change (kanban t_6b2702e3). Named for what the recipient must DO,
+        // because the account has not moved yet — the link is the only thing that moves it.
+        "email_change" => "Confirm your new sign-in email".to_string(),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -225,6 +228,26 @@ async fn send_inline(
                 token, app_url, token, app_url, app_name
             );
             Ok(("Password Reset Request".to_string(), body, String::new()))
+        }
+        // The inline safety net for the sign-in address change (kanban t_6b2702e3) — reached when
+        // the account has no `email_change` template row. Two things the customer must be told, and
+        // both were learned from the reset mail's own history: WHERE to click (a link, not a code),
+        // and that NOTHING HAS CHANGED YET (the old address stays valid until the link is opened).
+        "email_change" => {
+            let new_email = vars
+                .get("new_email")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(the new address)");
+            let link = vars.get("link").and_then(|v| v.as_str()).unwrap_or(app_url);
+            let body = format!(
+                "Hi {},\n\nWe received a request to change the email address you sign in to {} with, to:\n\n    {}\n\nTo confirm, open this link:\n\n    {}\n\nThe link works once and expires in 2 hours. Until you open it, nothing changes: your current address still works and your password stays the same. If you did not ask for this, ignore this email and nothing will happen.\n\n- The {} Team",
+                name, app_name, new_email, link, app_name
+            );
+            Ok((
+                "Confirm your new sign-in email".to_string(),
+                body,
+                String::new(),
+            ))
         }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);

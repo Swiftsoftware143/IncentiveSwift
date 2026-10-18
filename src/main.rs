@@ -881,6 +881,20 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/reset-password",
             post(crate::handlers::auth_handler::reset_password),
         )
+        // Sign-in address change (kanban t_6b2702e3). Two arms on purpose: the REQUEST is an
+        // authenticated act on the caller's own account and stays behind the auth layer, while the
+        // CONFIRM is opened from a mailbox and therefore carries no session — its token IS the
+        // credential, and `/api/v1/auth/email-change/confirm` is listed in
+        // `security::route_policy::PUBLIC_ROUTES` for exactly that reason (the REQUEST twin above is
+        // NOT, and must never be).
+        .route(
+            "/api/v1/auth/email-change",
+            post(crate::handlers::auth_handler::request_email_change),
+        )
+        .route(
+            "/api/v1/auth/email-change/confirm",
+            post(crate::handlers::auth_handler::confirm_email_change),
+        )
         // Admin endpoints (cross-app portfolio sync + impersonation)
         .route(
             "/api/v1/admin/portfolio-sync",

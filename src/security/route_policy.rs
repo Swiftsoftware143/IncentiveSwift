@@ -91,6 +91,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/auth/login",
     "/api/v1/auth/forgot-password",
     "/api/v1/auth/reset-password",
+    // The sign-in address change's CONFIRMATION arm (kanban t_6b2702e3). Anonymous by necessity:
+    // the customer opens the link from a mailbox, in a browser that carries no session, and the
+    // token in the body IS the credential — it reads one unexpired `email_changes` row, moves that
+    // row's OWN `accounts.email` and nothing else, then marks the row used. The REQUEST twin
+    // (`POST /api/v1/auth/email-change`) is NOT here and must never be: asking to move an address is
+    // an authenticated act on the caller's own account.
+    "/api/v1/auth/email-change/confirm",
     "/api/v1/business/register",
     // --- public catalogues ------------------------------------------------------
     "/api/v1/plans",
