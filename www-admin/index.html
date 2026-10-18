@@ -326,12 +326,14 @@ const Dashboard = () => {
   }
   return html`<div>
     <h2 class="text-xl font-bold mb-4">Dashboard</h2>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <div class="stat-card"><div class="stat-value">${st.total_plans ?? '...'}</div><div class="stat-label">Plans</div></div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
       <div class="stat-card"><div class="stat-value">${st.total_campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
-      <div class="stat-card"><div class="stat-value">${st.total_programs ?? '...'}</div><div class="stat-label">Loyalty Programs</div></div>
-      <div class="stat-card"><div class="stat-value">${st.total_users ?? '...'}</div><div class="stat-label">Users</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_participants ?? '...'}</div><div class="stat-label">Participants</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_entries ?? '...'}</div><div class="stat-label">Entries</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_points ?? '...'}</div><div class="stat-label">Points Awarded</div></div>
+      <div class="stat-card"><div class="stat-value">${st.total_rewards ?? '...'}</div><div class="stat-label">Rewards</div></div>
     </div>
+    <p class="text-xs text-gray-500 mt-4">Every figure is this account's own activity.</p>
   </div>`;
 };
 
