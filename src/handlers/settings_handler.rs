@@ -148,6 +148,28 @@ pub async fn get_settings(
         settings.push(json!({ "key": key, "value": value }));
     }
 
+    // A branding `logo_url` is a POINTER into `tenant_logos`, and the console renders it as the
+    // brand thumbnail while every sender embeds it in the mail header. When the bytes are gone the
+    // URL must not be advertised: the pointer and the row are written by different paths, so a row
+    // removed on its own (restore, hand-run DELETE, residue sweep) would otherwise leave a broken
+    // image in both places. Same invariant `crate::branding::load` holds for the senders.
+    if let Some(entry) = settings
+        .iter_mut()
+        .find(|s| s.get("key").and_then(Value::as_str) == Some(crate::branding::SETTINGS_KEY))
+    {
+        let points_at_logo = entry
+            .get("value")
+            .and_then(|v| v.get("logo_url"))
+            .and_then(Value::as_str)
+            .map(|u| !u.trim().is_empty())
+            .unwrap_or(false);
+        if points_at_logo && !crate::branding::logo_exists(&state.db, account_id).await {
+            if let Some(obj) = entry.get_mut("value").and_then(Value::as_object_mut) {
+                obj.insert("logo_url".to_string(), json!(""));
+            }
+        }
+    }
+
     Ok(Json(json!({ "settings": settings })))
 }
 

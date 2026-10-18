@@ -103,6 +103,24 @@ impl Branding {
         }
     }
 
+    /// Drop a `logo_url` whose bytes are not in `tenant_logos`, and answer `None` when that leaves
+    /// nothing to render with.
+    ///
+    /// The pointer is stored in this jsonb document while the bytes live in another table, so
+    /// anything that removes the row without rewriting the document (a restore, a hand-run DELETE,
+    /// a residue sweep) leaves the account advertising a logo that answers 404: a broken header
+    /// image in every mail it sends and a broken thumbnail on its Settings screen. The read path is
+    /// the last place that can hold the invariant, so both readers call this.
+    pub fn without_missing_logo(mut self, logo_exists: bool) -> Option<Branding> {
+        if !logo_exists {
+            self.logo_url.clear();
+        }
+        if self.brand_name.is_empty() && self.logo_url.is_empty() {
+            return None;
+        }
+        Some(self)
+    }
+
     /// The header block that opens every rendered HTML mail, or `""` for a tenant with no branding.
     ///
     /// Inline styles only, no external assets, no `<style>` block: mail clients strip or ignore all
@@ -147,23 +165,42 @@ impl Branding {
 ///
 /// A read failure is NOT fatal to a send: an email that cannot read its branding still goes out with
 /// the app's own identity, exactly as every mail did before this module existed.
+///
+/// ONE round trip fetches the document AND whether its logo's bytes are actually present: a pointer
+/// whose `tenant_logos` row is gone must never be rendered (see [`Branding::without_missing_logo`]).
 pub async fn load(pool: &PgPool, tenant_id: Uuid) -> Option<Branding> {
-    let stored: Option<Value> =
-        sqlx::query_scalar("SELECT value FROM tenant_settings WHERE tenant_id = $1 AND key = $2")
-            .bind(tenant_id)
-            .bind(SETTINGS_KEY)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    tenant = %tenant_id,
-                    error = %e,
-                    "email branding could not be read — sending with the app's own identity"
-                );
-                None
-            });
+    let stored: Option<(Value, bool)> = sqlx::query_as(
+        "SELECT s.value, EXISTS (SELECT 1 FROM tenant_logos l WHERE l.tenant_id = s.tenant_id)
+           FROM tenant_settings s WHERE s.tenant_id = $1 AND s.key = $2",
+    )
+    .bind(tenant_id)
+    .bind(SETTINGS_KEY)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            tenant = %tenant_id,
+            error = %e,
+            "email branding could not be read — sending with the app's own identity"
+        );
+        None
+    });
     // An unreadable row means "unbranded" here: `?` on the Option, not on the read error.
-    Branding::from_value(stored.as_ref()?)
+    let (doc, logo_exists) = stored?;
+    Branding::from_value(&doc).and_then(|b| b.without_missing_logo(logo_exists))
+}
+
+/// Whether this tenant actually HAS logo bytes in `tenant_logos`.
+///
+/// The console's settings read uses this to keep the same invariant [`load`] enforces for the
+/// senders. A read failure answers `false` (fail closed): the worse outcome by far is advertising a
+/// URL that renders as a broken image in every mail the account sends.
+pub async fn logo_exists(pool: &PgPool, tenant_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM tenant_logos WHERE tenant_id = $1)")
+        .bind(tenant_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false)
 }
 
 /// Validate an incoming `email_branding` document, for the settings write.
@@ -264,6 +301,28 @@ mod tests {
         assert_eq!(Branding::from_value(&json!({"brand_color": "#fff"})), None);
         assert!(Branding::from_value(&json!({"logo_url": "/x.png"})).is_some());
         assert!(Branding::from_value(&json!({"brand_name": "Acme"})).is_some());
+    }
+
+    #[test]
+    fn a_missing_logo_row_is_not_advertised() {
+        // The pointer lives in the settings document, the bytes in `tenant_logos`. When only the row
+        // is gone the account must fall back to its name — or to no header at all — instead of
+        // embedding a URL that answers 404 in every mail.
+        let gone = b("Acme", "", "/api/v1/branding/logo/abc?v=7")
+            .without_missing_logo(false)
+            .expect("the name still renders");
+        assert_eq!(gone.logo_url, "");
+        assert_eq!(gone.resolve_logo_url("https://x"), None);
+        assert!(!gone.header_html(None).contains("<img"));
+
+        // nothing but the pointer: no branding at all, so no header block
+        assert_eq!(b("", "", "/logo.png").without_missing_logo(false), None);
+
+        // the row IS there: untouched
+        let kept = b("Acme", "", "/logo.png")
+            .without_missing_logo(true)
+            .expect("configured");
+        assert_eq!(kept.logo_url, "/logo.png");
     }
 
     #[test]
