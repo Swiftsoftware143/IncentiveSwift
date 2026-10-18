@@ -1355,12 +1355,15 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
-  if (!st._loaded) { st._loaded = true; loadPrograms(); }
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
+  if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
   async function loadTiers(progId) { if (!progId) { st.tiers = []; st.tierErr = ''; renderApp(); return; } try { const data = await API.get('/loyalty/tiers?program_id='+encodeURIComponent(progId)); st.tiers = data.tiers||[]; st.tierErr=''; renderApp(); } catch(e){ st.tiers=[]; st.tierErr=(e && e.message) || String(e); renderApp(); } }
   async function loadRewards() { try { const data = await API.get('/loyalty/rewards'); st.rewards = data.rewards||[]; renderApp(); } catch(e){ st.rewards=[]; } }
+  // The redemptions themselves — a different reader from the tier catalogue above. A failure here
+  // must be VISIBLE (a blank list and a broken route look identical otherwise).
+  async function loadEarned() { try { const d = await API.get('/loyalty/rewards/earned'); st.earned = Array.isArray(d.earned)?d.earned:[]; st.earnedPending = d.pending||0; st.earnedErr=''; renderApp(); } catch(e){ st.earned=[]; st.earnedPending=0; st.earnedErr=(e&&e.message)||String(e); renderApp(); } }
   async function loadPledges() { try { const data = await API.get('/admin/pledges'); st.pledges = data.pending_pledges||[]; renderApp(); } catch(e){ st.pledges=[]; } }
   async function loadReferrals() { st.refLoading = true; renderApp(); try { const data = await API.get('/loyalty/referrals'); st.referrals = data.referrals||[]; st.referralCount = data.referral_count||0; st.referralCode = data.code||null; st.refLoading=false; renderApp(); } catch(e){ st.referrals=[]; st.refLoading=false; renderApp(); } }
   async function loadCredits() { try { const data = await API.get('/credits/balance'); const hist = await API.get('/credits/history'); st.credits = {balance:data,history:hist.transactions||hist||[]}; renderApp(); } catch(e){ st.credits={balance:{},history:[]}; } }
@@ -1576,18 +1579,52 @@ const LoyaltyPrograms = () => {
   </div>`;
 
   // ── Rewards Tab ──
+  // TWO different things, kept apart on purpose. `st.earned` is a real redemption: a member spent
+  // points, the row carries a status, and a tier that `requires_approval` waits here for the
+  // operator to approve or deny. `st.rewards` is the TIER CATALOGUE — what a member can redeem for.
+  // The tab used to render the catalogue under the heading "Rewards Earned", so every row read
+  // `pending`, the member read `?` and the date read "Invalid Date", and a real redemption could be
+  // neither approved nor denied from this panel although both routes existed (kanban t_ae0f4ef2).
+  const moderateReward = async (id, action) => {
+    const verb = action === 'approve' ? 'Approve' : 'Deny';
+    if (!confirm(verb + ' this redemption?')) return;
+    try { await API.post('/loyalty/rewards/' + id + '/' + action, {}); await loadEarned(); loadRewards(); }
+    catch (e) { alert('Could not ' + verb.toLowerCase() + ' it: ' + ((e && e.message) || e)); }
+  };
   const rewardsTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Rewards Earned</h2><span class="text-sm text-gray-500">${st.rewards.length} total</span></div>
-    <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Member</th><th>Reward</th><th>Points Spent</th><th>Status</th><th>Earned</th></tr></thead>
-        <tbody>${st.rewards.map(r => html`<tr>
-          <td>${r.member_id||r.contact_id||'?'}</td>
-          <td>${r.reward_tier_id||r.name||'?'}</td>
-          <td>${r.points_spent||0}</td>
+    <div class="flex items-center justify-between mb-3">
+      <div><h2 class="text-xl font-bold">Rewards Earned</h2>
+        <p class="text-sm text-gray-500">Points a member has spent. A reward whose tier needs approval waits here until you approve or deny it.</p></div>
+      <span class="text-sm text-gray-500">${st.earned.length} total${st.earnedPending ? ' · ' + st.earnedPending + ' waiting for you' : ''}</span>
+    </div>
+    ${st.earnedErr ? html`<div class="card mb-4 text-sm" style="border-left:4px solid #dc2626;padding:10px 14px;color:#991b1b">Could not load redemptions: ${st.earnedErr}</div>` : null}
+    <div class="card p-0 overflow-hidden mb-6">
+      <table class="table"><thead><tr><th>Member</th><th>Reward</th><th>Program</th><th>Points</th><th>Status</th><th>Earned</th><th>Actions</th></tr></thead>
+        <tbody>${st.earned.map(r => html`<tr>
+          <td>${r.member_name || r.member_email || 'Member'}</td>
+          <td>${r.tier_name || '?'}</td>
+          <td class="text-sm text-gray-500">${r.program_name || '—'}</td>
+          <td>${r.points == null ? '—' : r.points}</td>
           <td><span class="badge ${r.status==='approved'?'badge-green':r.status==='pending'?'badge-yellow':'badge-red'}">${r.status||'pending'}</span></td>
-          <td>${new Date(r.created_at||r.earned_at).toLocaleDateString()}</td>
+          <td>${r.earned_at ? new Date(r.earned_at).toLocaleDateString() : '—'}</td>
+          <td class="text-right">${r.status==='pending' ? html`<button class="text-green-600 text-sm mr-2" onClick=${() => moderateReward(r.id,'approve')}>Approve</button><button class="text-red-600 text-sm" onClick=${() => moderateReward(r.id,'deny')}>Deny</button>` : null}</td>
         </tr>`)}
-        ${st.rewards.length===0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No rewards earned yet.</td></tr>`}
+        ${st.earned.length===0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No redemptions yet. A member appears here when they spend points on a reward that needs your approval.</td></tr>`}
+      </tbody></table>
+    </div>
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-lg font-semibold">Reward tiers</h3>
+      <span class="text-sm text-gray-500">What a member can redeem for</span>
+    </div>
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Reward</th><th>Program</th><th>Points</th><th>Approval</th></tr></thead>
+        <tbody>${st.rewards.map(t => html`<tr>
+          <td>${t.name || '?'}</td>
+          <td class="text-sm text-gray-500">${t.program_name || '—'}</td>
+          <td>${t.cost == null ? '—' : t.cost}</td>
+          <td>${t.requires_approval ? html`<span class="badge badge-yellow">Needs approval</span>` : html`<span class="badge badge-green">Auto</span>`}</td>
+        </tr>`)}
+        ${st.rewards.length===0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No reward tiers yet.</td></tr>`}
       </tbody></table>
     </div>
   </div>`;

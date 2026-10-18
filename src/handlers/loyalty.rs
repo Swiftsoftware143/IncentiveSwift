@@ -106,6 +106,34 @@ pub async fn checkin(
     }
 }
 
+/// Does this redemption belong to the caller's account?
+///
+/// The chain is `loyalty_rewards_earned -> loyalty_reward_tiers -> loyalty_programs`, and a programme
+/// belongs to an account either directly (`loyalty_programs.account_id`) or through the campaign it
+/// runs on (`campaigns.account_id`). Both arms are accepted because both are how a programme is
+/// created; nothing else is.
+async fn reward_belongs_to_account(
+    db: &sqlx::PgPool,
+    reward_id: &Uuid,
+    account_id: &Uuid,
+) -> Result<bool, AppError> {
+    let owned = sqlx::query_scalar::<_, bool>(
+        r#"SELECT EXISTS(
+               SELECT 1
+                 FROM loyalty_rewards_earned lre
+                 JOIN loyalty_reward_tiers lrt ON lrt.id = lre.tier_id
+                 JOIN loyalty_programs lp ON lp.id = lrt.program_id
+                 LEFT JOIN campaigns c ON c.id = lp.campaign_id
+                WHERE lre.id = $1
+                  AND (lp.account_id = $2 OR c.account_id = $2))"#,
+    )
+    .bind(reward_id)
+    .bind(account_id)
+    .fetch_one(db)
+    .await?;
+    Ok(owned)
+}
+
 /// Body for approving a reward.
 #[derive(Deserialize)]
 pub struct ApproveBody {
@@ -121,6 +149,16 @@ pub async fn approve_reward(
 ) -> Result<Json<Value>, AppError> {
     let reward_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
+
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // SECURITY: knowing a reward id must not authorise the write. A redemption belongs to a
+    // programme, so the caller's own account must own that programme (directly or through its
+    // campaign). Graded 404, never 403 — a 403 would confirm the row exists to a stranger.
+    if !reward_belongs_to_account(&state.db, &reward_id, &account_id).await? {
+        return Err(AppError::NotFound("Reward not found".to_string()));
+    }
 
     // Get reward
     let reward = loyalty::get_reward(&state.db, &reward_id).await?;
@@ -221,6 +259,16 @@ pub async fn deny_reward(
 ) -> Result<Json<Value>, AppError> {
     let reward_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid reward ID".to_string()))?;
+
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // SECURITY: knowing a reward id must not authorise the write. A redemption belongs to a
+    // programme, so the caller's own account must own that programme (directly or through its
+    // campaign). Graded 404, never 403 — a 403 would confirm the row exists to a stranger.
+    if !reward_belongs_to_account(&state.db, &reward_id, &account_id).await? {
+        return Err(AppError::NotFound("Reward not found".to_string()));
+    }
 
     // Get reward
     let reward = loyalty::get_reward(&state.db, &reward_id).await?;

@@ -336,6 +336,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/rewards",
             get(handlers::loyalty_v2::get_rewards),
         )
+        // The account's own redemptions (pending first). Static segment, so it cannot be confused
+        // with `/loyalty/rewards/:id/approve` — a different path length entirely.
+        .route(
+            "/api/v1/loyalty/rewards/earned",
+            get(handlers::loyalty_v2::list_account_rewards_earned),
+        )
         // GET /api/v1/loyalty/vouchers, GET /api/v1/loyalty/my-vouchers/:contact_id and
         // POST /api/v1/loyalty/claim-voucher were RETIRED here (kanban t_30dfc98c), together with
         // their handlers (`loyalty_v2::get_vouchers` / `list_my_vouchers` / `claim_voucher` +

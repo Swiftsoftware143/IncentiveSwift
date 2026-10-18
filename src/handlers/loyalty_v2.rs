@@ -696,6 +696,86 @@ pub async fn get_rewards(
     })))
 }
 
+/// GET /api/v1/loyalty/rewards/earned — the caller's OWN redemptions, pending first.
+///
+/// Why this exists (kanban t_ae0f4ef2): the operator console's "Rewards Earned" tab read
+/// `GET /loyalty/rewards`, which returns the reward-TIER catalogue. Every row therefore showed
+/// `pending` (a tier has no status), the member column showed `?` (a tier has no member) and the
+/// Earned column showed "Invalid Date" — and a real redemption could be neither approved nor
+/// denied from the panel, even though `POST /loyalty/rewards/:id/{approve,deny}` both existed.
+/// Scoped exactly like `list_rewards_earned`: the programme must belong to the caller's account,
+/// directly or through its campaign. No role bypass is invented.
+pub async fn list_account_rewards_earned(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+
+    #[derive(sqlx::FromRow)]
+    struct EarnedRow {
+        id: Uuid,
+        member_name: Option<String>,
+        member_email: Option<String>,
+        tier_name: String,
+        points: i32,
+        status: String,
+        earned_at: Option<chrono::DateTime<chrono::Utc>>,
+        requires_approval: bool,
+        program_name: String,
+    }
+
+    let rows = sqlx::query_as::<_, EarnedRow>(
+        r#"SELECT lre.id,
+                  NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), '') AS member_name,
+                  c.email AS member_email,
+                  lrt.name AS tier_name,
+                  lrt.points_required AS points,
+                  COALESCE(lre.status, 'pending') AS status,
+                  lre.earned_at,
+                  COALESCE(lrt.requires_approval, false) AS requires_approval,
+                  lp.name AS program_name
+             FROM loyalty_rewards_earned lre
+             JOIN loyalty_reward_tiers lrt ON lrt.id = lre.tier_id
+             JOIN loyalty_programs lp ON lp.id = lrt.program_id
+             LEFT JOIN loyalty_members lm ON lm.id = lre.member_id
+             LEFT JOIN contacts c ON c.id = lm.contact_id
+            WHERE lp.account_id = $1
+               OR EXISTS (SELECT 1 FROM campaigns camp
+                           WHERE camp.id = lp.campaign_id AND camp.account_id = $1)
+            ORDER BY (COALESCE(lre.status, 'pending') = 'pending') DESC,
+                     lre.earned_at DESC NULLS LAST
+            LIMIT 200"#,
+    )
+    .bind(account_id)
+    .fetch_all(&s.db)
+    .await?;
+
+    let pending = rows.iter().filter(|r| r.status == "pending").count();
+    let list: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "member_name": r.member_name,
+                "member_email": r.member_email,
+                "tier_name": r.tier_name,
+                "program_name": r.program_name,
+                "points": r.points,
+                "status": r.status,
+                "earned_at": r.earned_at,
+                "requires_approval": r.requires_approval,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "earned": list,
+        "count": list.len(),
+        "pending": pending,
+    })))
+}
+
 // ── Account voucher listing (retired) ──
 //
 // `get_vouchers` (GET /api/v1/loyalty/vouchers) was RETIRED here (kanban t_30dfc98c), together
