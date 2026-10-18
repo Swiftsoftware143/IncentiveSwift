@@ -18,7 +18,7 @@
 //! | `ticket_number` | the entry's own reference (`entries.id`, first 8 hex, uppercased) — the platform has no OTHER ticket number |
 //! | `user_score`    | the score the CALLER supplied (`entries.score`); never invented             |
 //! | `prize_name`    | the contact's own `campaign_wins.prize_label` in this campaign -> the entry's `answers` (`prize_label` / `reward.label`) -> `campaigns.config->>'prize_name'` |
-//! | `reward_code`   | the same win's `redemption_code` -> the entry's `answers->>'redemption_code'` |
+//! | `reward_code`   | the same win's `redemption_code` -> the entry's `answers->>'redemption_code'` -> `campaigns.config` (`reward_code` / `redemption_code` / `prize_code`) |
 //! | `share_link` / `referral_link` | the campaign's public play URL — the same link the console's own "Direct Link" shows (`{origin}/play/{slug}`) |
 //!
 //! A key whose value does not exist is **not inserted**, so the placeholder stays in the
@@ -252,6 +252,33 @@ fn config_prize_label(campaign: &Campaign) -> String {
     String::new()
 }
 
+/// `campaigns.config` fallbacks for a reward CODE — the twin of [`config_prize_label`].
+///
+/// A prize that comes from the campaign config has no code of its own: the mechanics mint one PER
+/// WIN (`spin_handler::generate_redemption_code` -> `campaign_wins.redemption_code`), and that is
+/// the code the voucher has always shown. But a tenant can also run one campaign-wide promo code
+/// (a counter code, a discount), and the only place a config prize could carry it is the config.
+/// Binding it here is what stops a real, tenant-issued code from being dropped just because there
+/// is no win row to read it from (kanban t_cdc24339).
+///
+/// The voucher's code sentence is itself optional (`{{#if reward_code}}`), so a config prize with
+/// NO code of any kind now says "You won <prize> on <campaign>!" instead of promising a code.
+fn config_reward_code(campaign: &Campaign) -> String {
+    for ptr in [
+        "/reward_code",
+        "/redemption_code",
+        "/prize_code",
+        "/reward/code",
+    ] {
+        if let Some(v) = campaign.config.pointer(ptr).and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                return v.trim().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
 /// Prize label + reward code for this contact in this campaign, best-effort.
 ///
 /// The win row is the exact artifact the app writes when a mechanic awards something
@@ -293,6 +320,9 @@ async fn resolve_prize_fields(
     }
     if code.is_empty() {
         code = answer_str(answers, &["redemption_code", "reward_code", "code"]);
+    }
+    if code.is_empty() {
+        code = config_reward_code(campaign);
     }
 
     if !label.is_empty() {
@@ -455,6 +485,59 @@ mod tests {
                 "score-shaped follow-up '{name}' is NO arm's follow-up, so this list is dead code"
             );
         }
+    }
+
+    /// The measured defect (kanban t_cdc24339): a prize that comes from the campaign config has no
+    /// redemption code (codes are minted per `campaign_wins` row), so the shipped voucher must not
+    /// promise one — while a winner who DOES have a code still reads exactly the sentence it always
+    /// did. The two template strings are the shipped rows' own bytes after
+    /// `zz_is17_voucher_code_clause_is_conditional.sql`.
+    #[test]
+    fn the_voucher_promises_a_code_only_when_the_entry_has_one() {
+        let voucher = "You won {{prize_name}} on {{campaign_name}}!\
+                       {{#if reward_code}} Code: {{reward_code}}.{{/if}}";
+        let code_free =
+            serde_json::json!({"prize_name": "Free coffee", "campaign_name": "Probe spin"});
+        assert_eq!(
+            crate::delivery::sender::render_template(voucher, &code_free),
+            "You won Free coffee on Probe spin!",
+            "a code-less prize must not leave a literal placeholder (or an empty \"Code: .\")"
+        );
+        let coded = serde_json::json!({
+            "prize_name": "Free coffee",
+            "campaign_name": "Probe spin",
+            "reward_code": "REDEEM-AB12CD34",
+        });
+        assert_eq!(
+            crate::delivery::sender::render_template(voucher, &coded),
+            "You won Free coffee on Probe spin! Code: REDEEM-AB12CD34.",
+            "a winner WITH a code keeps the shipped sentence unchanged"
+        );
+
+        // The scratch arm's twin row is exposed the same way and gets the same treatment.
+        let scratch = "You won {{prize_name}}!{{#if reward_code}} Code: {{reward_code}}.{{/if}}";
+        assert_eq!(
+            crate::delivery::sender::render_template(
+                scratch,
+                &serde_json::json!({"prize_name": "Free coffee"})
+            ),
+            "You won Free coffee!"
+        );
+        assert_eq!(
+            crate::delivery::sender::render_template(
+                scratch,
+                &serde_json::json!({"prize_name": "Free coffee", "reward_code": "REDEEM-99"})
+            ),
+            "You won Free coffee! Code: REDEEM-99."
+        );
+
+        // The HTML body's code line is the same conditional, so the wire carries no <p>Code: </p>.
+        let html = "<h2>You won!</h2><p>Prize: <b>{{prize_name}}</b></p>\
+                    {{#if reward_code}}<p>Code: <b>{{reward_code}}</b></p>{{/if}}";
+        assert_eq!(
+            crate::delivery::sender::render_template(html, &code_free),
+            "<h2>You won!</h2><p>Prize: <b>Free coffee</b></p>"
+        );
     }
 
     /// A prize-claiming stage-1 row goes only to an entry that actually won something

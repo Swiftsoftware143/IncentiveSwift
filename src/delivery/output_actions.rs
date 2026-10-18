@@ -300,9 +300,11 @@ fn build_entry_payload<'a>(
 /// Simple template rendering: replace {{key}} with values from payload
 ///
 /// Double braces ONLY (the advertised vocabulary, `GET /api/v1/email-templates/merge-fields`);
-/// a leftover placeholder is logged by name instead of going out as copy — kanban t_e43521d2.
+/// `{{#if key}}…{{/if}}` sections are resolved first so a row can carry an optional clause
+/// (kanban t_cdc24339). A leftover placeholder is logged by name instead of going out as copy —
+/// kanban t_e43521d2.
 fn render_template(template: &str, payload: &Value) -> String {
-    let mut result = template.to_string();
+    let mut result = crate::template_render::resolve_sections(template, payload);
 
     // Flatten the payload for easy access: {{ campaign.name }}, {{ contact.email }}, etc.
     let flat = flatten_json(payload, "");

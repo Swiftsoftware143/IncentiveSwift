@@ -347,10 +347,12 @@ pub async fn test_tenant_smtp_config(
 
 /// Render {{key}} placeholders from a vars object.
 ///
-/// Double braces ONLY — the vocabulary both admin surfaces advertise. A leftover is logged by
-/// name (`template_render::warn_unsubstituted`) rather than silently mailed: kanban t_e43521d2.
+/// Double braces ONLY — the vocabulary both admin surfaces advertise. `{{#if key}}…{{/if}}`
+/// sections are resolved FIRST (kanban t_cdc24339: a shipped voucher promised a code it does not
+/// always have), so copy can carry an optional clause. A leftover is logged by name
+/// (`template_render::warn_unsubstituted`) rather than silently mailed: kanban t_e43521d2.
 pub fn render_template(template: &str, vars: &serde_json::Value) -> String {
-    let mut result = template.to_string();
+    let mut result = crate::template_render::resolve_sections(template, vars);
     if let Some(obj) = vars.as_object() {
         for (key, value) in obj {
             let placeholder = format!("{{{{{}}}}}", key);

@@ -10,11 +10,12 @@ pub(crate) const APP_URL: &str = "https://app.incentiveswift.com";
 ///
 /// The vocabulary is double braces ONLY, which is what both sides of the admin surface
 /// advertise (`GET /api/v1/email-templates/merge-fields` and the served console's merge-field
-/// buttons). Anything left over is logged by name — kanban t_e43521d2: the shipped `welcome`
-/// row spoke single braces, so `Welcome to {app_name}!` was mailed out verbatim and nothing
-/// said so.
+/// buttons). `{{#if key}}…{{/if}}` sections are resolved first, so a row can carry an optional
+/// clause (kanban t_cdc24339). Anything left over is logged by name — kanban t_e43521d2: the
+/// shipped `welcome` row spoke single braces, so `Welcome to {app_name}!` was mailed out verbatim
+/// and nothing said so.
 fn render_template(template: &str, vars: &serde_json::Value) -> String {
-    let mut result = template.to_string();
+    let mut result = crate::template_render::resolve_sections(template, vars);
     if let Some(obj) = vars.as_object() {
         for (key, value) in obj {
             let placeholder = format!("{{{{{}}}}}", key);
