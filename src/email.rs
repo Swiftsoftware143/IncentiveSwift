@@ -319,6 +319,40 @@ pub(crate) async fn record_last_send(
     ok: bool,
     detail: &str,
 ) {
+    write_panel(pool, to, subject, ok, detail).await;
+    append_log(
+        pool,
+        to,
+        subject,
+        if ok { "sent" } else { "failed" },
+        detail,
+    )
+    .await;
+}
+
+/// Append one row to the delivery history (`email_send_log`, migration zz_is15).
+///
+/// The history answers what the single slot cannot: it is append-only, so a credentials mail the
+/// provider refused at signup is still readable after any later message succeeds. Writing it NEVER
+/// fails a send — an error here is logged and dropped, exactly like the panel record below.
+async fn append_log(pool: &sqlx::PgPool, to: &str, subject: &str, status: &str, detail: &str) {
+    if let Err(e) = sqlx::query(
+        "INSERT INTO email_send_log (to_email, subject, status, detail) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(to)
+    .bind(subject)
+    .bind(status)
+    .bind(detail.chars().take(240).collect::<String>())
+    .execute(pool)
+    .await
+    {
+        tracing::warn!("could not append to email_send_log: {e}");
+    }
+}
+
+/// Write the single-value record the Email Provider panel reads
+/// (`admin_settings.email_last_send`) — "what happened to the most recent message?".
+async fn write_panel(pool: &sqlx::PgPool, to: &str, subject: &str, ok: bool, detail: &str) {
     let payload = json!({
         "at": chrono::Utc::now().to_rfc3339(),
         "ok": ok,
@@ -335,6 +369,17 @@ pub(crate) async fn record_last_send(
     {
         tracing::warn!("could not record email_last_send: {e}");
     }
+}
+
+/// Record a send that was WITHHELD before any provider request (a reserved/harness recipient).
+///
+/// `withheld` is its own status, never `failed`: nothing was attempted, so nothing can be blamed on
+/// the provider, and the panel must not tell the operator a customer was let down. The history row
+/// is written on its own status; the single slot carries the same reason for the panel's one line.
+pub(crate) async fn record_withheld(pool: &sqlx::PgPool, to: &str, subject: &str, reason: &str) {
+    let detail = format!("withheld: {reason} (no send attempted)");
+    append_log(pool, to, subject, "withheld", &detail).await;
+    write_panel(pool, to, subject, false, &detail).await;
 }
 
 /// Whether a recipient can never receive mail (reserved RFC-2606 name, or a fleet harness domain).
@@ -373,14 +418,7 @@ pub(crate) async fn send_email_request(
             subject = %subject,
             "send suppressed: recipient is a fleet harness address (fleet-dev domain)"
         );
-        record_last_send(
-            pool,
-            to,
-            subject,
-            false,
-            "withheld: recipient is a fleet harness address (no send attempted)",
-        )
-        .await;
+        record_withheld(pool, to, subject, "recipient is a fleet harness address").await;
         return Ok(());
     }
     let Some(cfg) = crate::email_provider::resolve(pool).await else {
@@ -402,25 +440,26 @@ pub(crate) async fn send_email_request(
         Some(html_body)
     };
 
+    // The RECIPIENT decides whether this was an attempt at all, not the shape of the outcome:
+    // `deliver` refuses the RFC-2606 class with `Err("recipient-refused: …")` and the fleet-harness
+    // class with `Ok(())`. Keying the withheld arm on `Ok` alone recorded a deliberately-withheld
+    // message as a delivery FAILURE (measured 2026-10-18 through the panel's test-send), which is the
+    // misreport the fleet rule forbids: nothing was attempted, so nothing may read as refused mail.
+    let held = recipient_is_undeliverable(to);
     let outcome = crate::email_provider::deliver(pool, &cfg, to, subject, text_body, html).await;
-    match &outcome {
-        Ok(()) if recipient_is_undeliverable(to) => {
-            // `deliver` withholds a recipient that provably cannot receive mail and still answers
-            // Ok, so Ok alone is NOT a delivery — record the truth the operator needs to see.
-            record_last_send(
-                pool,
-                to,
-                subject,
-                false,
-                "withheld: recipient cannot receive mail (no send attempted)",
-            )
-            .await;
-        }
-        Ok(()) => record_last_send(pool, to, subject, true, "").await,
-        Err(e) => {
-            tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
-            record_last_send(pool, to, subject, false, e).await;
+    if held {
+        record_withheld(pool, to, subject, "recipient cannot receive mail").await;
+    } else {
+        match &outcome {
+            Ok(()) => record_last_send(pool, to, subject, true, "").await,
+            Err(e) => {
+                tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
+                record_last_send(pool, to, subject, false, e).await;
+            }
         }
     }
+    // The OUTCOME is returned unchanged: `email_queue` deliberately treats a refused recipient as an
+    // ordinary bounded failure (3 attempts, no provider request) and dead-letters it, which is the
+    // surface that makes such a row visible. Only the RECORDING is honest now.
     outcome
 }

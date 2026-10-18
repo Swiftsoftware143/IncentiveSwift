@@ -1148,6 +1148,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/email-settings/test",
             post(handlers::email_settings_handler::test_email_settings),
         )
+        // The send HISTORY beside the one-slot "last email" record (migration zz_is15). Append-only,
+        // so a credentials mail refused at signup stays visible after later mail succeeds.
+        .route(
+            "/api/v1/admin/email-log",
+            get(handlers::email_settings_handler::email_log),
+        )
         // Tag-provisioning console (kanban t_3724204f): the master switch and the entry-tier
         // picker. `/api/v1/admin/*` is covered by `security::auth::admin_guard` (platform
         // operator only), so a tenant owner is refused here exactly like every other admin route.

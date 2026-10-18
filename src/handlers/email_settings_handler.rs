@@ -242,8 +242,7 @@ pub async fn test_email_settings(
     // Ok), so the withheld case is decided here and reported as its own outcome — the test-mail-hygiene
     // rule: never hand a test address to the provider, and never call a withheld send a delivery.
     let subject = "IncentiveSwift System Email Test";
-    let held = crate::email::recipient_is_undeliverable(&to);
-    match email_provider::deliver(
+    let outcome = email_provider::deliver(
         &state.db,
         &cfg,
         &to,
@@ -251,25 +250,25 @@ pub async fn test_email_settings(
         "This is a test of the IncentiveSwift system email provider.\n\nIf you received it, sending works.\n\n- IncentiveSwift",
         None,
     )
-    .await
-    {
-        Ok(()) if held => {
-            crate::email::record_last_send(
-                &state.db,
-                &to,
-                subject,
-                false,
-                "withheld: recipient cannot receive mail (no send attempted)",
-            )
+    .await;
+
+    // Decided BEFORE the outcome is read (measured 2026-10-18): `deliver` refuses the RFC-2606 class
+    // with `Err("recipient-refused: …")` and the fleet-harness class with `Ok(())`, so keying this on
+    // `Ok` alone answered "not sent — the customer received nothing" for a test the operator had
+    // aimed at a reserved address on purpose. A non-send is answered as WITHELD, whichever arm fired.
+    if crate::email::recipient_is_undeliverable(&to) {
+        crate::email::record_withheld(&state.db, &to, subject, "recipient cannot receive mail")
             .await;
-            Ok(Json(json!({
-                "success": false,
-                "withheld": true,
-                "provider": cfg.provider,
-                "to": to,
-                "detail": "Withheld: this address cannot receive mail, so no message was sent. Point the test at a real inbox to prove delivery."
-            })))
-        }
+        return Ok(Json(json!({
+            "success": false,
+            "withheld": true,
+            "provider": cfg.provider,
+            "to": to,
+            "detail": "Withheld: this address cannot receive mail, so no message was sent. Point the test at a real inbox to prove delivery."
+        })));
+    }
+
+    match outcome {
         Ok(()) => {
             crate::email::record_last_send(&state.db, &to, subject, true, "").await;
             Ok(Json(json!({
@@ -289,6 +288,38 @@ pub async fn test_email_settings(
             })))
         }
     }
+}
+
+/// `GET /api/v1/admin/email-log` — the last 50 transactional sends this installation attempted.
+///
+/// The Email Provider panel's "last email" line answers only the most recent attempt; this is the
+/// history beside it (migration zz_is15), so a credentials mail the provider refused at signup is
+/// still readable after any later message succeeds. `withheld` rows are reserved/harness recipients
+/// that were never attempted — a NON-SEND, not a provider refusal.
+///
+/// Mounted under `/api/v1/admin/*`, so `security::auth::admin_guard` gates it before this handler.
+pub async fn email_log(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT to_email, subject, status, detail, created_at FROM email_send_log \
+         ORDER BY created_at DESC LIMIT 50",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let sends: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "to": r.get::<String, _>("to_email"),
+                "subject": r.get::<Option<String>, _>("subject"),
+                "status": r.get::<String, _>("status"),
+                "detail": r.get::<Option<String>, _>("detail"),
+                "at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "sends": sends })))
 }
 
 #[cfg(test)]
