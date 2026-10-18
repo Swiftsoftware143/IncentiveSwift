@@ -788,6 +788,10 @@ function pbRender() {
   if (!wrap) return;
   var plans = PB.plans || [];
   if (!plans.length) { wrap.innerHTML = '<div style="color:#64748b;font-size:13px">No plans are published yet.</div>'; return; }
+  var curPrice = null;
+  for (var ci = 0; ci < plans.length; ci++) {
+    if ((plans[ci].slug || '') === curSlug) { curPrice = Number(plans[ci].monthly_price || 0); break; }
+  }
   var h = '';
   for (var i = 0; i < plans.length; i++) {
     var p = plans[i];
@@ -796,11 +800,15 @@ function pbRender() {
     var feats = (p.features && p.features.length) ? p.features : [];
     var fh = '';
     for (var j = 0; j < feats.length && j < 6; j++) { fh += '<li style="padding:2px 0">' + esc(pbFeatureLabel(feats[j])) + '</li>'; }
+    // The move is named by DIRECTION, never by "has a price": a customer on Enterprise was
+    // reading "Upgrade to Pro" for a cheaper plan (a downgrade), and pressing it filed an
+    // "Upgrade request" ticket. curPrice is the catalogue row of the plan they are ON.
+    var dir = (curPrice === null || price === curPrice) ? 'switch' : (price > curPrice ? 'up' : 'down');
+    var verb = (dir === 'up') ? 'Upgrade to ' : (dir === 'down' ? 'Downgrade to ' : 'Switch to ');
+    var btnStyle = (dir === 'up') ? '' : 'background:#64748b';
     var action = isCur
       ? '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>'
-      : (price > 0
-          ? '<button class="btn btn-sm" style="margin-top:10px" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + price + '" data-pb-id="' + esc(p.id || '') + '">Upgrade to ' + esc(p.name || p.slug) + '</button>'
-          : '<button class="btn btn-sm" style="margin-top:10px;background:#64748b" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="0" data-pb-id="' + esc(p.id || '') + '">Switch to ' + esc(p.name || p.slug) + '</button>');
+      : '<button class="btn btn-sm" style="margin-top:10px;' + btnStyle + '" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + price + '" data-pb-id="' + esc(p.id || '') + '" data-pb-name="' + esc(p.name || p.slug) + '" data-pb-dir="' + dir + '">' + verb + esc(p.name || p.slug) + '</button>';
     h += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fff">'
       + '<div style="font-weight:600;color:#1e293b">' + esc(p.name || p.slug) + '</div>'
       + '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:6px 0">' + pbPrice(price) + '<span style="font-size:12px;font-weight:400;color:#64748b">/month</span></div>'
@@ -811,7 +819,10 @@ function pbRender() {
   var btns = wrap.querySelectorAll('[data-pb-upgrade]');
   for (var k = 0; k < btns.length; k++) {
     btns[k].addEventListener('click', function () {
-      pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), this.getAttribute('data-pb-name'));
+      var dir = this.getAttribute('data-pb-dir');
+      var name = this.getAttribute('data-pb-name') || this.getAttribute('data-pb-upgrade');
+      if (dir === 'down' && !window.confirm('Move this workspace down to the ' + name + ' plan? You keep access until the change is made, then the lower plan applies.')) return;
+      pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), name);
     });
   }
 }
@@ -829,7 +840,7 @@ function pbAsk(slug, price, detail) {
   m.style.color = '#334155';
   m.innerHTML = 'Checkout is not open for this workspace yet, so our team completes the switch for you.'
     + ' <button class="btn btn-sm" id="pb-ask-btn" style="margin-left:6px">Request the '
-    + esc(name) + ' upgrade</button>';
+    + esc(name) + ' plan</button>';
   var btn = document.getElementById('pb-ask-btn');
   if (btn) btn.addEventListener('click', function () { pbRequest(slug, price, btn); });
 }
@@ -842,7 +853,7 @@ function pbRequest(slug, price, btn) {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, pbAuth()),
     body: JSON.stringify({
-      subject: 'Upgrade request: ' + name + ' plan',
+      subject: pbMoveWord(slug) + ' request: ' + name + ' plan',
       description: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from'
         + ' the dashboard. Self-serve checkout is not open yet, so the switch has to be made by the team.',
       priority: 'normal',
@@ -856,14 +867,27 @@ function pbRequest(slug, price, btn) {
         pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.', 's');
         return;
       }
-      if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' upgrade'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' plan'; }
       pbMsg('The request could not be sent' + ((d && d.message) ? ': ' + d.message : ' (error ' + r.status + ')') + '. Please try again.', 'e');
     });
   }).catch(function (e) {
     PB.busy = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' upgrade'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' plan'; }
     pbMsg((e && e.message) || 'The request could not be sent.', 'e');
   });
+}
+// 'Upgrade' / 'Downgrade' / 'Plan change' — decided from the catalogue, so the ticket the
+// customer files says what they actually asked for.
+function pbMoveWord(slug) {
+  var list = PB.plans || [];
+  var curSlug = (PB.plan && PB.plan.slug) || '';
+  var curP = null, wantP = null;
+  for (var i = 0; i < list.length; i++) {
+    if ((list[i].slug || '') === curSlug) curP = Number(list[i].monthly_price || 0);
+    if ((list[i].slug || '') === slug) wantP = Number(list[i].monthly_price || 0);
+  }
+  if (curP === null || wantP === null || wantP === curP) return 'Plan change';
+  return wantP > curP ? 'Upgrade' : 'Downgrade';
 }
 function pbUpgrade(slug, price, planId) {
   if (PB.busy) return;
@@ -915,7 +939,7 @@ function pbUpgrade(slug, price, planId) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and starts an upgrade when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and lets you ask to move to another plan (an upgrade or a downgrade) when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=0bc326c56c5e"></script>
