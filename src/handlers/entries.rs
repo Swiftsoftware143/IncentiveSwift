@@ -420,7 +420,25 @@ pub async fn create_entry(
     );
 
     // 10. Execute DIRECT campaign integrations (webhook/Mailchimp/HubSpot/etc)
-    dispatch_integrations(
+    //
+    // BEST-EFFORT, which is the rule every step around this one already follows: the loyalty
+    // checkin (7.5), the CoreSwift push (7.8) and the output actions (8.6) are fire-and-forget and
+    // the referrals (11) log their own failure — all of them say the same thing in their comments,
+    // that a step running AFTER the capture must never turn a valid entry into a 500. This one did
+    // not: `entries::create_entry` returns at step 6, the row is COMMITTED, and the fatal `?` here
+    // then answered the visitor `{"code":500,"error":"Internal server error"}` for a capture that
+    // had already been written — while the quiz writer (handlers::quiz_handler), calling this same
+    // function, has always logged a warning and returned the capture. So one broken integration
+    // behaved differently by campaign type for identical configuration, and on the play page it
+    // told the participant their submission failed when it had not.
+    //
+    // Measured live 2026-10-18 (before this change): a campaign whose `integrations` carried a
+    // HubSpot key the provider rejects produced `ENTRY HTTP 500` with `ENTRY_ROWS_IN_DB 1`, and the
+    // container logged `HubSpot API returned 401` then `classification=Status code: 500`.
+    //
+    // A failure is logged, never swallowed: the operator keeps the same visibility the quiz path
+    // gives, and a webhook target still gets its own delivery_log row from `push_to_webhook`.
+    if let Err(e) = dispatch_integrations(
         &state.http_client,
         &campaign.delivery_config,
         &payload,
@@ -428,7 +446,10 @@ pub async fn create_entry(
         &entry_id,
         &campaign.account_id,
     )
-    .await?;
+    .await
+    {
+        tracing::warn!("entry {entry_id}: direct campaign integrations failed: {e}");
+    }
 
     // 11. Referrals (kanban t_ad98b6ab).
     //
