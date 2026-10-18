@@ -129,19 +129,73 @@ pub fn lifecycle_templates(campaign_type: &str) -> (&'static str, &'static str) 
 /// recipient reads the braces.
 const SCORE_SHAPED_FOLLOWUPS: &[&str] = &["quiz_challenge_share"];
 
+/// The rows that PROMISE A PRIZE in their own copy — i.e. whose text carries `{{prize_name}}`
+/// (and usually `{{reward_code}}`). Same reason as the score list above: the renderer ships
+/// mustache placeholders verbatim, so a row on this list may only be sent to an entry that
+/// actually won something; otherwise the recipient reads "You won {{prize_name}}!".
+const PRIZE_SHAPED_ENTRIES: &[&str] = &["win_voucher", "scratch_confirm_prize"];
+const PRIZE_SHAPED_FOLLOWUPS: &[&str] = &["post_redemption_thanks", "urgent_expiry_notice"];
+
+/// Does this entry's var set answer for a prize? `resolve_prize_fields` binds `prize_name` only
+/// when a win row, the entry's own answers, or the campaign config actually produced a label, so
+/// an absent/blank name means "this participant won nothing".
+fn has_prize(vars: &Value) -> bool {
+    vars.get("prize_name")
+        .and_then(|v| v.as_str())
+        .map(|p| !p.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// The STAGE-1 (immediate acknowledgement) row THIS entry actually gets.
+///
+/// It is its arm's entry template (`lifecycle_templates`), UNLESS that row promises a prize the
+/// entry did not win — then it is the neutral `entry_confirmation` ("You are entered!").
+///
+/// The spin-wheel arm is the case this exists for, and it was measured live 2026-10-18: a
+/// spin_wheel campaign captured through the generic `POST /api/v1/entries` route returns the
+/// outcome `entrant` when nothing was won (`entries.rs`, `default_outcome`), `resolve_prize_fields`
+/// consequently binds no `prize_name`/`reward_code`, and the arm's entry template is
+/// `win_voucher` — so a participant who lost was mailed the SUBJECT "You won! Here is your prize"
+/// with the body reading `You won {{prize_name}} on …! Code: {{reward_code}}.` verbatim
+/// (`email_send_log` row `probe-arm-…@example.invalid | You won! Here is your prize`, plus the
+/// renderer's own `template_render` WARN naming both placeholders). The winners are unaffected:
+/// their prize fields are bound, and the inline result path uses the separate `spin_wheel_winner`
+/// / `scratch_card_winner` rows.
+///
+/// The discriminator is the DATA in `vars`, never the caller's word for the outcome, so a winner
+/// can never be downgraded by a caller bug — the same construction `followup_template` uses.
+pub fn entry_template(campaign_type: &str, vars: &Value) -> &'static str {
+    let (entry, _) = lifecycle_templates(campaign_type);
+    if PRIZE_SHAPED_ENTRIES.contains(&entry) && !has_prize(vars) {
+        DEFAULT_LIFECYCLE.0
+    } else {
+        entry
+    }
+}
+
 /// The follow-up row THIS entry actually gets.
 ///
-/// It is its arm's follow-up (`lifecycle_templates`), UNLESS that row asks for a score the entry
-/// does not have — then it is the de-scored `challenge_share`. The quiz arm is the case this
-/// exists for: its follow-up promises `{{user_score}}` because the SERVED quiz player produces one
-/// (`www-app/play.html` -> `POST /api/v1/quiz/{id}/submit` -> `entries.score`, kanban t_d8eef6ae),
-/// but the same campaign type can also be captured through the generic `POST /api/v1/entries` (a
-/// quiz campaign with no questions configured keeps that form), and THAT entry has no score.
+/// It is its arm's follow-up (`lifecycle_templates`), UNLESS that row asks for a score or a prize
+/// the entry does not have — then it is the neutral `challenge_share`. The quiz arm is the case
+/// the score guard exists for: its follow-up promises `{{user_score}}` because the SERVED quiz
+/// player produces one (`www-app/play.html` -> `POST /api/v1/quiz/{id}/submit` -> `entries.score`,
+/// kanban t_d8eef6ae), but the same campaign type can also be captured through the generic
+/// `POST /api/v1/entries` (a quiz campaign with no questions configured keeps that form), and THAT
+/// entry has no score.
+///
+/// The prize guard is its twin and was measured live 2026-10-18: a spin_wheel entrant who won
+/// nothing was scheduled `post_redemption_thanks` ("Thanks for redeeming {{prize_name}}!") 24h
+/// later, for a reward they never had. `urgent_expiry_notice` ("Your {{prize_name}} is about to
+/// expire") is the mystery arm's follow-up and gets the same guard.
+///
 /// Deciding here rather than at the call site means every path is safe by construction, including
-/// a future score producer on another arm.
+/// a future score or prize producer on another arm.
 pub fn followup_template(campaign_type: &str, vars: &Value) -> &'static str {
     let (_, followup) = lifecycle_templates(campaign_type);
-    if SCORE_SHAPED_FOLLOWUPS.contains(&followup) && vars.get("user_score").is_none() {
+    let wants_score =
+        SCORE_SHAPED_FOLLOWUPS.contains(&followup) && vars.get("user_score").is_none();
+    let wants_prize = PRIZE_SHAPED_FOLLOWUPS.contains(&followup) && !has_prize(vars);
+    if wants_score || wants_prize {
         DEFAULT_LIFECYCLE.1
     } else {
         followup
@@ -302,9 +356,9 @@ pub async fn trigger_entry_lifecycle(
     if to_email.is_empty() {
         return;
     }
-    let (entry_tpl, _) = lifecycle_templates(campaign_type);
+    let entry_tpl = entry_template(campaign_type, vars);
     // ...and the FOLLOW-UP is chosen by what this entry actually has (a row that asks for a score
-    // is never sent to an entry without one — see `followup_template`).
+    // or a prize is never sent to an entry without one — see `followup_template`).
     let followup_tpl = followup_template(campaign_type, vars);
 
     // Stage 1 — immediate
@@ -384,10 +438,14 @@ mod tests {
         assert_eq!(followup_template("quiz", &scored), "quiz_challenge_share");
         assert_eq!(followup_template("quiz", &unscored), "challenge_share");
         assert_eq!(followup_template("personality", &scored), "challenge_share");
+        // A spin follow-up promises the redemption of a prize, so it is only for an entry that HAS
+        // one; the scored-but-prizeless var set is exactly the losing entrant measured live.
+        let won = serde_json::json!({"campaign_name": "Spin", "prize_name": "Free coffee"});
         assert_eq!(
-            followup_template("spin_wheel", &scored),
+            followup_template("spin_wheel", &won),
             "post_redemption_thanks"
         );
+        assert_eq!(followup_template("spin_wheel", &scored), "challenge_share");
         // the list may only name a row some arm actually selects, or the guard protects nothing
         for name in SCORE_SHAPED_FOLLOWUPS {
             assert!(
@@ -395,6 +453,49 @@ mod tests {
                     .iter()
                     .any(|(_, _, followup)| followup == name),
                 "score-shaped follow-up '{name}' is NO arm's follow-up, so this list is dead code"
+            );
+        }
+    }
+
+    /// A prize-claiming stage-1 row goes only to an entry that actually won something
+    /// (measured live 2026-10-18: a losing spin_wheel entrant was mailed "You won! Here is your
+    /// prize" with `{{prize_name}}`/`{{reward_code}}` verbatim).
+    #[test]
+    fn a_prize_shaped_entry_row_is_only_sent_to_an_entry_that_won() {
+        let lost = serde_json::json!({"campaign_name": "Spin", "first_name": "Ada"});
+        let blank = serde_json::json!({"campaign_name": "Spin", "prize_name": "   "});
+        let won = serde_json::json!({"campaign_name": "Spin", "prize_name": "Free coffee"});
+
+        // spin_wheel: the loser gets the neutral acknowledgement, the winner the voucher
+        assert_eq!(entry_template("spin_wheel", &lost), "entry_confirmation");
+        assert_eq!(entry_template("spin_wheel", &blank), "entry_confirmation");
+        assert_eq!(entry_template("spin_wheel", &won), "win_voucher");
+
+        // scratch_card: same rule, its own rows
+        assert_eq!(entry_template("scratch_card", &lost), "entry_confirmation");
+        assert_eq!(
+            entry_template("scratch_card", &won),
+            "scratch_confirm_prize"
+        );
+
+        // an arm whose copy promises no prize is untouched by this guard
+        assert_eq!(entry_template("quiz", &lost), "entry_ack");
+        assert_eq!(entry_template("raffle", &lost), "entry_ticket");
+        assert_eq!(entry_template("personality", &lost), "entry_confirmation");
+
+        // a name on either list must be a row some arm actually selects, or the guard is dead
+        for name in PRIZE_SHAPED_ENTRIES {
+            assert!(
+                LIFECYCLE_MAP.iter().any(|(_, entry, _)| entry == name),
+                "prize-shaped entry '{name}' is NO arm's entry template, so this list is dead code"
+            );
+        }
+        for name in PRIZE_SHAPED_FOLLOWUPS {
+            assert!(
+                LIFECYCLE_MAP
+                    .iter()
+                    .any(|(_, _, followup)| followup == name),
+                "prize-shaped follow-up '{name}' is NO arm's follow-up, so this list is dead code"
             );
         }
     }
