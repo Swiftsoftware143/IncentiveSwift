@@ -511,6 +511,16 @@ const MyPlan = () => {
   const ownAnnual = (plan.price_annual === undefined || plan.price_annual === null) ? null : plan.price_annual;
   const isCurrent = (p) => String(p.slug || '').toLowerCase() === curSlug;
   const featKeys = (plan.features && typeof plan.features === 'object') ? Object.keys(plan.features) : [];
+  // The current-plan card's "Included:" line reads the SAME canonical labels the catalogue table
+  // below shows, not the raw entitlement keys (measured 2026-10-18: this card listed "all
+  // mechanics, credits monthly, mechanic spin wheel" while the table two inches below listed
+  // "Spin to Win, All Mechanics" — one screen, two vocabularies). The catalogue row for the
+  // tenant's OWN slug is the server-derived label list (GET /api/v1/plans); the entitlement key
+  // map from /auth/me stays the fallback for a tier the catalogue does not list.
+  const ownRow = catalogue.find(p => isCurrent(p));
+  const includedBits = (ownRow && Array.isArray(ownRow.features) && ownRow.features.length)
+    ? ownRow.features
+    : featKeys.map(pretty);
   const limitBits = [];
   if (plan.max_campaigns !== undefined && plan.max_campaigns !== null) limitBits.push(plan.max_campaigns < 0 ? 'Unlimited campaigns' : (plan.max_campaigns + ' campaigns'));
   if (plan.max_entries_per_month !== undefined && plan.max_entries_per_month !== null) limitBits.push(plan.max_entries_per_month < 0 ? 'Unlimited entries per month' : (plan.max_entries_per_month + ' entries per month'));
@@ -530,7 +540,7 @@ const MyPlan = () => {
       </div>
       ${st.me && ownAnnual > 0 && html`<div class="text-sm text-gray-600 mt-1">${money(ownAnnual)} per year if billed annually</div>`}
       <div class="text-sm text-gray-600 mt-2">${limitBits.length ? limitBits.join(' \u00b7 ') : 'Limits are set on your plan tier.'}</div>
-      <div class="text-sm text-gray-600 mt-1">${featKeys.length ? 'Included: ' + featKeys.map(pretty).join(', ') : ''}</div>` :
+      <div class="text-sm text-gray-600 mt-1">${includedBits.length ? 'Included: ' + includedBits.join(', ') : ''}</div>` :
       html`<div class="text-sm text-gray-500">Loading your plan\u2026</div>`}
     </div>
     <div class="card p-0 overflow-hidden">
