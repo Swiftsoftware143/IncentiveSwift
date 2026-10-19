@@ -1505,7 +1505,7 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
   if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
@@ -1589,7 +1589,22 @@ const LoyaltyPrograms = () => {
     } catch (e) { alert('Could not resolve that hold: ' + (e.message || e)); }
   }
   async function loadSettings() { try { const data = await API.get('/admin/clearinghouse/config'); st.chConfig = data; renderApp(); } catch(e){ st.chConfig = null; } try { const caps = await API.get('/admin/clearinghouse/caps'); st.chCaps = caps||[]; renderApp(); } catch(e){ st.chCaps = []; } try { const scfg = await API.get('/admin/clearinghouse/supplier-config'); st.supConfig = scfg||[]; renderApp(); } catch(e){ st.supConfig = []; } }
-  async function loadMembers(progId) { try { const data = await API.get('/loyalty/dashboard/admin/'+progId); st.members = data.members||[]; st.dashboard = data; renderApp(); } catch(e){ st.members=[]; } }
+  // The roster behind the check-in loop. `loyalty_members` rows are written by the PUBLIC check-in
+  // page (www-app/loyalty-checkin.html -> POST /api/v1/loyalty/checkin), and until 2026-10-19
+  // nothing read them back: the admin dashboard answered totals only, so an operator could see
+  // "12 members" and never who they were, and every per-member arm (QR, scans, card) was keyed on
+  // an id no screen could obtain. GET /loyalty/members?program_id=… is that read; the card is the
+  // member's own scannable code.
+  async function loadMembers(progId) {
+    const id = progId || st.memberProg || (st.list[0] && st.list[0].id);
+    if (!id) { st.members = []; st.memberProg = null; renderApp(); return; }
+    st.memberProg = id; st.memberBusy = true; st.memberErr = ''; renderApp();
+    try {
+      const d = await API.get('/loyalty/members?program_id=' + encodeURIComponent(id));
+      st.members = Array.isArray(d.members) ? d.members : [];
+    } catch (e) { st.members = []; st.memberErr = (e && e.message) || String(e); }
+    st.memberBusy = false; renderApp();
+  }
 
   const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
@@ -1631,9 +1646,10 @@ const LoyaltyPrograms = () => {
     try { await API.del('/loyalty/tiers/' + id); refreshTiers(); } catch(e){ alert(e.message); }
   };
 
-  const tabs = ['Plans','Programs','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
+  const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
+    if (t==='Members') loadMembers();
     if (t==='Tiers') refreshTiers();
     if (t==='Rewards') { loadRewards(); loadEarned(); }
     if (t==='Pledges') loadPledges();
@@ -2149,7 +2165,90 @@ const ledgerTab = html`<div>
   </div>
 </div>`;
 
-  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  // ── Members Tab ──
+  const fmtDay = (s) => { if (!s) return '—'; const d = new Date(s); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); };
+  const memberRows = (st.members || []).filter(m => {
+    const q = (st.memberSearch || '').toLowerCase();
+    if (!q) return true;
+    return [m.name, m.email, m.phone, m.tier_name].map(v => String(v || '').toLowerCase()).join(' ').includes(q);
+  });
+  const openCard = async (m) => {
+    st.card = { member: m, qr: null, err: '', busy: true }; renderApp();
+    try {
+      const q = await API.get('/loyalty/member/' + encodeURIComponent(m.id) + '/qr');
+      st.card = { member: m, qr: q, err: '', busy: false };
+    } catch (e) {
+      st.card = { member: m, qr: null, err: (e && e.message) || 'Could not load the member card', busy: false };
+    }
+    renderApp();
+  };
+  const refreshCard = async () => {
+    if (!st.card || !st.card.member) return;
+    try {
+      const q = await API.get('/loyalty/member/' + encodeURIComponent(st.card.member.id) + '/qr');
+      st.card = { member: st.card.member, qr: q, err: '', busy: false };
+    } catch (e) { st.card.busy = false; st.card.err = (e && e.message) || 'Could not load the code'; }
+    renderApp();
+  };
+  const replaceCode = async () => {
+    if (!st.card || !st.card.member) return;
+    if (!confirm('Replace this member\'s code? Every card already printed with the old code stops working.')) return;
+    st.card.busy = true; renderApp();
+    try {
+      const q = await API.post('/loyalty/member/' + encodeURIComponent(st.card.member.id) + '/qr/regenerate');
+      st.card = { member: st.card.member, qr: q, err: '', busy: false };
+    } catch (e) { st.card.busy = false; st.card.err = (e && e.message) || 'Could not replace the code'; }
+    renderApp();
+  };
+
+  const membersTab = html`<div>
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+      <h2 class="text-xl font-bold">Members</h2>
+      <div class="flex gap-2 items-center flex-wrap">
+        ${(st.list && st.list.length > 0) ? html`<select class="input" style="width:240px" value=${st.memberProg || ''} onChange=${e => loadMembers(e.target.value)}>${st.list.map(p => html`<option value=${p.id}>${p.name}</option>`)}</select>` : ''}
+        <input class="input" style="width:240px" placeholder="Search name, email or phone" value=${st.memberSearch || ''} onInput=${e => { st.memberSearch = e.target.value; renderApp(); }} />
+        <button class="btn btn-sm btn-outline" disabled=${st.memberBusy} onClick=${() => loadMembers(st.memberProg)}>Refresh</button>
+      </div>
+    </div>
+    <div class="text-xs text-gray-500 mb-3">Everyone who has checked in at your counter for the selected programme. <b>Member card</b> shows the scannable code that customer presents, and replaces it if a card is lost or copied.</div>
+    ${st.card ? html`<div class="card mb-4" data-member-card=${st.card.member.id}>
+      <div class="flex items-start gap-4 flex-wrap">
+        <div style="width:220px;height:220px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          ${st.card.busy ? html`<span class="text-sm text-gray-400">Loading code…</span>`
+            : (st.card.qr && st.card.qr.qr_svg) ? html`<div style="width:200px;height:200px" dangerouslySetInnerHTML=${{ __html: st.card.qr.qr_svg }}></div>`
+            : html`<span class="text-sm" style="color:#b91c1c;padding:0 12px;text-align:center">${st.card.err || 'No code yet'}</span>`}
+        </div>
+        <div class="flex-1" style="min-width:240px">
+          <h3 class="font-bold text-lg">${st.card.member.name || 'Member'}</h3>
+          <p class="text-sm text-gray-500">${st.card.member.email || st.card.member.phone || ''}</p>
+          <p class="text-sm mt-2">Code <b data-member-code style="letter-spacing:.06em">${(st.card.qr && st.card.qr.qr_code) || '—'}</b>${st.card.qr && st.card.qr.generated_at ? html` <span class="text-xs text-gray-400">· issued ${fmtDay(st.card.qr.generated_at)}</span>` : ''}</p>
+          <div class="flex gap-2 mt-3 flex-wrap">
+            <button class="btn btn-sm btn-outline" disabled=${st.card.busy} onClick=${refreshCard}>Refresh</button>
+            <button class="btn btn-sm btn-red" disabled=${st.card.busy} onClick=${replaceCode}>Replace code</button>
+            <button class="btn btn-sm btn-outline" onClick=${() => { st.card = null; renderApp(); }}>Close</button>
+          </div>
+          <p class="text-xs text-gray-400 mt-2">This image is what the counter scans. Replacing the code invalidates any printed copy.</p>
+        </div>
+      </div>
+    </div>` : ''}
+    <div class="card p-0 overflow-hidden">
+      <table class="table"><thead><tr><th>Member</th><th>Contact</th><th>Points</th><th>Tier</th><th>Last check-in</th><th>Member since</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${memberRows.map(m => html`<tr>
+            <td class="font-medium">${m.name || 'Member'}</td>
+            <td>${m.email || m.phone || html`<span class="text-gray-400">—</span>`}</td>
+            <td>${plural(m.points_balance || 0, 'point', 'points')}</td>
+            <td>${m.tier_name ? html`<span class="badge badge-blue">${m.tier_name}</span>` : html`<span class="text-gray-400">—</span>`}</td>
+            <td>${fmtDay(m.last_checkin_at)}</td>
+            <td>${fmtDay(m.member_since)}</td>
+            <td><button class="btn btn-sm btn-outline" data-member-card-btn=${m.id} onClick=${() => openCard(m)}>Member card</button></td>
+          </tr>`)}
+          ${memberRows.length === 0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.memberErr ? html`Could not load members: ${st.memberErr}` : html`No members yet. A customer appears here after their first check-in — open the check-in link from the Programs tab.`}</td></tr>`}
+        </tbody></table>
+    </div>
+  </div>`;
+
+  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     <div class="flex gap-2 mb-4 flex-wrap">${tabs.map(t => html`<button class="btn btn-sm ${st.tab===t.toLowerCase()?'':'btn-outline'}" onClick=${()=>setTab(t)}>${t}</button>`)}</div>
@@ -4040,6 +4139,11 @@ const BulkTenantDelete = () => {
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState(null);
+  // The plan picker's vocabulary and its last write (2026-10-19). It reads the SAME catalogue the
+  // Plans tab edits (GET /admin/plans), so a plan created there shows up here at the next load and
+  // nothing is hard-coded.
+  const [plans, setPlans] = useState([]);
+  const [assignMsg, setAssignMsg] = useState(null);
 
   const load = async () => {
     setErr(null);
@@ -4047,6 +4151,8 @@ const BulkTenantDelete = () => {
       const d = await OPSAPI.get('/admin/tenants');
       setRows((d && d.tenants) || []);
     } catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
+    try { const p = await OPSAPI.get('/admin/plans'); setPlans((p && p.plans) || []); }
+    catch (e) { setPlans([]); }
   };
   useEffect(() => { load(); }, []);
 
@@ -4078,6 +4184,39 @@ const BulkTenantDelete = () => {
     setBusy(false);
   };
 
+  // ── THE PLAN CELL (2026-10-19) ──
+  // It was a static `plan_name` string: the operator could SEE that a workspace was on "No Plan"
+  // and had no way to put it on one from this screen. `POST /api/v1/admin/plans/assign` has existed
+  // the whole time (plans_handler::admin_assign_plan) and its only caller was the raw API explorer
+  // in the Operator Console — a backend route with no UI. The select below is that missing half.
+  //
+  // It writes the CATALOGUE id (`catalog_plan_id`), not `plan_id`: `GET /admin/tenants` publishes
+  // the account's TIER id in `plan_id`, and the two id spaces are NOT interchangeable (measured:
+  // enterprise tier 0979d19e… vs catalogue f0bbc994…). The assign handler maps plans->plan_tiers by
+  // slug, so handing it a tier id would 404 "Plan not found" on every row but free.
+  const assignPlan = async (row, planId) => {
+    if (!planId) return;
+    const p = (plans || []).find(x => x.id === planId);
+    const label = p ? p.name : 'that plan';
+    if (!confirm('Put "' + (row.name || row.email || row.id) + '" on ' + label + '?')) return;
+    setAssignMsg({ ok: true, text: 'Assigning ' + label + '\u2026' });
+    try {
+      await OPSAPI.post('/admin/plans/assign', { account_id: row.id, plan_id: planId, billing_cycle: 'monthly' });
+      setAssignMsg({ ok: true, text: 'Assigned ' + label + ' to ' + (row.name || row.email || row.id) });
+    } catch (e) {
+      setAssignMsg({ ok: false, text: 'Not assigned: ' + String((e && e.message) || e) });
+    }
+    await load();
+  };
+  const planCell = (r) => html`<select class="input plan-pick" data-tenant-plan=${r.id || ''}
+      style="min-width:130px;font-size:11px" title="This workspace's plan. Changing it assigns the plan — the customer's limits and mail follow."
+      value=${r.catalog_plan_id || ''}
+      onChange=${e => assignPlan(r, e.target.value)}>
+      ${!r.catalog_plan_id ? html`<option value="" disabled selected>\u2014 no plan \u2014</option>` : ''}
+      ${(plans || []).filter(p => p.is_active !== false || p.id === r.catalog_plan_id)
+        .map(p => html`<option value=${p.id}>${p.name}</option>`)}
+    </select>`;
+
   return html`<div class="ops-action border rounded-lg p-2 mb-2 bg-gray-50">
     <div class="flex flex-wrap items-center gap-2 mb-2">
       <span class="text-xs font-semibold text-gray-700">Mass delete (select-all)</span>
@@ -4090,6 +4229,7 @@ const BulkTenantDelete = () => {
         Delete selected (${sel.length})</button>
       ${result && html`<span class="text-xs ${result.ok ? 'text-green-700' : 'text-red-600'}">${result.ok ? 'done' : 'ERROR'}</span>`}
     </div>
+    ${assignMsg && html`<div class="text-xs ${assignMsg.ok ? 'text-green-700' : 'text-red-600'}" data-plan-assign-msg>${assignMsg.text}</div>`}
     ${err ? html`<div class="text-xs text-red-600">${err}</div>`
       : !rows ? html`<div class="text-xs text-gray-400">loading...</div>`
       : html`<div class="overflow-auto" style="max-height:260px">
@@ -4108,7 +4248,7 @@ const BulkTenantDelete = () => {
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
             <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
-            <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
+            <td class="border-b px-2 py-1">${planCell(r)}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
           </tr>`)}</tbody>
