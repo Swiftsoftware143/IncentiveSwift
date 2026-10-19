@@ -192,6 +192,11 @@ pub async fn get_member_qr(
 ) -> Result<Json<Value>, AppError> {
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    // Ownership FIRST (the shared three-arm predicate), then read the member by id alone: the old
+    // single statement joined only `campaigns -> lp.campaign_id`, so a member of a programme whose
+    // only link is the FORWARD `campaigns.loyalty_program_id` (the one check-in resolves first) was
+    // answered 404 for a card they legitimately hold. 2026-10-19.
+    ensure_member_in_caller_programme(&state.db, &member_id, &account_id).await?;
     // Fetch member with program info - scoped to the caller's own programme, so a member that
     // belongs to another account is indistinguishable from an absent one (404).
     let member = sqlx::query_as::<
@@ -207,11 +212,9 @@ pub async fn get_member_qr(
         r#"SELECT lm.id, lm.program_id, lm.qr_code, lp.name, lm.qr_code_generated_at
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           JOIN campaigns c ON c.id = lp.campaign_id
-           WHERE lm.id = $1 AND c.account_id = $2"#,
+           WHERE lm.id = $1"#,
     )
     .bind(member_id)
-    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty member not found".into()))?;
@@ -359,6 +362,9 @@ pub async fn member_dashboard(
 ) -> Result<Json<Value>, AppError> {
     let account_id = Uuid::parse_str(&auth.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    // Same ownership gate the QR arm uses (three-arm predicate), so a member of a programme whose
+    // only link is the forward campaigns.loyalty_program_id is not answered 404 here. 2026-10-19.
+    ensure_member_in_caller_programme(&state.db, &member_id, &account_id).await?;
 
     #[derive(sqlx::FromRow)]
     struct MemberInfo {
@@ -389,11 +395,9 @@ pub async fn member_dashboard(
                   lp.slug AS program_slug, lp.currency_name, lp.currency_icon
            FROM loyalty_members lm
            JOIN loyalty_programs lp ON lp.id = lm.program_id
-           JOIN campaigns c ON c.id = lp.campaign_id
-           WHERE lm.id = $1 AND c.account_id = $2"#,
+           WHERE lm.id = $1"#,
     )
     .bind(member_id)
-    .bind(account_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Member not found".into()))?;
