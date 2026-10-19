@@ -144,6 +144,25 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" style="background:#059669" onclick="ebUpload()">Upload logo</button>
       <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
     </div>
+    <!-- What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo
+         (max 56px high / 240px wide); otherwise the brand name in 20px #111827; then a 3px rule in
+         the brand colour; nothing at all when neither is set. Same preview the admin console's
+         Settings screen renders, brought to the screen where a customer actually sets the branding —
+         until now they could type a name and colour and upload a logo without ever seeing the
+         header their recipients open the mail with. Updates IN PLACE on every keystroke (focus is
+         kept) and sends nothing. -->
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0">
+      <div style="font-size:12px;color:#64748b;margin-bottom:8px">Preview — the header every email from this workspace opens with</div>
+      <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff">
+        <div id="eb-bp" style="display:none">
+          <img id="eb-bp-logo" alt="" style="display:none;margin:0 auto 8px;max-height:56px;max-width:240px">
+          <div id="eb-bp-name" style="display:none;text-align:center;font-size:20px;font-weight:600;color:#111827;margin:0 0 8px"></div>
+          <div id="eb-bp-rule" style="border-top:3px solid #4f46e5;margin:0 0 10px"></div>
+        </div>
+        <div id="eb-bp-blank" style="font-size:13px;color:#64748b">Nothing is set yet, so mail keeps the IncentiveSwift header.</div>
+        <div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>
+      </div>
+    </div>
   </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Plan &amp; billing</h2>
@@ -204,6 +223,7 @@ if (!token) {
   paintAccount(user || {});
   fetchAccount();
   ebLoad();
+  ebWirePreview();
   pbLoad();
   loadStats();
   loadActivity();
@@ -671,6 +691,50 @@ function ebSetLogo(u) {
   if (!im) return;
   if (u) { im.src = ebLogoUrl(u); im.style.display = 'block'; if (rm) rm.style.display = ''; }
   else { im.style.display = 'none'; im.removeAttribute('src'); if (rm) rm.style.display = 'none'; }
+  ebSyncPreview();
+}
+// The colour the mail actually paints with: a well-formed hex value, else the app's default. Same
+// rule as Branding::effective_color (src/branding.rs), applied here so the preview cannot show a
+// colour the server would refuse to paint.
+function ebEffColor(c) {
+  var v = String(c || '').trim();
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) ? v : '#4f46e5';
+}
+// What a recipient sees — mirrors Branding::header_html (src/branding.rs) and the admin console's
+// own preview: a centred logo (max 56px high / 240px wide); otherwise the brand name in 20px
+// #111827; then a 3px rule in the brand colour. Nothing at all when neither is set. Reads the
+// panel's OWN controls, so it never sends a request and cannot drift from what Save would store.
+function ebSyncPreview() {
+  var wrap = document.getElementById('eb-bp');
+  var blank = document.getElementById('eb-bp-blank');
+  if (!wrap || !blank) return;
+  var logoEl = document.getElementById('eb-logo-prev');
+  var logo = (logoEl && logoEl.style.display !== 'none') ? (logoEl.getAttribute('src') || '') : '';
+  var nameEl = document.getElementById('eb-name');
+  var colourEl = document.getElementById('eb-colour');
+  var name = ((nameEl && nameEl.value) || '').trim();
+  var colour = ebEffColor(colourEl && colourEl.value);
+  var branded = !!(logo || name);
+  wrap.style.display = branded ? 'block' : 'none';
+  blank.style.display = branded ? 'none' : 'block';
+  var img = document.getElementById('eb-bp-logo');
+  if (img) {
+    if (logo) { img.src = logo; img.style.display = 'block'; }
+    else { img.style.display = 'none'; img.removeAttribute('src'); }
+  }
+  var nm = document.getElementById('eb-bp-name');
+  if (nm) { nm.textContent = name; nm.style.display = (branded && !logo) ? 'block' : 'none'; }
+  var rule = document.getElementById('eb-bp-rule');
+  if (rule) rule.style.borderTop = '3px solid ' + colour;
+}
+// Keystroke wiring for the preview: one listener per control, attached once at boot. The colour
+// input fires `input` while the picker moves, so the rule follows the pointer with no Save needed.
+function ebWirePreview() {
+  var n = document.getElementById('eb-name');
+  var c = document.getElementById('eb-colour');
+  if (n) n.addEventListener('input', ebSyncPreview);
+  if (c) { c.addEventListener('input', ebSyncPreview); c.addEventListener('change', ebSyncPreview); }
+  ebSyncPreview();
 }
 function ebLoad() {
   fetch(window.location.origin + '/api/v1/settings', { headers: ebAuth(), cache: 'no-store' })
