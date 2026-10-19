@@ -3040,6 +3040,29 @@ const SettingsView = () => {
   // `logo_url` is written only by the logo endpoints — this pane never sends it, so a save cannot
   // un-reference a logo that is still stored. The picker checks the same byte cap the server does.
   const BRAND_LOGO_MAX_BYTES = 2031616;
+  // The colour the mail actually paints with: a well-formed hex value, else the app's default.
+  // Same rule as Branding::effective_color (src/branding.rs), applied here so the preview cannot
+  // show a colour the server would refuse to paint.
+  const effColor = (c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(asText(c).trim()) ? asText(c).trim() : '#4f46e5';
+  // What a recipient sees — mirrors Branding::header_html in the app (src/branding.rs): a centred
+  // logo (max 56px high, max 240px wide); otherwise the brand name in 20px #111827; then a 3px rule
+  // in the brand colour. Nothing at all when neither is set. Updated IN PLACE on every keystroke so
+  // the panel never re-renders and steals focus from the field being typed in, and nothing is sent.
+  const syncPreview = () => {
+    const name = asText(st.brand && st.brand.brand_name).trim();
+    const logo = asText(st.brand && st.brand.logo_url).trim();
+    const branded = !!(name || logo);
+    const wrap = document.getElementById('bp-header');
+    const blank = document.getElementById('bp-blank');
+    const nm = document.getElementById('bp-name');
+    const img = document.getElementById('bp-logo');
+    const rule = document.getElementById('bp-rule');
+    if (wrap) wrap.style.display = branded ? 'block' : 'none';
+    if (blank) blank.style.display = branded ? 'none' : 'block';
+    if (nm) { nm.textContent = name; nm.style.display = (branded && !logo) ? 'inline-block' : 'none'; }
+    if (img) { img.style.display = logo ? 'inline-block' : 'none'; if (logo) img.setAttribute('src', logo); }
+    if (rule) rule.style.borderTop = '3px solid ' + effColor(st.brand && st.brand.brand_color);
+  };
   const brandSave = async () => {
     const name = asText(st.brand && st.brand.brand_name).trim();
     const color = asText(st.brand && st.brand.brand_color).trim();
@@ -3120,16 +3143,32 @@ const SettingsView = () => {
           <div class="mb-3">
             <label class="text-xs font-medium block mb-1 text-gray-500">Brand display name</label>
             <input id="brand-name-input" class="input" maxlength="60" placeholder="e.g. Giraudy Capital" value=${asText(st.brand && st.brand.brand_name)}
-              onInput=${e => { st.brand.brand_name = e.target.value; }} />
+              onInput=${e => { st.brand.brand_name = e.target.value; syncPreview(); }} />
           </div>
           <div class="mb-3">
             <label class="text-xs font-medium block mb-1 text-gray-500">Brand colour</label>
             <input id="brand-color-input" class="input" maxlength="9" placeholder="#4f46e5" value=${asText(st.brand && st.brand.brand_color)}
-              onInput=${e => { st.brand.brand_color = e.target.value; }} />
+              onInput=${e => { st.brand.brand_color = e.target.value; syncPreview(); }} />
             <div class="text-xs text-gray-400 mt-1">A hex colour such as #4f46e5, used for the rule under your logo.</div>
           </div>
           <button class="btn" id="brand-save-btn" disabled=${st.brandBusy} onClick=${brandSave}>Save branding</button>
         </div>
+      </div>
+      <div class="mt-5 pt-4" style="border-top:1px solid #e2e8f0">
+        <div class="font-medium mb-1">What your recipients see</div>
+        <p class="text-xs text-gray-500 mb-3">The header block the app puts at the top of every email this account sends. It follows the fields above as you type; this preview sends nothing and saves nothing.</p>
+        <div style="border:1px solid #e2e8f0;border-radius:12px;padding:22px;background:#fff;max-width:560px">
+          <div id="bp-header" style=${'display:' + ((st.brand && (asText(st.brand.brand_name).trim() || asText(st.brand.logo_url).trim())) ? 'block' : 'none')}>
+            <div style="text-align:center;padding:18px 0 6px">
+              <img id="bp-logo" alt=${asText(st.brand && st.brand.brand_name) || 'Your logo'} src=${asText(st.brand && st.brand.logo_url)}
+                style=${'max-height:56px;max-width:240px;display:' + (st.brand && asText(st.brand.logo_url).trim() ? 'inline-block' : 'none')} />
+              <span id="bp-name" style=${'font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827;display:' + ((st.brand && asText(st.brand.brand_name).trim() && !asText(st.brand.logo_url).trim()) ? 'inline-block' : 'none')}>${asText(st.brand && st.brand.brand_name)}</span>
+            </div>
+            <div id="bp-rule" style=${'border-top:3px solid ' + effColor(st.brand && st.brand.brand_color) + ';margin:0 0 18px'}></div>
+          </div>
+          <div style="font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">Hi Alex — this is a sample of the message body. Only the header above comes from your branding.</div>
+        </div>
+        <div id="bp-blank" class="text-xs text-gray-400 mt-2" style=${(st.brand && (asText(st.brand.brand_name).trim() || asText(st.brand.logo_url).trim())) ? 'display:none' : 'display:block'}>Nothing is set yet, so mail keeps the IncentiveSwift header.</div>
       </div>
     </div>
     ${st.error ? html`<div class="card p-3 text-sm text-red-700" style="background:#fef2f2">${st.error}</div>` : null}
