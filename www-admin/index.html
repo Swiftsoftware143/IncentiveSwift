@@ -3160,7 +3160,7 @@ const SettingsView = () => {
         <div style="border:1px solid #e2e8f0;border-radius:12px;padding:22px;background:#fff;max-width:560px">
           <div id="bp-header" style=${'display:' + ((st.brand && (asText(st.brand.brand_name).trim() || asText(st.brand.logo_url).trim())) ? 'block' : 'none')}>
             <div style="text-align:center;padding:18px 0 6px">
-              <img id="bp-logo" alt=${asText(st.brand && st.brand.brand_name) || 'Your logo'} src=${asText(st.brand && st.brand.logo_url)}
+              <img id="bp-logo" alt=${asText(st.brand && st.brand.brand_name) || 'Your logo'} src=${(st.brand && asText(st.brand.logo_url).trim()) ? asText(st.brand.logo_url) : undefined}
                 style=${'max-height:56px;max-width:240px;display:' + (st.brand && asText(st.brand.logo_url).trim() ? 'inline-block' : 'none')} />
               <span id="bp-name" style=${'font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827;display:' + ((st.brand && asText(st.brand.brand_name).trim() && !asText(st.brand.logo_url).trim()) ? 'inline-block' : 'none')}>${asText(st.brand && st.brand.brand_name)}</span>
             </div>
