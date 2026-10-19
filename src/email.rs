@@ -173,7 +173,7 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         "email_change" => "Confirm your new sign-in email".to_string(),
         // The customer's own plan request / billing ticket was answered (2026-10-19). Named for
         // the thing the customer asked about, so it reads as an answer and not as a system notice.
-        "plan_request_update" => format!("Update on your request — {app_name}"),
+        "plan_request_update" => format!("About your request — {app_name}"),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -276,7 +276,7 @@ async fn send_inline(
                 name, request, status_word, note, app_url, app_name
             );
             Ok((
-                format!("Update on your request — {}", app_name),
+                format!("About your request — {}", app_name),
                 body,
                 String::new(),
             ))
