@@ -347,6 +347,17 @@ pub async fn list_all_tenants(
             a.created_at,
             COALESCE(pt.name, 'No Plan') as plan_name,
             COALESCE(pt.id::text, '') as plan_id,
+            COALESCE(pt.slug, '') as plan_slug,
+            -- The CATALOGUE row (`plans.id`) that this account's tier maps to, by slug. The two id
+            -- spaces are NOT interchangeable (measured live 2026-09-25: `plans.pro` a43b9f9e… vs
+            -- `plan_tiers.pro` c3a2d26b…), and POST /admin/plans/assign takes a `plans.id`. Without
+            -- this the plan picker could not preselect the account's real plan.
+            COALESCE((
+                SELECT pl.id::text FROM plans pl
+                 WHERE pl.slug = pt.slug AND pl.is_active = true
+                 ORDER BY pl.sort_order ASC NULLS LAST, pl.created_at ASC
+                 LIMIT 1
+            ), '') as catalog_plan_id,
             COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
             u.user_count,
             COALESCE(a.probe_harness, '') as probe_harness
@@ -373,6 +384,11 @@ pub async fn list_all_tenants(
             let email: String = row.get("email");
             let plan_name: String = row.get("plan_name");
             let plan_id: String = row.get("plan_id");
+            let plan_slug: String = row.get("plan_slug");
+            // The catalogue-side id the assign writer takes (see the SELECT's comment). Published
+            // alongside the tier id so the console's plan picker can both PRESELECT the account's
+            // real plan and WRITE the one the operator picks, without guessing which id space.
+            let catalog_plan_id: String = row.get("catalog_plan_id");
             let price_monthly: f64 = row.get("price_monthly");
             let user_count: i64 = row.get("user_count");
             // The AUTHORITATIVE harness attribution (kanban t_4a744754): written at signup by the
@@ -387,6 +403,8 @@ pub async fn list_all_tenants(
                 "email": email,
                 "plan_name": plan_name,
                 "plan_id": plan_id,
+                "plan_slug": plan_slug,
+                "catalog_plan_id": catalog_plan_id,
                 "price_monthly": price_monthly,
                 "user_count": user_count,
                 "probe_harness": probe_harness,
