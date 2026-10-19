@@ -74,6 +74,71 @@ async fn tenant_scope(state: &AppState, account_id: &str) -> Result<Uuid, AppErr
     Ok(uuid)
 }
 
+/// Tell the REQUESTER that their request moved (2026-10-19).
+///
+/// The operator console is the only place a plan request is answered, and until now the answer
+/// stopped there: the customer's dashboard read the state back, but nothing ever told them to look.
+/// This is called from the two operator actions that ARE an answer — a status change, and a message
+/// the team marked visible to the customer — and from nowhere else, so a customer replying to their
+/// own ticket never mails themselves.
+///
+/// It never fails the caller: the request has already been written by the time this runs, and a mail
+/// problem must not roll back or 500 the operator's action. Every failure is logged and dropped,
+/// exactly like the reset-mail sender.
+async fn notify_requester(
+    state: &AppState,
+    ticket_id: Uuid,
+    actor: Uuid,
+    status_word: &str,
+    reply: &str,
+) {
+    let row = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String)>(
+        "SELECT tenant_id, created_by, subject FROM support_tickets WHERE id = $1",
+    )
+    .bind(ticket_id)
+    .fetch_optional(&state.db)
+    .await;
+
+    let Ok(Some((tenant_id, created_by, subject))) = row else {
+        return;
+    };
+    // The workspace that filed it; `created_by` is the fallback for a ticket opened outside one.
+    let Some(target) = tenant_id.or(created_by) else {
+        return;
+    };
+    // Never mail the account that just made the change (an operator answering their own ticket).
+    if target == actor {
+        return;
+    }
+    let who = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT COALESCE(email, ''), name FROM accounts WHERE id = $1",
+    )
+    .bind(target)
+    .fetch_optional(&state.db)
+    .await;
+
+    let Ok(Some((email, name))) = who else {
+        return;
+    };
+    if email.trim().is_empty() {
+        return;
+    }
+
+    if let Err(e) = crate::email::send_plan_request_update_email(
+        &state.db,
+        target,
+        email.trim(),
+        name.as_deref().unwrap_or(""),
+        &subject,
+        status_word,
+        reply,
+    )
+    .await
+    {
+        tracing::warn!("plan-request update mail to {} failed: {}", email, e);
+    }
+}
+
 /// The caller's platform role, read from the database rather than the JWT claim: a token minted
 /// before a promotion carries the old role, and this decides who may see a customer's private notes.
 async fn caller_is_operator(state: &AppState, account: Uuid) -> bool {
@@ -229,6 +294,15 @@ pub async fn update_ticket(
     .ok_or_else(|| AppError::NotFound("Ticket not found".to_string()))?;
     let _ = existing;
 
+    // The state the customer last saw, so "moved" means moved: a PUT that re-sends the same status
+    // must not mail the customer again.
+    let before_status =
+        sqlx::query_scalar::<_, String>("SELECT status FROM support_tickets WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or_default();
+
     let resolved_at: Option<chrono::DateTime<chrono::Utc>> = match body.status.as_deref() {
         Some("resolved") | Some("closed") => Some(chrono::Utc::now()),
         _ => None,
@@ -263,6 +337,17 @@ pub async fn update_ticket(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
+
+    // A status move by the TEAM is an answer, so the customer is told (2026-10-19). A customer's own
+    // PUT is not, and an unchanged status is not.
+    if is_operator {
+        if let Some(new_status) = body.status.as_deref() {
+            if new_status != before_status {
+                notify_requester(&state, id, account, new_status, "").await;
+            }
+        }
+    }
+
     Ok(Json(json!({ "ticket": row })))
 }
 
@@ -330,5 +415,22 @@ pub async fn add_message(
         .bind(id)
         .execute(&state.db)
         .await?;
+
+    // A reply the TEAM marked visible IS the answer the customer asked for, so it is mailed to them
+    // (2026-10-19). Before this, the console posted every reply as an internal note and the customer
+    // could not read it at all. An internal note, a customer's own message, and the operator's own
+    // ticket are all silent.
+    if is_operator && !is_internal {
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM support_tickets WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "updated".to_string());
+        notify_requester(&state, id, account, &status, &body.body).await;
+    }
+
     Ok(Json(json!({ "id": msg_id })))
 }

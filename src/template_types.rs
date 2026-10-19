@@ -45,6 +45,10 @@ pub const ACCOUNT_MAILS: &[(&str, &str)] = &[
         "Purchase confirmation (checkout / plan upgrade)",
     ),
     ("password_reset", "Password reset (forgot password)"),
+    (
+        "plan_request_update",
+        "Plan request answered (the customer's own billing/support request)",
+    ),
 ];
 
 pub const GROUP_ACCOUNT: &str = "Account emails";

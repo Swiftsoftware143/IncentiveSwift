@@ -156,6 +156,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <div id="pb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
     <div id="pb-current" style="font-size:13.5px;color:#334155;margin:0 0 14px">Loading your plan&hellip;</div>
     <div id="pb-plans" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
+    <!-- The customer's OWN plan requests and the team's answer (2026-10-19).
+         Until now this page could only SEND a request (POST /api/v1/support-tickets) and never read it
+         back: the customer was told "confirm here" and no such list existed, so the loop ended
+         silently. FunnelSwift, MissedCall and ADASwift all show the customer their request and its
+         live state; this is the same read over the app's own scoped routes
+         (GET /api/v1/support-tickets + GET /api/v1/support-tickets/:id), never a second store. -->
+    <div id="pb-requests" style="margin-top:16px"></div>
   </div>
 </div>
 <script>
@@ -764,6 +771,56 @@ function pbFeatureLabel(k) {
             white_label: 'White label', priority_support: 'Priority support' };
   return m[k] || String(k).replace(/_/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); });
 }
+// The customer's OWN plan requests and the team's answer (2026-10-19).
+// Reads the app's own SCOPED ticket routes: GET /api/v1/support-tickets answers only rows whose
+// tenant (or creator) is this workspace, and GET /:id carries the message thread. Messages flagged
+// is_internal are the team's private notes and are never rendered.
+function pbLoadRequests() {
+  var el = document.getElementById('pb-requests');
+  if (!el) return;
+  fetch(window.location.origin + '/api/v1/support-tickets', { headers: pbAuth(), cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var list = ((d && d.tickets) || []).filter(function (t) {
+        var cat = String((t && t.category) || '').toLowerCase();
+        var sub = String((t && t.subject) || '').toLowerCase();
+        return cat === 'billing' || sub.indexOf('plan') !== -1;
+      });
+      if (!list.length) { el.innerHTML = ''; return; }
+      list.sort(function (a, b) { return String(b.updated_at || '').localeCompare(String(a.updated_at || '')); });
+      list = list.slice(0, 5);
+      var h = '<h3 style="font-size:14px;font-weight:600;color:#1e293b;margin:0 0 8px">Your plan requests</h3>'
+        + '<p style="color:#64748b;font-size:12.5px;margin:0 0 10px">Our team completes these by hand. The state below is the live one, and we email you when it changes.</p>';
+      for (var i = 0; i < list.length; i++) {
+        (function (t) {
+          h += '<div data-plan-request="' + esc(t.id) + '" style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;background:#fff">'
+            + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center">'
+            + '<span style="font-size:13.5px;color:#1e293b">' + esc(t.subject || 'Plan request') + '</span>'
+            + '<span class="badge" data-request-state="' + esc(t.status || 'open') + '">' + esc(String(t.status || 'open').replace(/_/g, ' ')) + '</span>'
+            + '</div>'
+            + '<div data-request-reply="' + esc(t.id) + '" style="font-size:12.5px;color:#334155;margin-top:6px;display:none"></div>'
+            + '</div>';
+          fetch(window.location.origin + '/api/v1/support-tickets/' + encodeURIComponent(t.id), { headers: pbAuth(), cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (td) {
+              var msgs = (td && td.messages) || [];
+              var last = null;
+              for (var m = 0; m < msgs.length; m++) {
+                if (!msgs[m] || msgs[m].is_internal) continue;   // private notes stay private
+                last = msgs[m];
+              }
+              var box = document.querySelector('[data-request-reply="' + t.id + '"]');
+              if (box && last && last.body) {
+                box.style.display = 'block';
+                box.innerHTML = '<div style="background:#f8fafc;border-left:3px solid #6366f1;padding:8px 10px;border-radius:0 6px 6px 0;white-space:pre-wrap">'
+                  + esc(String(last.body)) + '</div>';
+              }
+            }).catch(function () {});
+        })(list[i]);
+      }
+      el.innerHTML = h;
+    }).catch(function () { el.innerHTML = ''; });
+}
 function pbLoad() {
   fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -773,6 +830,7 @@ function pbLoad() {
       list.sort(function (a, b) { return Number(a.monthly_price || 0) - Number(b.monthly_price || 0); });
       PB.plans = list;
       pbRender();
+      pbLoadRequests();
     })
     .catch(function () { pbMsg('Could not load the plan list right now.', 'e'); });
 }
@@ -865,6 +923,7 @@ function pbRequest(slug, price, btn) {
       PB.busy = false;
       if (r.ok) {
         pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.', 's');
+        pbLoadRequests();   // the new request must appear (and its live state) without a reload
         return;
       }
       if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' plan'; }

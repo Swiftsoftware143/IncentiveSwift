@@ -3441,7 +3441,12 @@ const SupportTickets = () => {
   const openDetail = async (id) => { try { const d = await API.get('/support-tickets/' + id); st.detail = d; st.newMsg=''; renderApp(); } catch(e){ alert(e.message); } };
   const closeDetail = () => { st.detail = null; load(); renderApp(); };
   const updateStatus = async (id, status) => { try { await API.put('/support-tickets/' + id, { status }); openDetail(id); load(); } catch(e){ alert(e.message); } };
-  const sendMsg = async () => { if(!st.newMsg || !st.detail) return; try { await API.post('/support-tickets/' + st.detail.ticket.id + '/messages', { body: st.newMsg, is_internal: true }); st.newMsg=''; openDetail(st.detail.ticket.id); } catch(e){ alert(e.message); } };
+  // A reply is either CUSTOMER-VISIBLE or an internal note (2026-10-19).
+  // Before this, the one Post button hard-coded `is_internal: true`, so EVERY message an operator
+  // wrote was a private note: the customer's dashboard could never show an answer to their request.
+  // The customer's own Plan & billing screen now lists their request and the team's reply, and this
+  // is the half that lets the team actually send one.
+  const sendMsg = async (internal) => { if(!st.newMsg || !st.detail) return; try { await API.post('/support-tickets/' + st.detail.ticket.id + '/messages', { body: st.newMsg, is_internal: !!internal }); st.newMsg=''; openDetail(st.detail.ticket.id); } catch(e){ alert(e.message); } };
   const remove = async (id) => { if(!confirm('Delete this ticket?')) return; await API.del('/support-tickets/' + id); load(); };
   const badge = (s) => s==='open' ? 'badge badge-yellow' : s==='resolved' ? 'badge badge-green' : s==='in_progress' ? 'badge badge-blue' : 'badge badge-red';
   const prio = (p) => ({low:'Low',normal:'Normal',high:'High',urgent:'Urgent'}[p] || p);
@@ -3456,16 +3461,17 @@ const SupportTickets = () => {
       ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
     </div>
     <div class="card overflow-hidden">
-      <table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
+      <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
           <td class="font-medium text-sm">${t.subject}</td>
+          <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}</td>
           <td><span class=${badge(t.status)}>${t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
           <td class="text-sm text-gray-500">${t.category||'—'}</td>
           <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
           <td><button class="text-red-600 text-sm mr-2" onClick=${e => { e.stopPropagation(); remove(t.id); }}>Delete</button></td>
         </tr>`)}
-        ${!filtered.length ? html`<tr><td colspan="6" class="text-center text-gray-400 py-8">No tickets in this view</td></tr>` : null}
+        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No tickets in this view</td></tr>` : null}
         </tbody></table>
     </div>
 
@@ -3499,10 +3505,11 @@ const SupportTickets = () => {
           ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
         </div>
         ${st.detail.ticket.description ? html`<div class="bg-gray-50 rounded-lg p-3 text-sm mb-4">${st.detail.ticket.description}</div>` : null}
-        <div class="space-y-2 mb-4">${(st.detail.messages||[]).map(m => html`<div class="rounded-lg p-3 text-sm ${m.is_internal?'bg-blue-50':'bg-gray-50'}"><span class="text-gray-400 text-xs mr-2">${new Date(m.created_at).toLocaleTimeString()}</span>${m.body}${m.is_internal?html` <span class="text-blue-500 text-xs">(internal)</span>`:null}</div>`)}</div>
-        <div class="flex gap-2 mb-4">
-          <input class="border rounded px-3 py-2 text-sm flex-1" placeholder="Add internal note..." value=${st.newMsg} onInput=${e => { st.newMsg=e.target.value; renderApp(); }} />
-          <button class="px-3 py-2 text-sm rounded bg-gray-200" onClick=${sendMsg}>Post</button>
+        <div class="space-y-2 mb-4">${(st.detail.messages||[]).map(m => html`<div class="rounded-lg p-3 text-sm ${m.is_internal?'bg-blue-50':'bg-gray-50'}"><span class="text-gray-400 text-xs mr-2">${new Date(m.created_at).toLocaleTimeString()}</span>${m.body}${m.is_internal?html` <span class="text-blue-500 text-xs">(internal — the customer never sees this)</span>`:html` <span class="text-green-600 text-xs">(sent to the customer)</span>`}</div>`)}</div>
+        <div class="flex gap-2 mb-4 flex-wrap">
+          <input id="ticket-msg" class="border rounded px-3 py-2 text-sm flex-1" placeholder="Write a reply to the customer..." value=${st.newMsg} onInput=${e => { st.newMsg=e.target.value; renderApp(); }} />
+          <button class="px-3 py-2 text-sm rounded bg-blue-600 text-white" data-ticket-reply="customer" onClick=${() => sendMsg(false)}>Reply to customer</button>
+          <button class="px-3 py-2 text-sm rounded bg-gray-200" data-ticket-reply="internal" onClick=${() => sendMsg(true)}>Internal note</button>
         </div>
         <div class="flex gap-2">
           ${['open','in_progress','resolved','closed'].filter(s => s!==st.detail.ticket.status).map(s => html`<button class="px-3 py-1.5 text-xs rounded border" onClick=${() => updateStatus(st.detail.ticket.id, s)}>Set ${s==='in_progress'?'In Progress':s}</button>`)}
@@ -4206,7 +4213,17 @@ const BulkTenantDelete = () => {
   // rows by eye, which is how a test-account sweep under-counts. Rows the API protects (portfolio
   // companies, the workspace you are signed in as) are still refused PER ROW by bulk-delete and the
   // reason comes back in the result line, so they are not filtered out here — the operator sees them.
-  const probeRows = list.filter((r) => !!probeHarnessOf(r) || isProbeOwner(r.email));
+  // LIVE MONITORS ARE NOT CLEANUP CANDIDATES (cron 2026-10-19). The tenancy-canary fixtures
+  // (`Tenancy Canary A/B`, `probe-canary-*@swiftsoftware.dev`) are seeded and re-checked by a cron
+  // monitor in every app; deleting one only makes the monitor re-seed it. They match the probe
+  // predicates above, so the one-click sweep used to tick live infrastructure next to the
+  // disposable rows — measured live: the button read "Select probes (6)" when 4 rows were test
+  // residue and 2 were the monitors. They keep their [probe] badge and stay in the table; they are
+  // simply not offered for mass deletion, and the panel says how many were held back.
+  const isMonitorRow = (r) => /^tenancy canary/i.test(String((r && r.name) || ''))
+    || /^probe-canary/i.test(String((r && r.email) || ''));
+  const monitorRows = list.filter(isMonitorRow);
+  const probeRows = list.filter((r) => !isMonitorRow(r) && (!!probeHarnessOf(r) || isProbeOwner(r.email)));
 
   const run = async () => {
     setConfirming(false);
@@ -4255,6 +4272,17 @@ const BulkTenantDelete = () => {
       ${(plans || []).filter(p => p.is_active !== false || p.id === r.catalog_plan_id)
         .map(p => html`<option value=${p.id}>${p.name}</option>`)}
     </select>`;
+  // What the workspace is actually charged (2026-10-19). `GET /admin/tenants` has published
+  // `price_monthly` (cast to float8 in SQL, so it is a number and not the silent NULL a bare
+  // NUMERIC decode produces) since the plan picker shipped, and the table threw it away — so a
+  // paying workspace and a free one read identically on the screen where plans are assigned.
+  const billingCell = (r) => {
+    if (!r.catalog_plan_id) return html`<span class="text-gray-400">—</span>`;
+    const n = (r.price_monthly == null) ? 0 : Number(r.price_monthly);
+    if (isNaN(n)) return html`<span class="text-gray-500">—</span>`;
+    if (n === 0) return html`<span class="text-xs px-1 rounded bg-green-100 text-green-700">free</span>`;
+    return html`<span style="font-family:monospace">$${n.toFixed(2)}<span class="text-xs text-gray-500">/mo</span></span>`;
+  };
 
   return html`<div class="ops-action border rounded-lg p-2 mb-2 bg-gray-50">
     <div class="flex flex-wrap items-center gap-2 mb-2">
@@ -4263,6 +4291,8 @@ const BulkTenantDelete = () => {
       <button class="px-2 py-0.5 rounded border text-xs" data-tenants="select-probes"
         disabled=${busy || probeRows.length === 0} onClick=${() => setSel(probeRows.map((r) => r.id))}>
         Select probes (${probeRows.length})</button>
+      ${monitorRows.length > 0 && html`<span class="text-xs text-gray-500" data-monitors-excluded=${monitorRows.length}
+        title="live tenancy-canary fixtures that a cron monitor seeds and checks — they stay in the list and are never mass-deleted">${monitorRows.length} live monitor(s) excluded</span>`}
       <button class="px-3 py-1 rounded text-sm ${sel.length ? 'btn-red' : 'bg-gray-200 text-gray-500'}"
         disabled=${busy || sel.length === 0} onClick=${() => setConfirming(true)}>
         Delete selected (${sel.length})</button>
@@ -4279,6 +4309,7 @@ const BulkTenantDelete = () => {
             <th class="text-left border-b px-2 py-1 bg-gray-100">name</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">email</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">plan</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100">billing</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">users</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">id</th>
           </tr></thead>
@@ -4288,6 +4319,7 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1">${r.name || ''}</td>
             <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
             <td class="border-b px-2 py-1">${planCell(r)}</td>
+            <td class="border-b px-2 py-1" data-tenant-billing=${r.id || ''}>${billingCell(r)}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
           </tr>`)}</tbody>

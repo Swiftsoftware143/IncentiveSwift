@@ -123,7 +123,8 @@
     <p>The Tenants page lists all registered accounts in a searchable table. Each row shows:</p>
     <ul>
       <li><strong>Name</strong> — Tenant company or display name</li>
-      <li><strong>Plan</strong> — Currently assigned plan name</li>
+      <li><strong>Plan</strong> — The plan the workspace is on, as a picker: choose a plan and it is assigned immediately</li>
+      <li><strong>Billing</strong> — What that workspace is actually charged on its current plan: the plan tier's monthly price, or <em>free</em> for a zero-priced tier. A dash means the workspace has no plan at all. The figure comes from the same row the picker writes, so assigning a plan updates this column at the next load.</li>
       <li><strong>Status</strong> — Active (<span style="color:var(--green)">●</span>) or Suspended (<span style="color:var(--red)">●</span>)</li>
       <li><strong>Users</strong> — Number of user accounts under this tenant</li>
       <li><strong>Created</strong> — Account creation date</li>
@@ -134,7 +135,8 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
   </div>
   <div class="card">
     <h3>Assigning Plans</h3>
-    <p>Plan assignment is an operator control in the console's <strong>Plans</strong> section — <strong>Assign plan to account</strong>. It takes the target plan id and the account id and applies the change immediately; no confirmation from the tenant is required. There is no per-tenant "Assign Plan" button on the Tenants table.</p>
+    <p>The <strong>Plan</strong> column on the Tenants table is a picker. Open the console's <strong>Operator Console → 4 · Tenants</strong> panel, choose a plan in the row you want to change, and confirm: the change applies immediately and needs no action from the tenant. The row's cell then reads the new plan, and a line above the table confirms what was assigned to whom. A workspace with no plan shows <em>— no plan —</em> until you give it one.</p>
+    <p>The picker writes the catalogue plan, not the account's tier id: the two are different ids for the same plan (the server maps them by slug), so an operator never has to know which is which. The same endpoint is available to scripts.</p>
     <pre>POST /api/v1/admin/plans/assign   — Assign plan (fields: plan_id, account_id)</pre>
   </div>
   <div class="card">

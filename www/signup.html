@@ -113,9 +113,18 @@ async function handleSignup(e) {
     }
 
     // Success — do NOT log them in. They confirm their email by signing in with the password we sent.
+    // The panel also names the way back in when that mail never arrives (cron 2026-10-19): the reset
+    // request page is on the APP host and prefills the address from ?email=, so the customer does not
+    // retype it. Without this, "check your email" was a dead end whenever the mail was filtered —
+    // the same gap closed on FunnelSwift (a8ed8ad) and MissedCall.
     document.getElementById('signup-form').style.display = 'none';
     sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
-      email.replace(/[<>&]/g, '') + '.<br><br>You can change your password any time in your profile settings.';
+      email.replace(/[<>&]/g, '') + '.<br><br>You can change your password any time in your profile settings.' +
+      '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+      'Nothing in your inbox after a minute? Check your spam folder, then ' +
+      '<a href="https://app.incentiveswift.com/forgot-password.html?email=' + encodeURIComponent(email) + '" ' +
+      'style="color:var(--accent);font-weight:600">send yourself a reset code</a>.' +
+      '</div>';
     sucDiv.style.display = 'block';
   } catch (e) {
     errDiv.textContent = e.message;

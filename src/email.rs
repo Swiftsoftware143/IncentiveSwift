@@ -171,6 +171,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The sign-in address change (kanban t_6b2702e3). Named for what the recipient must DO,
         // because the account has not moved yet — the link is the only thing that moves it.
         "email_change" => "Confirm your new sign-in email".to_string(),
+        // The customer's own plan request / billing ticket was answered (2026-10-19). Named for
+        // the thing the customer asked about, so it reads as an answer and not as a system notice.
+        "plan_request_update" => format!("Update on your request — {app_name}"),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -250,6 +253,34 @@ async fn send_inline(
                 String::new(),
             ))
         }
+        // The inline safety net for the customer's own answered request (2026-10-19) — reached when
+        // the account has no `plan_request_update` template row. It says the three things the
+        // customer needs: WHICH request, its state now, and where to read the team's note again.
+        "plan_request_update" => {
+            let request = vars
+                .get("request")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your request");
+            let status_word = vars
+                .get("status_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or("updated");
+            let reply = vars.get("reply").and_then(|v| v.as_str()).unwrap_or("");
+            let note = if reply.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n\nThe team's note:\n\n{}\n", reply.trim())
+            };
+            let body = format!(
+                "Hi {},\n\nHere is an update on \"{}\" — it is now: {}.{}\n\nYou can read this on your dashboard's Plan & billing screen at {}/dashboard/ at any time.\n\n- The {} Team",
+                name, request, status_word, note, app_url, app_name
+            );
+            Ok((
+                format!("Update on your request — {}", app_name),
+                body,
+                String::new(),
+            ))
+        }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);
             Ok((format!("{} Notification", app_name), body, String::new()))
@@ -322,6 +353,36 @@ pub async fn send_reset_email(
         "app_url": "https://app.incentiveswift.com",
     });
     send_template_email(pool, Some(account_id), to, "password_reset", &vars).await
+}
+
+/// Tell a customer their own request moved (2026-10-19).
+///
+/// Until this existed the loop ended silently: a workspace asked for a paid plan from the Plan &
+/// billing screen, the team answered (or moved the state) in the operator console, and the customer
+/// was never told — the only way to learn the answer was to keep re-opening the dashboard. FunnelSwift
+/// (`plan_request_update`) and WorkflowSwift ("the customer is told when their request is handled")
+/// already mail on this event; this is the same mail for this app's own ticket queue.
+///
+/// `account_id` is the REQUESTER's account, so the mail renders that workspace's email branding.
+pub async fn send_plan_request_update_email(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    to: &str,
+    name: &str,
+    request: &str,
+    status_word: &str,
+    reply: &str,
+) -> Result<(), String> {
+    let vars = json!({
+        "name": if name.trim().is_empty() { "there" } else { name.trim() },
+        "request": request,
+        "status_word": status_word.replace('_', " "),
+        "reply": reply,
+        "app_name": APP_NAME,
+        "login_url": APP_URL,
+        "app_url": APP_URL,
+    });
+    send_template_email(pool, Some(account_id), to, "plan_request_update", &vars).await
 }
 
 /// The operator's view of the LAST transactional send this installation attempted.
