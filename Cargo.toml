@@ -40,6 +40,10 @@ anyhow = "1"
 rust_decimal = { version = "1", features = ["serde"] }
 lettre = { version = "0.11", features = ["tokio1-native-tls", "builder", "smtp-transport"] }
 regex-lite = "0.1.9"
+# The member card's scannable code (GET /api/v1/loyalty/member/:member_id/qr -> inline `qr_svg`).
+# SVG only, exactly the shape FunnelSwift ships its counter codes with; the crate is already in the
+# box's cargo registry cache at this version.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

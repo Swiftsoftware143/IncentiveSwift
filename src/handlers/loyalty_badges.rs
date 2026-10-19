@@ -7,11 +7,12 @@
 //! (t_f76c9950). What remains is authenticated and scoped to the caller's own programme.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use rand::Rng;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -46,6 +47,124 @@ async fn ensure_member_in_caller_programme(
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3: QR Code Generation
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/// The member card's scannable image, as an inline `<svg>` the console can drop straight into a
+/// card and a browser can print. `None` only if the payload cannot be encoded, and the JSON arm
+/// then omits the key rather than shipping a broken `<img>`.
+fn qr_svg(data: &str) -> Option<String> {
+    let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
+    Some(
+        code.render::<qrcode::render::svg::Color>()
+            .min_dimensions(220, 220)
+            .dark_color(qrcode::render::svg::Color("#111827"))
+            .light_color(qrcode::render::svg::Color("#ffffff"))
+            .build(),
+    )
+}
+
+/// `GET /api/v1/loyalty/members?program_id=<uuid>` — the operator's member roster for ONE
+/// programme.
+///
+/// This is the missing read behind the console's Loyalty screen: `loyalty_members` is written by
+/// the public check-in flow (`POST /api/v1/loyalty/checkin`, `www-app/loyalty-checkin.html`) and
+/// every member arm in this file is keyed on a member id the operator had no way to obtain — the
+/// admin dashboard answered totals only, never the rows. Scoped exactly like the member arms
+/// (`loyalty_programs -> campaigns.account_id`), so a programme belonging to another account is a
+/// 404, not an empty list.
+pub async fn program_members(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let program_id = q
+        .get("program_id")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
+        .ok_or_else(|| AppError::BadRequest("program_id must be a uuid".into()))?;
+
+    let owned: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM loyalty_programs lp \
+           JOIN campaigns c ON c.id = lp.campaign_id \
+          WHERE lp.id = $1 AND c.account_id = $2)",
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !owned {
+        return Err(AppError::NotFound("Program not found".into()));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct MemberRow {
+        id: Uuid,
+        first_name: Option<String>,
+        last_name: Option<String>,
+        email: Option<String>,
+        phone: Option<String>,
+        points_balance: i32,
+        lifetime_points: i32,
+        member_since: Option<chrono::DateTime<chrono::Utc>>,
+        last_checkin_at: Option<chrono::DateTime<chrono::Utc>>,
+        tier_name: Option<String>,
+        current_streak: i32,
+        has_qr: bool,
+    }
+
+    let rows: Vec<MemberRow> = sqlx::query_as(
+        r#"SELECT lm.id,
+                  c.first_name, c.last_name, c.email, c.phone,
+                  COALESCE(lm.points_balance, 0)   AS points_balance,
+                  COALESCE(lm.lifetime_points, 0)  AS lifetime_points,
+                  lm.member_since, lm.last_checkin_at,
+                  t.name                           AS tier_name,
+                  COALESCE(lm.current_streak, 0)   AS current_streak,
+                  (lm.qr_code IS NOT NULL AND lm.qr_code <> '') AS has_qr
+             FROM loyalty_members lm
+             LEFT JOIN contacts c ON c.id = lm.contact_id
+             LEFT JOIN loyalty_tiers t ON t.id = lm.tier_id
+            WHERE lm.program_id = $1
+            ORDER BY COALESCE(lm.points_balance, 0) DESC, lm.member_since DESC NULLS LAST
+            LIMIT 500"#,
+    )
+    .bind(program_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let total = rows.len();
+    let members: Vec<Value> = rows
+        .into_iter()
+        .map(|m| {
+            let name = [m.first_name.as_deref(), m.last_name.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            json!({
+                "id": m.id.to_string(),
+                "name": if name.is_empty() { m.email.clone().unwrap_or_else(|| "Member".into()) } else { name },
+                "email": m.email,
+                "phone": m.phone,
+                "points_balance": m.points_balance,
+                "lifetime_points": m.lifetime_points,
+                "tier_name": m.tier_name,
+                "current_streak": m.current_streak,
+                "member_since": m.member_since.map(|t| t.to_rfc3339()),
+                "last_checkin_at": m.last_checkin_at.map(|t| t.to_rfc3339()),
+                "has_qr": m.has_qr,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "program_id": program_id.to_string(),
+        "total": total,
+        "members": members,
+    })))
+}
 
 /// GET /api/v1/loyalty/member/:member_id/qr
 /// Generate or retrieve the QR code for a loyalty member.
@@ -86,13 +205,15 @@ pub async fn get_member_qr(
 
     // If QR already exists, return it
     if let Some(ref qr) = existing_qr {
+        let qr_data = format!("IS:{}:{}", mid, qr);
         return Ok(Json(json!({
             "member_id": mid.to_string(),
             "program_id": pid.to_string(),
             "program_name": program_name,
             "qr_code": qr,
             "generated_at": qr_generated_at.map(|t| t.to_rfc3339()),
-            "qr_data": format!("IS:{}:{}", mid, qr),
+            "qr_data": qr_data,
+            "qr_svg": qr_svg(&qr_data),
             "regenerated": false,
         })));
     }
@@ -126,6 +247,7 @@ pub async fn get_member_qr(
         "qr_code": qr_code,
         "generated_at": now.to_rfc3339(),
         "qr_data": format!("IS:{}:{}", mid, qr_code),
+        "qr_svg": qr_svg(&format!("IS:{}:{}", mid, qr_code)),
         "regenerated": true,
     })))
 }

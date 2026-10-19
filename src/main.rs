@@ -520,6 +520,15 @@ async fn main() -> anyhow::Result<()> {
         // only ever have answered "not enrolled". The business/supplier ids are MultiDirectory
         // entities, so no account owner is derivable in THIS app; the sibling external surface
         // was retired the same way (t_f76c9950).
+        // The operator's member ROSTER (2026-10-19): `loyalty_members` rows are written by the
+        // public check-in page, but every per-member arm below needs an id the console had no way
+        // to obtain — the admin dashboard answered totals only. Private by default-deny: it is in
+        // neither PUBLIC list, so `security::route_policy` requires a credential and the handler
+        // scopes the read to the caller's own programme.
+        .route(
+            "/api/v1/loyalty/members",
+            get(handlers::loyalty_badges::program_members),
+        )
         // Loyalty QR endpoints (Phase 3)
         .route(
             "/api/v1/loyalty/member/:member_id/qr",
