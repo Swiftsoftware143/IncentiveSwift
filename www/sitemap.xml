@@ -1,13 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
+    <loc>https://incentiveswift.com/guide</loc>
+    <lastmod>2026-10-15</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://incentiveswift.com/</loc>
-    <changefreq>weekly</changefreq>
+    <lastmod>2026-10-15</lastmod>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://incentiveswift.com/signup</loc>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
+    <loc>https://incentiveswift.com/iqs-play</loc>
+    <lastmod>2026-07-31</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://incentiveswift.com/kb</loc>
+    <lastmod>2026-10-11</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://incentiveswift.com/long-form-qualifier</loc>
+    <lastmod>2026-09-21</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://incentiveswift.com/privacy</loc>
+    <lastmod>2026-09-25</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://incentiveswift.com/refunds</loc>
+    <lastmod>2026-09-25</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://incentiveswift.com/terms</loc>
+    <lastmod>2026-09-25</lastmod>
+    <priority>0.7</priority>
   </url>
 </urlset>
