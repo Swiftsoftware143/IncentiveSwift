@@ -19,10 +19,17 @@ use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 
-/// The caller's account owns the loyalty programme this member belongs to
-/// (`loyalty_members -> loyalty_programs -> campaigns.account_id`)? A caller who does not own it
-/// gets the same 404 an absent member gets - the refusal invents no role bypass (kanban
+/// The caller's account owns the loyalty programme this member belongs to? A caller who does not
+/// own it gets the same 404 an absent member gets - the refusal invents no role bypass (kanban
 /// t_f08d32e7: this file's member QR / scan / dashboard arms took no `AuthenticatedUser` at all).
+///
+/// The predicate is the SAME three-arm one `update_program` / `list_programs` use, because a
+/// programme has two links and either may be the only one that exists (measured 2026-10-19):
+/// `loyalty_programs.account_id` is the explicit owner, `lp.campaign_id` is the reverse pointer the
+/// console's "+ Add Program" modal leaves NULL, and `campaigns.loyalty_program_id` is the canonical
+/// FORWARD link `POST /loyalty/checkin` resolves first. Joining only `lp.campaign_id` therefore
+/// 404'd a member who had just legitimately checked in to a forward-linked programme, and the
+/// operator could never open that member's card.
 async fn ensure_member_in_caller_programme(
     pool: &sqlx::PgPool,
     member_id: &Uuid,
@@ -31,8 +38,12 @@ async fn ensure_member_in_caller_programme(
     let owns: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM loyalty_members lm \
            JOIN loyalty_programs lp ON lp.id = lm.program_id \
-           JOIN campaigns c ON c.id = lp.campaign_id \
-          WHERE lm.id = $1 AND c.account_id = $2)",
+          WHERE lm.id = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c \
+                             WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns fwd \
+                             WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2)))",
     )
     .bind(member_id)
     .bind(account_id)
@@ -85,8 +96,12 @@ pub async fn program_members(
 
     let owned: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM loyalty_programs lp \
-           JOIN campaigns c ON c.id = lp.campaign_id \
-          WHERE lp.id = $1 AND c.account_id = $2)",
+          WHERE lp.id = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c \
+                             WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns fwd \
+                             WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2)))",
     )
     .bind(program_id)
     .bind(account_id)
@@ -436,8 +451,13 @@ pub async fn admin_dashboard(
     // (`loyalty_programs.campaign_id -> campaigns.account_id`) - no role bypass.
     let program = sqlx::query_as::<_, (Uuid, String, bool)>(
         "SELECT lp.id, lp.name, lp.is_active FROM loyalty_programs lp \
-           JOIN campaigns c ON c.id = lp.campaign_id \
-          WHERE lp.slug = $1 AND c.account_id = $2 LIMIT 1",
+          WHERE lp.slug = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c \
+                             WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns fwd \
+                             WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2)) \
+          LIMIT 1",
     )
     .bind(&program_slug)
     .bind(account_id)
