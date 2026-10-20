@@ -195,7 +195,7 @@ pub(crate) enum IssuedAt {
 /// is `accounts.sessions_valid_from` as a unix epoch (`None` there = the account has never
 /// restricted its sessions, which is every account until it changes or resets its password, so
 /// nothing changes for tokens already in the wild). A session with NO `iat` cannot prove it is
-/// newer than the change, and the safe answer for a credential is "cannot prove → refuse".
+/// newer than the change, and the safe answer for a credential is "cannot prove → refuse". `iat` is second-granularity (and the change's own timestamp is floored to a second for this reason), so a session minted in the SAME second as the change cannot be told apart from a re-login and is allowed.
 /// A [`IssuedAt::Durable`] credential is not a session and is never refused here.
 pub(crate) fn token_predates_password_change(issued: IssuedAt, valid_from: Option<i64>) -> bool {
     let IssuedAt::Session(jwt_iat) = issued else {
@@ -239,7 +239,7 @@ async fn guard_account_exists(
     let valid_from = match uuid::Uuid::parse_str(account_id) {
         Ok(id) => {
             sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(EXTRACT(EPOCH FROM sessions_valid_from)::bigint, 0)
+                "SELECT COALESCE(floor(EXTRACT(EPOCH FROM sessions_valid_from))::bigint, 0)
                    FROM accounts WHERE id = $1",
             )
             .bind(id)
