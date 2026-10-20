@@ -216,12 +216,21 @@ pub async fn list_tickets(
         .await?
     } else {
         sqlx::query_as::<_, SupportTicket>(
-            r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                      priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at,
-                      plan_slug, plan_applied_at
-               FROM support_tickets
-               WHERE tenant_id = $1 OR created_by = $1
-               ORDER BY updated_at DESC"#,
+            // THE CUSTOMER'S OWN LIST CARRIES THE PLAN'S NAME (cron 2026-10-20). The row it read
+            // before selected `plan_slug` alone, so a request filed from the dashboard came back
+            // with `plan_name: null` and the console had to re-derive the display name from a local
+            // slug map. The operator's arm has joined `plans` since the plan column existed; this is
+            // the same join in the read direction, so BOTH callers get one shape. `COALESCE(…, slug)`
+            // keeps a request naming a plan that has since been retired readable (it prints the
+            // slug rather than nothing).
+            r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description, t.status,
+                      t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
+                      t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                      COALESCE(p.name, t.plan_slug) AS plan_name
+               FROM support_tickets t
+               LEFT JOIN plans p ON p.slug = t.plan_slug
+               WHERE t.tenant_id = $1 OR t.created_by = $1
+               ORDER BY t.updated_at DESC"#,
         )
         .bind(scope)
         .fetch_all(&state.db)
@@ -598,8 +607,27 @@ pub async fn update_ticket(
         }
     }
 
+    // THE RESPONSE MUST CARRY THE STATE THIS CALL JUST CAUSED (cron 2026-10-20). `row` was read
+    // BEFORE the plan move above, so a request this very save switched came back as
+    // `plan_applied_at: null` with `plan_name: null` — the operator's screen was handed an object
+    // that contradicted the green "switched" sentence beside it. One re-read with the SAME join the
+    // detail route uses makes the two endpoints answer one shape, and a caller that renders the
+    // response instead of re-fetching the list is no longer shown a stale row.
+    let ticket = sqlx::query_as::<_, SupportTicket>(
+        r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
+                  t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by,
+                  t.created_at, t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                  COALESCE(p.name, t.plan_slug) AS plan_name
+           FROM support_tickets t
+           LEFT JOIN plans p ON p.slug = t.plan_slug
+           WHERE t.id = $1"#,
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+
     Ok(Json(json!({
-        "ticket": row,
+        "ticket": ticket,
         "plan_applied": plan_applied,
         "plan_note": plan_note,
     })))
