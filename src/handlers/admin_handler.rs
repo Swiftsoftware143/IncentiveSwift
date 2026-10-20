@@ -348,6 +348,14 @@ pub async fn list_all_tenants(
             COALESCE(pt.name, 'No Plan') as plan_name,
             COALESCE(pt.id::text, '') as plan_id,
             COALESCE(pt.slug, '') as plan_slug,
+            -- The tier the app ACTUALLY applies (2026-10-20). `auth_handler` labels an account with
+            -- no `plan_tier_id` "Free" (`plan_name.unwrap_or("Free")`), so those accounts are served
+            -- Free limits — and this list published the literal 'No Plan', so the operator's screen
+            -- and the customer's own screen disagreed about the same account. Name the enforced tier.
+            COALESCE(pt.name, (SELECT dt.name FROM plan_tiers dt
+                                WHERE dt.slug = 'free' AND dt.is_active
+                                ORDER BY dt.created_at LIMIT 1), 'Free') as plan_effective_name,
+            (a.plan_tier_id IS NULL) as plan_is_default,
             -- The CATALOGUE row (`plans.id`) that this account's tier maps to, by slug. The two id
             -- spaces are NOT interchangeable (measured live 2026-09-25: `plans.pro` a43b9f9e… vs
             -- `plan_tiers.pro` c3a2d26b…), and POST /admin/plans/assign takes a `plans.id`. Without
@@ -397,11 +405,15 @@ pub async fn list_all_tenants(
             // ordinary-looking address read as a customer. COALESCEd to '' so a pre-column row is
             // empty, never null.
             let probe_harness: String = row.get("probe_harness");
+            let plan_effective_name: String = row.get("plan_effective_name");
+            let plan_is_default: bool = row.get("plan_is_default");
             json!({
                 "id": id.to_string(),
                 "name": name.unwrap_or_default(),
                 "email": email,
                 "plan_name": plan_name,
+                "plan_effective_name": plan_effective_name,
+                "plan_is_default": plan_is_default,
                 "plan_id": plan_id,
                 "plan_slug": plan_slug,
                 "catalog_plan_id": catalog_plan_id,
