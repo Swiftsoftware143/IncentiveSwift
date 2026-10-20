@@ -59,7 +59,10 @@ where
 
         // Try API key validation first (bcrypt verify)
         if let Some(user) = validate_api_key(&app_state, token).await? {
-            guard_account_exists(&app_state.db, &method, &user.account_id).await?;
+            // An ISSUED API key is an integration credential, not a browser session: a password
+            // change must not revoke it, so it is never measured against `sessions_valid_from`.
+            guard_account_exists(&app_state.db, &method, &user.account_id, IssuedAt::Durable)
+                .await?;
             return Ok(user);
         }
 
@@ -75,7 +78,15 @@ where
                 .unwrap_or_else(|| "authenticated".to_string()),
             impersonating: claims.impersonating.clone(),
         };
-        guard_account_exists(&app_state.db, &method, &user.account_id).await?;
+        // `claims.iat` is what lets a password change or reset end the sessions that predate it
+        // (see [`IssuedAt`] and the module doc: SESSION REVOCATION).
+        guard_account_exists(
+            &app_state.db,
+            &method,
+            &user.account_id,
+            IssuedAt::Session(claims.iat),
+        )
+        .await?;
         Ok(user)
     }
 }
@@ -164,6 +175,41 @@ pub(crate) fn refusal_for(method: &Method, names_a_row: bool) -> Option<AppError
     }
 }
 
+/// What kind of credential a request presented, for the `sessions_valid_from` arm.
+///
+/// Only a browser SESSION can be ended by a password change. A durable API key is an integration
+/// credential the account issued on purpose; measuring it against the password timestamp would
+/// silently revoke every integration the moment the owner rotated a password, so it is never
+/// measured at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IssuedAt {
+    /// A session JWT and its `iat` (seconds since the epoch, when the mint recorded one).
+    Session(Option<i64>),
+    /// A durable, non-session credential (an issued API key).
+    Durable,
+}
+
+/// Is a JWT older than the instant its account last changed or reset its password?
+///
+/// Pure, so both arms are unit-tested and the rule is readable without a database. `valid_from`
+/// is `accounts.sessions_valid_from` as a unix epoch (`None` there = the account has never
+/// restricted its sessions, which is every account until it changes or resets its password, so
+/// nothing changes for tokens already in the wild). A session with NO `iat` cannot prove it is
+/// newer than the change, and the safe answer for a credential is "cannot prove → refuse".
+/// A [`IssuedAt::Durable`] credential is not a session and is never refused here.
+pub(crate) fn token_predates_password_change(issued: IssuedAt, valid_from: Option<i64>) -> bool {
+    let IssuedAt::Session(jwt_iat) = issued else {
+        return false;
+    };
+    match valid_from {
+        None => false,
+        Some(v) => match jwt_iat {
+            None => true,
+            Some(iat) => iat < v,
+        },
+    }
+}
+
 /// Refuse a request whose token names an `accounts` row that does not exist.
 ///
 /// One existence lookup, at the boundary, before any handler runs — which is what closes the whole
@@ -175,19 +221,37 @@ pub(crate) fn refusal_for(method: &Method, names_a_row: bool) -> Option<AppError
 ///
 /// Since kanban t_53fcb666 the lookup runs for READS too (one primary-key read), because a token
 /// whose account is gone must not keep reading: the refusal there is 401 (see [`refusal_for`]).
+///
+/// SESSION REVOCATION (2026-10-20): the same single read also returns
+/// `accounts.sessions_valid_from`, so a JWT minted before the account's last password change or
+/// reset is refused here with [`SESSION_ENDED`] — no second query. Measured before this: a token
+/// minted before a password reset still answered 200 afterwards, i.e. changing the password (the
+/// one thing a user does when they think their session is stolen) revoked nothing.
 async fn guard_account_exists(
     db: &sqlx::PgPool,
     method: &Method,
     account_id: &str,
+    issued: IssuedAt,
 ) -> Result<(), AppError> {
-    let names_a_row = match uuid::Uuid::parse_str(account_id) {
-        Ok(id) => sqlx::query_scalar::<_, i32>("SELECT 1 FROM accounts WHERE id = $1")
+    // ONE read answers both questions: does the row exist, and (if it exists) when were its
+    // sessions last invalidated. `COALESCE(..., 0)` keeps a NULL — the ordinary case — as "no
+    // restriction" without a second column read.
+    let valid_from = match uuid::Uuid::parse_str(account_id) {
+        Ok(id) => {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COALESCE(EXTRACT(EPOCH FROM sessions_valid_from)::bigint, 0)
+                   FROM accounts WHERE id = $1",
+            )
             .bind(id)
             .fetch_optional(db)
             .await?
-            .is_some(),
-        Err(_) => false,
+        }
+        Err(_) => None,
     };
+    let names_a_row = valid_from.is_some();
+    if names_a_row && token_predates_password_change(issued, valid_from.filter(|v| *v > 0)) {
+        return Err(session_ended());
+    }
     match refusal_for(method, names_a_row) {
         Some(e) => Err(e),
         None => Ok(()),
@@ -504,7 +568,7 @@ pub async fn admin_guard(
     // Measured live on funnelswift 2026-10-20 after kanban t_53fcb666 shipped: deleting an account
     // revoked its token, but DEMOTING an operator (the other half of "remove the compromised
     // account") did not — the guard above decided on `claims.role` alone. This app's platform
-    // authority lives on the row the login reads (`accounts.role`, minted into the token by
+    // authority lives on the row that the login reads (`accounts.role`, minted into the token by
     // `handlers::auth_handler::create_jwt`), so a 30-day token minted while the row said `admin`
     // kept the whole operator surface after an `UPDATE accounts SET role='company_admin'`.
     //
@@ -571,7 +635,8 @@ mod tests {
     use super::{
         account_gate, admin_surface_denied_for, claim_backed_by_row, is_admin_surface,
         is_platform_admin, is_state_changing, is_stop_impersonation, issued_key_prefix,
-        refusal_for, session_ended, unknown_account, AccountGate, KEY_PREFIX_LEN, SESSION_ENDED,
+        refusal_for, session_ended, token_predates_password_change, unknown_account, AccountGate,
+        IssuedAt, KEY_PREFIX_LEN, SESSION_ENDED,
     };
     use crate::error::AppError;
     use axum::http::Method;
@@ -817,5 +882,47 @@ mod tests {
         assert_eq!(issued_key_prefix("is_key_éééé"), Some("éééé"));
         // mixed: 3x 'é' is 6 bytes, so the 8-byte window closes on boundaries
         assert_eq!(issued_key_prefix("is_key_éééab"), Some("éééab"));
+    }
+
+    /// The reported defect (kanban t_80787a0f): changing or resetting the password revoked
+    /// nothing, because the boundary decided on the token's claims alone. The rule is now one
+    /// comparison — a session minted BEFORE the account's `sessions_valid_from` is refused — and
+    /// it must change nothing else: a NULL timestamp (every account that never rotated), a
+    /// session minted at or after the change, and a durable API key all stay exactly as they were.
+    #[test]
+    fn a_session_minted_before_the_password_change_is_refused_and_nothing_else_is() {
+        // NULL column: never restricted, so every token already in the wild keeps working.
+        assert!(!token_predates_password_change(
+            IssuedAt::Session(Some(1_000)),
+            None
+        ));
+        // Minted BEFORE the change -> refused.
+        assert!(token_predates_password_change(
+            IssuedAt::Session(Some(1_000)),
+            Some(2_000)
+        ));
+        // Minted AT the change or after it -> allowed (a re-login must work).
+        assert!(!token_predates_password_change(
+            IssuedAt::Session(Some(2_000)),
+            Some(2_000)
+        ));
+        assert!(!token_predates_password_change(
+            IssuedAt::Session(Some(3_000)),
+            Some(2_000)
+        ));
+        // A session that cannot prove it is newer is refused rather than trusted.
+        assert!(token_predates_password_change(
+            IssuedAt::Session(None),
+            Some(2_000)
+        ));
+        assert!(!token_predates_password_change(
+            IssuedAt::Session(None),
+            None
+        ));
+        // A durable API key is an integration credential, not a session: never revoked by this.
+        assert!(!token_predates_password_change(
+            IssuedAt::Durable,
+            Some(2_000)
+        ));
     }
 }

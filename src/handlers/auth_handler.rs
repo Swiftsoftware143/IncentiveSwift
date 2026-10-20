@@ -908,11 +908,16 @@ pub async fn change_password(
 
     let new_hash = hash_password(&body.new_password)?;
 
-    sqlx::query("UPDATE accounts SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(account_uuid)
-        .execute(&state.db)
-        .await?;
+    // SESSION REVOCATION (2026-10-20): changing the password also ends every JWT issued BEFORE it.
+    // Measured before this: a token minted before the change kept answering 200 afterwards, so the
+    // one action a user takes when they believe their session is stolen revoked nothing.
+    sqlx::query(
+        "UPDATE accounts SET password_hash = $1, sessions_valid_from = NOW() WHERE id = $2",
+    )
+    .bind(&new_hash)
+    .bind(account_uuid)
+    .execute(&state.db)
+    .await?;
 
     Ok(Json(json!({ "status": "password_updated" })))
 }
@@ -1145,12 +1150,16 @@ pub async fn reset_password(
 
     let new_hash = hash_password(&body.new_password)?;
 
-    // Update account password and mark token as used
-    sqlx::query("UPDATE accounts SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(account_id)
-        .execute(&state.db)
-        .await?;
+    // Update account password and mark token as used. SESSION REVOCATION (2026-10-20): the reset
+    // also ends every JWT issued BEFORE it — measured before this: a token minted before a reset
+    // still answered 200 from `/auth/me` afterwards, which is the whole point of resetting.
+    sqlx::query(
+        "UPDATE accounts SET password_hash = $1, sessions_valid_from = NOW() WHERE id = $2",
+    )
+    .bind(&new_hash)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
 
     sqlx::query("UPDATE password_resets SET used = true WHERE token = $1")
         .bind(&body.token)
