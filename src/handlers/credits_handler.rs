@@ -214,7 +214,13 @@ pub async fn admin_list_credits(
     _auth: AuthenticatedUser,
 ) -> Json<serde_json::Value> {
     let rows = sqlx::query(
-        "SELECT a.id, a.name, a.email, COALESCE(pt.name, 'No Plan') AS plan_name,
+        // The tier the app ACTUALLY applies (2026-10-20). `auth_handler` labels an account with no
+        // `plan_tier_id` "Free", so those accounts are served Free limits; publishing 'No Plan' here
+        // made this panel disagree with the customer's own screen about the same account.
+        "SELECT a.id, a.name, a.email,
+                COALESCE(pt.name, (SELECT dt.name FROM plan_tiers dt
+                                    WHERE dt.slug = 'free' AND dt.is_active
+                                    ORDER BY dt.created_at LIMIT 1), 'Free') AS plan_name,
                 a.credits_balance, a.credits_lifetime_used,
                 COALESCE(a.zc_pool_remaining, 0) AS zc_pool_remaining,
                 COALESCE(a.zc_pool_total, 0) AS zc_pool_total,
