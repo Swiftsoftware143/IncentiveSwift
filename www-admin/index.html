@@ -162,7 +162,7 @@ window.appGuidePages = {
   "api-keys":     { title: "API Keys", desc: "Keys that let other tools call IncentiveSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
   settings:       { title: "Settings", desc: "Your workspace, profile and email settings.", actions: ["Update your profile", "Set your email provider"] },
   "my-plan":      { title: "Plan & Pricing", desc: "Your plan decides what is available to you. This is where you see it and upgrade.", actions: ["Compare plans", "Upgrade"] },
-  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
+  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace. The Plan requests button filters the queue down to customers who asked to buy a plan (a switch your team makes by hand, since no card is taken here), and each of those rows carries a Plan request badge.", actions: ["Open a ticket", "Check a reply"] },
   reviews:        { title: "Reviews & Ratings", desc: "Feedback customers have left, collected so you can see how you are doing.", actions: ["Read a review", "Respond"] },
   calendar:       { title: "Calendar", desc: "Scheduled dates for your campaigns and events, in one view.", actions: ["See what is coming up", "Add a date"] },
   "knowledge-base": { title: "Knowledge Base", desc: "Help articles you can read and, for operators, publish.", actions: ["Read an article", "Search the base"] },
@@ -3450,7 +3450,17 @@ const SupportTickets = () => {
   const remove = async (id) => { if(!confirm('Delete this ticket?')) return; await API.del('/support-tickets/' + id); load(); };
   const badge = (s) => s==='open' ? 'badge badge-yellow' : s==='resolved' ? 'badge badge-green' : s==='in_progress' ? 'badge badge-blue' : 'badge badge-red';
   const prio = (p) => ({low:'Low',normal:'Normal',high:'High',urgent:'Urgent'}[p] || p);
-  const filtered = st.list.filter(t => st.filter==='all' ? true : t.status===st.filter);
+  // A PLAN REQUEST is an ordinary support ticket that says where it came from (2026-10-20).
+  // The customer's Plan & billing screen files one when they press "Request the <plan> plan",
+  // because no payment provider is stored on this install — so this queue is the ONLY place the
+  // buying requests appear, and until now nothing on the row told them apart from a question.
+  // Two spellings are read: `source` is what the console files today; a legacy row can only be
+  // recognised by the shape it was filed with (category 'billing', subject "<Move> request: <Plan> plan").
+  const isPlanRequest = (t) => !!t && (t.source === 'plan_request'
+    || (t.category === 'billing' && / request:.* plan$/i.test(String(t.subject || ''))));
+  const planCount = st.list.filter(isPlanRequest).length;
+  const filtered = st.list.filter(t => st.filter==='all' ? true
+    : st.filter==='plan' ? isPlanRequest(t) : t.status===st.filter);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4">
@@ -3459,11 +3469,12 @@ const SupportTickets = () => {
     </div>
     <div class="flex gap-2 mb-4">
       ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
+      <button data-plan-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='plan'?'bg-blue-600 text-white':'text-blue-700 border-blue-300'}" onClick=${() => { st.filter = st.filter==='plan' ? 'all' : 'plan'; renderApp(); }}>Plan requests (${planCount})</button>
     </div>
     <div class="card overflow-hidden">
       <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
-          <td class="font-medium text-sm">${t.subject}</td>
+          <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}</td>
           <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}</td>
           <td><span class=${badge(t.status)}>${t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
@@ -3471,7 +3482,7 @@ const SupportTickets = () => {
           <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
           <td><button class="text-red-600 text-sm mr-2" onClick=${e => { e.stopPropagation(); remove(t.id); }}>Delete</button></td>
         </tr>`)}
-        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No tickets in this view</td></tr>` : null}
+        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.filter==='plan' ? 'No plan requests right now. A customer who presses "Request the plan" on their Plan & billing screen files one here.' : 'No tickets in this view'}</td></tr>` : null}
         </tbody></table>
     </div>
 

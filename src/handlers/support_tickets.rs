@@ -21,6 +21,12 @@ pub struct SupportTicket {
     pub status: String,
     pub priority: String,
     pub category: Option<String>,
+    /// WHERE the ticket came from — `plan_request` is what the customer's Plan & billing screen
+    /// files when they ask to buy (this install has no payment provider, so that request IS the
+    /// buying path). NULL means an ordinary ticket. `#[sqlx(default)]` keeps every scoped SELECT
+    /// that predates the column decoding unchanged.
+    #[sqlx(default)]
+    pub source: Option<String>,
     pub assignee_id: Option<Uuid>,
     pub created_by: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -51,6 +57,11 @@ pub struct CreateTicketInput {
     pub description: Option<String>,
     pub priority: Option<String>,
     pub category: Option<String>,
+    /// The ticket's origin, normalised by the handler: `plan_request` for the customer's "Request
+    /// the <plan> plan" button. Absent or junk is stored as an ordinary ticket (NULL), never a 4xx:
+    /// a malformed origin must not cost the customer their buying request.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -165,7 +176,7 @@ pub async fn list_tickets(
     let tickets = if caller_is_operator(&state, scope).await {
         sqlx::query_as::<_, SupportTicket>(
             r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
-                      t.status, t.priority, t.category, t.assignee_id, t.created_by, t.created_at,
+                      t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
                       t.updated_at, t.resolved_at, a.email AS account_email
                FROM support_tickets t
                LEFT JOIN accounts a ON a.id = t.tenant_id
@@ -177,7 +188,7 @@ pub async fn list_tickets(
     } else {
         sqlx::query_as::<_, SupportTicket>(
             r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                      priority, category, assignee_id, created_by, created_at, updated_at, resolved_at
+                      priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at
                FROM support_tickets
                WHERE tenant_id = $1 OR created_by = $1
                ORDER BY updated_at DESC"#,
@@ -199,10 +210,24 @@ pub async fn create_ticket(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let id = Uuid::new_v4();
     let priority = body.priority.unwrap_or_else(|| "normal".to_string());
+    // One spelling, so the operator's Plan requests view is a single-value match. Trimmed,
+    // lower-cased, and limited to slug characters; empty after that becomes NULL (ordinary ticket).
+    let source: Option<String> = body
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .map(|s| {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty() && s.len() <= 40);
     sqlx::query(
         r#"INSERT INTO support_tickets
-             (id, tenant_id, campaign_id, contact_id, subject, description, status, priority, category, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9)"#,
+             (id, tenant_id, campaign_id, contact_id, subject, description, status, priority, category, source, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10)"#,
     )
     .bind(id)
     .bind(account)
@@ -212,12 +237,13 @@ pub async fn create_ticket(
     .bind(&body.description)
     .bind(&priority)
     .bind(&body.category)
+    .bind(&source)
     .bind(account)
     .execute(&state.db)
     .await?;
     let row = sqlx::query_as::<_, SupportTicket>(
         r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                  priority, category, assignee_id, created_by, created_at, updated_at, resolved_at
+                  priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at
            FROM support_tickets WHERE id = $1"#,
     )
     .bind(id)
@@ -269,7 +295,7 @@ pub async fn get_ticket(
     let is_operator = caller_is_operator(&state, account).await;
     let row = sqlx::query_as::<_, SupportTicket>(
         r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                  priority, category, assignee_id, created_by, created_at, updated_at, resolved_at
+                  priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at
            FROM support_tickets
            WHERE id = $1 AND (tenant_id = $2 OR created_by = $2 OR $3)"#,
     )
@@ -363,7 +389,7 @@ pub async fn update_ticket(
 
     let row = sqlx::query_as::<_, SupportTicket>(
         r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                  priority, category, assignee_id, created_by, created_at, updated_at, resolved_at
+                  priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at
            FROM support_tickets WHERE id = $1"#,
     )
     .bind(id)

@@ -979,7 +979,12 @@ function pbRequest(slug, price, btn, onFail) {
       description: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from'
         + ' the dashboard. Self-serve checkout is not open yet, so the switch has to be made by the team.',
       priority: 'normal',
-      category: 'billing'
+      category: 'billing',
+      // WHERE this ticket came from (2026-10-20). On this install no payment provider is stored, so
+      // this row IS the buying path: the operator's Plan requests view reads exactly this value, and
+      // without it a request to hand over money sat in the support queue indistinguishable from a
+      // question. The server stores it as `source` alongside the ordinary text fields.
+      source: 'plan_request'
     })
   }).then(function (r) {
     return r.text().then(function (t) {
