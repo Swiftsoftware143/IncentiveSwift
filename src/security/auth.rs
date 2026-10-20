@@ -477,8 +477,12 @@ pub async fn admin_guard(
     // The role AND the impersonation claim decide together: the claim is what lets an impersonation
     // session reach the ONE route that ends it (see [`admin_surface_denied_for`]). An API key
     // resolves to a role but carries no claim, so it is never impersonating.
-    let (role, impersonating) = match validate_api_key(&state, &token).await? {
-        Some(user) => (user.role, false),
+    //
+    // `subject` is the `accounts` id the credential names — `None` on the API-key arm, whose role is
+    // the literal `api_key` and whose row is the key's own. It is needed by the demotion check
+    // below, which compares the CLAIM to the row.
+    let (role, impersonating, subject) = match validate_api_key(&state, &token).await? {
+        Some(user) => (user.role, false, None),
         None => {
             let claims = crate::security::jwt::verify_jwt(&token, &state.config.jwt_secret)?;
             (
@@ -487,6 +491,7 @@ pub async fn admin_guard(
                     .clone()
                     .unwrap_or_else(|| "authenticated".to_string()),
                 claims.impersonating.is_some(),
+                claims.sub.clone(),
             )
         }
     };
@@ -495,18 +500,126 @@ pub async fn admin_guard(
         return Err(AppError::Forbidden("Admin role required".to_string()));
     }
 
+    // ── the CLAIM must not exceed what the live `accounts` row grants (kanban t_28184826) ────────
+    // Measured live on funnelswift 2026-10-20 after kanban t_53fcb666 shipped: deleting an account
+    // revoked its token, but DEMOTING an operator (the other half of "remove the compromised
+    // account") did not — the guard above decided on `claims.role` alone. This app's platform
+    // authority lives on the row the login reads (`accounts.role`, minted into the token by
+    // `handlers::auth_handler::create_jwt`), so a 30-day token minted while the row said `admin`
+    // kept the whole operator surface after an `UPDATE accounts SET role='company_admin'`.
+    //
+    // One-directional on purpose: a claim LOWER than the row is not this rule's business, the
+    // impersonation session (minted with the TARGET's own role) is never a platform-admin claim,
+    // and an API key's `api_key` role is not one either — so every tenant surface keeps the
+    // behaviour it had. Fail closed: an unparseable or missing subject, and a row that no longer
+    // grants the role, both refuse 401; a database that cannot answer is a 5xx, never a pass.
+    if is_platform_admin(&role) {
+        let Some(sub) = subject.as_deref() else {
+            return Err(AppError::Unauthorized(
+                "This session is no longer valid. Please sign in again.".to_string(),
+            ));
+        };
+        match account_role(&state.db, sub).await {
+            Ok(row_role) => {
+                if !claim_backed_by_row(&role, row_role.as_deref()) {
+                    tracing::warn!(
+                        subject = %sub,
+                        "refused an admin role claim the accounts row no longer grants"
+                    );
+                    return Err(AppError::Unauthorized(
+                        "This session is no longer valid. Please sign in again.".to_string(),
+                    ));
+                }
+            }
+            Err(e) => {
+                tracing::error!("account role lookup failed for {sub}: {e}");
+                return Err(AppError::Internal(
+                    "Admin authorisation temporarily unavailable".to_string(),
+                ));
+            }
+        }
+    }
+
     Ok(next.run(req).await)
+}
+
+/// Is a platform-admin CLAIM still backed by the `accounts` row?
+///
+/// `true` when the credential claims no platform authority at all (that is not this rule's
+/// business — tenant surfaces and `api_key`/impersonation sessions are untouched), and `true` when
+/// the row still grants it. `false` — the refusal — when the claim is platform-admin and the row is
+/// missing, unreadable as an id, or has been DEMOTED (kanban t_28184826).
+pub(crate) fn claim_backed_by_row(claim_role: &str, row_role: Option<&str>) -> bool {
+    !is_platform_admin(claim_role) || row_role.is_some_and(is_platform_admin)
+}
+
+/// The live `role` of the `accounts` row named by a token's `sub`, or `None` when it is gone or the
+/// id does not parse. `Err` only when the database could not answer, so a broken lookup is a 5xx
+/// rather than a misleading 401 (kanban t_28184826).
+async fn account_role(db: &sqlx::PgPool, sub: &str) -> Result<Option<String>, sqlx::Error> {
+    let Ok(account_id) = uuid::Uuid::parse_str(sub) else {
+        return Ok(None);
+    };
+    sqlx::query_scalar::<_, String>("SELECT role FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(db)
+        .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        account_gate, admin_surface_denied_for, is_admin_surface, is_platform_admin,
-        is_state_changing, is_stop_impersonation, issued_key_prefix, refusal_for, session_ended,
-        unknown_account, AccountGate, KEY_PREFIX_LEN, SESSION_ENDED,
+        account_gate, admin_surface_denied_for, claim_backed_by_row, is_admin_surface,
+        is_platform_admin, is_state_changing, is_stop_impersonation, issued_key_prefix,
+        refusal_for, session_ended, unknown_account, AccountGate, KEY_PREFIX_LEN, SESSION_ENDED,
     };
     use crate::error::AppError;
     use axum::http::Method;
+
+    /// The reported defect (kanban t_28184826): the operator guard proved the credential was a
+    /// real signed token, but decided on `claims.role` alone. This app mints the role from
+    /// `accounts.role` at login (30-day JWT) and never re-reads it, so DEMOTING an operator —
+    /// `UPDATE accounts SET role='company_admin'` — left the old token on the whole operator
+    /// surface. A platform-admin claim the live row no longer backs must be refused; every claim
+    /// that carries no platform authority (`user`, `company_admin`, the API key's `api_key`, the
+    /// impersonation session's target role) is untouched.
+    #[test]
+    fn a_platform_admin_claim_the_accounts_row_no_longer_grants_is_refused() {
+        // demoted rows: claim says admin/super_admin, row says something lower
+        for claim in ["admin", "super_admin"] {
+            for demoted_to in ["company_admin", "business_user", "user", ""] {
+                assert!(
+                    !claim_backed_by_row(claim, Some(demoted_to)),
+                    "a {claim} claim over a {demoted_to:?} row must be refused"
+                );
+            }
+            // …and a row that is GONE backs nothing either.
+            assert!(!claim_backed_by_row(claim, None));
+        }
+        // A real operator is untouched, and either admitted role backs either claim.
+        for claim in ["admin", "super_admin"] {
+            for row in ["admin", "super_admin"] {
+                assert!(claim_backed_by_row(claim, Some(row)));
+            }
+        }
+        // Non-operator claims are NEVER refused by this rule — this is what keeps every tenant
+        // surface (and the api_key / impersonation doors) exactly as it was.
+        for claim in [
+            "user",
+            "company_admin",
+            "business_user",
+            "api_key",
+            "authenticated",
+            "",
+        ] {
+            assert!(claim_backed_by_row(claim, Some("company_admin")));
+            assert!(claim_backed_by_row(claim, Some("user")));
+            assert!(claim_backed_by_row(claim, None));
+        }
+        // A claim LOWER than the row is not this rule's business either.
+        assert!(claim_backed_by_row("company_admin", Some("admin")));
+        assert!(claim_backed_by_row("user", Some("super_admin")));
+    }
 
     /// The request-entry account guard (kanban t_a7b7b5b9), reduced to its pure decision: a
     /// STATE-CHANGING method naming no `accounts` row is refused; a write naming a real account
