@@ -966,7 +966,7 @@ function pbAsk(slug, price, detail) {
   var btn = document.getElementById('pb-ask-btn');
   if (btn) btn.addEventListener('click', function () { pbRequest(slug, price, btn); });
 }
-function pbRequest(slug, price, btn) {
+function pbRequest(slug, price, btn, onFail) {
   if (PB.busy) return;
   PB.busy = true;
   var name = pbPlanName(slug);
@@ -995,11 +995,13 @@ function pbRequest(slug, price, btn) {
         return;
       }
       if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' plan'; }
+      if (onFail) { onFail(); return; }
       pbMsg('The request could not be sent' + ((d && d.message) ? ': ' + d.message : ' (error ' + r.status + ')') + '. Please try again.', 'e');
     });
   }).catch(function (e) {
     PB.busy = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Request the ' + name + ' plan'; }
+    if (onFail) { onFail(); return; }
     pbMsg((e && e.message) || 'The request could not be sent.', 'e');
   });
 }
@@ -1049,12 +1051,15 @@ function pbUpgrade(slug, price, planId) {
       var code = (d && d.error) || '';
       if (code === 'payment_provider_not_configured' || code === 'checkout_not_implemented') {
         // NO SELF-SERVE CHECKOUT IS OPEN (measured live 2026-10-18: `payment_providers` holds 0
-        // rows, so every press answered 503 payment_provider_not_configured). A buy button that
-        // can only fail is the defect this console already retired elsewhere, and the console's
-        // own Plan screen sends upgrades to a Support Ticket ("we will switch you over"). So this
-        // page offers the SAME real path: one press files a billing ticket naming the plan, which
-        // lands in the operator's Support Tickets list.
-        pbAsk(slug, price, detail);
+        // rows, so every press answered 503 payment_provider_not_configured). The console's own
+        // Plan screen sends upgrades to a Support Ticket ("we will switch you over"), so this page
+        // files the SAME request.
+        //
+        // ONE PRESS FILES IT (cron 2026-10-20). Measured live in Chromium: pressing "Upgrade to Pro"
+        // answered 503 and only PAINTED a second "Request the plan" button, so a single click filed
+        // NOTHING — the customer had to press twice before a request existed, while the sibling apps
+        // file on the first press. The button is kept for the retry case, when filing itself fails.
+        pbRequest(slug, price, null, function () { pbAsk(slug, price, detail); });
         return;
       }
       pbMsg('Upgrades are not open on this workspace yet.' + detail, 'e');
