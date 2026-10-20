@@ -371,11 +371,13 @@ pub async fn get_ticket(
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let is_operator = caller_is_operator(&state, account).await;
     let row = sqlx::query_as::<_, SupportTicket>(
-        r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
-                  priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at,
-                  plan_slug, plan_applied_at
-           FROM support_tickets
-           WHERE id = $1 AND (tenant_id = $2 OR created_by = $2 OR $3)"#,
+        r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
+                  t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by,
+                  t.created_at, t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                  COALESCE(p.name, t.plan_slug) AS plan_name
+           FROM support_tickets t
+           LEFT JOIN plans p ON p.slug = t.plan_slug
+           WHERE t.id = $1 AND (t.tenant_id = $2 OR t.created_by = $2 OR $3)"#,
     )
     .bind(id)
     .bind(account)
