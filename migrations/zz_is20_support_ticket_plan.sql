@@ -1,0 +1,21 @@
+-- zz_is20_support_ticket_plan.sql
+-- Cron 2026-10-20: a plan request named its plan only in PROSE (subject "Move request: Pro plan"),
+-- so the operator's Resolve closed the ticket, told the customer it was handled, and left the
+-- workspace on Free. FunnelSwift closed this loop on 2026-10-19; ADASwift on 2026-10-20; this is
+-- the same contract on the ticket the IncentiveSwift dashboard files. The plan needs to be a
+-- COLUMN on the ticket, not a phrase an operator has to read out of the subject.
+--
+-- `plan_slug` is nullable on purpose: a ticket about a broken scan or a billing question names no
+-- plan and must behave exactly as it did before.
+--
+-- `plan_applied_at` is the idempotency mark. Re-saving `resolved` on a request whose plan already
+-- moved must not move it again, and must not re-run the affiliate attribution that rides the plan
+-- writer. It is stamped by the SAME handler call that moves the plan
+-- (support_tickets::update_ticket), never by a separate action the operator has to remember.
+--
+-- This app's boot runner (src/db/migrations.rs) re-reads ./migrations on EVERY start and records
+-- each file by NAME in `_migrations` with no checksum, so this file is re-executed only on a
+-- database that has not seen it -- and must therefore be idempotent. ADD COLUMN IF NOT EXISTS
+-- makes a second run a no-op.
+ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS plan_slug TEXT;
+ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS plan_applied_at TIMESTAMPTZ;

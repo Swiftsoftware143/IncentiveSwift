@@ -302,6 +302,32 @@ pub async fn admin_assign_plan(
     // tier silently never changed. Same direction as `tier_handler::post_plan_features`.
     // `plans` keeps its checkout/marketing role: `attribute_plan_upgrade` below legitimately
     // still receives a `plans.id` (it reads `plans.name` / `price_monthly`).
+    let tier_id = assign_plan(&state, account_id, plan_id).await?;
+
+    Ok(Json(json!({
+        "status": "assigned",
+        "plan_id": plan_id.to_string(),
+        "account_id": account_id.to_string(),
+        "plan_tier_id": tier_id.to_string(),
+    })))
+}
+
+/// The ONE writer of an account's plan tier (cron 2026-10-20).
+///
+/// TWO callers need this: the operator's Change Plan picker ([`admin_assign_plan`]) and
+/// `support_tickets::update_ticket` when it closes a plan request the customer filed. They must
+/// write the SAME column and settle the same referrer — a second hand-rolled UPDATE inside the
+/// ticket handler would have switched the tier and silently skipped `attribute_plan_upgrade`, so a
+/// customer who asked to buy, and was switched, would never have credited the affiliate who sent
+/// them.
+///
+/// `plan_id` is a row of `plans` (the catalogue the console and the checkout read); the canonical
+/// TIER row is resolved through the shared slug. Returns the tier id that was written.
+pub async fn assign_plan(
+    state: &AppState,
+    account_id: Uuid,
+    plan_id: Uuid,
+) -> Result<Uuid, AppError> {
     let mapping = sqlx::query(
         r#"SELECT p.slug AS plan_slug, pt.id AS tier_id
              FROM plans p
@@ -330,14 +356,9 @@ pub async fn admin_assign_plan(
         .await?;
 
     // Credit the referring affiliate if this is a paid-plan assignment.
-    attribute_plan_upgrade(&state, account_id, plan_id).await;
+    attribute_plan_upgrade(state, account_id, plan_id).await;
 
-    Ok(Json(json!({
-        "status": "assigned",
-        "plan_id": plan_id.to_string(),
-        "account_id": account_id.to_string(),
-        "plan_tier_id": tier_id.to_string(),
-    })))
+    Ok(tier_id)
 }
 
 /// GET /api/v1/admin/plans/{id}
