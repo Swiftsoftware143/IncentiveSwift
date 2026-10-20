@@ -87,7 +87,8 @@ where
 /// 200/empty for a gone account, and a known account must never pay a second query's refusal).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum AccountGate {
-    /// Not a state-changing method: no lookup, no refusal.
+    /// Not a state-changing method. The lookup still runs (kanban t_53fcb666) — a read naming a
+    /// gone account is refused 401 — but a read naming a LIVE account pays no refusal.
     Skip,
     /// A write naming an account row that does not exist: refuse with the field-level 4xx.
     Refuse,
@@ -128,7 +129,42 @@ pub(crate) fn unknown_account() -> AppError {
     )
 }
 
-/// Refuse a STATE-CHANGING request whose token names an `accounts` row that does not exist.
+/// The one user-visible string for a credential whose `accounts` row is gone (kanban t_53fcb666).
+/// The SPA's 401 arm turns it into "Session expired" + sign-out.
+pub(crate) const SESSION_ENDED: &str = "This session is no longer valid. Please sign in again.";
+
+/// The 401 a READ gets when its credential names an `accounts` row that no longer exists.
+pub(crate) fn session_ended() -> AppError {
+    AppError::Unauthorized(SESSION_ENDED.to_string())
+}
+
+/// The refusal owed to a request whose credential names no `accounts` row, or `None` when the row
+/// is there (or the method is a read of a live account, which pays no refusal).
+///
+/// Two shapes, both 4xx, decided here so both arms are unit-tested:
+/// * a STATE-CHANGING request keeps the field-level 404 it has always answered (the caller learns
+///   WHICH thing was wrong, and it is not a 500 — see the module docs);
+/// * a READ has nothing to write, so there is no FK to violate — it answers **401**, which is what
+///   makes deleting the row BE the revocation (kanban t_53fcb666). Measured on this app 2026-10-20
+///   BEFORE this: after `delete from accounts`, the same token still answered `200` from
+///   `GET /api/v1/credits/balance` and `GET /api/v1/campaigns` (only `/auth/me` 404'd, because
+///   that handler looks the row up itself). The token lives 30 days, so deletion has to revoke.
+pub(crate) fn refusal_for(method: &Method, names_a_row: bool) -> Option<AppError> {
+    match account_gate(method, names_a_row) {
+        AccountGate::Proceed => None,
+        AccountGate::Refuse => Some(unknown_account()),
+        // A read (the method cannot write) whose account is gone: 401, never a quiet 200.
+        AccountGate::Skip => {
+            if names_a_row {
+                None
+            } else {
+                Some(session_ended())
+            }
+        }
+    }
+}
+
+/// Refuse a request whose token names an `accounts` row that does not exist.
 ///
 /// One existence lookup, at the boundary, before any handler runs — which is what closes the whole
 /// class at once: every writer that binds `claims.sub` into an FK column (`tenant_settings.
@@ -136,14 +172,14 @@ pub(crate) fn unknown_account() -> AppError {
 /// there is no path around this check. A shape that is not a uuid at all cannot name a row either
 /// (`credits_handler` used to bind `Uuid::nil()` for one, which is just as absent), so it is
 /// refused the same way — still a 4xx, never a 500.
+///
+/// Since kanban t_53fcb666 the lookup runs for READS too (one primary-key read), because a token
+/// whose account is gone must not keep reading: the refusal there is 401 (see [`refusal_for`]).
 async fn guard_account_exists(
     db: &sqlx::PgPool,
     method: &Method,
     account_id: &str,
 ) -> Result<(), AppError> {
-    if !is_state_changing(method) {
-        return Ok(());
-    }
     let names_a_row = match uuid::Uuid::parse_str(account_id) {
         Ok(id) => sqlx::query_scalar::<_, i32>("SELECT 1 FROM accounts WHERE id = $1")
             .bind(id)
@@ -152,9 +188,9 @@ async fn guard_account_exists(
             .is_some(),
         Err(_) => false,
     };
-    match account_gate(method, names_a_row) {
-        AccountGate::Refuse => Err(unknown_account()),
-        _ => Ok(()),
+    match refusal_for(method, names_a_row) {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 
@@ -466,8 +502,8 @@ pub async fn admin_guard(
 mod tests {
     use super::{
         account_gate, admin_surface_denied_for, is_admin_surface, is_platform_admin,
-        is_state_changing, is_stop_impersonation, issued_key_prefix, unknown_account, AccountGate,
-        KEY_PREFIX_LEN,
+        is_state_changing, is_stop_impersonation, issued_key_prefix, refusal_for, session_ended,
+        unknown_account, AccountGate, KEY_PREFIX_LEN, SESSION_ENDED,
     };
     use crate::error::AppError;
     use axum::http::Method;
@@ -488,6 +524,34 @@ mod tests {
             assert_eq!(account_gate(&m, false), AccountGate::Skip, "{m} unknown");
             assert_eq!(account_gate(&m, true), AccountGate::Skip, "{m} known");
         }
+    }
+
+    /// The read arm of the SAME guard (kanban t_53fcb666). Before this, a token whose `accounts`
+    /// row had been deleted still answered 200 from `GET /api/v1/credits/balance` and
+    /// `GET /api/v1/campaigns` — the credential outlived the account for its full 30 days. Both
+    /// directions are pinned: a read naming a LIVE account is untouched (no refusal, so the guard
+    /// is not a blanket gate), and a read naming nobody is 401 with the SPA's own sign-out string.
+    #[test]
+    fn a_read_naming_a_deleted_account_is_refused_401_and_a_live_one_is_untouched() {
+        for m in [Method::GET, Method::HEAD, Method::OPTIONS] {
+            assert!(
+                refusal_for(&m, true).is_none(),
+                "{m} live account must pass"
+            );
+            match refusal_for(&m, false) {
+                Some(AppError::Unauthorized(msg)) => {
+                    assert_eq!(msg, SESSION_ENDED, "the SPA matches this string")
+                }
+                other => panic!("{m} gone account must be 401, got {other:?}"),
+            }
+        }
+        // The write arm is unchanged by this card: still the field-level 404.
+        assert!(matches!(
+            refusal_for(&Method::POST, false),
+            Some(AppError::NotFound(_))
+        ));
+        assert!(refusal_for(&Method::POST, true).is_none());
+        assert!(matches!(session_ended(), AppError::Unauthorized(_)));
     }
 
     /// The refusal is the app's own 4xx and NAMES the account — the whole point of moving it off
