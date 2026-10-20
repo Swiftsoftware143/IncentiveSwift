@@ -46,6 +46,12 @@ pub struct SupportTicket {
     /// mark: re-saving `resolved` must not move the plan a second time.
     #[sqlx(default)]
     pub plan_applied_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The plan's DISPLAY name, joined from `plans` by the operator's list. Without it the console
+    /// printed the bare catalogue slug ("pro") at the operator, which is an internal identifier, not
+    /// the plan a customer asked for. `#[sqlx(default)]` keeps every SELECT that does not join it
+    /// decoding unchanged.
+    #[sqlx(default)]
+    pub plan_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -198,9 +204,11 @@ pub async fn list_tickets(
         sqlx::query_as::<_, SupportTicket>(
             r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
                       t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
-                      t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at, a.email AS account_email
+                      t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                      COALESCE(p.name, t.plan_slug) AS plan_name, a.email AS account_email
                FROM support_tickets t
                LEFT JOIN accounts a ON a.id = t.tenant_id
+               LEFT JOIN plans p ON p.slug = t.plan_slug
                ORDER BY t.updated_at DESC
                LIMIT 500"#,
         )
