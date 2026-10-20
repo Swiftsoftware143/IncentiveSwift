@@ -223,7 +223,39 @@ pub async fn create_ticket(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
-    Ok(Json(json!({ "ticket": row })))
+    // Tell the filer we have it (cron 2026-10-20). On this install no payment provider is stored, so
+    // this row IS the buying path: the dashboard's "Request the plan" button files one of these. The
+    // row was written and the response was 201 while the filer's inbox stayed empty — they asked to
+    // hand over money and heard nothing until an operator happened to answer. Best-effort on purpose:
+    // the row is what the operator works from, so a mail problem never fails (or 500s) the request;
+    // the response carries `acknowledged`, which the dashboard reads before promising a copy.
+    let mut acknowledged = false;
+    let filer: Option<(String, String)> =
+        sqlx::query_as("SELECT email, COALESCE(NULLIF(name, ''), '') FROM accounts WHERE id = $1")
+            .bind(account)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+    if let Some((email, name)) = filer {
+        if let Err(e) = crate::email::send_support_request_receipt_email(
+            &state.db,
+            account,
+            &email,
+            &name,
+            &body.subject,
+        )
+        .await
+        {
+            tracing::warn!(
+                ticket = %id,
+                to = %email,
+                "support-request receipt mail was not sent: {e}"
+            );
+        } else {
+            acknowledged = true;
+        }
+    }
+    Ok(Json(json!({ "acknowledged": acknowledged, "ticket": row })))
 }
 
 /// GET /api/v1/support-tickets/:id

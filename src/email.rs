@@ -174,6 +174,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The customer's own plan request / billing ticket was answered (2026-10-19). Named for
         // the thing the customer asked about, so it reads as an answer and not as a system notice.
         "plan_request_update" => format!("About your request — {app_name}"),
+        // The moment the customer FILES the request (cron 2026-10-20). Named so it is obvious in an
+        // inbox that it is the acknowledgement of the thing they just did, not the answer to it.
+        "support_request_receipt" => format!("We have your request — {app_name}"),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -281,6 +284,26 @@ async fn send_inline(
                 String::new(),
             ))
         }
+        // The inline safety net for the receipt the filer gets the moment the ticket row is written
+        // (cron 2026-10-20) — reached when the account has no `support_request_receipt` template row.
+        // On an install with no payment provider this ticket IS the buying path, so a silent receipt
+        // is a customer who asked to hand over money and heard nothing. It names their request back,
+        // says a person answers by email, and says plainly that nothing has been charged.
+        "support_request_receipt" => {
+            let request = vars
+                .get("request")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your request");
+            let body = format!(
+                "Hi {},\n\nThank you — we have your request:\n\n    {}\n\nA person, not a robot, reads this and replies by email. Nothing has been charged, and nothing will be charged until you agree to it.\n\nYou can follow its state on your dashboard's Plan & billing screen at {}/dashboard/ at any time; it updates as the team moves it along.\n\n- The {} Team",
+                name, request, app_url, app_name
+            );
+            Ok((
+                format!("We have your request — {}", app_name),
+                body,
+                String::new(),
+            ))
+        }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);
             Ok((format!("{} Notification", app_name), body, String::new()))
@@ -383,6 +406,33 @@ pub async fn send_plan_request_update_email(
         "app_url": APP_URL,
     });
     send_template_email(pool, Some(account_id), to, "plan_request_update", &vars).await
+}
+
+/// Tell the filer we have their request, the moment it is filed (cron 2026-10-20).
+///
+/// On this install `payment_providers` is empty, so `POST /api/v1/checkout/upgrade` refuses every
+/// purchase and the dashboard's "Request the plan" button is what a customer who wants to pay
+/// actually does. Until this existed `POST /api/v1/support-tickets` wrote the row, returned 201, and
+/// the filer's inbox stayed empty: they asked to hand over money and heard nothing at all until an
+/// operator happened to answer. ADASwift, FunnelSwift, WorkflowSwift and MissedCall Respondr all
+/// send this receipt; this app was the last one silent.
+///
+/// `account_id` is the FILER's account, so the mail renders that workspace's own branding.
+pub async fn send_support_request_receipt_email(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    to: &str,
+    name: &str,
+    request: &str,
+) -> Result<(), String> {
+    let vars = json!({
+        "name": if name.trim().is_empty() { "there" } else { name.trim() },
+        "request": request,
+        "app_name": APP_NAME,
+        "login_url": APP_URL,
+        "app_url": APP_URL,
+    });
+    send_template_email(pool, Some(account_id), to, "support_request_receipt", &vars).await
 }
 
 /// The operator's view of the LAST transactional send this installation attempted.

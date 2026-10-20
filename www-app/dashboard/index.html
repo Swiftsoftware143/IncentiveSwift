@@ -986,7 +986,11 @@ function pbRequest(slug, price, btn) {
       var d = null; try { d = JSON.parse(t); } catch (e) {}
       PB.busy = false;
       if (r.ok) {
-        pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.', 's');
+        // The receipt is best-effort on the server, so the promise is only made when the server
+        // says it actually queued one (`acknowledged`, cron 2026-10-20). Before this the customer
+        // was never told any copy was coming, because none was ever sent.
+        pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.'
+          + ((d && d.acknowledged) ? ' We have emailed you a copy of this request.' : ''), 's');
         pbLoadRequests();   // the new request must appear (and its live state) without a reload
         return;
       }

@@ -49,6 +49,10 @@ pub const ACCOUNT_MAILS: &[(&str, &str)] = &[
         "plan_request_update",
         "Plan request answered (the customer's own billing/support request)",
     ),
+    (
+        "support_request_receipt",
+        "Request received (sent the moment a customer files a support/plan request)",
+    ),
 ];
 
 pub const GROUP_ACCOUNT: &str = "Account emails";
