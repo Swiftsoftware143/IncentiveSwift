@@ -408,6 +408,24 @@ pub async fn coreswift_push(
         .ok_or_else(|| AppError::NotFound("No captured contacts yet".to_string()))?,
     };
 
+    // A reserved (harness/test) address is not a person, so the delivery path skips the push
+    // entirely (see `coreswift_external::do_push`). Surface THAT as itself — a 400 saying why —
+    // instead of the generic "the hub rejected it" 500, which blamed CoreSwift for a request it
+    // never received (measured 2026-10-20 against a probe contact).
+    let contact_email: Option<String> =
+        sqlx::query_scalar("SELECT email FROM contacts WHERE id = $1")
+            .bind(contact_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+    if let Some(addr) = contact_email.as_deref() {
+        if crate::security::email_addr::is_reserved_address(addr) {
+            return Err(AppError::BadRequest(format!(
+                "{addr} is a reserved test address, so no CRM contact was created"
+            )));
+        }
+    }
+
     // The endpoint is tenant-settable, so the refusal is surfaced as itself (403 + the gate's
     // reason) rather than as "not connected" (kanban t_f3c75b2a).
     if let Err(e) = get_coreswift_conn(&state, &account_id).await {
