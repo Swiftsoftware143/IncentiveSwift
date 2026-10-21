@@ -287,15 +287,27 @@ pub async fn create_ticket(
                 "That plan name is too long".to_string(),
             ));
         }
-        let plan: Option<(String, f64)> = sqlx::query_as(
-            "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8 \
+        // A RETIRED tier (`is_active = false`) is not on sale: the billing screen filters it out,
+        // so a request naming it asks for a tier the customer cannot even see. MEASURED LIVE
+        // 2026-10-21: a request naming a retired row was accepted (200, row stored, receipt mail
+        // queued) and the resolve arm below then seated the workspace on it — the same defect the
+        // fleet fixed for the operator's assign action (missedcallrespondr 2edd595), still open on
+        // this customer path. Refused by name, before the row, like an unknown or free plan.
+        let plan: Option<(String, f64, bool)> = sqlx::query_as(
+            "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8, is_active \
                FROM plans WHERE slug = $1",
         )
         .bind(slug)
         .fetch_optional(&state.db)
         .await?;
-        let (name, price) =
+        let (name, price, on_sale) =
             plan.ok_or_else(|| AppError::BadRequest(format!("No plan is called '{slug}'")))?;
+        if !on_sale {
+            return Err(AppError::BadRequest(format!(
+                "{name} is retired, so it cannot be requested - the billing screen lists only the \
+                 plans on sale. The team can re-activate it on the Plans table if it is coming back."
+            )));
+        }
         if price <= 0.0 {
             return Err(AppError::BadRequest(format!(
                 "{name} is a free plan - there is nothing to switch to"
@@ -555,8 +567,8 @@ pub async fn update_ticket(
                 if row.plan_applied_at.is_some() {
                     plan_note = Some(format!("already switched to {ticket_plan}"));
                 } else if let Some(move_account) = row.tenant_id {
-                    let target: Option<(Uuid, String)> =
-                        sqlx::query_as("SELECT id, name FROM plans WHERE slug = $1")
+                    let target: Option<(Uuid, String, bool)> =
+                        sqlx::query_as("SELECT id, name, is_active FROM plans WHERE slug = $1")
                             .bind(&ticket_plan)
                             .fetch_optional(&state.db)
                             .await?;
@@ -568,7 +580,16 @@ pub async fn update_ticket(
                             );
                             plan_note = Some(format!("no plan is called '{ticket_plan}' any more"));
                         }
-                        Some((plan_id, plan_name)) => {
+                        Some((_, ref retired_name, false)) => {
+                            tracing::warn!(
+                                ticket = %id, plan = %ticket_plan,
+                                "plan request resolved, but the plan is retired (is_active = false) - the plan did NOT move"
+                            );
+                            plan_note = Some(format!(
+                                "{retired_name} is retired, so the workspace was not moved onto it"
+                            ));
+                        }
+                        Some((plan_id, plan_name, true)) => {
                             let current: Option<String> = sqlx::query_scalar(
                                 "SELECT pt.slug FROM accounts a \
                                    JOIN plan_tiers pt ON pt.id = a.plan_tier_id \
