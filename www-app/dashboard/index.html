@@ -1006,8 +1006,13 @@ function pbRequest(slug, price, btn, onFail) {
         // The receipt is best-effort on the server, so the promise is only made when the server
         // says it actually queued one (`acknowledged`, cron 2026-10-20). Before this the customer
         // was never told any copy was coming, because none was ever sent.
-        pbMsg('Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.'
-          + ((d && d.acknowledged) ? ' We have emailed you a copy of this request.' : ''), 's');
+        // A press that lands on an OPEN request for the same plan is answered with that request, not
+        // a twin (the server refuses the duplicate, cron 2026-10-21). Saying "Request sent" again
+        // would read as if the earlier press had been lost, so the sentence names the open request.
+        pbMsg((d && d.already_open)
+          ? 'You already have an open request for the ' + name + ' plan \u2014 our team is on it, and its live status is listed below.'
+          : 'Request sent \u2014 our team will switch this workspace to ' + name + ' and confirm here.'
+            + ((d && d.acknowledged) ? ' We have emailed you a copy of this request.' : ''), 's');
         pbLoadRequests();   // the new request must appear (and its live state) without a reload
         return;
       }

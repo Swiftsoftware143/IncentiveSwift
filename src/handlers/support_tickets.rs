@@ -304,6 +304,49 @@ pub async fn create_ticket(
         plan_name = name;
     }
 
+    // A SECOND identical request is not a second request (measured live 2026-10-21). The dashboard's
+    // Upgrade button stays pressable after a request is filed, so a customer who pressed it twice
+    // left two OPEN `plan_request` rows for the same plan — two requests in the operator's Plan
+    // requests view, two receipt mails to one inbox, and a customer list that reads as if the first
+    // press had been ignored. Their intent is unchanged, so the EXISTING open request is returned
+    // (flagged `already_open`) instead of minting a twin; no second receipt is queued, because the
+    // first one already told them truthfully that the request had been received.
+    //
+    // The key is the TIER ASKED FOR (`plan_slug`), so a workspace with a Pro request open can still
+    // ask for Enterprise. Only plan/billing requests are deduped: an ordinary support question may
+    // legitimately repeat.
+    if matches!(source.as_deref(), Some("plan_request") | Some("billing")) {
+        let existing_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM support_tickets \
+             WHERE tenant_id = $1 \
+               AND source IN ('plan_request','billing') \
+               AND status IN ('open','in_progress') \
+               AND plan_slug IS NOT DISTINCT FROM $2 \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(account)
+        .bind(plan_slug.as_deref())
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(existing_id) = existing_id {
+            let ticket = sqlx::query_as::<_, SupportTicket>(
+                r#"SELECT id, tenant_id, campaign_id, contact_id, subject, description, status,
+                          priority, category, source, assignee_id, created_by, created_at, updated_at, resolved_at,
+                          plan_slug, plan_applied_at
+                   FROM support_tickets WHERE id = $1"#,
+            )
+            .bind(existing_id)
+            .fetch_one(&state.db)
+            .await?;
+            return Ok(Json(json!({
+                "acknowledged": false,
+                "already_open": true,
+                "ticket": ticket,
+                "plan_name": plan_name,
+            })));
+        }
+    }
+
     sqlx::query(
         r#"INSERT INTO support_tickets
              (id, tenant_id, campaign_id, contact_id, subject, description, status, priority, category, source, created_by, plan_slug)
