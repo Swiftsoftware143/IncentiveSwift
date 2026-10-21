@@ -4,7 +4,7 @@ use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use serde::Deserialize;
@@ -337,7 +337,18 @@ pub async fn bulk_delete_tenants(
 pub async fn list_all_tenants(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, AppError> {
+    // HARNESS TRAFFIC IS NOT A CUSTOMER (measured live 2026-10-21, same class as ADASwift
+    // 8cf989d / missedcallrespondr 2a38b95 / WorkflowSwift 61bca4d). `accounts.probe_harness` is
+    // stamped at signup from the `X-Swift-Harness` header; a harness retires its identity but not
+    // the account, and this app's self-serve door is where every fleet probe lands. The tag is
+    // authoritative and NULL for every real customer, so hiding tagged rows cannot hide a customer;
+    // `?include_probe=1` keeps them observable for support.
+    let include_probe = params
+        .get("include_probe")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let rows = sqlx::query(
         r#"
         SELECT
@@ -378,9 +389,13 @@ pub async fn list_all_tenants(
             WHERE a2.id IS NOT NULL
             GROUP BY a2.id
         ) u ON u.acc_id = a.id
+        WHERE $1::bool
+           OR COALESCE(a.probe_harness, '') = ''
+           OR a.probe_harness ~* '^CNRY'
         ORDER BY a.created_at DESC
         "#,
     )
+    .bind(include_probe)
     .fetch_all(&state.db)
     .await?;
 
