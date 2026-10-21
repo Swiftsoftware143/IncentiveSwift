@@ -3490,7 +3490,7 @@ const SupportTickets = () => {
       <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
           <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}${(t.plan_name || t.plan_slug) ? html` <span class="badge" data-plan-asked=${t.plan_slug || t.plan_name} title=${t.plan_applied_at ? 'the workspace was moved onto this plan' : 'the workspace is NOT on this plan yet'}>${t.plan_name || t.plan_slug}${t.plan_applied_at ? ' · switched' : ''}</span>` : null}</td>
-          <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}</td>
+          <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}${isProbeOwner(t.account_email) ? html` <span class="badge badge-yellow" data-probe-row="1" title="filed by a fleet test harness — a probe, not a customer waiting to buy">probe</span>` : null}</td>
           <td><span class=${badge(t.status)}>${t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
           <td class="text-sm text-gray-500">${t.category||'—'}</td>
