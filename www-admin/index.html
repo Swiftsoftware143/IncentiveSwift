@@ -3433,14 +3433,29 @@ const SiteConfigView = () => {
 
 // ---- SUPPORT TICKETS ----
 const SupportTickets = () => {
-  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all' });
+  // `planMsg` is the answer to "did the workspace actually move?" (cron 2026-10-20). A green
+  // "resolved" chip over a workspace still on Free is the dead end this screen now closes.
+  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all', planMsg: null });
   const load = async () => { try { const d = await API.get('/support-tickets'); st.list = Array.isArray(d.tickets) ? d.tickets : []; renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
   const openNew = () => { st.form = { subject:'', description:'', priority:'normal', category:'' }; st.showModal = true; renderApp(); };
   const create = async () => { if(!st.form.subject) return alert('Subject required'); try { await API.post('/support-tickets', st.form); st.showModal = false; load(); } catch(e){ alert('Error: ' + e.message); } };
   const openDetail = async (id) => { try { const d = await API.get('/support-tickets/' + id); st.detail = d; st.newMsg=''; renderApp(); } catch(e){ alert(e.message); } };
   const closeDetail = () => { st.detail = null; load(); renderApp(); };
-  const updateStatus = async (id, status) => { try { await API.put('/support-tickets/' + id, { status }); openDetail(id); load(); } catch(e){ alert(e.message); } };
+  // Resolving a plan request MOVES the workspace onto the plan it asked for (cron 2026-10-20).
+  // The answer reports whether it moved; when it did not, the reason is shown rather than hidden.
+  const updateStatus = async (id, status) => {
+    try {
+      const d = await API.put('/support-tickets/' + id, { status });
+      const note = d && d.plan_note;
+      st.planMsg = note
+        ? { ok: !!(d && d.plan_applied), text: (d && d.plan_applied)
+            ? ('Workspace switched to ' + note + '.')
+            : ('The workspace was NOT switched: ' + note) }
+        : null;
+      openDetail(id); load();
+    } catch(e){ alert(e.message); }
+  };
   // A reply is either CUSTOMER-VISIBLE or an internal note (2026-10-19).
   // Before this, the one Post button hard-coded `is_internal: true`, so EVERY message an operator
   // wrote was a private note: the customer's dashboard could never show an answer to their request.
@@ -3474,7 +3489,7 @@ const SupportTickets = () => {
     <div class="card overflow-hidden">
       <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
-          <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}</td>
+          <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}${(t.plan_name || t.plan_slug) ? html` <span class="badge" data-plan-asked=${t.plan_slug || t.plan_name} title=${t.plan_applied_at ? 'the workspace was moved onto this plan' : 'the workspace is NOT on this plan yet'}>${t.plan_name || t.plan_slug}${t.plan_applied_at ? ' · switched' : ''}</span>` : null}</td>
           <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}</td>
           <td><span class=${badge(t.status)}>${t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
@@ -3515,6 +3530,8 @@ const SupportTickets = () => {
           <span class="badge badge-blue">${prio(st.detail.ticket.priority)}</span>
           ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
         </div>
+        ${(st.detail.ticket.plan_name || st.detail.ticket.plan_slug) ? html`<div class="mb-4 text-sm" data-plan-detail="1"><span class="text-gray-500">Asks for:</span> <strong>${st.detail.ticket.plan_name || st.detail.ticket.plan_slug}</strong>${st.detail.ticket.plan_applied_at ? html` <span class="badge badge-green">switched to this plan</span>` : html` <span class="badge">not switched yet — Resolve does it</span>`}</div>` : null}
+        ${st.planMsg ? html`<div class="rounded-lg p-3 text-sm mb-4 ${st.planMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-plan-msg=${st.planMsg.ok ? 'applied' : 'not-applied'}>${st.planMsg.text}</div>` : null}
         ${st.detail.ticket.description ? html`<div class="bg-gray-50 rounded-lg p-3 text-sm mb-4">${st.detail.ticket.description}</div>` : null}
         <div class="space-y-2 mb-4">${(st.detail.messages||[]).map(m => html`<div class="rounded-lg p-3 text-sm ${m.is_internal?'bg-blue-50':'bg-gray-50'}"><span class="text-gray-400 text-xs mr-2">${new Date(m.created_at).toLocaleTimeString()}</span>${m.body}${m.is_internal?html` <span class="text-blue-500 text-xs">(internal — the customer never sees this)</span>`:html` <span class="text-green-600 text-xs">(sent to the customer)</span>`}</div>`)}</div>
         <div class="flex gap-2 mb-4 flex-wrap">
@@ -4279,7 +4296,7 @@ const BulkTenantDelete = () => {
       style="min-width:130px;font-size:11px" title="This workspace's plan. Changing it assigns the plan — the customer's limits and mail follow."
       value=${r.catalog_plan_id || ''}
       onChange=${e => assignPlan(r, e.target.value)}>
-      ${!r.catalog_plan_id ? html`<option value="" disabled selected>\u2014 no plan \u2014</option>` : ''}
+      ${!r.catalog_plan_id ? html`<option value="" disabled selected>\u2014 no plan \u00b7 ${r.plan_effective_name || 'Free'} limits</option>` : ''}
       ${(plans || []).filter(p => p.is_active !== false || p.id === r.catalog_plan_id)
         .map(p => html`<option value=${p.id}>${p.name}</option>`)}
     </select>`;
@@ -4614,7 +4631,7 @@ const ImpersonateAccounts = () => {
           <tbody>${shown.slice(0, 100).map(r => html`<tr class="imp-picker-row" data-account-id=${r.id}>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
             <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
-            <td class="border-b px-2 py-1">${r.plan_name || ''}</td>
+            <td class="border-b px-2 py-1">${r.plan_effective_name || r.plan_name || ''}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
             <td class="border-b px-2 py-1">${r.id === meId
               ? html`<span class="text-gray-400" style="font-size:11px">your own account</span>`
