@@ -862,6 +862,12 @@ function pbLoadRequests() {
             + '<span style="font-size:13.5px;color:#1e293b">' + esc(t.subject || 'Plan request') + '</span>'
             + '<span class="badge" data-request-state="' + esc(t.status || 'open') + '">' + esc(String(t.status || 'open').replace(/_/g, ' ')) + '</span>'
             + '</div>'
+            + ((t.plan_slug || t.plan_name)
+                ? '<div data-request-plan="' + esc(t.plan_slug || '') + '" style="font-size:12px;color:#475569;margin-top:6px">Plan asked for: <strong>'
+                    + esc(t.plan_name || pbPlanName(t.plan_slug) || t.plan_slug) + '</strong>'
+                    + (t.plan_applied_at ? ' <span style="color:#047857">\u2014 this workspace is on it now</span>' : '')
+                  + '</div>'
+                : '')
             + '<div data-request-reply="' + esc(t.id) + '" style="font-size:12.5px;color:#334155;margin-top:6px;display:none"></div>'
             + '</div>';
           fetch(window.location.origin + '/api/v1/support-tickets/' + encodeURIComponent(t.id), { headers: pbAuth(), cache: 'no-store' })
@@ -984,7 +990,13 @@ function pbRequest(slug, price, btn, onFail) {
       // this row IS the buying path: the operator's Plan requests view reads exactly this value, and
       // without it a request to hand over money sat in the support queue indistinguishable from a
       // question. The server stores it as `source` alongside the ordinary text fields.
-      source: 'plan_request'
+      source: 'plan_request',
+      // WHICH plan, as a catalogue slug (cron 2026-10-20). Before this the plan existed only as
+      // words inside the subject, so the operator's Resolve closed the request and told the
+      // customer it was handled while the workspace stayed on Free. The server validates this
+      // against its own plan catalogue (an unknown or free plan is refused with a sentence) and
+      // switches the workspace onto it when the request is resolved.
+      plan_slug: slug
     })
   }).then(function (r) {
     return r.text().then(function (t) {
