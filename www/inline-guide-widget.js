@@ -143,6 +143,17 @@
       return;
     }
 
+    // "Don't show this again" must survive a reload (measured 2026-10-21). The dismiss click stored
+    // {"<page>": true} and hid this button, but the next render set it back to `flex` - so the button
+    // came back within a moment and again on every reload, i.e. the label promised something the code
+    // did not do. This variant never auto-opens the panel, so the only thing a dismissal can mean here
+    // is "hide the floating guide button on THIS page"; honour the stored per-page choice.
+    if (getClosed()[getPageKey()] === true) {
+      toggle.style.display = 'none';
+      panel.classList.remove('open');
+      return;
+    }
+
     toggle.style.display = 'flex';
     document.getElementById('ig-title').textContent = entry.title || 'Guide';
     document.getElementById('ig-desc').textContent = entry.desc || '';
