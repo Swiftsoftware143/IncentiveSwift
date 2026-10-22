@@ -487,15 +487,13 @@ async fn create_reward(
 }
 
 async fn apply_reward_tag(state: &AppState, contact_id: &str, tag: &str) -> Result<(), AppError> {
-    // Update the contact's tags_applied or similar field
-    // This depends on schema — here we update a hypothetical tags field
-    sqlx::query("UPDATE contacts SET notes = COALESCE(notes, '') || $1 WHERE id = $2::uuid")
-        .bind(format!("\n[Reward Tag: {}]", tag))
-        .bind(contact_id)
-        .execute(&state.db)
-        .await?;
-
-    Ok(())
+    // ONE implementation (cron 2026-10-22). This local copy used to append to `contacts.notes` only,
+    // so the AUTO-APPROVED path tagged nobody while the manual-approval path (db::loyalty) applied
+    // the tag — the tier editor's promise held only half the time. Both now write the real
+    // `contact_tags` row through db::loyalty::apply_reward_tag.
+    let contact_uuid = Uuid::parse_str(contact_id)
+        .map_err(|_| AppError::BadRequest("Invalid contact ID".to_string()))?;
+    crate::db::loyalty::apply_reward_tag(&state.db, &contact_uuid, tag).await
 }
 
 async fn push_reward_notification(

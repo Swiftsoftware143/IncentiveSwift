@@ -774,6 +774,17 @@ async fn main() -> anyhow::Result<()> {
                 .put(handlers::contacts::update_contact)
                 .delete(handlers::contacts::delete_contact),
         )
+        // Contact tags (migration zz_is21): the join the Tags screen's "Apply a tag to contacts"
+        // action and the Loyalty reward-tag promise both needed. Scoped by `contact_tenants` +
+        // `tags.account_id`, so a shared contact never leaks another tenant's label.
+        .route(
+            "/api/v1/contacts/:id/tags",
+            get(handlers::contacts::list_contact_tags).post(handlers::contacts::assign_contact_tag),
+        )
+        .route(
+            "/api/v1/contacts/:id/tags/:tag_id",
+            delete(handlers::contacts::remove_contact_tag),
+        )
         // Tags — the tenant's own tag library. The served Operator Console has shipped a `Tags`
         // screen with create/edit/delete all along (`www-admin/index.html` nav id `tags`, view
         // `Tags` + `TagModal`), which POSTs/PUTs/DELETEs these paths, but only the GET existed here

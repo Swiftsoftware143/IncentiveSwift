@@ -13,7 +13,7 @@
 //! 126 historical rows the backfill could not attribute (see migrations/zz_is10_contact_tenants.sql).
 
 use crate::error::AppError;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// Input for upserting a contact.
@@ -367,4 +367,223 @@ pub async fn delete_contact(
     .await?;
 
     Ok(true)
+}
+
+// ---- Contact tags (cron 2026-10-22) ------------------------------------------------------------
+//
+// `tags` is the account's own library; `contact_tags` (migration zz_is21) is the join that lets a
+// tag actually sit on a PERSON instead of only on one campaign `entries.tags_applied` row. Two
+// callers wanted this and had nowhere to write it: the admin Contacts screen ("Apply a tag to
+// contacts" is listed as an action on the Tags screen) and the Loyalty tier editor ("the reward tag
+// is what the member is tagged with when the reward is approved" — before this it only appended a
+// line to `contacts.notes`, which no screen reads).
+
+/// One tag carried by a contact, as every reader renders it.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct ContactTag {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub color: Option<String>,
+    pub source: String,
+}
+
+/// The tags this account has put on ONE contact. Scoped twice: the contact must be linked to the
+/// account (`contact_tenants`) and the tag must belong to the same account — so a caller can never
+/// read a foreign tenant's label through a shared contact.
+pub async fn list_contact_tags(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_id: &Uuid,
+) -> Result<Vec<ContactTag>, AppError> {
+    let rows = sqlx::query_as::<_, ContactTag>(
+        r#"SELECT t.id, t.name, t.color, ct_tag.source
+           FROM contact_tags ct_tag
+           JOIN tags t ON t.id = ct_tag.tag_id
+           WHERE ct_tag.contact_id = $1
+             AND t.account_id = $2
+             AND EXISTS (SELECT 1 FROM contact_tenants ct
+                         WHERE ct.contact_id = $1 AND ct.account_id = $2)
+           ORDER BY t.name"#,
+    )
+    .bind(contact_id)
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// The tags for MANY contacts at once, keyed by contact id — one query for the list screen rather
+/// than one per row.
+pub async fn tags_for_contacts(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Vec<ContactTag>>, AppError> {
+    use std::collections::HashMap;
+    let mut out: HashMap<Uuid, Vec<ContactTag>> = HashMap::new();
+    if contact_ids.is_empty() {
+        return Ok(out);
+    }
+    let rows = sqlx::query(
+        r#"SELECT ct_tag.contact_id, t.id, t.name, t.color, ct_tag.source
+           FROM contact_tags ct_tag
+           JOIN tags t ON t.id = ct_tag.tag_id
+           WHERE ct_tag.contact_id = ANY($1)
+             AND t.account_id = $2
+           ORDER BY t.name"#,
+    )
+    .bind(contact_ids)
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+
+    for row in rows {
+        let contact_id: Uuid = row.get("contact_id");
+        out.entry(contact_id).or_default().push(ContactTag {
+            id: row.get("id"),
+            name: row.get("name"),
+            color: row.get("color"),
+            source: row.get("source"),
+        });
+    }
+    Ok(out)
+}
+
+/// Find-or-create a tag by name in this account's library and return its id.
+///
+/// Matching is case-insensitive so "vip" and "VIP" are one tag, not two — the operator typing the
+/// name in a prompt is the common path, and two rows that read the same would be a silent mess. The
+/// allowance (`plans.max_tags`) is NOT re-checked here: this path may be reached by a loyalty rule
+/// the account already configured, and refusing the tag at reward time would lose the fact that the
+/// member earned it. Explicit tag creation (POST /tags) keeps its own gate.
+pub async fn ensure_tag_named(
+    pool: &PgPool,
+    account_id: &Uuid,
+    name: &str,
+) -> Result<Uuid, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("A tag name is required".to_string()));
+    }
+    if trimmed.chars().count() > 64 {
+        return Err(AppError::UnprocessableEntity(
+            "Tag name is longer than 64 characters".to_string(),
+        ));
+    }
+    if let Some(existing) = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM tags WHERE account_id = $1 AND lower(name) = lower($2) ORDER BY created_at LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(trimmed)
+    .fetch_optional(pool)
+    .await?
+    {
+        return Ok(existing);
+    }
+    let id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO tags (account_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(account_id)
+    .bind(trimmed)
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Put a tag (from THIS account's library) on a contact the account can see. Idempotent: a second
+/// press is the state the operator asked for, not an error.
+pub async fn assign_contact_tag(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_id: &Uuid,
+    tag_id: &Uuid,
+    source: &str,
+) -> Result<bool, AppError> {
+    // Both halves of the link must already be the caller's: the contact through `contact_tenants`,
+    // the tag through `tags.account_id`. A foreign id is a 404, never a write.
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM contact_tenants WHERE contact_id = $1 AND account_id = $2)",
+    )
+    .bind(contact_id)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    if !visible {
+        return Err(AppError::NotFound("Contact not found".to_string()));
+    }
+    let owns_tag: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM tags WHERE id = $1 AND account_id = $2)")
+            .bind(tag_id)
+            .bind(account_id)
+            .fetch_one(pool)
+            .await?;
+    if !owns_tag {
+        return Err(AppError::NotFound("Tag not found".to_string()));
+    }
+
+    let inserted = sqlx::query(
+        "INSERT INTO contact_tags (contact_id, tag_id, source) VALUES ($1, $2, $3) \
+         ON CONFLICT (contact_id, tag_id) DO NOTHING",
+    )
+    .bind(contact_id)
+    .bind(tag_id)
+    .bind(source)
+    .execute(pool)
+    .await?;
+    Ok(inserted.rows_affected() > 0)
+}
+
+/// Take a tag off a contact. Idempotent in the sense the operator asked for: the tag is gone
+/// afterwards, whether or not this call removed it.
+pub async fn remove_contact_tag(
+    pool: &PgPool,
+    account_id: &Uuid,
+    contact_id: &Uuid,
+    tag_id: &Uuid,
+) -> Result<bool, AppError> {
+    let removed = sqlx::query(
+        "DELETE FROM contact_tags ct_tag USING tags t \
+         WHERE ct_tag.tag_id = t.id AND ct_tag.contact_id = $1 AND ct_tag.tag_id = $2 \
+           AND t.account_id = $3",
+    )
+    .bind(contact_id)
+    .bind(tag_id)
+    .bind(account_id)
+    .execute(pool)
+    .await?;
+    Ok(removed.rows_affected() > 0)
+}
+
+/// Put a tag on a contact BY NAME, resolving the owning account from the contact's own link rows.
+///
+/// This is the loyalty path: a reward tier carries only a name, and the tier belongs to a programme
+/// that belongs to an account — but the reward row may be reached with just the contact. Every
+/// account the contact is linked to gets the tag in ITS OWN library (that is what "the member is
+/// tagged" means per tenant), which is why this returns how many links were written.
+pub async fn apply_named_tag_to_contact(
+    pool: &PgPool,
+    contact_id: &Uuid,
+    name: &str,
+    source: &str,
+) -> Result<u64, AppError> {
+    let accounts: Vec<Uuid> =
+        sqlx::query_scalar("SELECT account_id FROM contact_tenants WHERE contact_id = $1")
+            .bind(contact_id)
+            .fetch_all(pool)
+            .await?;
+    let mut written = 0u64;
+    for account_id in accounts {
+        let tag_id = ensure_tag_named(pool, &account_id, name).await?;
+        let inserted = sqlx::query(
+            "INSERT INTO contact_tags (contact_id, tag_id, source) VALUES ($1, $2, $3) \
+             ON CONFLICT (contact_id, tag_id) DO NOTHING",
+        )
+        .bind(contact_id)
+        .bind(tag_id)
+        .bind(source)
+        .execute(pool)
+        .await?;
+        written += inserted.rows_affected();
+    }
+    Ok(written)
 }

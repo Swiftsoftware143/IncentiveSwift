@@ -1,5 +1,6 @@
 //! Loyalty database operations — member management, checkins, rewards, thresholds.
 
+use crate::db::contacts;
 use crate::error::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -239,7 +240,15 @@ pub async fn create_reward(
     Ok(id)
 }
 
-/// Apply a reward tag to a contact (stored in contact notes).
+/// Apply a reward tag to a contact.
+///
+/// TWO writes, on purpose (cron 2026-10-22). The tier editor's own words are "that is what the
+/// member is tagged with when the reward is approved", and until this change the only thing that
+/// happened was a line appended to `contacts.notes` — which no screen, export or segmentation reads,
+/// so the promise was invisible. `contact_tags` (migration zz_is21) is the real link: the tag is
+/// created in each account that can see the contact and put on the person, where the Contacts screen
+/// shows it and where a later automation can act on it. The notes line stays as the human-readable
+/// trail the earlier behaviour produced (and existing notes must not be rewritten away).
 pub async fn apply_reward_tag(pool: &PgPool, contact_id: &Uuid, tag: &str) -> Result<(), AppError> {
     sqlx::query(
         r#"UPDATE contacts
@@ -250,6 +259,10 @@ pub async fn apply_reward_tag(pool: &PgPool, contact_id: &Uuid, tag: &str) -> Re
     .bind(contact_id)
     .execute(pool)
     .await?;
+
+    // The real tag. A contact linked to no account has nothing to tag (a shared identity row with
+    // no tenant) — that is not an error, the notes line above is all such a row can carry.
+    contacts::apply_named_tag_to_contact(pool, contact_id, tag, "loyalty").await?;
 
     Ok(())
 }
