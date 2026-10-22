@@ -44,7 +44,8 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 <body>
 <div class="signup-card">
   <div class="logo"><svg width="24" height="24" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="13" stroke="#00E5FF" stroke-width="2"/><path d="M9 14l3 3 7-7" stroke="#00E5FF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg> <span>IncentiveSwift</span></div>
-  <p class="subtitle">Free account — no credit card required <span class="plan-badge">Free Plan</span></p>
+  <p class="subtitle">Free account — no credit card required <span class="plan-badge" id="signup-plan-badge">Free Plan</span></p>
+  <p class="terms" id="signup-plan-note" style="display:none;font-size:12.5px;color:#cfd2dd;line-height:1.5"></p>
 
   <div class="feature-list">
     <div class="feature-row"><span class="check">✓</span> Spin-to-Win, Raffles, Quizzes &amp; more</div>
@@ -76,6 +77,22 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 </div>
 
 <script>
+/* WHICH TIER the visitor picked on /pricing (measured live 2026-10-21).
+   Every card on /pricing advertised a tier, but its CTA carried nothing, so a visitor who
+   clicked "Get Pro" landed on a page whose only plan word was "Free Plan" - the pick vanished.
+   The CTA now carries the slug, and this page says out loud what the account starts on. */
+var TIER_NAMES = {free: 'Free', pro: 'Pro', enterprise: 'Enterprise'};
+var pickedTier = (new URLSearchParams(location.search).get('plan') || '').trim().toLowerCase();
+var pickedLabel = TIER_NAMES[pickedTier];
+if (pickedLabel && pickedTier !== 'free') {
+  document.getElementById('signup-plan-badge').textContent = 'Starts on Free';
+  var planNote = document.getElementById('signup-plan-note');
+  planNote.textContent = 'You picked ' + pickedLabel + '. New accounts start on Free \u2014 no card. '
+    + 'Open Plan & billing in your dashboard whenever you want us to switch the workspace to '
+    + pickedLabel + '.';
+  planNote.style.display = 'block';
+}
+
 async function handleSignup(e) {
   e.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
