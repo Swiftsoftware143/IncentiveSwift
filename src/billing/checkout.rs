@@ -179,17 +179,64 @@ pub async fn create_checkout_session(
             "checkout/create REFUSED: no active payment provider for the account and none owned by \
              a platform-operator account"
         );
+        // BUYER-FIRST (2026-10-22, parity with FunnelSwift). The upgrade screen paints this
+        // `message` verbatim (`d.message || d.error`), so it is addressed to the CUSTOMER: what
+        // happened to their money comes first and the operator's setup detail sits in parentheses
+        // at the end. Before this the sentence OPENED by telling a buyer how the platform operator
+        // configures Stripe in his admin console — an instruction addressed to somebody else, on
+        // the one screen where a buyer is trying to give us money.
+        //
+        // The attempt is also RECORDED, not just logged. A 503 in a log line tells support nothing
+        // about which plan a real workspace wanted; `checkout_sessions` with status
+        // `provider_missing` is that history, so the platform team can activate the plan by hand.
+        // `user_id` has no FK here (only `account_id` does), so the account id is the fallback —
+        // the same shape the successful path below uses.
+        let record_user: Option<Uuid> = sqlx::query_scalar(
+            "SELECT u.id FROM users u JOIN accounts a ON a.tenant_id = u.tenant_id \
+             WHERE a.id = $1 ORDER BY u.created_at LIMIT 1",
+        )
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+        let recorded = sqlx::query(
+            "INSERT INTO checkout_sessions \
+             (id, account_id, user_id, price_amount, price_currency, description, metadata, status, \
+              payment_provider) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'provider_missing', 'none')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(account_id)
+        .bind(record_user.unwrap_or(account_id))
+        .bind(plan_price)
+        .bind(CHECKOUT_CURRENCY)
+        .bind(body.description.clone())
+        .bind(json!({
+            "kind": "plan",
+            "reason": "payment_provider_not_configured",
+            "account_id": account_id.to_string(),
+            "plan_id": plan_id.to_string(),
+            "plan_slug": plan_slug,
+        }))
+        .execute(&state.db)
+        .await;
+        if let Err(e) = recorded {
+            tracing::error!(%account_id, "checkout/create: could not record the refused attempt: {e:?}");
+        }
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "payment_provider_not_configured",
-                "message": "No payment provider is configured, so checkout cannot work. The \
-                            platform operator adds Stripe's keys in the admin console (Provider \
-                            Keys / Payment providers) on the operator's own account; that key then \
-                            funds every workspace's plan purchase, and a workspace that brings its \
-                            own Stripe account is charged through its own. No session was created \
-                            and no charge can occur.",
+                "message": "No charge was made — nothing was sent to a payment provider, so you \
+                            cannot be billed. Upgrades are not switched on for this installation \
+                            yet: your request has been recorded for the platform team, who can \
+                            activate this plan for your workspace by hand. (Operator: add Stripe's \
+                            keys on the operator's own account in the admin console under Provider \
+                            Keys / Payment providers; that key then funds every workspace's plan \
+                            purchase, and a workspace that brings its own Stripe account is charged \
+                            through its own.)",
                 "configured": false,
+                "request_recorded": true,
                 "requested": requested,
             })),
         ));
