@@ -44,13 +44,29 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 // Input types
 // ---------------------------------------------------------------------------
+/// The ONE currency a plan checkout is charged in.
+///
+/// Stripe's request body carries it (`plan_session_form`), and the `checkout_sessions` row we write
+/// MUST carry the same value — this constant is that single source of truth. Before it existed the
+/// row took the CALLER's `price_currency` string while Stripe was always charged `usd`, so a client
+/// that posted `price_currency: "jpy"` produced a session row recording 79 JPY for a 79 USD charge:
+/// a money record that could lie about the currency of a real sale.
+pub const CHECKOUT_CURRENCY: &str = "usd";
 
 /// Input for creating a checkout session. Every field is echoed back in a refusal (see
 /// `requested` below) so a caller can see the whole request that was turned down.
 #[derive(Deserialize)]
 pub struct CreateCheckoutInput {
-    pub price_amount: f64,
-    pub price_currency: String,
+    /// OPTIONAL. The amount actually charged is the PLAN row's own price (see the doc above the
+    /// handler) — this field was required yet never trusted, so a client that sent the documented
+    /// minimum (`plan_id`) was refused by serde with a leaked internal sentence
+    /// (`missing field \`price_amount\``) before the plan was even read. A caller that still POSTS
+    /// an amount keeps the old refusal when it is not finite/positive, so nothing that used to be
+    /// rejected now passes silently.
+    #[serde(default)]
+    pub price_amount: Option<f64>,
+    #[serde(default)]
+    pub price_currency: Option<String>,
     pub description: Option<String>,
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
@@ -74,7 +90,8 @@ pub struct CreateCheckoutInput {
 ///
 /// The arms now, cheapest first:
 ///
-/// * `price_amount` not finite/positive -> 400 (a zero price is not a checkout)
+/// * a SUPPLIED `price_amount` not finite/positive -> 400 (a zero price is not a checkout); omitting
+///   it is legal, because the charged amount is the plan's own price
 /// * `plan_id` missing/unknown/inactive -> 404 `plan_not_found`
 /// * the PLAN's own price is 0 -> 400 "That plan costs nothing…"
 /// * no active provider row and none owned by a platform-operator account -> 503
@@ -111,12 +128,15 @@ pub async fn create_checkout_session(
         "payment_provider": body.payment_provider,
     });
 
-    // A zero/negative/non-finite price is not a checkout.
-    if !body.price_amount.is_finite() || body.price_amount <= 0.0 {
-        return Err(AppError::BadRequest(format!(
-            "price_amount must be greater than zero (got {}); there is nothing to check out.",
-            body.price_amount
-        )));
+    // A zero/negative/non-finite price is not a checkout. Only a SUPPLIED amount is judged here:
+    // the amount that decides whether there is anything to charge is the PLAN's own price (arm 3
+    // below), so a caller that names only the plan is not refused before we can read it.
+    if let Some(amount) = body.price_amount {
+        if !amount.is_finite() || amount <= 0.0 {
+            return Err(AppError::BadRequest(format!(
+                "price_amount must be greater than zero (got {amount}); there is nothing to check out."
+            )));
+        }
     }
 
     // ── 1. The PLAN, from our own catalogue. ─────────────────────────────────────────────────────
@@ -285,7 +305,7 @@ pub async fn create_checkout_session(
     .bind(account_id)
     .bind(user_id)
     .bind(plan_price)
-    .bind(&body.price_currency)
+    .bind(CHECKOUT_CURRENCY)
     .bind(body.description.clone())
     .bind(body.success_url.clone())
     .bind(body.cancel_url.clone())
@@ -732,7 +752,10 @@ fn plan_session_form(
         ("mode", "subscription".to_string()),
         ("payment_method_types[]", "card".to_string()),
         ("line_items[0][quantity]", "1".to_string()),
-        ("line_items[0][price_data][currency]", "usd".to_string()),
+        (
+            "line_items[0][price_data][currency]",
+            CHECKOUT_CURRENCY.to_string(),
+        ),
         ("line_items[0][price_data][unit_amount]", cents.to_string()),
         (
             "line_items[0][price_data][recurring][interval]",
