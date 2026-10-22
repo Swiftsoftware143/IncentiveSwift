@@ -48,11 +48,38 @@ pub async fn dashboard_stats(
     .await?
     .unwrap_or(0);
 
+    // Points awarded across this tenant's loyalty programmes. The SUM and the joins are the ones
+    // `analytics_handler::overview` already uses for its `total_points_issued`, so the dashboard
+    // tile and the Analytics panel cannot disagree about the same number.
+    let total_points: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(m.lifetime_points), 0) FROM loyalty_members m
+         JOIN loyalty_programs p ON p.id = m.program_id
+         JOIN campaigns c ON c.id = p.campaign_id
+         WHERE c.account_id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    // Rewards = prizes this tenant's campaigns have actually awarded. Same query shape as
+    // `analytics_handler::overview`'s `total_wins`; `loyalty_rewards_earned` is a separate ledger
+    // and is deliberately NOT mixed in, or the two screens would count different things.
+    let total_rewards: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM campaign_wins w
+         JOIN campaigns c ON c.id = w.campaign_id
+         WHERE c.account_id = $1",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
     Ok(Json(json!({
         "total_campaigns": total_campaigns,
-        "total_rewards": 0,
+        "total_rewards": total_rewards,
         "total_participants": total_participants,
-        "total_points": 0,
+        "total_points": total_points,
         "total_entries": total_entries,
     })))
 }
