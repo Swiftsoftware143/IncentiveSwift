@@ -1505,7 +1505,7 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, md: null, mdBusy: false, mdErr: '', scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
   if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
@@ -2201,6 +2201,22 @@ const ledgerTab = html`<div>
     renderApp();
   };
 
+  // Member history (2026-10-22). GET /api/v1/loyalty/dashboard/member/:id has always answered the
+  // member's lifetime points, streaks, referral count and last ten scans, but NO screen called it: the
+  // roster showed a balance and a card, so an operator could see that a customer's balance moved and
+  // had no way to ask WHY — the scan log that answers it was unreachable. `Details` opens it by the
+  // roster's own member id, so the ownership gate in the handler is the caller's own account.
+  const openDetails = async (m) => {
+    st.md = { member: m, data: null, err: '', busy: true }; renderApp();
+    try {
+      const d = await API.get('/loyalty/dashboard/member/' + encodeURIComponent(m.id));
+      st.md = { member: m, data: d, err: '', busy: false };
+    } catch (e) {
+      st.md = { member: m, data: null, err: (e && e.message) || 'Could not load this member', busy: false };
+    }
+    renderApp();
+  };
+
   const membersTab = html`<div>
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h2 class="text-xl font-bold">Members</h2>
@@ -2211,6 +2227,38 @@ const ledgerTab = html`<div>
       </div>
     </div>
     <div class="text-xs text-gray-500 mb-3">Everyone who has checked in at your counter for the selected programme. <b>Member card</b> shows the scannable code that customer presents, and replaces it if a card is lost or copied.</div>
+    ${st.md ? html`<div class="card mb-4" data-member-details=${st.md.member.id}>
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div>
+          <h3 class="font-bold text-lg">${st.md.member.name || 'Member'} \u2014 activity</h3>
+          <p class="text-sm text-gray-500">${st.md.data ? ((st.md.data.program_name || '') + (st.md.data.currency_name ? ' \u00b7 ' + st.md.data.currency_name : '')) : (st.md.member.email || st.md.member.phone || '')}</p>
+        </div>
+        <button class="btn btn-sm btn-outline" onClick=${() => { st.md = null; renderApp(); }}>Close</button>
+      </div>
+      ${st.md.busy ? html`<p class="text-sm text-gray-400">Loading this member's history\u2026</p>`
+        : st.md.err ? html`<p class="text-sm" style="color:#b91c1c">${st.md.err}</p>`
+        : html`<div>
+          <div class="flex gap-3 flex-wrap mb-4">
+            <div class="stat-card" style="min-width:130px"><div class="stat-value">${plural(st.md.data.points_balance || 0, 'point', 'points')}</div><div class="stat-label">Balance</div></div>
+            <div class="stat-card" style="min-width:130px"><div class="stat-value">${plural(st.md.data.lifetime_points || 0, 'point', 'points')}</div><div class="stat-label">Earned all time</div></div>
+            <div class="stat-card" style="min-width:130px"><div class="stat-value">${st.md.data.current_streak || 0}</div><div class="stat-label">Current streak</div></div>
+            <div class="stat-card" style="min-width:130px"><div class="stat-value">${st.md.data.longest_streak || 0}</div><div class="stat-label">Longest streak</div></div>
+            <div class="stat-card" style="min-width:130px"><div class="stat-value">${st.md.data.total_referrals || 0}</div><div class="stat-label">Referrals</div></div>
+          </div>
+          <p class="text-sm mb-3">Member since <b>${fmtDay(st.md.data.member_since)}</b> \u00b7 last activity <b>${fmtDay(st.md.data.last_activity_date)}</b>${st.md.data.referral_code ? html` \u00b7 referral code <b style="letter-spacing:.06em">${st.md.data.referral_code}</b>` : ''}${st.md.data.has_qr ? '' : html` \u00b7 <span style="color:#b45309">no card code yet</span>`}</p>
+          <h4 class="font-semibold mb-2">Recent activity</h4>
+          ${(st.md.data.recent_scans || []).length === 0
+            ? html`<p class="text-sm text-gray-400">No check-ins recorded for this member yet.</p>`
+            : html`<table class="table"><thead><tr><th>When</th><th>Where</th><th>Change</th><th>Balance after</th></tr></thead><tbody>
+                ${(st.md.data.recent_scans || []).map(s => html`<tr>
+                  <td>${fmtDay(s.scanned_at)}</td>
+                  <td>${s.business_name || s.scan_type || '\u2014'}</td>
+                  <td>${s.points_awarded > 0 ? '+' + s.points_awarded : String(s.points_awarded || 0)}</td>
+                  <td>${plural(s.points_balance || 0, 'point', 'points')}</td>
+                </tr>`)}
+              </tbody></table>`}
+        </div>`}
+    </div>` : ''}
     ${st.card ? html`<div class="card mb-4" data-member-card=${st.card.member.id}>
       <div class="flex items-start gap-4 flex-wrap">
         <div style="width:220px;height:220px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">
@@ -2241,7 +2289,7 @@ const ledgerTab = html`<div>
             <td>${m.tier_name ? html`<span class="badge badge-blue">${m.tier_name}</span>` : html`<span class="text-gray-400">—</span>`}</td>
             <td>${fmtDay(m.last_checkin_at)}</td>
             <td>${fmtDay(m.member_since)}</td>
-            <td><button class="btn btn-sm btn-outline" data-member-card-btn=${m.id} onClick=${() => openCard(m)}>Member card</button></td>
+            <td><button class="btn btn-sm btn-outline" data-member-card-btn=${m.id} onClick=${() => openCard(m)}>Member card</button> <button class="btn btn-sm btn-outline" data-member-details-btn=${m.id} onClick=${() => openDetails(m)}>Details</button></td>
           </tr>`)}
           ${memberRows.length === 0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.memberErr ? html`Could not load members: ${st.memberErr}` : html`No members yet. A customer appears here after their first check-in — open the check-in link from the Programs tab.`}</td></tr>`}
         </tbody></table>
@@ -2737,7 +2785,7 @@ const LeadsView = () => {
 // — public.contacts is still one row per person, deduped by email then phone — so a person captured
 // by two businesses is one contact with two links, and each business sees them.
 const ContactsView = () => {
-  const st = viewState('contacts', { list: [], search: '', impOpen: false, impText: '', impBusy: false, impMsg: '', loaded: false });
+  const st = viewState('contacts', { list: [], search: '', impOpen: false, impText: '', impBusy: false, impMsg: '', loaded: false, det: null });
   const load = async () => {
     try { const d = await API.get('/contacts?limit=100'); st.list = (d && d.contacts) || (Array.isArray(d) ? d : []); }
     catch (e) { console.error(e); st.list = []; }
@@ -2756,6 +2804,59 @@ const ContactsView = () => {
       st.impBusy = false; await load(); return;
     } catch (e) { st.impMsg = 'Import failed: ' + e.message; }
     st.impBusy = false; renderApp();
+  };
+  // Contact tags (migration zz_is21): the Tags screen has always listed "Apply a tag to contacts" as
+  // an action and the Loyalty tier editor promises the reward tag is what the member is tagged with.
+  // Both land here: a chip per tag, "+ Tag" to apply one (a new name is created in this account's own
+  // tag library), and a click on the chip takes it off. The server answers with the contact's tags as
+  // they now stand, so the row renders the truth instead of assuming the POST worked.
+  const assignTag = async (c) => {
+    const name = prompt('Tag this contact with which tag? A new name is added to your tag library.');
+    if (!name || !name.trim()) return;
+    try {
+      const r = await API.post('/contacts/' + c.id + '/tags', { name: name.trim() });
+      if (r && r.tags) c.tags = r.tags;
+      renderApp();
+    } catch (e) { alert('Could not tag that contact: ' + e.message); }
+  };
+  const removeTag = async (c, t) => {
+    try {
+      const r = await API.del('/contacts/' + c.id + '/tags/' + t.id);
+      c.tags = (r && r.tags) || (c.tags || []).filter(x => x.id !== t.id);
+      renderApp();
+    } catch (e) { alert('Could not remove that tag: ' + e.message); }
+  };
+  // Contact history (2026-10-22). `GET /api/v1/contacts/:id` has always answered the person's whole
+  // record — every entry they made, each with the question/answer pairs behind it — but NO screen
+  // called it: the roster showed a row and nothing else, so an operator could see someone had entered
+  // three times and could never see WHAT they answered or which campaign it came from. `History` opens
+  // that record by the roster's own contact id; the handler's account scope is what keeps a contact
+  // shared with another business from showing that business's entries.
+  const openDetails = async (c) => {
+    st.det = { id: c.id, contact: c, data: null, err: '', busy: true }; renderApp();
+    try {
+      const d = await API.get('/contacts/' + encodeURIComponent(c.id));
+      st.det = { id: c.id, contact: c, data: d, err: '', busy: false };
+    } catch (e) {
+      st.det = { id: c.id, contact: c, data: null, err: (e && e.message) || 'Could not load this contact', busy: false };
+    }
+    renderApp();
+  };
+  // A form answer is JSONB, so it can be a string, a number, or a whole object. Render the scalar
+  // as-is and the object as JSON rather than "[object Object]".
+  const answerText = (v) => {
+    if (v === null || v === undefined) return '—';
+    if (typeof v === 'string') {
+      // `value` from this API is the answer's JSON TEXT, so a string answer arrives as "Blue" with
+      // the quotes still on it. Decode that so the operator reads the answer, not its encoding.
+      const t = v.trim();
+      if (t.length > 1 && t[0] === '"' && t[t.length - 1] === '"') {
+        try { return JSON.parse(t); } catch (e) { return t.slice(1, -1); }
+      }
+      return v;
+    }
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    try { return JSON.stringify(v); } catch (e) { return String(v); }
   };
   const exportCsv = async () => {
     try {
@@ -2783,17 +2884,50 @@ const ContactsView = () => {
       </div>
     </div>
     ${st.impMsg ? html`<div class="mb-3 text-sm text-gray-700 bg-gray-50 border rounded px-3 py-2">${st.impMsg}</div>` : null}
+    ${st.det ? html`<div class="card mb-4" data-contact-details=${st.det.id}>
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div>
+          <h3 class="font-bold text-lg">${[st.det.contact.first_name, st.det.contact.last_name].filter(Boolean).join(' ') || st.det.contact.email || 'Contact'} — history</h3>
+          <p class="text-sm text-gray-500">${[st.det.contact.email, st.det.contact.phone, st.det.contact.business_name].filter(Boolean).join(' · ') || 'No contact details on file'}</p>
+        </div>
+        <button class="border rounded px-3 py-1 text-sm" onClick=${() => { st.det = null; renderApp(); }}>Close</button>
+      </div>
+      ${st.det.busy ? html`<p class="text-sm text-gray-400">Loading this contact's history…</p>`
+        : st.det.err ? html`<p class="text-sm" style="color:#b91c1c">${st.det.err}</p>`
+        : (() => {
+            const es = (st.det.data && st.det.data.entries) || [];
+            const delivered = es.filter(x => x.entry && x.entry.delivered).length;
+            return html`<div>
+              <div class="flex gap-3 flex-wrap mb-4">
+                <div class="stat-card" style="min-width:130px"><div class="stat-value">${es.length}</div><div class="stat-label">${es.length === 1 ? 'Entry' : 'Entries'}</div></div>
+                <div class="stat-card" style="min-width:130px"><div class="stat-value">${delivered}</div><div class="stat-label">Delivered to you</div></div>
+                <div class="stat-card" style="min-width:130px"><div class="stat-value">${es.length && es[0].entry && es[0].entry.created_at ? new Date(es[0].entry.created_at).toLocaleDateString() : '—'}</div><div class="stat-label">Most recent</div></div>
+              </div>
+              ${es.length ? es.map(x => html`<div class="border rounded p-3 mb-2">
+                <div class="flex items-center justify-between gap-2 flex-wrap mb-2">
+                  <span class="text-sm font-medium">${x.entry && x.entry.created_at ? new Date(x.entry.created_at).toLocaleString() : 'Entry'}</span>
+                  <span class="text-xs text-gray-500">${x.entry && x.entry.outcome ? 'Outcome: ' + x.entry.outcome : (x.entry && x.entry.score != null ? 'Score: ' + x.entry.score : '')}${x.entry && x.entry.delivered ? ' · delivered' : ' · not delivered yet'}</span>
+                </div>
+                ${(x.questions_and_answers || []).length ? html`<ul class="text-sm" style="list-style:none;padding:0;margin:0">
+                  ${(x.questions_and_answers || []).map(q => html`<li class="py-1"><span class="text-gray-500">${q.question_text || q.question_key || 'Question'}:</span> ${answerText(q.raw_value !== null && q.raw_value !== undefined ? q.raw_value : q.value)}</li>`)}
+                </ul>` : html`<p class="text-sm text-gray-400">No form answers recorded for this entry.</p>`}
+              </div>`) : html`<p class="text-sm text-gray-400">This person has no entries yet — the contact was imported or created by hand.</p>`}
+            </div>`;
+          })()}
+    </div>` : null}
     <div class="card overflow-hidden">
       <table class="table w-full">
-        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Business</th><th>Entries</th><th>Last seen</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Business</th><th>Tags</th><th>Entries</th><th>Last seen</th><th>History</th></tr></thead>
         <tbody>
           ${filtered.map(c => html`<tr>
             <td class="font-medium text-sm">${[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}</td>
             <td class="text-sm">${c.email || '—'}</td>
             <td class="text-sm">${c.phone || '—'}</td>
             <td class="text-sm">${c.business_name || '—'}</td>
+            <td class="text-sm">${(c.tags && c.tags.length) ? c.tags.map(t => html`<span class="badge" style=${'background:' + (t.color || '#6366f1') + '22;color:' + (t.color || '#6366f1') + ';cursor:pointer'} title=${(t.source === 'loyalty' ? 'Applied by a loyalty reward' : 'Applied by an operator') + ' — click to remove'} onClick=${() => removeTag(c, t)}>${t.name} ✕</span>`) : html`<span class="text-gray-400">—</span>`}<button class="text-xs text-blue-600 ml-1" onClick=${() => assignTag(c)}>+ Tag</button></td>
             <td class="text-sm">${c.total_entries == null ? '—' : c.total_entries}</td>
             <td class="text-sm text-gray-500">${c.last_seen_at ? new Date(c.last_seen_at).toLocaleDateString() : '—'}</td>
+            <td class="text-sm"><button class="text-xs text-blue-600" data-contact-history=${c.id} onClick=${() => openDetails(c)}>History</button></td>
           </tr>`)}
         </tbody>
       </table>
