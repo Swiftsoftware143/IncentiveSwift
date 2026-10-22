@@ -129,13 +129,23 @@ pub async fn list_plans(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let plans = sqlx::query_as::<_, Plan>(
-        r#"SELECT id, name, slug, description,
+        r#"-- The OPERATOR catalogue, so it must include RETIRED rows: `DELETE /admin/plans/:id` is a soft
+           -- retire (`is_active = false`), and this list is the only surface an operator has for the
+           -- catalogue. Filtering it to `is_active = true` meant a plan retired by one click vanished
+           -- from the panel with NO way back — and `admin_assign_plan` now answers 409 telling the
+           -- operator to re-activate it on this very list (measured live 2026-10-22: GET /admin/plans
+           -- returned 3 rows, all active, while the 4th sat retired and invisible).
+           -- The CUSTOMER-facing read is a different handler (`dashboard_handler::list_public_plans`)
+           -- and still filters `is_active = true`; the panel's assign picker excludes retired rows
+           -- client-side, so nothing on sale changes. Active rows stay first, so the ladder an
+           -- operator reads is the one customers see.
+           SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
                   features, is_active, sort_order, payment_provider, created_at, updated_at
            FROM plans
-           WHERE is_active = true
-           ORDER BY sort_order ASC NULLS LAST,
+           ORDER BY is_active DESC,
+                    sort_order ASC NULLS LAST,
                     COALESCE(NULLIF(price_monthly, 0), price) ASC NULLS LAST, name ASC"#,
     )
     .fetch_all(&state.db)
