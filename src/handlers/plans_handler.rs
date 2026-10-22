@@ -277,12 +277,27 @@ pub async fn admin_assign_plan(
     let account_id = Uuid::parse_str(&body.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account_id".to_string()))?;
 
-    // Verify plan exists
-    let _plan = sqlx::query_scalar::<_, Uuid>("SELECT id FROM plans WHERE id = $1")
-        .bind(plan_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
+    // The plan must exist AND still be on sale. MEASURED LIVE 2026-10-22: this action answered 200
+    // for a `plans` row with is_active = false and moved `accounts.plan_tier_id` onto its tier —
+    // while the customer's own Plan & Pricing screen reads `FROM plans p WHERE p.is_active = true`
+    // (`dashboard_handler::list_public_plans`). The workspace was therefore seated on a tier its
+    // catalogue cannot show and its own picker cannot re-offer, and nothing on that screen explained
+    // the limits it was getting. Same defect class missedcallrespondr fixed in 2edd595 and ADASwift
+    // in 2026-10-21; the operator's Plans table has the re-activate control, so seating a retired
+    // tier is never the intended action — refuse it by name instead of writing it.
+    let plan: Option<(String, bool)> =
+        sqlx::query_as("SELECT name, is_active FROM plans WHERE id = $1")
+            .bind(plan_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (plan_name, plan_active) =
+        plan.ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
+    if !plan_active {
+        return Err(AppError::Conflict(format!(
+            "'{plan_name}' is retired, so it cannot be assigned: the customer's plan screen would \
+             not list the plan they are on. Re-activate it on the Plans table first, then assign it."
+        )));
+    }
 
     // Verify account exists
     let _account = sqlx::query_scalar::<_, Uuid>("SELECT id FROM accounts WHERE id = $1")
