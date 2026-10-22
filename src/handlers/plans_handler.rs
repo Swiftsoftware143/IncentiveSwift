@@ -434,7 +434,23 @@ pub async fn update_plan(
     .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
 
     let name: String = body.name.unwrap_or_else(|| existing.get("name"));
-    let slug = body.slug.unwrap_or_else(|| generate_slug(&name));
+    // The slug is an IDENTITY, not a display field. `assign_plan` maps `plans` -> `plan_tiers` BY
+    // SLUG, and the entitlement reads join the same way, so a rewritten slug silently unlinks a plan
+    // from its tier. MEASURED LIVE 2026-10-22: a PUT carrying only `is_active` regenerated the slug
+    // from the name (`probe-life-life1` -> `probe-lifecycle`), after which assigning that plan
+    // answers "No plan found matching plan slug" and the tier lookup has nothing to join to. The
+    // live rows hide it because slugify(name) happens to equal their stored slug (Pro -> pro), so it
+    // only bites a plan whose slug is not the slug of its name — and then it bites silently.
+    let slug: String = match body.slug {
+        Some(s) => {
+            let s = s.trim().to_string();
+            if s.is_empty() {
+                return Err(AppError::BadRequest("slug cannot be empty".to_string()));
+            }
+            s
+        }
+        None => existing.get("slug"),
+    };
     let description: Option<String> = body.description.or_else(|| existing.get("description"));
     let price_monthly: f64 = body
         .price_monthly
