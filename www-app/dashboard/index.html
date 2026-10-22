@@ -237,7 +237,8 @@ function paintAccount(u) {
   // The usage card shows a count beside the plan's allowance, so it repaints once the plan is read.
   if (USAGE.data) renderUsage();
   var nm = u.name || u.email || 'Your account';
-  var plan = u.plan_name || (u.plan && u.plan.name) || 'Free';
+  // No invention: if the plan was not read, name none (the badge renders empty, not 'Free').
+  var plan = u.plan_name || (u.plan && u.plan.name) || '';
   var nameEl = document.getElementById('userName');
   var planEl = document.getElementById('userPlan');
   var av = document.getElementById('uav');
@@ -256,7 +257,7 @@ function paintAccount(u) {
     ['Name', u.name || '—'],
     ['Email', u.email || '—'],
     ['Company', u.company || '—'],
-    ['Plan', '<span class="badge">' + esc(plan) + '</span>']
+    ['Plan', '<span class="badge">' + esc(plan || '\u2014') + '</span>']
   ];
   var h = '';
   for (var i = 0; i < rows.length; i++) {
@@ -909,7 +910,8 @@ function pbRender() {
   var curSlug = cur.slug || '';
   var curEl = document.getElementById('pb-current');
   if (curEl) {
-    curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || 'Free') + '</span>'
+    // No invention: an unread plan shows a dash, never the word Free.
+    curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || '\u2014') + '</span>'
       + (pbPlanLimits(cur) ? ' <span style="color:#64748b">\u2014 ' + esc(pbPlanLimits(cur)) + '</span>' : '');
   }
   var wrap = document.getElementById('pb-plans');

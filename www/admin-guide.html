@@ -84,6 +84,7 @@
     <a href="#tag-to-free-account">Tag to Free Account</a>
     <a href="#email-branding">Email Branding</a>
     <a href="#email-provider">Email Provider</a>
+    <a href="#profile-picture">Your Profile Picture</a>
   </div>
 </nav>
 <div class="container">
@@ -592,6 +593,22 @@ subject and recipient, a red &ldquo;❌ Last email was NOT delivered &mdash; the
 nothing&rdquo; line with the provider's own reason, or an explicit withheld line for an address that
 was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
 <code>POST /api/v1/admin/email-settings/test</code> (optional <code>?to=address</code>).</p>
+</section>
+
+<section id="profile-picture">
+  <h2 class="sec-title"><span class="sec-num">14</span> Your own profile picture</h2>
+  <p>Every account can carry a picture, set from the console itself: open the account menu at the
+  top right, choose <strong>Profile</strong>, and use <strong>Upload picture</strong> in the profile
+  card. The picture then appears wherever the signed-in user is shown. <strong>Remove picture</strong>
+  deletes it and the card falls back to the account's initials.</p>
+  <p>Accepted are <strong>PNG, JPEG, GIF and WebP up to 2&nbsp;MB</strong>. The type is read from the
+  file's own bytes rather than from its name, so renaming a file cannot get it past the check, and an
+  oversized image is refused with the limit in the message instead of being stored cut in half.
+  Uploading again simply replaces the previous picture.</p>
+  <p>Routes: <code>POST|DELETE /api/v1/auth/avatar</code> and
+  <code>GET /api/v1/auth/avatar/&lt;account id&gt;</code>. The profile answer carries
+  <code>avatar_url</code> with a version marker, so a replaced picture shows immediately instead of
+  being served from the browser's cache.</p>
 </section>
 
 <div class="foot">
