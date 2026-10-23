@@ -174,7 +174,12 @@ window.appGuidePages = {
   portfolio:      { title: "Portfolio", desc: "An operator view across the accounts you manage.", actions: ["Open an account", "Compare activity"] },
   plans:          { title: "Plans", desc: "The plan catalogue customers can be on (operators only).", actions: ["Review a plan", "Edit its limits"] },
   "plan-tiers":   { title: "Plan Tiers", desc: "The definitions behind each plan tier (operators only).", actions: ["Review a tier", "Edit it"] },
-  "email-templates": { title: "Email Templates", desc: "The wording of the emails this app sends (operators only).", actions: ["Edit a template", "Preview it"] }
+  "email-templates": { title: "Email Templates", desc: "The wording of the emails this app sends (operators only).", actions: ["Edit a template", "Preview it"] },
+  analytics:      { title: "Analytics", desc: "How your account is performing: campaigns, entries, wins, the win rate, redemptions, loyalty members and points issued. Below the totals, click a campaign's name to open that campaign's own numbers \u2014 its entries, redemptions and redemption rate, average score, the loyalty members it brought in, where the entries came from, which prizes were won and whether automatic loyalty enrolment is on. A campaign with no play yet says so rather than showing a zero, and a failed read names the reason.", actions: ["Read the account totals", "Click a campaign's name to open its own numbers", "Close the detail card when you are done"] },
+  entries:        { title: "Entries & Answers", desc: "The raw record of play, one row per entry: when it was made, who made it, what the result was and its delivery state. This is the row to check when an entry is disputed, rather than the summary counts.", actions: ["Find an entry", "Check its result and delivery state"] },
+  offers:         { title: "Offers", desc: "The offers you can hand out \u2014 each one's name, its discount, any cap on it and whether it is active. Deactivating stops an offer being handed out without deleting its history, and reactivating brings it back.", actions: ["Add an offer", "Edit one", "Deactivate it, or reactivate it later"] },
+  profile:        { title: "Profile", desc: "Your own account: change your name and company, change your password (your current one must verify first), and set or remove your profile picture. The picture is PNG, JPEG, GIF or WebP up to 2 MB, and its type is read from the file's own bytes rather than its name.", actions: ["Update your name and company", "Change your password", "Upload or remove a picture"] },
+  "email-provider": { title: "Email Provider", desc: "The platform-wide mail server every outgoing message goes through: its host, port, credentials and the from-address, with a Test button that sends one message. Changing it here changes the sender for every workspace on this deployment.", actions: ["Review the current mail server", "Send a test message", "Save a change"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>
@@ -286,8 +291,15 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 // kanban t_4fcbe895 — a deep link to ONE screen (`/admin/#profile`), so the app dashboard's
 // "Profile & password" button lands on the Profile screen instead of the dashboard. Read once at
 // boot and kept in step by the sidebar; an unknown name falls back to the dashboard (see `views`).
-const setViewHash = (id) => { try { history.replaceState(null, '', '#' + id); } catch (e) {} };
-const VIEW_FROM_HASH = (function () { try { return (window.location.hash || '').replace(/^#\/?/, ''); } catch (e) { return ''; } })();
+// kanban cron-2310 — the screens were a ONE-WAY door: nav wrote the hash with replaceState (so no
+// history entry was added) and nothing listened for a traversal, so the browser's Back left the whole
+// console instead of returning to the previous screen, and following a `#screen` link changed the URL
+// without repainting. Push one entry per screen and follow the browser's own Back/Forward; an unknown
+// name still falls back to the dashboard (`views[S.view] || Dashboard`).
+const viewFromHash = () => { try { return (window.location.hash || '').replace(/^#\/?/, ''); } catch (e) { return ''; } };
+const setViewHash = (id) => { try { history.pushState({ view: id }, '', '#' + id); } catch (e) {} };
+window.addEventListener('popstate', () => { const v = viewFromHash(); if (!v || v === S.view) return; S.view = v; renderApp(); });
+const VIEW_FROM_HASH = viewFromHash();
 if (VIEW_FROM_HASH) S.view = VIEW_FROM_HASH;
 
 // ---- LOGIN ----
@@ -1845,7 +1857,7 @@ const LoyaltyPrograms = () => {
       <div class="stat-card"><div class="stat-value">${st.credits.balance?.balance||0}</div><div class="stat-label">Balance</div></div>
       <div class="stat-card"><div class="stat-value">${st.credits.balance?.credits_monthly||0}</div><div class="stat-label">Monthly</div></div>
       <div class="stat-card"><div class="stat-value">${st.credits.balance?.lifetime_used||0}</div><div class="stat-label">Lifetime Used</div></div>
-      <div class="stat-card"><div class="stat-value">${st.credits.balance?.plan_name||'Free'}</div><div class="stat-label">Plan</div></div>
+      <div class="stat-card"><div class="stat-value">${st.credits.balance?.plan_name||'\u2014'}</div><div class="stat-label">Plan</div></div>
     </div>
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Description</th><th>Date</th></tr></thead>
@@ -2956,7 +2968,7 @@ const ContactsView = () => {
 // them. Every number names a real answer from one of the four routes; a route that does not answer
 // renders '—', never a fabricated 0, and a total outage says so instead of painting an empty account.
 const AnalyticsView = () => {
-  const st = viewState('analytics', { loaded: false, busy: false, err: '', ov: null, co: null, ca: null, lo: null });
+  const st = viewState('analytics', { loaded: false, busy: false, err: '', ov: null, co: null, ca: null, lo: null, detail: null, detailFor: '', detailErr: '', detailBusy: false });
   const load = async () => {
     st.busy = true; st.err = '';
     const one = async (p) => { try { return await API.get(p); } catch (e) { return null; } };
@@ -2972,6 +2984,24 @@ const AnalyticsView = () => {
   if (!st.loaded) { st.loaded = true; load(); }
   const num = v => (typeof v === 'number' && isFinite(v)) ? String(v) : '—';
   const pct = v => (typeof v === 'number' && isFinite(v)) ? (v + '%') : '—';
+  // Per-campaign drill-down. GET /analytics/campaigns/:slug has returned the entries timeline,
+  // the source split, the prize distribution, the redemption rate and the loyalty bridge since the
+  // route shipped, and nothing in this console ever read it — the Analytics panel could only show
+  // account totals, so a customer could not answer "which campaign is working". A failed read says
+  // what failed; it never paints a fabricated 0.
+  const openDetail = async (c) => {
+    if (!c || !c.slug) return;
+    st.detailFor = c.slug; st.detail = null; st.detailErr = ''; st.detailBusy = true; renderApp();
+    try {
+      st.detail = await API.get('/analytics/campaigns/' + encodeURIComponent(c.slug));
+      st.detailErr = '';
+    } catch (e) {
+      st.detail = null;
+      st.detailErr = e.message || 'the campaign analytics route did not answer';
+    }
+    st.detailBusy = false; renderApp();
+  };
+  const closeDetail = () => { st.detailFor = ''; st.detail = null; st.detailErr = ''; renderApp(); };
   const ov = st.ov || {}, co = st.co || {}, lo = st.lo || {};
   const campaigns = (st.ca && st.ca.campaigns) || [];
   const programs = (lo.programs) || [];
@@ -3000,7 +3030,7 @@ const AnalyticsView = () => {
         <thead><tr><th>Campaign</th><th>Type</th><th>Status</th><th>Entries</th><th>Unique</th><th>Wins</th><th>Win rate</th></tr></thead>
         <tbody>
           ${campaigns.map(c => html`<tr>
-            <td class="font-medium text-sm">${c.name || c.slug || '—'}</td>
+            <td class="font-medium text-sm"><button class="text-blue-600 underline" onClick=${() => openDetail(c)}>${c.name || c.slug || '—'}</button></td>
             <td class="text-sm">${String(c.type || '—').replace(/_/g, ' ')}</td>
             <td class="text-sm">${c.status || '—'}</td>
             <td class="text-sm">${num(c.total_entries)}</td>
@@ -3012,6 +3042,42 @@ const AnalyticsView = () => {
       </table>
       ${!campaigns.length ? html`<div class="text-center text-gray-400 py-8">${st.loaded ? 'No campaigns yet' : 'Loading...'}</div>` : null}
     </div>
+    ${st.detailFor ? html`<div class="card p-4 mb-5">
+      <div class="flex items-center justify-between mb-2">
+        <div class="text-sm font-medium">Campaign detail — ${(st.detail && st.detail.campaign && st.detail.campaign.name) || st.detailFor}</div>
+        <button class="border rounded px-2 py-1 text-xs" onClick=${closeDetail}>Close</button>
+      </div>
+      ${st.detailBusy ? html`<div class="text-sm text-gray-400">Loading…</div>` : null}
+      ${st.detailErr ? html`<div class="text-sm text-red-600">${st.detailErr}</div>` : null}
+      ${(st.detail && !st.detailBusy) ? html`<div>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+          ${(() => {
+            const p = st.detail.performance || {}, b = st.detail.loyalty_bridge || {};
+            const tl = st.detail.entries_over_time || [];
+            const total = tl.reduce((a, r) => a + (Number(r.count) || 0), 0);
+            return [
+              ['Entries', num(total)],
+              ['Redemptions', num(p.total_redemptions)],
+              ['Redemption rate', pct(p.redemption_rate)],
+              ['Avg score', num(p.avg_score)],
+              ['Loyalty members', num(b.members_gained)],
+            ].map(t => html`<div class="border rounded p-2"><div class="text-xs text-gray-500">${t[0]}</div><div class="text-lg font-bold">${t[1]}</div></div>`);
+          })()}
+        </div>
+        <div class="grid md:grid-cols-3 gap-4 text-sm">
+          <div><div class="font-medium mb-1">Top sources</div>
+            ${(st.detail.source_breakdown || []).slice(0, 5).map(s => html`<div class="text-gray-600">${s.source}: <b>${s.count}</b> (${pct(s.percent)})</div>`)}
+            ${!(st.detail.source_breakdown || []).length ? html`<div class="text-gray-400">no entries yet</div>` : null}</div>
+          <div><div class="font-medium mb-1">Prizes won</div>
+            ${(st.detail.win_rate_by_prize || []).slice(0, 5).map(p => html`<div class="text-gray-600">${p.prize_label}: <b>${p.total}</b></div>`)}
+            ${!(st.detail.win_rate_by_prize || []).length ? html`<div class="text-gray-400">no wins yet</div>` : null}</div>
+          <div><div class="font-medium mb-1">Loyalty bridge</div>
+            <div class="text-gray-600">Auto-enrol: <b>${(st.detail.loyalty_bridge && st.detail.loyalty_bridge.auto_enroll) ? 'on' : 'off'}</b></div>
+            <div class="text-gray-600">Points per play: <b>${num((st.detail.loyalty_bridge || {}).points_per_play)}</b></div>
+            <div class="text-gray-600">Points awarded: <b>${num((st.detail.loyalty_bridge || {}).points_awarded)}</b></div></div>
+        </div>
+      </div>` : null}
+    </div>` : null}
     <div class="grid md:grid-cols-2 gap-4">
       <div class="card p-4">
         <div class="text-sm font-medium mb-2">Contacts</div>
@@ -4352,6 +4418,8 @@ const BulkTenantDelete = () => {
   // nothing is hard-coded.
   const [plans, setPlans] = useState([]);
   const [assignMsg, setAssignMsg] = useState(null);
+  // Plan lifecycle feedback (2026-10-22).
+  const [planMsg, setPlanMsg] = useState(null);
 
   const load = async () => {
     setErr(null);
@@ -4426,6 +4494,26 @@ const BulkTenantDelete = () => {
     }
     await load();
   };
+  // PLAN LIFECYCLE (2026-10-22). `DELETE /admin/plans/:id` is a SOFT retire (is_active = false), and
+  // until now nothing in this panel could reverse it: the only control was the raw JSON box further
+  // up this console — a backend capability with no usable UI. `GET /admin/plans` now returns retired
+  // rows too (plans_handler::list_plans), so the strip below can show them and put them back on
+  // sale. The assign picker keeps offering only plans that are on sale.
+  const togglePlanActive = async (p) => {
+    const next = !(p.is_active !== false);
+    const label = p.name || 'this plan';
+    if (!confirm(next
+      ? 'Put "' + label + '" back on sale? Customers will see it on the pricing page again.'
+      : 'Retire "' + label + '"? Customers will no longer see it on the pricing page, and it cannot be assigned until you put it back.')) return;
+    setPlanMsg({ ok: true, text: (next ? 'Re-activating ' : 'Retiring ') + label + '\u2026' });
+    try {
+      await OPSAPI.put('/admin/plans/' + p.id, { is_active: next });
+      setPlanMsg({ ok: true, text: label + (next ? ' is back on sale' : ' is retired') });
+    } catch (e) {
+      setPlanMsg({ ok: false, text: 'Not changed: ' + String((e && e.message) || e) });
+    }
+    await load();
+  };
   const planCell = (r) => html`<select class="input plan-pick" data-tenant-plan=${r.id || ''}
       style="min-width:130px;font-size:11px" title="This workspace's plan. Changing it assigns the plan — the customer's limits and mail follow."
       value=${r.catalog_plan_id || ''}
@@ -4461,6 +4549,16 @@ const BulkTenantDelete = () => {
       ${result && html`<span class="text-xs ${result.ok ? 'text-green-700' : 'text-red-600'}">${result.ok ? 'done' : 'ERROR'}</span>`}
     </div>
     ${assignMsg && html`<div class="text-xs ${assignMsg.ok ? 'text-green-700' : 'text-red-600'}" data-plan-assign-msg>${assignMsg.text}</div>`}
+    ${planMsg && html`<div class="text-xs ${planMsg.ok ? 'text-green-700' : 'text-red-600'}" data-plan-lifecycle-msg>${planMsg.text}</div>`}
+    ${(plans && plans.length > 0) && html`<div class="flex flex-wrap items-center gap-2 mb-2" data-plan-catalogue>
+      <span class="text-xs font-semibold text-gray-700">Plans</span>
+      ${plans.map((p) => html`<span class="inline-flex items-center gap-1 border rounded px-1 py-0.5 text-xs" data-plan-row=${p.id}>
+        <span>${p.name}</span>
+        <span class="text-gray-500">$${Number(p.price_monthly || 0).toFixed(0)}/mo</span>
+        <span class="px-1 rounded ${p.is_active !== false ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}" data-plan-state=${p.is_active !== false ? 'active' : 'retired'}>${p.is_active !== false ? 'on sale' : 'retired'}</span>
+        <button class="px-1 rounded border" disabled=${busy} data-plan-toggle=${p.id} onClick=${() => togglePlanActive(p)}>${p.is_active !== false ? 'Retire' : 'Re-activate'}</button>
+      </span>`)}
+    </div>`}
     ${err ? html`<div class="text-xs text-red-600">${err}</div>`
       : !rows ? html`<div class="text-xs text-gray-400">loading...</div>`
       : html`<div class="overflow-auto" style="max-height:260px">
@@ -5777,11 +5875,17 @@ const EntriesAnswers = () => {
   // `S.me` is the ONE source: the boot refresh below and the Profile screen both fill it from
   // GET /api/v1/auth/me, so the name, the picture and the tier can never disagree with the row.
   // The tier painted here is the REAL plan name — never the raw role word ("User"), which is the
-  // stray label this card removes — and an account with no tier reads "Free".
+  // stray label this card removes — and an account with no tier reads an em dash, NEVER an
+  // invented "Free" (fleet rule, same as adaswift / incentiveswift's own app console / workflowswift):
+  // telling a paid workspace it is on Free because a tier read failed is a false statement about what
+  // they bought. `plan` is a plan OBJECT on some endpoints, so it is read by `.name`, never
+  // interpolated directly (that printed "[object Object]" in the sibling app).
   const me = S.me || {};
   const meName = me.name || me.email || 'Account';
   const meInitial = (meName + '?').charAt(0).toUpperCase();
-  const mePlan = me.plan_name || 'Free';
+  const mePlanRaw = me.plan_name != null ? me.plan_name
+    : (typeof me.plan === 'string' ? me.plan : (me.plan && me.plan.name));
+  const mePlan = mePlanRaw == null ? '' : String(mePlanRaw).trim();
 
   return html`<div class="flex w-full">
     <div class="sidebar w-56 bg-white border-r border-gray-200 min-h-screen p-3 flex flex-col" style="flex-shrink:0">
@@ -5795,13 +5899,15 @@ const EntriesAnswers = () => {
           : html`<span class="uav-ph">${meInitial}</span>`}
         <div style="min-width:0">
           <div class="nav-text" style="font-size:13px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title=${meName}>${meName}</div>
-          <div class="nav-text" style="margin-top:3px"><span class="badge badge-blue">${mePlan}</span></div>
+          <div class="nav-text" style="margin-top:3px">${mePlan
+            ? html`<span class="badge badge-blue">${mePlan}</span>`
+            : html`<span class="badge" style="color:#94a3b8">\u2014</span>`}</div>
         </div>
       </div>
       <div class="flex-1 space-y-1">
-        ${nav.map(n => html`<div class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }}>
+        ${nav.map(n => html`<button type="button" class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }} aria-label=${n.label}>
           <span>${n.icon}</span><span class="nav-text">${n.label}</span>
-        </div>`)}
+        </button>`)}
       </div>
       ${/* Admin Guide entry point (kanban t_15f0bf7d, fleet standard t_c504d969): the admin guide is
             served on THIS console's own origin at /admin-guide.html and nothing linked it, so the
@@ -5810,9 +5916,9 @@ const EntriesAnswers = () => {
             NOTE htm/preact: this MUST be an html`` child, not a bare string - a string child renders
             as TEXT and the anchor would show up as markup. */
         isAdmin ? html`<a class="nav-item" id="admin-guide-link" href="/admin-guide.html" target="_blank" rel="noopener" style="text-decoration:none" title="IncentiveSwift Admin Guide - running the software: accounts, campaigns, loyalty programs, tags, leads, API keys and settings">📖 <span class="nav-text">Admin Guide</span></a>` : ''}
-      <div class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }}>
+      <button type="button" class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }} aria-label="Logout">
         <span>🚪</span><span class="nav-text">Logout</span>
-      </div>
+      </button>
     </div>
     <div class="main flex-1 p-6 overflow-auto">
       ${impersonationBanner()}
