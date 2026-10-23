@@ -579,6 +579,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/pledges/:id/review",
             post(handlers::loyalty_v2::review_pledge),
         )
+        // The operator's revenue view: upgrade attempts that never became money. `billing::checkout`
+        // records every refused attempt as `checkout_sessions.status = 'provider_missing'` and tells
+        // the CUSTOMER "the platform team can activate this plan for your workspace by hand" — until
+        // this route nothing in either console read those rows, so that promise had no screen behind
+        // it. Admin-guarded by path (security::auth::admin_guard over /api/v1/admin/*).
+        .route(
+            "/api/v1/admin/checkout-requests",
+            get(handlers::admin_handler::list_checkout_requests),
+        )
         // Rotation Config API — RETIRED (kanban t_8e9d3a52). The five arms
         //   POST   /api/v1/admin/rotation-configs
         //   GET    /api/v1/admin/rotation-configs/:campaign_slug

@@ -747,3 +747,84 @@ pub async fn email_queue(
         "rows": rows,
     })))
 }
+
+/// Query string for [`list_checkout_requests`]. `limit` is clamped server-side.
+#[derive(Deserialize)]
+pub struct CheckoutRequestQuery {
+    pub limit: Option<i64>,
+}
+
+/// GET /api/v1/admin/checkout-requests — purchase attempts that never became money.
+///
+/// `billing::checkout` writes a `checkout_sessions` row for every upgrade attempt and, when the
+/// installation has no payment provider, records it as `provider_missing` and tells the CUSTOMER
+/// *"the platform team can activate this plan for your workspace by hand"*. Until this route that
+/// promise had no screen behind it: the row was written, and nothing in either console read the
+/// table — so a buyer asking to pay produced a record the operator could never see. Measured
+/// 2026-10-23 (parity with FunnelSwift's `aa5899c`): `checkout_sessions` in this app had no reader
+/// at all, and the operator's only trace of a refused purchase was a log line naming no plan.
+///
+/// Cross-tenant ON PURPOSE — this is the operator's revenue view: which workspace tried to buy
+/// which plan, when, and why it did not happen. The admin console already lists every account, so
+/// this adds no new reach. `status` is restricted to the states that mean "no money moved", so a
+/// completed purchase never appears here as a request. Admin-guarded by path
+/// (`security::auth::admin_guard` over `/api/v1/admin/*`) and re-checked in the handler.
+pub async fn list_checkout_requests(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Query(params): Query<CheckoutRequestQuery>,
+) -> Result<Json<Value>, AppError> {
+    if user.role != "admin" && user.role != "super_admin" {
+        return Err(AppError::Forbidden("Admin access required".into()));
+    }
+    let limit = params.limit.unwrap_or(100).clamp(1, 500);
+
+    let rows = sqlx::query(
+        r#"SELECT cs.id, cs.account_id, cs.status, cs.price_amount::text AS amount,
+                  cs.price_currency AS currency, cs.description, cs.metadata, cs.created_at,
+                  a.name AS account_name, a.email AS account_email,
+                  p.name AS plan_name, p.slug AS plan_slug
+             FROM checkout_sessions cs
+             LEFT JOIN accounts a ON a.id = cs.account_id
+             LEFT JOIN plans p ON p.slug = cs.metadata->>'plan_slug'
+            WHERE cs.status IN ('provider_missing', 'failed', 'cancelled')
+            ORDER BY cs.created_at DESC
+            LIMIT $1"#,
+    )
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+
+    let requests: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let meta = r.try_get::<Option<Value>, _>("metadata").unwrap_or(None);
+            json!({
+                "id": r.try_get::<Uuid, _>("id").map(|v| v.to_string()).unwrap_or_default(),
+                "account_id": r.try_get::<Uuid, _>("account_id").map(|v| v.to_string()).unwrap_or_default(),
+                // A workspace row can be gone (deleted) while its attempt survives; the screen
+                // renders that as a dash rather than dropping the record.
+                "account_name": r.try_get::<Option<String>, _>("account_name").unwrap_or(None),
+                "account_email": r.try_get::<Option<String>, _>("account_email").unwrap_or(None),
+                "plan_name": r.try_get::<Option<String>, _>("plan_name").unwrap_or(None),
+                "plan_slug": r.try_get::<Option<String>, _>("plan_slug")
+                    .unwrap_or(None)
+                    .or_else(|| meta.as_ref().and_then(|m| m.get("plan_slug")).and_then(|v| v.as_str()).map(|s| s.to_string())),
+                "amount": r.try_get::<Option<String>, _>("amount").unwrap_or(None),
+                "currency": r.try_get::<Option<String>, _>("currency").unwrap_or(None),
+                "status": r.try_get::<String, _>("status").unwrap_or_default(),
+                "reason": meta.as_ref().and_then(|m| m.get("reason")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                "description": r.try_get::<Option<String>, _>("description").unwrap_or(None),
+                "created_at": r
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "count": requests.len(),
+        "requests": requests,
+    })))
+}

@@ -413,7 +413,7 @@ const Portfolio = () => {
 
 // ---- PLANS ----
 const Plans = () => {
-  const st = viewState('plans', { list: [], pubById: {}, showModal: false, editItem: null });
+  const st = viewState('plans', { list: [], pubById: {}, showModal: false, editItem: null, req: [] });
   // The list must come from the OPERATOR catalogue, GET /api/v1/admin/plans: the old
   // `API.get('/plans')` is the PUBLIC marketing listing, which (a) answers an envelope
   // `{plans:[…]}` that `Array.isArray(data) ? data : []` turned into [], so the table rendered
@@ -432,6 +432,14 @@ const Plans = () => {
         const rows = (pub && pub.plans) ? pub.plans : (Array.isArray(pub) ? pub : []);
         rows.forEach(r => { if (r && r.id != null && r.monthly_price != null) st.pubById[r.id] = r.monthly_price; });
       } catch (_) { st.pubById = {}; }
+      // Purchase requests — upgrade attempts that never became money. `POST /api/v1/checkout/create`
+      // records each refused attempt as `checkout_sessions.status = 'provider_missing'` and tells the
+      // CUSTOMER "the platform team can activate this plan for your workspace by hand". Until this
+      // card nothing in either console read those rows, so the promise had no screen behind it.
+      try {
+        const rq = await API.get('/admin/checkout-requests?limit=50');
+        st.req = (rq && rq.requests) ? rq.requests : [];
+      } catch (_) { st.req = []; }
       renderApp();
     } catch(e) { console.error(e); }
   };
@@ -459,6 +467,26 @@ const Plans = () => {
       </tbody></table>
       <div class="text-xs text-gray-400 px-3 py-2">Monthly is the price the public pricing page lists for this plan. The tier an account is actually seated on is on the Tiers screen.</div>
     </div>
+    ${st.req.length > 0 && html`<div class="card p-0 overflow-hidden mt-4">
+      <div class="px-3 pt-3 pb-2">
+        <h3 class="font-bold text-base">Upgrade requests</h3>
+        <p class="text-xs text-gray-500 mt-1">Workspaces that pressed Upgrade while this installation had no payment provider connected. Nothing was charged. Seat the workspace on the plan they asked for, or connect a provider, and the next attempt charges normally.</p>
+      </div>
+      <table class="table"><thead><tr><th>When</th><th>Workspace</th><th>Plan they asked for</th><th>Amount</th><th>Status</th></tr></thead>
+        <tbody>${st.req.map(q => {
+          const when = q.created_at ? new Date(q.created_at).toLocaleString() : '-';
+          const label = q.status === 'provider_missing' ? 'No payment provider yet'
+                      : (q.status === 'cancelled' ? 'Cancelled at checkout' : 'Checkout failed');
+          const cls = q.status === 'provider_missing' ? 'badge-yellow' : 'badge-red';
+          return html`<tr>
+            <td class="text-xs text-gray-500 whitespace-nowrap">${when}</td>
+            <td>${q.account_name || q.account_email || '—'}</td>
+            <td>${q.plan_name ? html`<span class="font-medium">${q.plan_name}</span>` : (q.plan_slug || '—')}</td>
+            <td class="text-gray-500">${q.amount ? '$' + Number(q.amount).toFixed(2) : '—'}</td>
+            <td><span class="badge ${cls}">${label}</span></td>
+          </tr>`;
+        })}</tbody></table>
+    </div>`}
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
       <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
         ${(() => {
