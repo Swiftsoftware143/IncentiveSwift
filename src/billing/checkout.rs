@@ -223,6 +223,18 @@ pub async fn create_checkout_session(
         if let Err(e) = recorded {
             tracing::error!(%account_id, "checkout/create: could not record the refused attempt: {e:?}");
         }
+        // THE ASK, WHERE THE OPERATOR CAN ACT ON IT (2026-10-23; parity with ADASwift and
+        // WorkflowSwift). `checkout_sessions` is a HISTORY screen: it shows that a workspace
+        // pressed Upgrade, but acting on it means hand-assigning a plan. The operator's Plan
+        // requests queue is the surface whose Resolve action seats the workspace on the tier, and
+        // it reads `support_tickets` rows carrying `source='plan_request'` + `plan_slug`.
+        // The dashboard's own "Request the plan" press files exactly such a row, but only if that
+        // follow-up press runs -- a customer who closed the tab had asked for nothing. The ask is
+        // filed HERE, server-side, deduped on the same (tenant, source, open, plan_slug) key the
+        // ticket door uses, so a later press returns the open request instead of minting a twin.
+        // No mail is queued: nothing was charged, so a refusal must not add mail volume.
+        let plan_request =
+            record_upgrade_request(&state.db, account_id, &plan_slug, &plan_name, plan_price).await;
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -237,6 +249,7 @@ pub async fn create_checkout_session(
                             through its own.)",
                 "configured": false,
                 "request_recorded": true,
+                "plan_request": plan_request,
                 "requested": requested,
             })),
         ));
@@ -832,6 +845,92 @@ fn plan_session_form(
         .map(|(k, v)| format!("{}={}", urlencode(k), urlencode(v)))
         .collect::<Vec<String>>()
         .join("&")
+}
+
+/// File the tier a customer pressed "Upgrade" for as an OPEN plan request the operator can act on.
+///
+/// Returns `Some({"id", "plan_slug", "plan_name", "already_open"})` when a request exists — either
+/// the row just written or the one already open for that tier — and `None` when the row could not be
+/// written. BEST-EFFORT by design: the caller is already answering a 503, so a bookkeeping failure
+/// must never turn a refusal into a 500. It is logged instead.
+///
+/// The row is the SAME shape the dashboard's "Request the plan" button files
+/// (`handlers::support_tickets::create_ticket`: `source='plan_request'`, `category='billing'`,
+/// `plan_slug` set), because that is what `list_tickets` filters for the operator's Plan requests
+/// view and what `update_ticket`'s Resolve arm reads to switch the workspace onto the tier. It is
+/// inserted directly rather than through that handler so no receipt mail is queued: this path
+/// charged nothing, and a second "we got your request" mail would be noise on top of the screen the
+/// customer is already reading.
+///
+/// Dedupe key: one OPEN/in_progress request per (account, plan_slug) — the same key the ticket door
+/// uses. A customer who presses the button twice, or whose console then fires its own ticket
+/// request, gets `already_open: true` instead of a duplicate in the queue.
+async fn record_upgrade_request(
+    db: &sqlx::PgPool,
+    account_id: Uuid,
+    plan_slug: &str,
+    plan_name: &str,
+    plan_price: f64,
+) -> Option<Value> {
+    let open: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM support_tickets \
+          WHERE tenant_id = $1 AND source = 'plan_request' \
+            AND status IN ('open','in_progress') \
+            AND plan_slug IS NOT DISTINCT FROM $2 \
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(plan_slug)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            %account_id,
+            "checkout/create: could not look for an open plan request: {e:?}"
+        )
+    })
+    .ok()?;
+
+    let (id, already_open) = match open {
+        Some(id) => (id, true),
+        None => {
+            let id = Uuid::new_v4();
+            let written = sqlx::query(
+                r#"INSERT INTO support_tickets
+                     (id, tenant_id, campaign_id, contact_id, subject, description, status, priority,
+                      category, source, created_by, plan_slug)
+                   VALUES ($1,$2,NULL,NULL,$3,$4,'open','normal','billing','plan_request',$2,$5)"#,
+            )
+            .bind(id)
+            .bind(account_id)
+            .bind(format!("Upgrade request: {plan_name} plan"))
+            .bind(format!(
+                "This workspace pressed Upgrade on the {plan_name} plan (${plan_price:.0}/month) \
+                 and no payment provider is configured, so nothing was charged and nothing can be \
+                 billed. Filed automatically by the checkout refusal arm, so the ask survives even \
+                 if the customer closes the tab. Resolving this request seats the workspace on the \
+                 plan."
+            ))
+            .bind(plan_slug)
+            .execute(db)
+            .await;
+            if let Err(e) = written {
+                tracing::error!(
+                    %account_id,
+                    "checkout/create: could not file the plan request: {e:?}"
+                );
+                return None;
+            }
+            (id, false)
+        }
+    };
+
+    Some(json!({
+        "id": id.to_string(),
+        "plan_slug": plan_slug,
+        "plan_name": plan_name,
+        "already_open": already_open,
+    }))
 }
 
 #[cfg(test)]
