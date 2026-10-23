@@ -295,12 +295,14 @@ pub async fn admin_assign_plan(
     // the limits it was getting. Same defect class missedcallrespondr fixed in 2edd595 and ADASwift
     // in 2026-10-21; the operator's Plans table has the re-activate control, so seating a retired
     // tier is never the intended action — refuse it by name instead of writing it.
-    let plan: Option<(String, bool)> =
-        sqlx::query_as("SELECT name, is_active FROM plans WHERE id = $1")
+    // The slug is carried out of this query because the SAME call settles the workspace's open
+    // purchase request below, and `checkout_sessions.metadata->>'plan_slug'` is keyed on it.
+    let plan: Option<(String, bool, String)> =
+        sqlx::query_as("SELECT name, is_active, slug FROM plans WHERE id = $1")
             .bind(plan_id)
             .fetch_optional(&state.db)
             .await?;
-    let (plan_name, plan_active) =
+    let (plan_name, plan_active, plan_slug) =
         plan.ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;
     if !plan_active {
         return Err(AppError::Conflict(format!(
@@ -329,11 +331,36 @@ pub async fn admin_assign_plan(
     // still receives a `plans.id` (it reads `plans.name` / `price_monthly`).
     let tier_id = assign_plan(&state, account_id, plan_id).await?;
 
+    // ── Close the request this call just satisfied (cron 2026-10-23) ────────────────────────────
+    // The operator's Upgrade-requests screen used to name the action and offer no button: seating a
+    // workspace meant leaving the screen and re-finding it on Tiers. The screen now calls this same
+    // route, so the record of the refused purchase has to move with it — otherwise the operator
+    // switches the workspace, the table still reads "No payment provider yet", and the next operator
+    // switches it again. `operator_activated` is the state that says "the money still never moved,
+    // but the plan was given by hand", and `list_checkout_requests` keeps it as history.
+    //
+    // Scoped to THIS plan's slug (plus a request that recorded no slug at all, which cannot be a
+    // different plan) so a workspace with two open requests keeps the one this click did not answer.
+    // A failure here must not fail the assignment: the tier is already written, and reporting an
+    // error would tell the operator nothing was done.
+    let requests_closed = sqlx::query(
+        "UPDATE checkout_sessions SET status = 'operator_activated', updated_at = NOW() \
+         WHERE account_id = $1 AND status = 'provider_missing' \
+           AND (metadata->>'plan_slug' = $2 OR metadata->>'plan_slug' IS NULL)",
+    )
+    .bind(account_id)
+    .bind(&plan_slug)
+    .execute(&state.db)
+    .await
+    .map(|r| r.rows_affected())
+    .unwrap_or(0);
+
     Ok(Json(json!({
         "status": "assigned",
         "plan_id": plan_id.to_string(),
         "account_id": account_id.to_string(),
         "plan_tier_id": tier_id.to_string(),
+        "requests_closed": requests_closed,
     })))
 }
 

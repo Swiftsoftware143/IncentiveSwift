@@ -364,6 +364,24 @@ const Portfolio = () => {
   // modal (t_286aead1) and the Campaigns form (t_f4aefe45) already use.
   const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
+  // Close the loop the request table opens (cron 2026-10-23). The panel has always said "seat the
+  // workspace on the plan they asked for" and offered no way to do it: the operator had to leave the
+  // screen, find the workspace on Tiers, and guess which plan the row above meant. This posts the
+  // app's ONE plan writer (POST /api/v1/admin/plans/assign -> plans_handler::assign_plan), the same
+  // call the customer's own plan request closes through, so the tier written, the affiliate credit
+  // and the request's own status all move together. The backend closes the pending request, which is
+  // why the reload re-reads the list instead of deleting the row here.
+  const give = async (q) => {
+    if (!q || !q.plan_id || !q.account_id) return;
+    st.busyReq = q.id; renderApp();
+    try {
+      await API.post('/admin/plans/assign', { account_id: q.account_id, plan_id: q.plan_id });
+      st.busyReq = null; load();
+    } catch (e) {
+      st.busyReq = null; renderApp();
+      alert('Could not switch that workspace: ' + (e && e.message ? e.message : e));
+    }
+  };
   const save = async (data) => {
     try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
   };
@@ -470,20 +488,25 @@ const Plans = () => {
     ${st.req.length > 0 && html`<div class="card p-0 overflow-hidden mt-4">
       <div class="px-3 pt-3 pb-2">
         <h3 class="font-bold text-base">Upgrade requests</h3>
-        <p class="text-xs text-gray-500 mt-1">Workspaces that pressed Upgrade while this installation had no payment provider connected. Nothing was charged. Seat the workspace on the plan they asked for, or connect a provider, and the next attempt charges normally.</p>
+        <p class="text-xs text-gray-500 mt-1">Workspaces that pressed Upgrade while this installation had no payment provider connected. Nothing was charged. Press "Give them …" to seat the workspace on the plan it asked for — the same writer the Tiers screen and the customer's own plan request use, so the affiliate is credited and the request closes itself. Connect a provider under Payment providers and the next attempt charges normally.</p>
       </div>
-      <table class="table"><thead><tr><th>When</th><th>Workspace</th><th>Plan they asked for</th><th>Amount</th><th>Status</th></tr></thead>
+      <table class="table"><thead><tr><th>When</th><th>Workspace</th><th>Plan they asked for</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>${st.req.map(q => {
           const when = q.created_at ? new Date(q.created_at).toLocaleString() : '-';
           const label = q.status === 'provider_missing' ? 'No payment provider yet'
-                      : (q.status === 'cancelled' ? 'Cancelled at checkout' : 'Checkout failed');
-          const cls = q.status === 'provider_missing' ? 'badge-yellow' : 'badge-red';
+                      : (q.status === 'cancelled' ? 'Cancelled at checkout'
+                      : (q.status === 'operator_activated' ? 'Switched by our team' : 'Checkout failed'));
+          const cls = q.status === 'provider_missing' ? 'badge-yellow'
+                    : (q.status === 'operator_activated' ? 'badge-green' : 'badge-red');
           return html`<tr>
             <td class="text-xs text-gray-500 whitespace-nowrap">${when}</td>
             <td>${q.account_name || q.account_email || '—'}</td>
             <td>${q.plan_name ? html`<span class="font-medium">${q.plan_name}</span>` : (q.plan_slug || '—')}</td>
             <td class="text-gray-500">${q.amount ? '$' + Number(q.amount).toFixed(2) : '—'}</td>
             <td><span class="badge ${cls}">${label}</span></td>
+            <td>${(q.status === 'provider_missing' && q.plan_id && q.account_id)
+              ? html`<button class="btn btn-sm btn-green" disabled=${st.busyReq === q.id} onClick=${() => give(q)}>${st.busyReq === q.id ? 'Switching…' : 'Give them ' + (q.plan_name || 'this plan')}</button>`
+              : html`<span class="text-xs text-gray-400">—</span>`}</td>
           </tr>`;
         })}</tbody></table>
     </div>`}

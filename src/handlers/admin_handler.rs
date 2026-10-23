@@ -769,6 +769,12 @@ pub struct CheckoutRequestQuery {
 /// this adds no new reach. `status` is restricted to the states that mean "no money moved", so a
 /// completed purchase never appears here as a request. Admin-guarded by path
 /// (`security::auth::admin_guard` over `/api/v1/admin/*`) and re-checked in the handler.
+///
+/// `plan_id` is the catalogue row (`plans.id`) the operator's one-click switch needs: the console
+/// renders a "Give them <plan>" button per request, and `POST /admin/plans/assign` takes a
+/// `plans.id` (never the slug, and never a `plan_tiers` id). `operator_activated` is included so a
+/// request the operator has already satisfied stays in the list as history — the customer kept the
+/// plan, so the record must stop reading as "nothing happened" without vanishing.
 pub async fn list_checkout_requests(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -783,11 +789,11 @@ pub async fn list_checkout_requests(
         r#"SELECT cs.id, cs.account_id, cs.status, cs.price_amount::text AS amount,
                   cs.price_currency AS currency, cs.description, cs.metadata, cs.created_at,
                   a.name AS account_name, a.email AS account_email,
-                  p.name AS plan_name, p.slug AS plan_slug
+                  p.name AS plan_name, p.slug AS plan_slug, p.id AS plan_id
              FROM checkout_sessions cs
              LEFT JOIN accounts a ON a.id = cs.account_id
              LEFT JOIN plans p ON p.slug = cs.metadata->>'plan_slug'
-            WHERE cs.status IN ('provider_missing', 'failed', 'cancelled')
+            WHERE cs.status IN ('provider_missing', 'failed', 'cancelled', 'operator_activated')
             ORDER BY cs.created_at DESC
             LIMIT $1"#,
     )
@@ -810,6 +816,10 @@ pub async fn list_checkout_requests(
                 "plan_slug": r.try_get::<Option<String>, _>("plan_slug")
                     .unwrap_or(None)
                     .or_else(|| meta.as_ref().and_then(|m| m.get("plan_slug")).and_then(|v| v.as_str()).map(|s| s.to_string())),
+                // The id the operator's switch posts back. Empty when the plan has since been
+                // deleted from the catalogue, which the screen renders as no button at all.
+                // (The LEFT JOIN makes the column nullable, so it decodes as Option<Uuid>.)
+                "plan_id": r.try_get::<Option<Uuid>, _>("plan_id").unwrap_or(None).map(|v| v.to_string()).unwrap_or_default(),
                 "amount": r.try_get::<Option<String>, _>("amount").unwrap_or(None),
                 "currency": r.try_get::<Option<String>, _>("currency").unwrap_or(None),
                 "status": r.try_get::<String, _>("status").unwrap_or_default(),
