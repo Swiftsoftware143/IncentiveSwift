@@ -177,6 +177,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The moment the customer FILES the request (cron 2026-10-20). Named so it is obvious in an
         // inbox that it is the acknowledgement of the thing they just did, not the answer to it.
         "support_request_receipt" => format!("We have your request — {app_name}"),
+        // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
+        // Named as a preview so it can never be mistaken for a system notice.
+        "branding_preview" => format!("Your email branding — a preview from {app_name}"),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -300,6 +303,20 @@ async fn send_inline(
             );
             Ok((
                 format!("We have your request — {}", app_name),
+                body,
+                String::new(),
+            ))
+        }
+        // The customer's own branding sample (cron 2026-10-23): the header above this body IS
+        // their branding, which is the whole point of the message. Reached when the account has no
+        // `branding_preview` template row — true of every account today.
+        "branding_preview" => {
+            let body = format!(
+                "Hi {},\n\nThis is what the top of every email from your workspace looks like.\n\nIf your logo and name are showing above this message, your customers see them too — on the sign-in details a new user receives, and on every password reset.\n\nNothing else about your mail changes: each message's wording comes from its own template; only the header comes from your branding.\n\nTo change it, open the Email branding card on your dashboard at {}/dashboard/ .\n\n- The {} Team",
+                name, app_url, app_name
+            );
+            Ok((
+                format!("Your email branding — a preview from {}", app_name),
                 body,
                 String::new(),
             ))

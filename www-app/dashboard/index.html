@@ -156,6 +156,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn" onclick="ebSave()">Save branding</button>
+      <button class="btn" style="background:#0f766e" onclick="ebPreview()">Send me a preview</button>
       <button class="btn" style="background:#059669" onclick="ebUpload()">Upload logo</button>
       <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
     </div>
@@ -783,6 +784,26 @@ function ebSave() {
       ebLoad();
     });
   }).catch(function (e) { ebMsg((e && e.message) || 'Could not save', 'e'); });
+}
+// A real-inbox proof of the header above (POST /api/v1/settings/branding/preview): the server mails
+// the CALLER's own address a sample carrying this workspace's logo, name and colour, through the
+// PLATFORM mailer — so it works for an account with no mail server of its own (the Settings mail
+// test goes through the tenant's server and says nothing about branding). The recipient is the
+// caller's own address and is not a request field, so this cannot be used to mail anyone else.
+function ebPreview() {
+  ebMsg('Sending a preview to your own address…', 'i');
+  fetch(window.location.origin + '/api/v1/settings/branding/preview', { method: 'POST', headers: ebAuth() })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function (d) {
+      ebMsg(d.detail || (d.sent ? 'Preview sent to your own address' : 'The preview was not sent'), d.sent ? 's' : 'e');
+    })
+    .catch(function (e) { ebMsg((e && e.message) || 'Could not send the preview', 'e'); });
 }
 function ebUpload() {
   var f = document.getElementById('eb-logo');

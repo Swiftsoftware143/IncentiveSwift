@@ -1346,6 +1346,13 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::branding_handler::upload_logo)
                 .delete(handlers::branding_handler::delete_logo),
         )
+        // The customer's own branding PREVIEW (cron 2026-10-23): mails the caller a sample of
+        // what their branded header looks like, through the platform mailer. The recipient is the
+        // caller's own address (the request carries no body), so this is not a relay.
+        .route(
+            "/api/v1/settings/branding/preview",
+            post(handlers::settings_handler::preview_branding_email),
+        )
         // Analytics routes
         .route(
             "/api/v1/analytics/overview",

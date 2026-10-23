@@ -106,6 +106,69 @@ pub async fn test_settings_email(
     Ok(Json(test_email_answer(&to, &sent)))
 }
 
+/// POST /api/v1/settings/branding/preview — mail the CALLER a sample of their own branded email.
+///
+/// WHY (cron 2026-10-23): a customer can set a logo, a display name and a colour on the dashboard's
+/// Email branding card, but had no way to see the result in a real inbox. The tenant mail-server
+/// test beside this handler (`/settings/email/test`) sends through the TENANT's own server and says
+/// nothing about branding. This arm sends the app's own sample through the PLATFORM mailer, so an
+/// account with no mail server of its own still gets the proof.
+///
+/// The recipient is ALWAYS the caller's own address (the request has no body), so this can never be
+/// used as a relay, and a caller whose address cannot receive mail is told plainly that the preview
+/// was withheld instead of being shown a false "sent".
+pub async fn preview_branding_email(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let to = auth.email.trim().to_string();
+    if to.is_empty() {
+        return Err(AppError::BadRequest(
+            "This account has no email address to send the preview to".to_string(),
+        ));
+    }
+    if crate::email::recipient_is_undeliverable(&to) {
+        return Ok(Json(json!({
+            "sent": false,
+            "to": to,
+            "detail": "That address cannot receive mail (it is a reserved test address), so no preview was sent."
+        })));
+    }
+    let name: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error: {e}")))?
+        .unwrap_or_default();
+    let vars = json!({ "name": name });
+    match crate::email::send_template_email(
+        &state.db,
+        Some(account_id),
+        &to,
+        "branding_preview",
+        &vars,
+    )
+    .await
+    {
+        Ok(()) => {
+            let branded = crate::branding::load(&state.db, account_id).await.is_some();
+            Ok(Json(json!({
+                "sent": true,
+                "to": to,
+                "branded": branded,
+                "detail": if branded {
+                    "Preview sent to your own address, with your logo and brand name at the top."
+                } else {
+                    "Preview sent to your own address. Nothing is branded yet, so it carries the IncentiveSwift header — set a name or a logo, save, and send it again."
+                }
+            })))
+        }
+        Err(detail) => Ok(Json(json!({ "sent": false, "to": to, "detail": detail }))),
+    }
+}
+
 /// GET /api/v1/settings
 pub async fn get_settings(
     State(state): State<AppState>,
