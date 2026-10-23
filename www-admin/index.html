@@ -364,24 +364,6 @@ const Portfolio = () => {
   // modal (t_286aead1) and the Campaigns form (t_f4aefe45) already use.
   const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
-  // Close the loop the request table opens (cron 2026-10-23). The panel has always said "seat the
-  // workspace on the plan they asked for" and offered no way to do it: the operator had to leave the
-  // screen, find the workspace on Tiers, and guess which plan the row above meant. This posts the
-  // app's ONE plan writer (POST /api/v1/admin/plans/assign -> plans_handler::assign_plan), the same
-  // call the customer's own plan request closes through, so the tier written, the affiliate credit
-  // and the request's own status all move together. The backend closes the pending request, which is
-  // why the reload re-reads the list instead of deleting the row here.
-  const give = async (q) => {
-    if (!q || !q.plan_id || !q.account_id) return;
-    st.busyReq = q.id; renderApp();
-    try {
-      await API.post('/admin/plans/assign', { account_id: q.account_id, plan_id: q.plan_id });
-      st.busyReq = null; load();
-    } catch (e) {
-      st.busyReq = null; renderApp();
-      alert('Could not switch that workspace: ' + (e && e.message ? e.message : e));
-    }
-  };
   const save = async (data) => {
     try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
   };
@@ -465,6 +447,24 @@ const Plans = () => {
 
   const show = (item) => { st.editItem = item; st.formSeeded = false; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
+  // Close the loop the request table opens (cron 2026-10-23). The panel has always said "seat the
+  // workspace on the plan they asked for" and offered no way to do it: the operator had to leave the
+  // screen, find the workspace on Tiers, and guess which plan the row above meant. This posts the
+  // app's ONE plan writer (POST /api/v1/admin/plans/assign -> plans_handler::assign_plan), the same
+  // call the customer's own plan request closes through, so the tier written, the affiliate credit
+  // and the request's own status all move together. The backend closes the pending request, which is
+  // why the reload re-reads the list instead of deleting the row here.
+  const give = async (q) => {
+    if (!q || !q.plan_id || !q.account_id) return;
+    st.busyReq = q.id; renderApp();
+    try {
+      await API.post('/admin/plans/assign', { account_id: q.account_id, plan_id: q.plan_id });
+      st.busyReq = null; load();
+    } catch (e) {
+      st.busyReq = null; renderApp();
+      alert('Could not switch that workspace: ' + (e && e.message ? e.message : e));
+    }
+  };
   // The plan CRUD lives on /api/v1/admin/plans (+ /:id). The old `/plans` path answered live 404
   // on PUT and 405 on POST, so this editor's Save could never succeed (kanban t_8e0ae96e).
   const save = async (data) => {
