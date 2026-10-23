@@ -55,6 +55,17 @@
   .foot { background: var(--g800); color: var(--g400); text-align: center; padding: 2rem; font-size: 0.85rem; margin-top: 3rem; }
   .foot a { color: var(--primary-light); text-decoration: none; }
   @media (max-width: 768px) { .header-inner { padding: 0.75rem 1rem; flex-wrap: wrap; } .hero { padding: 1.5rem; } .hero h2 { font-size: 1.3rem; } .container { padding: 0 1rem; } }
+
+/* Phone: nothing on this page may widen the document (measured 2026-10-22, real Chromium at 390 px).
+   A route/merge-field table laid out wider than the column, and one long migration filename in
+   inline <code>, each pushed the whole guide sideways (measured 420-917 px of document width).
+   The table now scrolls inside its own box and a long token wraps, so the page itself stays 100%. */
+@media (max-width: 768px) {
+  body, .main-content, .content-area, main { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  table { display: block; width: 100%; max-width: 100%; overflow-x: auto; }
+  pre { overflow-x: auto; max-width: 100%; }
+  code { overflow-wrap: anywhere; }
+}
 </style>
 </head>
 <body>
@@ -85,6 +96,9 @@
     <a href="#email-branding">Email Branding</a>
     <a href="#email-provider">Email Provider</a>
     <a href="#profile-picture">Your Profile Picture</a>
+    <a href="#campaign-analytics">Campaign Analytics</a>
+    <a href="#account-modules">The Account Modules</a>
+    <a href="#plan-requests">Plan Requests</a>
   </div>
 </nav>
 <div class="container">
@@ -156,6 +170,12 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
       <li><strong>💳 Plans</strong> — the subscription rows the marketing site and checkout read. The panel edits only <em>Name</em>, <em>Monthly price</em> and <em>Yearly price</em>. It has no feature fields; whatever a customer is allowed to <em>do</em> is not set here.</li>
       <li><strong>🥇 Plan Tiers</strong> — the Features &amp; Plans panel. The entitlement model (<code>plan_tiers</code> &rarr; <code>tier_features</code> &rarr; <code>features</code>), and the only thing every runtime gate reads.</li>
     </ul>
+  </div>
+  <div class="card">
+    <h3>Upgrade requests — workspaces that tried to pay</h3>
+    <p>When a workspace presses <strong>Upgrade</strong> while this installation has no payment provider connected, nothing is charged and the customer is told their request has been recorded for the platform team. The <strong>Plans</strong> panel now carries an <strong>Upgrade requests</strong> card listing exactly those attempts: when, which workspace, the plan they asked for, the amount, and why it did not go through ("No payment provider yet" on an installation with no provider).</p>
+    <p>Nothing was charged on any of those rows. Each open row carries a <strong>Give them &lt;plan&gt;</strong> button: pressing it seats that workspace on exactly the plan it asked for, credits the affiliate the same way the customer's own plan request does, and flips the row to <strong>Switched by our team</strong> — which is the record that the plan was given by hand while no money moved. The button acts on the plan named in its own row, so a workspace with two open requests keeps the other one open. You can also connect a provider under Payment providers, after which the next attempt charges normally. The card is hidden when there is nothing to show, and a completed purchase never appears here.</p>
+    <pre>GET /api/v1/admin/checkout-requests?limit=50   — operator only; tenant tokens get 403</pre>
   </div>
   <div class="card">
     <h3>Plan Tiers — reading the screen</h3>
@@ -609,6 +629,155 @@ was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
   <code>GET /api/v1/auth/avatar/&lt;account id&gt;</code>. The profile answer carries
   <code>avatar_url</code> with a version marker, so a replaced picture shows immediately instead of
   being served from the browser's cache.</p>
+</section>
+
+<section id="campaign-analytics">
+  <h2 class="sec-title"><span class="sec-num">15</span> 📊 Campaign analytics</h2>
+  <div class="card">
+    <h3>What the Analytics panel shows</h3>
+    <p>Open <strong>Analytics</strong> in the console to see the account's own totals: active and
+    total campaigns, total entries, total and average wins, the win rate, redemptions, loyalty
+    members and points issued. Every number is read from your own account's rows — nothing is
+    estimated or filled in with a placeholder.</p>
+  </div>
+  <div class="card">
+    <h3>Opening one campaign's numbers</h3>
+    <p>Below the totals is a table of your campaigns. <strong>Click the campaign's name</strong> to
+    open its own detail card, which answers “which campaign is working”:</p>
+    <ul>
+      <li><strong>Entries</strong> — the total for that campaign alone, not the account.</li>
+      <li><strong>Redemptions</strong> and <strong>redemption rate</strong> — how many wins were
+      actually claimed, and what share of entries that is.</li>
+      <li><strong>Average score</strong> — the mean entry score for that campaign.</li>
+      <li><strong>Loyalty members</strong> — how many members that campaign brought in.</li>
+      <li><strong>Top sources</strong> — where the entries came from, with counts and shares.</li>
+      <li><strong>Prizes won</strong> — how often each prize was actually won.</li>
+      <li><strong>Loyalty bridge</strong> — whether automatic enrolment is on and how many points a
+      play awards.</li>
+    </ul>
+    <p><strong>Close</strong> dismisses the card. A campaign with no data yet says so
+    (“no entries yet”, “no wins yet”) instead of showing a made-up zero.</p>
+    <p>If the detail read fails, the card shows the reason the route gave instead of an empty
+    panel — so a number that is missing always has a stated cause.</p>
+    <p>Routes: <code>GET /api/v1/analytics/overview</code>,
+    <code>GET /api/v1/analytics/campaigns</code> and
+    <code>GET /api/v1/analytics/campaigns/&lt;slug&gt;</code>.</p>
+  </div>
+</section>
+
+<section id="account-modules">
+  <h2 class="sec-title"><span class="sec-num">16</span> 🧭 The account modules</h2>
+  <p>Beyond campaigns and loyalty, every workspace carries the same set of working screens. Each
+  one lists real rows for your own account; none of them is a preview or a mock-up.</p>
+  <div class="card">
+    <h3>🎁 Prize Pools</h3>
+    <p>The prizes a campaign can hand out, and how likely each one is. The table lists every prize
+    with its <strong>weight</strong> (its share of the draw), the resulting <strong>chance</strong>,
+    its <strong>type</strong>, the <strong>stock</strong> left and its colour. Change a weight to
+    change the odds — the chance column follows from the weights, so the numbers you see are the
+    odds you are actually offering.</p>
+  </div>
+  <div class="card">
+    <h3>🏆 Wins &amp; Redemptions</h3>
+    <p>Every prize that has been won, in one list: <strong>when</strong> it was won, the
+    <strong>winner</strong>, the <strong>prize</strong> and its <strong>status</strong>. This is
+    where a win stops being a number and becomes something to hand over.</p>
+  </div>
+  <div class="card">
+    <h3>📝 Entries &amp; Answers</h3>
+    <p>The raw record of play: <strong>when</strong> an entry was made, the
+    <strong>participant</strong>, the <strong>result</strong> of the play, and its
+    <strong>delivery</strong> state. Use it to check a disputed entry — the row is the source of
+    truth, not the summary counts.</p>
+  </div>
+  <div class="card">
+    <h3>👥 Contacts</h3>
+    <p>Everyone your business has captured or imported — <strong>one row per person</strong>, and the
+    same person can belong to more than one business. Each row carries their name, email, phone, the
+    business they belong to, their tags, how many entries they have made, when they were last seen,
+    and their history.</p>
+  </div>
+  <div class="card">
+    <h3>🎫 Support Tickets</h3>
+    <p>Requests raised from any workspace or from the operator side: <strong>subject</strong>,
+    <strong>workspace</strong>, <strong>status</strong>, <strong>priority</strong>,
+    <strong>category</strong> and when it was <strong>updated</strong>. <strong>+ New
+    Ticket</strong> opens one on a customer's behalf.</p>
+  </div>
+  <div class="card">
+    <h3>⭐ Reviews &amp; Ratings</h3>
+    <p>What customers said, with the <strong>rating</strong>, the <strong>reviewer</strong>, the
+    <strong>title</strong>, its <strong>status</strong> and the <strong>date</strong>.
+    <strong>Approve</strong> publishes a review and <strong>Reject</strong> holds it back, so
+    nothing appears on a public page until someone here says so. <strong>Delete</strong> removes it
+    outright.</p>
+  </div>
+  <div class="card">
+    <h3>📅 Calendar</h3>
+    <p>Events scheduled for the account: create one, give it a date, and it appears in the list so
+    the team can see what is coming.</p>
+  </div>
+  <div class="card">
+    <h3>📚 Knowledge Base</h3>
+    <p>Help articles, grouped by <strong>group</strong> so a set of related answers stays together.
+    <strong>+ New article</strong> writes one; the title and group are what a reader browses
+    by.</p>
+  </div>
+  <div class="card">
+    <h3>📞 Call Logs</h3>
+    <p>A record of conversations: <strong>when</strong>, the <strong>direction</strong>, who it was
+    <strong>with</strong>, the <strong>outcome</strong>, how many <strong>minutes</strong> it ran and
+    any <strong>notes</strong>. <strong>+ Log a call</strong> adds one after the fact, so a phone
+    conversation leaves a trail like every other contact.</p>
+  </div>
+  <div class="card">
+    <h3>🤝 Deals</h3>
+    <p>Agreed arrangements per business: the <strong>business</strong>, the <strong>type</strong>,
+    the <strong>offer</strong> behind it, the <strong>points</strong> involved, how long it is
+    <strong>valid</strong> and whether it has been <strong>redeemed</strong>.
+    <strong>+ New deal</strong> records one.</p>
+  </div>
+  <div class="card">
+    <h3>🎟 Offers</h3>
+    <p>The offers themselves: <strong>name</strong>, <strong>discount</strong>, any
+    <strong>cap</strong>, and whether it is <strong>active</strong>. An offer can be edited, then
+    <strong>Deactivated</strong> to stop it being handed out and <strong>Reactivated</strong> later
+    — deactivating keeps the history instead of deleting it.</p>
+  </div>
+</section>
+
+<section id="plan-requests">
+  <h2 class="sec-title"><span class="sec-num">17</span> Plan requests (the operator queue)</h2>
+  <div class="card">
+    <p>No card is taken on this install until a payment provider is connected, so the customer's own
+    buying path is a <strong>request</strong>. Their <strong>Plan &amp; billing</strong> screen files the
+    plan they want as a ticket the moment they press the button &mdash; one press, one request &mdash; and
+    the ticket is stamped <code>source = plan_request</code> along with the plan it names. A move to a
+    cheaper plan arrives the same way, so the queue is not only upgrades.</p>
+  </div>
+  <div class="card">
+    <h3>Where it lands</h3>
+    <p>Admin console &rarr; <strong>Support Tickets</strong>. Every request carries a
+    <strong>Plan request</strong> badge beside the workspace that filed it, and the
+    <strong>Plan requests</strong> button above the list filters the queue down to exactly those rows,
+    so a request cannot hide among ordinary support questions. A request for a <strong>retired</strong>
+    tier is refused at filing time (the billing screen lists only plans on sale), and a second request
+    for the plan already open is folded into that one instead of filling the queue with duplicates.</p>
+  </div>
+  <div class="card">
+    <h3>Working one</h3>
+    <p>Open the row to read what the customer asked for and reply &mdash; the reply emails the customer,
+    so they are not left guessing. Switch the workspace by hand on the <strong>Plans</strong> screen (see
+    <em>Plan Management</em> above), then set the ticket to <strong>resolved</strong>. The customer's own
+    Plan &amp; billing screen reads that state back, which is what makes its "our team will confirm here"
+    sentence true rather than a promise.</p>
+  </div>
+  <div class="card">
+    <h3>Who sees what</h3>
+    <p>A platform role (<code>admin</code> / <code>super_admin</code>) reads and works the whole
+    install's queue. A customer stays scoped to their own workspace's tickets, and another workspace's
+    request answers 404 rather than 403, so a refusal never confirms that the row exists.</p>
+  </div>
 </section>
 
 <div class="foot">
