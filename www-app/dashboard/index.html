@@ -7,6 +7,15 @@
 <style>
 body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 .header{background:#fff;border-bottom:1px solid #e2e8f0;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+/* phone: this dashboard had NO breakpoint at all. The header is a nowrap flex row with 24px
+   side padding, and its right-hand cluster (avatar, name, plan, User Guide, Sign Out) would not
+   shrink, so at 390px it ended at x=404 — 14px past the screen edge and the page scrolled
+   sideways. Measured 2026-10-22. The cluster may now wrap, and the padding tightens. */
+@media(max-width:768px){
+  .header{padding:10px 12px;flex-wrap:wrap;gap:8px}
+  .header>div{min-width:0;flex-wrap:wrap;justify-content:flex-end;max-width:100%}
+  .header h1,.header h2{font-size:16px}
+}
 .card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
 .btn{background:#2563eb;color:#fff;padding:8px 16px;border-radius:8px;cursor:pointer;border:none;font-weight:500}.btn:hover{background:#1d4ed8}
 .btn-sm{padding:5px 12px;font-size:13px}
@@ -67,7 +76,9 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
         <div style="font-size:12px;color:#64748b;margin-bottom:6px">Current picture</div>
         <img id="pp-prev" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:none;border:1px solid #e2e8f0;background:#fff">
         <span id="pp-ph" class="uav-ph" style="width:56px;height:56px;font-size:22px">?</span>
-        <input id="pp-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
+        <!-- The visible "Current picture" text above is a heading, not a label, so the file control
+             had no accessible name (measured 2026-10-22 in this page's accessibility census). -->
+        <input id="pp-file" type="file" aria-label="Profile picture file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
@@ -128,13 +139,17 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <div id="eb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:220px">
-        <label style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Brand display name</label>
+        <label for="eb-name" style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Brand display name</label>
         <input id="eb-name" placeholder="Your business name" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid #e2e8f0;border-radius:8px;box-sizing:border-box">
-        <label style="display:block;font-size:12px;color:#64748b;margin:12px 0 4px">Brand colour</label>
+        <label for="eb-colour" style="display:block;font-size:12px;color:#64748b;margin:12px 0 4px">Brand colour</label>
         <input id="eb-colour" type="color" value="#4f46e5" style="width:64px;height:32px;padding:1px;border:1px solid #e2e8f0;border-radius:8px;background:#fff">
       </div>
       <div style="flex:1;min-width:220px">
-        <div style="font-size:12px;color:#64748b;margin-bottom:4px">Logo</div>
+        <!-- A `label for` rather than a `div`: the text was already on screen as a heading, but a
+             heading does not NAME the control. Measured 2026-10-22 in the accessibility census of
+             this page: #eb-logo (and #eb-colour, #pp-file) had no accessible name at all, so a
+             screen-reader user heard "button, choose file" with nothing saying which file. -->
+        <label for="eb-logo" style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Logo</label>
         <img id="eb-logo-prev" alt="" style="max-height:56px;max-width:200px;display:none;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
         <input id="eb-logo" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:8px">
       </div>
@@ -822,11 +837,14 @@ function pbLimit(v) {
 function pbPlanLimits(p) {
   if (!p) return '';
   var bits = [];
-  if (p.max_campaigns !== undefined) bits.push(pbLimit(p.max_campaigns) + ' campaigns');
-  if (p.max_entries_per_month !== undefined) bits.push(pbLimit(p.max_entries_per_month) + ' entries/month');
+  // Counts are read as sentences ("1 campaign", not "1 campaigns") - the Free tier showed the
+  // plural on a limit of one, which reads like a template that was never finished.
+  function pbCt(n, one, many) { return pbLimit(n) + ' ' + (Number(n) === 1 ? one : many); }
+  if (p.max_campaigns !== undefined) bits.push(pbCt(p.max_campaigns, 'campaign', 'campaigns'));
+  if (p.max_entries_per_month !== undefined) bits.push(pbCt(p.max_entries_per_month, 'entry/month', 'entries/month'));
   if (p.features && typeof p.features === 'object') {
-    if (p.features.max_leads !== undefined) bits.push(pbLimit(p.features.max_leads) + ' leads');
-    if (p.features.max_tags !== undefined) bits.push(pbLimit(p.features.max_tags) + ' tags');
+    if (p.features.max_leads !== undefined) bits.push(pbCt(p.features.max_leads, 'lead', 'leads'));
+    if (p.features.max_tags !== undefined) bits.push(pbCt(p.features.max_tags, 'tag', 'tags'));
   }
   return bits.join(' \u00b7 ');
 }
@@ -930,6 +948,9 @@ function pbRender() {
     var feats = (p.features && p.features.length) ? p.features : [];
     var fh = '';
     for (var j = 0; j < feats.length && j < 6; j++) { fh += '<li style="padding:2px 0">' + esc(pbFeatureLabel(feats[j])) + '</li>'; }
+    // A card that silently stopped at six items read as if the higher tier added almost
+    // nothing (Pro carries 17 features, Enterprise more), so the leftover count is stated.
+    if (feats.length > 6) { fh += '<li style="padding:2px 0;color:#64748b">+ ' + (feats.length - 6) + ' more in this plan</li>'; }
     // The move is named by DIRECTION, never by "has a price": a customer on Enterprise was
     // reading "Upgrade to Pro" for a cheaper plan (a downgrade), and pressing it filed an
     // "Upgrade request" ticket. curPrice is the catalogue row of the plan they are ON.
