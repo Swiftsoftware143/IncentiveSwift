@@ -127,6 +127,17 @@
     .feature-grid { grid-template-columns: 1fr; }
     dl { grid-template-columns: 1fr; gap: 2px; }
     dt { padding-bottom: 0; }
+    /* A phone could not read this page at its own width: the content's min-content (a wide table,
+       a long URL in <code>, the topbar badge) propagated through flex items that default to
+       min-width:auto, so the whole document laid itself out wider than the screen — measured
+       2026-10-23 in Chromium at 390x844. Tables scroll inside their own box, tokens wrap, the
+       badge may use two lines. Nothing above 900px changes. */
+    .main-content, .content-area { min-width: 0; }
+    .topbar { flex-wrap: wrap; row-gap: 6px; }
+    .topbar-badge { max-width: 100%; white-space: normal; }
+    table { display: block; width: 100%; max-width: 100%; overflow-x: auto; }
+    pre, code, kbd { overflow-wrap: anywhere; word-break: break-word; }
+    pre { overflow-x: auto; max-width: 100%; }
   }
 </style>
 </head>
