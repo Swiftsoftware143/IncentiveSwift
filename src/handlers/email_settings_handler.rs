@@ -298,11 +298,18 @@ pub async fn test_email_settings(
 /// that were never attempted — a NON-SEND, not a provider refusal.
 ///
 /// Mounted under `/api/v1/admin/*`, so `security::auth::admin_guard` gates it before this handler.
+///
+/// HARNESS ROWS ARE NOT IN THE LIST (2026-10-23). Every fleet probe signup writes one `withheld` row,
+/// so the tail was 49/50 harness addresses when measured live on this app — the history could not
+/// answer the question its own doc comment says it exists for ("did that customer ever get their
+/// password?"), because real attempts had been pushed out of the window by rows that were never sends.
+/// The tail now lists only attempts that went to a real address, and `withheld_7d` counts the harness
+/// rows that are not shown, so nothing is silently dropped.
 pub async fn email_log(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     use sqlx::Row;
     let rows = sqlx::query(
         "SELECT to_email, subject, status, detail, created_at FROM email_send_log \
-         ORDER BY created_at DESC LIMIT 50",
+         WHERE status <> 'withheld' ORDER BY created_at DESC LIMIT 50",
     )
     .fetch_all(&state.db)
     .await
@@ -319,7 +326,14 @@ pub async fn email_log(State(state): State<AppState>) -> Result<Json<Value>, App
             })
         })
         .collect();
-    Ok(Json(json!({ "sends": sends })))
+    let withheld: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM email_send_log \
+          WHERE status = 'withheld' AND created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+    Ok(Json(json!({ "sends": sends, "withheld_7d": withheld })))
 }
 
 #[cfg(test)]

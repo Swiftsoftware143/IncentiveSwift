@@ -2554,7 +2554,7 @@ const EmailProvider = () => {
       // The HISTORY beside the one-slot line above: a credentials mail refused at signup
       // stays readable here after any later mail succeeds. A failed read must never break
       // the screen, so it degrades to an empty list.
-      try { const l = await API.get('/admin/email-log'); st.log = (l && l.sends) || []; }
+      try { const l = await API.get('/admin/email-log'); st.log = (l && l.sends) || []; st.logWithheld = (l && l.withheld_7d) || 0; }
       catch (e) { st.log = []; }
       // Measured by the API off the STORED row; `configured` says a provider is saved, it does not
       // say the copy in the database is encrypted. Both facts are shown, neither is assumed.
@@ -2613,7 +2613,7 @@ const EmailProvider = () => {
     </div>
     <div class="card mb-4">
       <h3 class="font-semibold mb-2">Recent sends</h3>
-      <p class="text-sm text-gray-500 mb-2">The last 50 transactional emails this installation attempted. The line above answers only "what happened to the most recent one" — this history keeps a credentials mail that failed at signup visible after any later mail succeeds.</p>
+      <p class="text-sm text-gray-500 mb-2">The last 50 transactional emails this installation actually attempted to a real address. The line above answers only "what happened to the most recent one" — this history keeps a credentials mail that failed at signup visible after any later mail succeeds. Reserved test addresses are not listed: ${st.logWithheld || 0} were withheld in the last 7 days and none of them were attempts.</p>
       ${(!st.log || !st.log.length)
         ? html`<div class="text-sm text-gray-400">No sends recorded yet.</div>`
         : html`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-gray-500"><th class="py-1 pr-3">When</th><th class="py-1 pr-3">To</th><th class="py-1 pr-3">Subject</th><th class="py-1">Outcome</th></tr></thead><tbody>
