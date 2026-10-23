@@ -780,3 +780,78 @@ pub async fn add_message(
 
     Ok(Json(json!({ "id": msg_id })))
 }
+
+/// Record the paid tier a visitor PICKED on the public pricing page, at the moment they sign up.
+///
+/// The pricing cards already carry the tier into `/signup?plan=pro`, and that page told the visitor
+/// "You picked Pro" — then posted `{name,email}` and dropped the pick, so the account landed on Free
+/// and nothing in the operator's console knew a paid tier had been asked for. Signup is the only
+/// anonymous door that mints a workspace, so it is the one place the pick can be kept.
+///
+/// The row is the SAME `support_tickets` shape the dashboard's "Request the plan" button files
+/// (`source='plan_request'` + `plan_slug`, deduped on one open request per tier) — which is what the
+/// operator's Plan requests view reads and what its Resolve action switches the workspace with. So a
+/// signup pick is workable, not a line in a log. Best-effort by design: an unknown, retired or free
+/// slug returns `None` and the signup still succeeds — a preference must never refuse an account.
+pub async fn record_signup_plan_request(
+    db: &sqlx::PgPool,
+    account_id: Uuid,
+    picked: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    let slug: String = picked
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    if slug.is_empty() || slug.len() > 60 {
+        return Ok(None);
+    }
+    // The same price expression the ticket door and checkout use: `price_monthly` holds 0 for the
+    // paid tiers on this install (measured live 2026-10-20), the money is in the legacy `price`.
+    let plan: Option<(String, f64, bool)> = sqlx::query_as(
+        "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8, is_active \
+           FROM plans WHERE slug = $1",
+    )
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    let Some((name, price, on_sale)) = plan else {
+        return Ok(None);
+    };
+    if !on_sale || price <= 0.0 {
+        return Ok(None);
+    }
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM support_tickets \
+          WHERE tenant_id = $1 AND source = 'plan_request' \
+            AND status IN ('open','in_progress') \
+            AND plan_slug IS NOT DISTINCT FROM $2 \
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    if existing.is_some() {
+        return Ok(Some((slug, name)));
+    }
+    sqlx::query(
+        r#"INSERT INTO support_tickets
+             (id, tenant_id, campaign_id, contact_id, subject, description, status, priority,
+              category, source, created_by, plan_slug)
+           VALUES ($1,$2,NULL,NULL,$3,$4,'open','normal','billing','plan_request',$2,$5)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(format!("Plan request at signup: {name} plan"))
+    .bind(format!(
+        "This workspace picked the {name} plan (${price:.0}/month) on the pricing page before it \
+         signed up. New accounts start on Free and no card was taken, so the switch has to be made \
+         by the team. Filed automatically by the signup door."
+    ))
+    .bind(&slug)
+    .execute(db)
+    .await?;
+    Ok(Some((slug, name)))
+}

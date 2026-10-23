@@ -59,6 +59,13 @@ pub struct RegisterInput {
     pub name: Option<String>,
     pub referral_code: Option<String>,
     pub industry_slug: Option<String>,
+    /// The paid tier the visitor picked on the public pricing page (`/signup?plan=pro`). Accepted
+    /// under BOTH names for the same reason the sibling door does (cron 2026-10-21 there): the page
+    /// speaks `plan`, API callers speak `plan_slug`, and a field only one caller can fill silently
+    /// does nothing. Recorded as the same `plan_request` row the dashboard's upgrade button files
+    /// (cron 2026-10-23) — before this, the pick was dropped and the operator never knew.
+    #[serde(default, alias = "plan_slug")]
+    pub plan: Option<String>,
 }
 
 /// POST /api/v1/auth/register — self-service signup, assigns Free plan.
@@ -294,6 +301,35 @@ pub async fn register(
         }
     });
 
+    // The tier the visitor picked on the pricing page, kept as a WORKABLE request (cron 2026-10-23).
+    // The card carries `?plan=pro` into the signup page and that page told them "You picked Pro", but
+    // the POST carried name+email only — so the pick died here and the operator's Plan requests view
+    // never saw a paid interest from a fresh signup. Filed as the same `source='plan_request'` row the
+    // dashboard's upgrade button creates, which is what that view reads and what its Resolve action
+    // switches the workspace with. Best-effort: a free/unknown/retired slug files nothing and the
+    // account still succeeds — the workspace always starts on Free.
+    let plan_request = match body
+        .plan
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(picked) => {
+            match crate::handlers::support_tickets::record_signup_plan_request(
+                &state.db, account_id, picked,
+            )
+            .await
+            {
+                Ok(filed) => filed,
+                Err(e) => {
+                    tracing::warn!("signup plan pick '{picked}' was not recorded: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     Ok(Json(json!({
         "token": token,
         "user": {
@@ -302,7 +338,13 @@ pub async fn register(
             "name": name,
             "role": "company_admin",
             "plan": "free",
-        }
+        },
+        // What the signup page reads to tell the visitor their pick was received (null when they
+        // picked Free or named no tier): `{plan_slug, plan_name}`.
+        "plan_request": match plan_request {
+            Some((slug, plan_name)) => json!({ "plan_slug": slug, "plan_name": plan_name }),
+            None => Value::Null,
+        },
     })))
 }
 

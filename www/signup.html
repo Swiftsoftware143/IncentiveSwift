@@ -61,11 +61,11 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
   <form id="signup-form" onsubmit="handleSignup(event)">
     <div class="form-group">
       <label>Full Name</label>
-      <input type="text" id="signup-name" placeholder="Your name or company" required>
+      <input type="text" id="signup-name" placeholder="Your name or company" required aria-label="Your name or company">
     </div>
     <div class="form-group">
       <label>Email Address</label>
-      <input type="email" id="signup-email" placeholder="you@company.com" required>
+      <input type="email" id="signup-email" placeholder="you@company.com" required aria-label="Email">
     </div>
     <button type="submit" id="signup-btn" class="submit-btn">Create Free Account →</button>
   </form>
@@ -117,10 +117,14 @@ async function handleSignup(e) {
     // No password is sent: the server generates the login credentials and emails them to this
     // address (the SAME path the auto-created tag accounts use), so signup and auto-provisioning
     // can never drift. The user confirms their address by signing in with the emailed password.
+    // The tier picked on the pricing page now travels WITH the signup (cron 2026-10-23). Before this
+    // the page said "You picked Pro" and then posted name+email only, so the pick died at the door and
+    // nothing in the operator's console knew a paid tier had been asked for. The server files the same
+    // plan-request row the dashboard's upgrade button creates, which the Plan requests view reads.
     const res = await fetch('/api/v1/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email }),
+      body: JSON.stringify({ name, email, plan: pickedTier || 'free' }),
     });
 
     const data = await res.json();
@@ -135,8 +139,20 @@ async function handleSignup(e) {
     // retype it. Without this, "check your email" was a dead end whenever the mail was filtered —
     // the same gap closed on FunnelSwift (a8ed8ad) and MissedCall.
     document.getElementById('signup-form').style.display = 'none';
+    // Did the server keep the tier they picked? It answers `plan_request: {plan_slug, plan_name}`
+    // when the pick named a paid plan and the request row was filed (cron 2026-10-23), null when they
+    // picked Free or named nothing. Say it plainly instead of leaving the pick looking ignored.
+    var keptPlan = '';
+    if (data && data.plan_request && data.plan_request.plan_name) {
+      keptPlan = String(data.plan_request.plan_name).replace(/[<>&]/g, '');
+    }
     sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
       email.replace(/[<>&]/g, '') + '.<br><br>You can change your password any time in your profile settings.' +
+      (keptPlan
+        ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+          'Your <strong>' + keptPlan + '</strong> pick is with our team — your workspace starts on Free (no card taken) ' +
+          'and they make the switch for you.</div>'
+        : '') +
       '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
       'Nothing in your inbox after a minute? Check your spam folder, then ' +
       '<a href="https://app.incentiveswift.com/forgot-password.html?email=' + encodeURIComponent(email) + '" ' +
