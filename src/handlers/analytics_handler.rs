@@ -681,7 +681,20 @@ pub async fn export_csv(
     let uuid = Uuid::parse_str(&account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
 
+    // An UNKNOWN type used to fall through to the `_` arm below, which builds the CAMPAIGNS
+    // report — so `?type=contact` (a typo) or any invented value handed the operator a DIFFERENT
+    // report under a green download, with a filename that carried their own typo. Measured live
+    // 2026-10-24: `?type=bogus` answered 200 with the campaigns CSV. The import twin
+    // (`import_csv`, below) has always refused this shape with a 400 that names the valid set, so
+    // the two halves of the same screen disagreed. The default stays `campaigns`; anything else
+    // that is not one of the three real reports is now a 400 that says which three exist.
     let export_type = query.r#type.as_deref().unwrap_or("campaigns");
+    if !matches!(export_type, "campaigns" | "contacts" | "entries") {
+        return Err(AppError::BadRequest(format!(
+            "export type '{}' is not supported — use 'campaigns', 'contacts' or 'entries'",
+            export_type
+        )));
+    }
     let mut csv = String::new();
 
     match export_type {
@@ -785,7 +798,9 @@ pub async fn export_csv(
             }
         }
         _ => {
-            // Default: campaigns export
+            // Campaigns export. Only reachable with `?type=campaigns` (or no type at all): the
+            // guard at the top of this handler refuses every other value, so a typo can no longer
+            // land here and masquerade as a campaigns report.
             csv.push_str("Campaign Name,Type,Status,Total Entries,Unique Contacts,Total Wins,Win Rate %,Created At\n");
             let rows = sqlx::query(
                 "SELECT c.name, c.type, c.status,

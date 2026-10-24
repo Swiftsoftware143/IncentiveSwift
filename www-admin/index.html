@@ -2924,7 +2924,15 @@ const ContactsView = () => {
   const exportCsv = async () => {
     try {
       const r = await fetch(window.location.origin + '/api/v1/analytics/export?type=contacts', { headers: { 'Authorization': ['Bearer', API.token].join(' ') } });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // A refused export used to say only "Export failed: HTTP 400" -- a status code with no reason.
+      // The server's own sentence (e.g. "export type 'contact' is not supported -- use 'campaigns',
+      // 'contacts' or 'entries'") is what tells the operator what to fix, so read the body first and
+      // fall back to the bare status only when the body has nothing to say.
+      if (!r.ok) {
+        let why = 'HTTP ' + r.status;
+        try { const d = await r.json(); why = (d && (d.error || d.message)) || why; } catch (e) {}
+        throw new Error(why);
+      }
       const b = await r.blob();
       const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'contacts.csv';
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
