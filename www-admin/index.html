@@ -474,14 +474,15 @@ const Plans = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div>
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Actions</th></tr></thead>
+      <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Payment link</th><th>Actions</th></tr></thead>
         <tbody>${st.list.map(p => html`<tr>
           <td class="font-medium">${p.name}</td>
           <td class="text-gray-500">${((st.pubById || {})[p.id] ?? p.price_monthly) ? '$' + ((st.pubById || {})[p.id] ?? p.price_monthly) : '-'}</td>
           <td class="text-gray-500">${p.price_yearly ? '$' + p.price_yearly : '-'}</td>
+          <td class="text-gray-500">${p.purchase_url ? 'Set' : '-'}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
         </tr>`)}
-        ${st.list.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
+        ${st.list.length === 0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
       </tbody></table>
       <div class="text-xs text-gray-400 px-3 py-2">Monthly is the price the public pricing page lists for this plan. The tier an account is actually seated on is on the Tiers screen.</div>
     </div>
@@ -513,13 +514,17 @@ const Plans = () => {
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
       <div class="modal-content"><h3 class="text-lg font-bold mb-4">${st.editItem ? 'Edit' : 'Add'} Plan</h3>
         ${(() => {
-          const pf = viewState('plans_form', { name: '', price_monthly: '', price_yearly: '' });
+          // purchase_url is the plan's own hosted payment page (2026-10-24): with a link set, a
+          // customer's Upgrade press is handed straight to it even when no payment provider is
+          // connected here. It is a DRAFT field like the rest, so typing cannot be reverted.
+          const pf = viewState('plans_form', { name: '', price_monthly: '', price_yearly: '', purchase_url: '' });
           // Seeded ON OPEN from the row. The draft itself lives in the shared object above, so a
           // re-render while the modal is open can no longer revert it (kanban t_8e0ae96e).
           if (!st.formSeeded) {
             pf.name = st.editItem?.name || '';
             pf.price_monthly = (st.editItem && st.editItem.price_monthly != null) ? String(st.editItem.price_monthly) : '';
             pf.price_yearly = (st.editItem && st.editItem.price_yearly != null) ? String(st.editItem.price_yearly) : '';
+            pf.purchase_url = st.editItem?.purchase_url || '';
             st.formSeeded = true;
           }
           const numOrNull = (v) => (v === '' || v === null || v === undefined) ? null : Number(v);
@@ -530,9 +535,17 @@ const Plans = () => {
             <div><label class="text-sm font-medium block mb-1">Name</label><input class="input" value=${pf.name} onInput=${e => { pf.name = e.target.value; }} /></div>
             <div><label class="text-sm font-medium block mb-1">Monthly price ($)</label><input type="number" class="input" value=${pf.price_monthly} onInput=${e => { pf.price_monthly = e.target.value; }} /></div>
             <div><label class="text-sm font-medium block mb-1">Yearly price ($)</label><input type="number" class="input" value=${pf.price_yearly} onInput=${e => { pf.price_yearly = e.target.value; }} /></div>
+            <!-- A PLAN CAN CARRY ITS OWN PAYMENT PAGE (2026-10-24). The plans.purchase_url column has
+                 existed since the table shipped and had NO box here, so on an install whose payment
+                 providers table is EMPTY (this one) every press on Upgrade could only be refused even
+                 when the operator already had a working way to be paid. Paste a Stripe Payment Link,
+                 a PayPal button or any https payment page and the checkout hands the buyer to it.
+                 Clearing the box removes the link (that is how a plan comes off sale-by-link). -->
+            <div><label class="text-sm font-medium block mb-1">Payment link (optional)</label><input class="input" value=${pf.purchase_url} onInput=${e => { pf.purchase_url = e.target.value; }} placeholder="https://buy.stripe.com/..." />
+              <p class="text-xs text-gray-500 mt-1">A hosted payment page for this plan. With a link set, a customer pressing Upgrade is taken straight to it even when no payment provider is connected here, and the request is still filed for you. Leave empty for no link.</p></div>
             <div class="flex gap-2 justify-end mt-4">
               <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
-              <button class="btn" onClick=${() => save({name: pf.name, price_monthly: numOrNull(pf.price_monthly), price_yearly: numOrNull(pf.price_yearly)})}>${st.editItem ? 'Save' : 'Add'}</button>
+              <button class="btn" onClick=${() => save({name: pf.name, price_monthly: numOrNull(pf.price_monthly), price_yearly: numOrNull(pf.price_yearly), purchase_url: pf.purchase_url || ''})}>${st.editItem ? 'Save' : 'Add'}</button>
             </div>
           </div>`; })()}
       </div>

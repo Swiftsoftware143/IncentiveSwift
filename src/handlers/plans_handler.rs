@@ -43,6 +43,14 @@ pub struct Plan {
     pub is_active: bool,
     pub sort_order: i32,
     pub payment_provider: Option<String>,
+    /// The hosted payment page the OPERATOR pasted into this plan (2026-10-24).
+    ///
+    /// `plans.purchase_url` has existed since the plans table shipped and NO code path in this app
+    /// could write or read it, so on an install whose `payment_providers` is EMPTY (this one) every
+    /// press on Upgrade could only be refused even when the operator already had a working way to be
+    /// paid. `billing::checkout` reads it at the till; this struct is what the operator's console
+    /// round-trips, so the panel can show that a plan carries a link and clear it again.
+    pub purchase_url: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -59,6 +67,7 @@ pub struct CreatePlanInput {
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
     pub payment_provider: Option<String>,
+    pub purchase_url: Option<String>,
 }
 
 /// Input for updating a plan.
@@ -73,6 +82,23 @@ pub struct UpdatePlanInput {
     pub is_active: Option<bool>,
     pub sort_order: Option<i32>,
     pub payment_provider: Option<String>,
+    /// The plan's own hosted payment page. THREE cases, and they must stay distinguishable:
+    /// absent = leave whatever is stored; `null` or `""` = CLEAR the link (that is how the operator
+    /// takes a plan off sale-by-link); anything else = set it. A plain `Option<String>` collapses
+    /// "absent" and "null" into one value, which is why this is a double option — without it a
+    /// pasted link could never be removed again.
+    #[serde(default, deserialize_with = "deserialize_some")]
+    pub purchase_url: Option<Option<String>>,
+}
+
+/// Present-but-may-be-null: distinguishes an ABSENT json field (-> `None`) from an explicit `null`
+/// (-> `Some(None)`). Used for `UpdatePlanInput::purchase_url`, whose clear arm is the whole point.
+fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
 }
 
 /// Input for admin plan assignment.
@@ -142,7 +168,7 @@ pub async fn list_plans(
            SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
            FROM plans
            ORDER BY is_active DESC,
                     sort_order ASC NULLS LAST,
@@ -163,10 +189,22 @@ pub async fn create_plan(
     let slug = body.slug.unwrap_or_else(|| generate_slug(&body.name));
     let id = Uuid::new_v4();
     let features = body.features.unwrap_or_else(|| json!({}));
+    // ── A PLAN CAN CARRY ITS OWN PAYMENT PAGE (2026-10-24) ──────────────────────────────────
+    // `plans.purchase_url` has existed since the plans table shipped and NO code path in this app
+    // could write or read it, so on an install whose `payment_providers` is EMPTY every press on
+    // Upgrade could only be refused. An operator who already has a working way to be paid — a
+    // Stripe Payment Link, a PayPal button, any hosted page — can now paste it here and the till
+    // hands the buyer straight to it. `billing::checkout::is_hosted_payment_url` judges a typo at
+    // the till, so a bad value cannot send a buyer somewhere broken. Blank means "no link".
+    let purchase_url = body
+        .purchase_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     sqlx::query(
-        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price, price_yearly, features, is_active, sort_order, payment_provider)
-           VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10)"#
+        r#"INSERT INTO plans (id, name, slug, description, price_monthly, price, price_yearly, features, is_active, sort_order, payment_provider, purchase_url)
+           VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10, $11)"#
     )
     .bind(id)
     .bind(&body.name)
@@ -178,6 +216,7 @@ pub async fn create_plan(
     .bind(body.is_active.unwrap_or(true))
     .bind(body.sort_order.unwrap_or(0))
     .bind(&body.payment_provider)
+    .bind(purchase_url)
     .execute(&state.db)
     .await?;
 
@@ -185,7 +224,7 @@ pub async fn create_plan(
         r#"SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
     .bind(id)
@@ -426,7 +465,7 @@ pub async fn get_plan(
         r#"SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
@@ -452,7 +491,7 @@ pub async fn update_plan(
         r#"SELECT name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider
+                  features, is_active, sort_order, payment_provider, purchase_url
            FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
@@ -492,14 +531,26 @@ pub async fn update_plan(
         .unwrap_or_else(|| existing.get("sort_order"));
     let payment_provider: Option<String> = existing.get("payment_provider");
     let payment_provider: Option<String> = body.payment_provider.or(payment_provider);
+    // The plan's own hosted payment page, with the CLEAR arm this column needs: absent leaves what
+    // is stored, `null` or a blank string REMOVES the link (how the operator takes a plan off
+    // sale-by-link), anything else stores the trimmed value. `billing::checkout` reads it per
+    // purchase, so the next Upgrade press after a clear is refused again.
+    let purchase_url: Option<String> = match body.purchase_url {
+        Some(supplied) => supplied
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
+        None => existing.get("purchase_url"),
+    };
 
     sqlx::query(
         r#"UPDATE plans SET
                name = $1, slug = $2, description = $3,
                price_monthly = $4, price = $4, price_yearly = $5,
                features = $6, is_active = $7, sort_order = $8,
-               payment_provider = $9, updated_at = now()
-           WHERE id = $10"#,
+               payment_provider = $9, purchase_url = $10, updated_at = now()
+           WHERE id = $11"#,
     )
     .bind(&name)
     .bind(&slug)
@@ -510,6 +561,7 @@ pub async fn update_plan(
     .bind(is_active)
     .bind(sort_order)
     .bind(&payment_provider)
+    .bind(&purchase_url)
     .bind(plan_id)
     .execute(&state.db)
     .await?;
@@ -518,7 +570,7 @@ pub async fn update_plan(
         r#"SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
@@ -573,7 +625,7 @@ pub async fn admin_update_plan_features(
         r#"SELECT id, name, slug, description,
                   COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
                   price_yearly,
-                  features, is_active, sort_order, payment_provider, created_at, updated_at
+                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
            FROM plans WHERE id = $1"#,
     )
     .bind(plan_id)
