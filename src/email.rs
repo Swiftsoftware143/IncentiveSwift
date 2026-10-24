@@ -206,14 +206,14 @@ async fn send_inline(
         // that type is absent (see `send_welcome_email`).
         "welcome" | "welcome_credentials" => {
             let body = format!(
-                "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
+                "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@swiftsoftware.net\n\nBest regards,\nThe {} Team",
                 app_name, name, email, password, app_url, app_name
             );
             Ok((format!("Welcome to {}!", app_name), body, String::new()))
         }
         "purchase_confirmed" => {
             let body = format!(
-                "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, please contact support@incentiveswift.com\n\nBest regards,\nThe {} Team",
+                "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, please contact support@swiftsoftware.net\n\nBest regards,\nThe {} Team",
                 name, plan_name_val, app_url, app_name
             );
             Ok((
