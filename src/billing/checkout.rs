@@ -73,6 +73,11 @@ pub struct CreateCheckoutInput {
     pub metadata: Option<Value>,
     pub payment_provider: Option<String>,
     pub plan_id: Option<String>,
+    /// OPTIONAL. Which TERM to sell: absent/`"month"` (the only thing this app could sell before
+    /// 2026-10-24), or `"year"`/`"yearly"`/`"annual"` for the yearly price the catalogue carries.
+    /// Anything else is a 400 that names this field — never a silent fallback to monthly.
+    #[serde(default)]
+    pub billing_cycle: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +110,29 @@ pub struct CreateCheckoutInput {
 /// 424 and never 502 for the failure arm: Cloudflare REPLACES the body of an origin 502 with its own
 /// page, so the customer would see nothing at all (FunnelSwift measured the same on 2026-10-15).
 ///
+/// ## The BILLING TERM (2026-10-24): the yearly price the catalogue carries can now be bought
+///
+/// Until this change the Stripe form hardcoded `recurring][interval]=month` (`plan_session_form`),
+/// so a MONTHLY subscription was the only thing this app could ever sell — while the catalogue
+/// already carries an annual figure for every paid tier (`plan_tiers.price_annual`: Pro $399,
+/// Enterprise $1699, edited by the operator's own Tier editor) and `terms.html` tells customers a
+/// subscription is billed "on a recurring monthly or annual basis, depending on the plan you
+/// select". The yearly offer existed everywhere except the one place a customer buys.
+///
+/// `billing_cycle` is OPTIONAL and defaults to `"month"`, so a caller that does not send it gets
+/// exactly the request this handler built before (same form, same columns, same metadata plus one
+/// `billing_cycle: "month"` key). `"year"`, `"yearly"` and `"annual"` ask for the yearly arm, which:
+///
+/// * charges the plan's yearly price — `COALESCE(plans.price_yearly, plan_tiers.price_annual)`,
+///   the same precedence `COALESCE(NULLIF(price_monthly,0), price)` uses for the monthly figure, so
+///   the operator's Tier editor funds what checkout sells (those two tables drifted apart before:
+///   `plans` holds 0/49/199 in `price` while `plan_tiers` holds the annual numbers);
+/// * builds `interval=year`;
+/// * records the yearly amount + term on `checkout_sessions.metadata` and on the refused attempt;
+/// * REFUSES BY NAME when the tier has no yearly price, instead of quietly charging the monthly
+///   rate — a charge the buyer did not agree to is the worst possible fallback;
+/// * rejects any other value with a 400 that names the field.
+///
 /// The price CHARGED is the plan row's own (`COALESCE(NULLIF(price_monthly, 0), price)`, the
 /// expression `/auth/me` and the public catalogue already use); the caller's `price_amount` is
 /// echoed on a refusal and never trusted as the amount.
@@ -126,7 +154,29 @@ pub async fn create_checkout_session(
         "cancel_url": body.cancel_url,
         "metadata": body.metadata,
         "payment_provider": body.payment_provider,
+        "billing_cycle": body.billing_cycle,
     });
+
+    // WHICH TERM (2026-10-24). Absent means month — the only term this handler could build before
+    // today, so every existing caller keeps its exact behaviour. An unrecognised value is named in a
+    // 400 rather than silently sold as monthly: a buyer who asked for a year must never be charged
+    // on a term they did not choose.
+    let billing_cycle = body
+        .billing_cycle
+        .as_deref()
+        .unwrap_or("month")
+        .trim()
+        .to_lowercase();
+    let yearly = match billing_cycle.as_str() {
+        "" | "month" | "monthly" => false,
+        "year" | "yearly" | "annual" => true,
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "Unknown billing_cycle '{other}' — use 'month' or 'year'."
+            )))
+        }
+    };
+    let interval = if yearly { "year" } else { "month" };
 
     // A zero/negative/non-finite price is not a checkout. Only a SUPPLIED amount is judged here:
     // the amount that decides whether there is anything to charge is the PLAN's own price (arm 3
@@ -143,14 +193,24 @@ pub async fn create_checkout_session(
     let raw_plan_id = body.plan_id.as_deref().map(str::trim).unwrap_or("");
     let plan_id =
         Uuid::parse_str(raw_plan_id).map_err(|_| AppError::NotFound("Unknown plan".to_string()))?;
-    let plan: Option<(String, String, f64)> = sqlx::query_as(
-        "SELECT slug, name, COALESCE(NULLIF(price_monthly, 0), price)::float8 FROM plans \
-         WHERE id = $1 AND is_active = true",
+    // The MONTHLY figure is `COALESCE(NULLIF(price_monthly, 0), price)` — the expression `/auth/me`
+    // and the public catalogue use. The YEARLY figure follows the same precedence one level down:
+    // `plans.price_yearly` when an operator has filled it in, else `plan_tiers.price_annual`, which
+    // is the table the operator's own Tier editor writes (measured 2026-10-24: `plans.price_yearly`
+    // is 0 on every row while `plan_tiers.price_annual` carries Pro 399 / Enterprise 1699 — so
+    // reading only `plans` would advertise a yearly term that can never be bought).
+    let plan: Option<(String, String, f64, f64)> = sqlx::query_as(
+        "SELECT p.slug, p.name, \
+                COALESCE(NULLIF(p.price_monthly, 0), p.price)::float8, \
+                COALESCE(NULLIF(p.price_yearly, 0), NULLIF(pt.price_annual, 0)::float8, 0)::float8 \
+         FROM plans p \
+         LEFT JOIN plan_tiers pt ON lower(pt.slug) = lower(p.slug) \
+         WHERE p.id = $1 AND p.is_active = true",
     )
     .bind(plan_id)
     .fetch_optional(&state.db)
     .await?;
-    let Some((plan_slug, plan_name, plan_price)) = plan else {
+    let Some((plan_slug, plan_name, plan_price, plan_annual)) = plan else {
         tracing::warn!(%account_id, %plan_id, "checkout/create REFUSED: unknown or inactive plan");
         return Ok((
             StatusCode::NOT_FOUND,
@@ -162,10 +222,16 @@ pub async fn create_checkout_session(
             })),
         ));
     };
-    if !plan_price.is_finite() || plan_price <= 0.0 {
-        return Err(AppError::BadRequest(
-            "That plan costs nothing — there is nothing to check out.".to_string(),
-        ));
+    // The amount for the term the buyer asked for, and the ONE guard over it. A yearly ask on a tier
+    // with no yearly price is refused BY NAME: charging the monthly rate instead would bill someone
+    // for a term they did not choose.
+    let amount = if yearly { plan_annual } else { plan_price };
+    if !amount.is_finite() || amount <= 0.0 {
+        return Err(AppError::BadRequest(if yearly {
+            format!("The {plan_name} plan has no yearly price, so it can only be bought monthly.")
+        } else {
+            "That plan costs nothing — there is nothing to check out.".to_string()
+        }));
     }
 
     // ── 2. Which merchant account funds this purchase? ───────────────────────────────────────────
@@ -208,7 +274,7 @@ pub async fn create_checkout_session(
         .bind(Uuid::new_v4())
         .bind(account_id)
         .bind(record_user.unwrap_or(account_id))
-        .bind(plan_price)
+        .bind(amount)
         .bind(CHECKOUT_CURRENCY)
         .bind(body.description.clone())
         .bind(json!({
@@ -217,6 +283,9 @@ pub async fn create_checkout_session(
             "account_id": account_id.to_string(),
             "plan_id": plan_id.to_string(),
             "plan_slug": plan_slug,
+            // The term the buyer asked for, so the operator's history shows a yearly ask as a
+            // yearly amount rather than reading back as the monthly rate.
+            "billing_cycle": interval,
         }))
         .execute(&state.db)
         .await;
@@ -233,8 +302,10 @@ pub async fn create_checkout_session(
         // filed HERE, server-side, deduped on the same (tenant, source, open, plan_slug) key the
         // ticket door uses, so a later press returns the open request instead of minting a twin.
         // No mail is queued: nothing was charged, so a refusal must not add mail volume.
-        let plan_request =
-            record_upgrade_request(&state.db, account_id, &plan_slug, &plan_name, plan_price).await;
+        let plan_request = record_upgrade_request(
+            &state.db, account_id, &plan_slug, &plan_name, amount, interval,
+        )
+        .await;
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -320,7 +391,8 @@ pub async fn create_checkout_session(
         plan_id,
         &plan_slug,
         &plan_name,
-        plan_price,
+        amount,
+        interval,
         &secret_key,
     )
     .await
@@ -364,7 +436,7 @@ pub async fn create_checkout_session(
     .bind(Uuid::new_v4())
     .bind(account_id)
     .bind(user_id)
-    .bind(plan_price)
+    .bind(amount)
     .bind(CHECKOUT_CURRENCY)
     .bind(body.description.clone())
     .bind(body.success_url.clone())
@@ -374,18 +446,28 @@ pub async fn create_checkout_session(
         "account_id": account_id.to_string(),
         "plan_id": plan_id.to_string(),
         "plan_slug": plan_slug,
+        // What the buyer is actually subscribed to. The receiver grants by `plan_slug`, so the term
+        // changes no entitlement — it makes the money record say 399.00|year instead of implying a
+        // monthly sale, which is what an operator reconciling against Stripe needs.
+        "billing_cycle": interval,
     }))
     .bind(&provider_session_id)
     .execute(&state.db)
     .await?;
 
     tracing::info!(
-        %account_id, plan = %plan_slug, session = %provider_session_id,
+        %account_id, plan = %plan_slug, session = %provider_session_id, term = interval, amount,
         "stripe checkout session created"
     );
     Ok((
         StatusCode::CREATED,
-        Json(json!({ "url": url, "session_id": provider_session_id, "plan": plan_slug })),
+        Json(json!({
+            "url": url,
+            "session_id": provider_session_id,
+            "plan": plan_slug,
+            "billing_cycle": interval,
+            "amount": amount,
+        })),
     ))
 }
 
@@ -670,7 +752,7 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-/// Create the Stripe Checkout session for a monthly plan.
+/// Create the Stripe Checkout session for a plan, on the TERM the buyer chose.
 ///
 /// Kept to ONE outbound call so the whole thing is provable without a live Stripe account: the base
 /// URL honours `STRIPE_API_BASE` (default = production, so unset behaviour is byte-identical) and the
@@ -688,6 +770,7 @@ async fn create_stripe_plan_session(
     plan_slug: &str,
     plan_name: &str,
     price: f64,
+    interval: &str,
     secret_key: &str,
 ) -> Result<(String, String), String> {
     let api_base = std::env::var("STRIPE_API_BASE")
@@ -700,7 +783,7 @@ async fn create_stripe_plan_session(
         .to_string();
 
     let body = plan_session_form(
-        account_id, email, plan_id, plan_slug, plan_name, price, &origin,
+        account_id, email, plan_id, plan_slug, plan_name, price, interval, &origin,
     );
 
     let resp = reqwest::Client::new()
@@ -791,11 +874,15 @@ pub async fn list_checkout_sessions(
     Ok(Json(json!({ "items": items, "count": items.len() })))
 }
 
-/// The exact `application/x-www-form-urlencoded` body for a monthly PLAN checkout session.
+/// The exact `application/x-www-form-urlencoded` body for a PLAN checkout session on `interval`.
 ///
 /// Split out of the outbound call for one reason: Stripe validates the API key BEFORE it parses the
 /// body, so a malformed body is invisible behind an auth failure. Everything a Stripe session needs
 /// is asserted here, in a unit test, instead of being inferred from a 401.
+///
+/// `interval` is `"month"` or `"year"` — the term the buyer chose. It reaches Stripe BOTH in
+/// `recurring][interval]` (what actually bills the card) and in the product name (what the payer
+/// reads on the checkout page), so the two can never disagree.
 fn plan_session_form(
     account_id: Uuid,
     email: &str,
@@ -803,11 +890,17 @@ fn plan_session_form(
     plan_slug: &str,
     plan_name: &str,
     price: f64,
+    interval: &str,
     origin: &str,
 ) -> String {
-    // A monthly plan, so the session is a subscription rather than a one-off charge. Stripe takes
+    // A recurring plan, so the session is a subscription rather than a one-off charge. Stripe takes
     // the amount in whole cents.
     let cents = (price * 100.0).round() as i64;
+    let term_label = if interval == "year" {
+        "yearly"
+    } else {
+        "monthly"
+    };
     let params: Vec<(&str, String)> = vec![
         ("mode", "subscription".to_string()),
         ("payment_method_types[]", "card".to_string()),
@@ -819,11 +912,11 @@ fn plan_session_form(
         ("line_items[0][price_data][unit_amount]", cents.to_string()),
         (
             "line_items[0][price_data][recurring][interval]",
-            "month".to_string(),
+            interval.to_string(),
         ),
         (
             "line_items[0][price_data][product_data][name]",
-            format!("{plan_name} plan (monthly)"),
+            format!("{plan_name} plan ({term_label})"),
         ),
         (
             "success_url",
@@ -864,13 +957,16 @@ fn plan_session_form(
 ///
 /// Dedupe key: one OPEN/in_progress request per (account, plan_slug) — the same key the ticket door
 /// uses. A customer who presses the button twice, or whose console then fires its own ticket
-/// request, gets `already_open: true` instead of a duplicate in the queue.
+/// request, gets `already_open: true` instead of a duplicate in the queue. The TERM is recorded on
+/// the row that gets written (`amount`/`interval` describe what was actually asked for), so a yearly
+/// ask reads back as the yearly figure rather than as the monthly rate.
 async fn record_upgrade_request(
     db: &sqlx::PgPool,
     account_id: Uuid,
     plan_slug: &str,
     plan_name: &str,
-    plan_price: f64,
+    amount: f64,
+    interval: &str,
 ) -> Option<Value> {
     let open: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM support_tickets \
@@ -903,13 +999,13 @@ async fn record_upgrade_request(
             )
             .bind(id)
             .bind(account_id)
-            .bind(format!("Upgrade request: {plan_name} plan"))
+            .bind(format!("Upgrade request: {plan_name} plan ({interval}ly)"))
             .bind(format!(
-                "This workspace pressed Upgrade on the {plan_name} plan (${plan_price:.0}/month) \
+                "This workspace pressed Upgrade on the {plan_name} plan (${amount:.0}/{interval}) \
                  and no payment provider is configured, so nothing was charged and nothing can be \
                  billed. Filed automatically by the checkout refusal arm, so the ask survives even \
                  if the customer closes the tab. Resolving this request seats the workspace on the \
-                 plan."
+                 plan; quote the {interval}ly price when the invoice is raised."
             ))
             .bind(plan_slug)
             .execute(db)
@@ -988,6 +1084,7 @@ mod plan_session_form_tests {
             "pro",
             "Pro",
             49.0,
+            "month",
             "https://app.incentiveswift.com",
         );
         // The raw body is percent-encoded...
@@ -1041,6 +1138,7 @@ mod plan_session_form_tests {
             "enterprise",
             "Enterprise",
             199.0,
+            "month",
             "https://o",
         );
         assert_eq!(
@@ -1054,12 +1152,45 @@ mod plan_session_form_tests {
             "pro",
             "Pro",
             9.005,
+            "month",
             "https://o",
         );
         assert_eq!(
             value(&decoded(&body), "line_items[0][price_data][unit_amount]"),
             "901"
         );
+    }
+
+    #[test]
+    fn a_yearly_ask_bills_twelve_months_and_says_so_on_the_page() {
+        // The defect this guards (2026-10-24): every form carried `interval=month`, so the yearly
+        // price the catalogue advertises could not be bought at all. The term must reach BOTH the
+        // billing interval and the product name the payer reads.
+        let body = plan_session_form(
+            Uuid::nil(),
+            "x@example.invalid",
+            Uuid::nil(),
+            "pro",
+            "Pro",
+            399.0,
+            "year",
+            "https://o",
+        );
+        let pairs = decoded(&body);
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][recurring][interval]"),
+            "year"
+        );
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][unit_amount]"),
+            "39900",
+            "a yearly session charges the yearly amount, not the monthly rate"
+        );
+        assert_eq!(
+            value(&pairs, "line_items[0][price_data][product_data][name]"),
+            "Pro plan (yearly)"
+        );
+        assert_eq!(value(&pairs, "mode"), "subscription");
     }
 
     #[test]

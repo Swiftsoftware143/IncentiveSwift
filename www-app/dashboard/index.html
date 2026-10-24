@@ -190,6 +190,11 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <p style="color:#64748b;font-size:14px;margin:0 0 14px">What this workspace is on, what each plan includes, and the way up. Prices are the ones your plan records carry.</p>
     <div id="pb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
     <div id="pb-current" style="font-size:13.5px;color:#334155;margin:0 0 14px">Loading your plan&hellip;</div>
+    <!-- BILLING TERM (2026-10-24). Checkout can sell either term; until this switch existed this
+         screen only ever quoted the monthly rate, so the yearly price these plan records carry could
+         not be bought from the one place a customer buys. The saving on each card is computed from
+         the two figures in the same row, never written here. -->
+    <div id="pb-term" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px"></div>
     <div id="pb-plans" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px"></div>
     <!-- The customer's OWN plan requests and the team's answer (2026-10-19).
          Until now this page could only SEND a request (POST /api/v1/support-tickets) and never read it
@@ -210,7 +215,9 @@ var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(STORE_KEY)
 var user = null;
 // Plan-ladder state. Declared HERE, above the boot block: `paintAccount()` (called at boot) writes
 // `PB.plan`, so a declaration further down the file would throw and abort the boot.
-var PB = { plans: null, plan: null, busy: false };
+// `term` is the billing term the customer is looking at: 'month' (the default, and the only term this
+// app could sell before 2026-10-24) or 'year'.
+var PB = { plans: null, plan: null, busy: false, term: 'month' };
 // Declared HERE for the same reason as PB: `paintAccount()` (called at boot) repaints the usage
 // card, so a `var USAGE` further down the file would throw `Cannot read properties of undefined`
 // and abort the boot before the dashboard painted (measured in Chromium, 2026-10-16).
@@ -944,6 +951,35 @@ function pbLoad() {
     })
     .catch(function () { pbMsg('Could not load the plan list right now.', 'e'); });
 }
+// ── BILLING TERM (2026-10-24) ────────────────────────────────────────────────────────────────
+// `POST /api/v1/checkout/create` takes an optional `billing_cycle` ("month" default, "year" for the
+// yearly price each plan record carries), and `GET /api/v1/plans` now publishes `annual_price` from
+// the same precedence checkout charges. This switch is the only place a customer chooses it: before
+// it existed the screen quoted the monthly rate only, so the yearly offer in the plan records could
+// not be bought from the surface where a customer actually buys.
+function pbTermBtn(v, label) {
+  var on = (PB.term === v);
+  return '<button type="button" class="btn btn-sm" data-pb-term="' + v + '" style="' +
+    (on ? 'font-weight:600;' : 'background:#fff;color:#475569;border:1px solid #e2e8f0;') + '">' +
+    label + '</button>';
+}
+function pbSetTerm(v) {
+  if (v === PB.term) return;
+  PB.term = v;
+  pbRender();
+}
+function pbTermBar() {
+  var el = document.getElementById('pb-term');
+  if (!el) return;
+  el.innerHTML = '<span style="font-size:13px;color:#64748b">Billing term:</span>'
+    + pbTermBtn('month', 'Monthly')
+    + pbTermBtn('year', 'Yearly');
+  var bs = el.querySelectorAll('[data-pb-term]');
+  for (var i = 0; i < bs.length; i++) {
+    bs[i].addEventListener('click', function () { pbSetTerm(this.getAttribute('data-pb-term')); });
+  }
+}
+
 function pbRender() {
   var cur = PB.plan || {};
   var curSlug = cur.slug || '';
@@ -953,6 +989,7 @@ function pbRender() {
     curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || '\u2014') + '</span>'
       + (pbPlanLimits(cur) ? ' <span style="color:#64748b">\u2014 ' + esc(pbPlanLimits(cur)) + '</span>' : '');
   }
+  pbTermBar();
   var wrap = document.getElementById('pb-plans');
   if (!wrap) return;
   var plans = PB.plans || [];
@@ -966,6 +1003,10 @@ function pbRender() {
     var p = plans[i];
     var isCur = (p.slug || '') === curSlug;
     var price = Number(p.monthly_price || 0);
+    var annual = Number(p.annual_price === null || p.annual_price === undefined ? 0 : p.annual_price);
+    // The yearly card is shown only for a tier that HAS a yearly price. A $0 tier has no term at all.
+    var yearlyHere = (PB.term === 'year' && price > 0 && annual > 0);
+    var amount = yearlyHere ? annual : price;
     var feats = (p.features && p.features.length) ? p.features : [];
     var fh = '';
     for (var j = 0; j < feats.length && j < 6; j++) { fh += '<li style="padding:2px 0">' + esc(pbFeatureLabel(feats[j])) + '</li>'; }
@@ -978,12 +1019,41 @@ function pbRender() {
     var dir = (curPrice === null || price === curPrice) ? 'switch' : (price > curPrice ? 'up' : 'down');
     var verb = (dir === 'up') ? 'Upgrade to ' : (dir === 'down' ? 'Downgrade to ' : 'Switch to ');
     var btnStyle = (dir === 'up') ? '' : 'background:#64748b';
-    var action = isCur
-      ? '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>'
-      : '<button class="btn btn-sm" style="margin-top:10px;' + btnStyle + '" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + price + '" data-pb-id="' + esc(p.id || '') + '" data-pb-name="' + esc(p.name || p.slug) + '" data-pb-dir="' + dir + '">' + verb + esc(p.name || p.slug) + '</button>';
+    var action;
+    if (isCur) {
+      action = '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>';
+    } else if (price <= 0) {
+      // A $0 plan is not purchasable: checkout refuses it by name ("That plan costs nothing").
+      action = '<div data-pb-free-plan="' + esc(p.slug || '') + '" style="margin-top:10px;font-size:12.5px;color:#475569;font-weight:600">Free plan \u2014 nothing to pay</div>';
+    } else if (PB.term === 'year' && annual <= 0) {
+      // A yearly ask on a tier with no yearly price is refused by the server BY NAME; the button is
+      // never offered, so nobody can be sold a term this tier does not have.
+      action = '<div data-pb-no-yearly="' + esc(p.slug || '') + '" style="margin-top:10px;font-size:12.5px;color:#475569">Yearly price not set for this tier \u2014 choose <strong>Monthly</strong>.</div>';
+    } else {
+      action = '<button class="btn btn-sm" style="margin-top:10px;' + btnStyle + '" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + amount + '" data-pb-term="' + (yearlyHere ? 'year' : 'month') + '" data-pb-id="' + esc(p.id || '') + '" data-pb-name="' + esc(p.name || p.slug) + '" data-pb-dir="' + dir + '">' + verb + esc(p.name || p.slug) + '</button>';
+    }
+    // The price block: the yearly figure carries its own per-month equivalent and the saving, both
+    // computed from the two numbers in this row so a price change can never leave a stale claim.
+    var priceHtml;
+    if (yearlyHere) {
+      var freeMonths = Math.round(((price * 12) - annual) / price);
+      var saving = (freeMonths >= 1)
+        ? (freeMonths + ' month' + (freeMonths === 1 ? '' : 's') + ' free')
+        : (pbPrice((price * 12) - annual) + ' off a year');
+      priceHtml = '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:6px 0">' + pbPrice(annual)
+        + '<span style="font-size:12px;font-weight:400;color:#64748b">/year</span></div>'
+        + '<div style="margin:-2px 0 8px;font-size:12px;color:#16a34a;font-weight:600">'
+        + pbPrice(Math.round((annual / 12) * 100) / 100) + '/mo \u2014 ' + esc(saving) + '</div>';
+    } else {
+      priceHtml = '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:6px 0">' + pbPrice(price)
+        + '<span style="font-size:12px;font-weight:400;color:#64748b">/mo</span></div>'
+        + ((PB.term === 'year' && price > 0)
+            ? '<div style="margin:-2px 0 8px;font-size:12px;color:#64748b">Monthly only \u2014 this tier has no yearly price</div>'
+            : '');
+    }
     h += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;background:#fff">'
       + '<div style="font-weight:600;color:#1e293b">' + esc(p.name || p.slug) + '</div>'
-      + '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:6px 0">' + pbPrice(price) + '<span style="font-size:12px;font-weight:400;color:#64748b">/month</span></div>'
+      + priceHtml
       + '<ul style="list-style:none;padding:0;margin:0;font-size:13px;color:#475569">' + fh + '</ul>'
       + action + '</div>';
   }
@@ -994,7 +1064,7 @@ function pbRender() {
       var dir = this.getAttribute('data-pb-dir');
       var name = this.getAttribute('data-pb-name') || this.getAttribute('data-pb-upgrade');
       if (dir === 'down' && !window.confirm('Move this workspace down to the ' + name + ' plan? You keep access until the change is made, then the lower plan applies.')) return;
-      pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), name);
+      pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), name, this.getAttribute('data-pb-term'));
     });
   }
 }
@@ -1014,19 +1084,22 @@ function pbAsk(slug, price, detail) {
     + ' <button class="btn btn-sm" id="pb-ask-btn" style="margin-left:6px">Request the '
     + esc(name) + ' plan</button>';
   var btn = document.getElementById('pb-ask-btn');
-  if (btn) btn.addEventListener('click', function () { pbRequest(slug, price, btn); });
+  if (btn) btn.addEventListener('click', function () { pbRequest(slug, price, btn, null, PB.term); });
 }
-function pbRequest(slug, price, btn, onFail) {
+function pbRequest(slug, price, btn, onFail, term) {
   if (PB.busy) return;
   PB.busy = true;
   var name = pbPlanName(slug);
+  // The term travels with the ask: a request for a YEARLY plan must read as one in the operator's
+  // queue, or the invoice gets raised at the monthly rate. `term` defaults to the switch's own state.
+  var t = (term === 'year') ? 'year' : 'month';
   if (btn) { btn.disabled = true; btn.textContent = 'Sending\u2026'; }
   fetch(window.location.origin + '/api/v1/support-tickets', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, pbAuth()),
     body: JSON.stringify({
-      subject: pbMoveWord(slug) + ' request: ' + name + ' plan',
-      description: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/month) from'
+      subject: pbMoveWord(slug) + ' request: ' + name + ' plan' + (t === 'year' ? ' (yearly)' : ''),
+      description: 'This workspace asked to move to the ' + name + ' plan ($' + price + '/' + t + ') from'
         + ' the dashboard. Self-serve checkout is not open yet, so the switch has to be made by the team.',
       priority: 'normal',
       category: 'billing',
@@ -1084,8 +1157,15 @@ function pbMoveWord(slug) {
   if (curP === null || wantP === null || wantP === curP) return 'Plan change';
   return wantP > curP ? 'Upgrade' : 'Downgrade';
 }
-function pbUpgrade(slug, price, planId) {
+function pbUpgrade(slug, price, planId, name, term) {
   if (PB.busy) return;
+  // The amount and the term come from the card the customer is looking at (both read from the plan
+  // record), so the confirmation can never disagree with the price on screen. `term` is what the
+  // server is asked to sell: "month" or "year".
+  var t = (term === 'year') ? 'year' : 'month';
+  var planName = name || pbPlanName(slug);
+  var shown = '$' + (Math.round(Number(price) * 100) / 100) + '/' + t;
+  if (!window.confirm('Move this workspace to ' + planName + ' \u2014 ' + shown + '?\n\nNothing is charged until the payment provider confirms the payment.')) return;
   PB.busy = true;
   pbMsg('Starting checkout\u2026', 'i');
   fetch(window.location.origin + '/api/v1/checkout/create', {
@@ -1094,8 +1174,11 @@ function pbUpgrade(slug, price, planId) {
     body: JSON.stringify({
       price_amount: price,
       price_currency: 'usd',
-      description: (slug || 'plan') + ' plan (monthly)',
+      description: (slug || 'plan') + ' plan (' + (t === 'year' ? 'yearly' : 'monthly') + ')',
       plan_id: planId || null,
+      // WHICH TERM (2026-10-24). Absent used to be the ONLY option the server had: a monthly
+      // session. The field is optional there, so this is additive.
+      billing_cycle: t,
       success_url: window.location.origin + '/dashboard/?checkout=success',
       cancel_url: window.location.origin + '/dashboard/?checkout=cancelled'
     })
@@ -1125,7 +1208,7 @@ function pbUpgrade(slug, price, planId) {
         // answered 503 and only PAINTED a second "Request the plan" button, so a single click filed
         // NOTHING — the customer had to press twice before a request existed, while the sibling apps
         // file on the first press. The button is kept for the retry case, when filing itself fails.
-        pbRequest(slug, price, null, function () { pbAsk(slug, price, detail); });
+        pbRequest(slug, price, null, function () { pbAsk(slug, price, detail); }, t);
         return;
       }
       pbMsg('Upgrades are not open on this workspace yet.' + detail, 'e');
@@ -1137,7 +1220,7 @@ function pbUpgrade(slug, price, planId) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes and lets you ask to move to another plan (an upgrade or a downgrade) when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>

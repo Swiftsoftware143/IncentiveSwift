@@ -185,7 +185,15 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
            -- `plan_tiers` -> `tier_features` -> `features`, the same tables every runtime gate reads
            -- (features.rs), joined here by slug. The legacy array stays as the fallback for a `plans`
            -- row whose slug has no tier.
+           -- THE YEARLY FIGURE (2026-10-24). The tenant dashboard now offers a Monthly/Yearly switch
+           -- and checkout can sell either term, so the catalogue has to publish both amounts. Same
+           -- precedence checkout charges: `plans.price_yearly` when an operator filled it in, else
+           -- `plan_tiers.price_annual` — the column the operator's Tier editor actually writes
+           -- (`plans.price_yearly` is 0 on every row live; the tiers table carries 399 / 1699). A
+           -- tier with no yearly price answers 0 and the screen says "monthly only" rather than
+           -- inventing a figure.
            SELECT p.id, p.name, p.slug, ROUND(p.price)::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description,
+                  COALESCE(NULLIF(p.price_yearly, 0), NULLIF(pt.price_annual, 0), 0)::float8 as annual_price,
                   COALESCE((
                       SELECT jsonb_agg(CASE WHEN tf.limit_value IS NULL THEN f.label
                                             WHEN tf.limit_value < 0 THEN f.label
@@ -198,7 +206,7 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
                       WHERE lower(pt.slug) = lower(p.slug)
                   ), p.features) as features,
                   NULL::text as how_it_works
-           FROM plans p WHERE p.is_active = true
+           FROM plans p LEFT JOIN plan_tiers pt ON lower(pt.slug) = lower(p.slug) WHERE p.is_active = true
            ORDER BY p.sort_order ASC NULLS LAST, p.price ASC NULLS LAST, p.name ASC"#,
     ).fetch_all(&state.db).await?;
     let mut plans: Vec<Value> = Vec::new();
@@ -209,6 +217,9 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
             "name": row.get::<String,_>("name"),
             "slug": row.get::<String,_>("slug"),
             "monthly_price": row.get::<i32,_>("monthly_price"),
+            // What a yearly subscription costs, from the same precedence checkout charges. 0 means
+            // "this tier has no yearly price", and the dashboard says so instead of guessing.
+            "annual_price": row.get::<f64,_>("annual_price"),
             "monthly_zc_pool": row.get::<i32,_>("monthly_zc_pool"),
             "description": row.get::<Option<String>,_>("description"),
             "features": row.get::<Option<serde_json::Value>,_>("features"),
