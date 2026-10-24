@@ -3207,7 +3207,7 @@ const ApiKeysView = () => {
 // /api/v1/settings/email/test never falls back to the platform mailer) — hence the unsaved-changes
 // note beside the button instead of a silent surprise.
 const SettingsView = () => {
-  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false, brand: {}, brandMsg: null, brandBusy: false });
+  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false, brand: {}, brandMsg: null, brandBusy: false, previewBusy: false, previewMsg: null });
   const MAIL_KEYS = ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_email', 'smtp_from_name'];
   const asText = (v) => (v === null || v === undefined) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
   const load = async () => {
@@ -3314,6 +3314,17 @@ const SettingsView = () => {
     if (img) { img.style.display = logo ? 'inline-block' : 'none'; if (logo) img.setAttribute('src', logo); }
     if (rule) rule.style.borderTop = '3px solid ' + effColor(st.brand && st.brand.brand_color);
   };
+  // The operator's own inbox proof. The backend mails a sample of THEIR branded mail to their own
+  // address (no recipient field, so no relay) and answers {sent, detail}; a reserved test address is
+  // reported as NOT sent rather than a false success.
+  const brandPreview = async () => {
+    st.previewBusy = true; st.previewMsg = null; renderApp();
+    try {
+      const r = await API.post('/settings/branding/preview');
+      st.previewMsg = { ok: !!(r && r.sent), text: (r && r.detail) || ((r && r.sent) ? ('Preview sent to ' + r.to) : 'No preview was sent.') };
+    } catch(e) { st.previewMsg = { ok: false, text: e.message }; }
+    st.previewBusy = false; renderApp();
+  };
   const brandSave = async () => {
     const name = asText(st.brand && st.brand.brand_name).trim();
     const color = asText(st.brand && st.brand.brand_color).trim();
@@ -3419,6 +3430,11 @@ const SettingsView = () => {
           </div>
           <div style="font:14px/1.5 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">Hi Alex — this is a sample of the message body. Only the header above comes from your branding.</div>
         </div>
+        <div class="mt-3 flex items-center gap-2 flex-wrap">
+          <button class="btn btn-sm" id="brand-preview-btn" disabled=${st.previewBusy} onClick=${brandPreview}>${st.previewBusy ? 'Sending…' : 'Send me a preview email'}</button>
+          <span class="text-xs text-gray-400">Mails this sample, with your logo and colour, to your own address.</span>
+        </div>
+        ${st.previewMsg ? html`<div class=${'text-sm mt-2 ' + (st.previewMsg.ok ? 'text-green-800' : 'text-red-700')}>${st.previewMsg.text}</div>` : null}
         <div id="bp-blank" class="text-xs text-gray-400 mt-2" style=${(st.brand && (asText(st.brand.brand_name).trim() || asText(st.brand.logo_url).trim())) ? 'display:none' : 'display:block'}>Nothing is set yet, so mail keeps the IncentiveSwift header.</div>
       </div>
     </div>
