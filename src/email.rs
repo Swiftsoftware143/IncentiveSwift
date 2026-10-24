@@ -1,36 +1,16 @@
 use serde_json::json;
 
+use crate::branding::{bind_branding, effective_branding, with_branding_header};
+
 /// The product's own identity — what the `{{app_name}}` merge field carries.
 pub(crate) const APP_NAME: &str = "IncentiveSwift";
 /// Public app origin — what the `{{login_url}}` merge field carries, and the base of the
 /// public campaign link the lifecycle sender binds as `{{share_link}}`/`{{referral_link}}`.
 pub(crate) const APP_URL: &str = "https://app.incentiveswift.com";
 
-/// Where this app's OWN wordmark is served (2026-10-24).
-///
-/// Used for the header of every message sent for an account that has configured no branding of
-/// its own. A mail client fetches it over the network with NO session, so it is an absolute URL on
-/// a host that answers publicly — and it is a PNG, because Gmail and Outlook do not render the SVG
-/// the pages use. 400x80 with a transparent background; the header block centres it, and `alt`
-/// carries the name so a client that blocks images still says whose mail this is.
-const APP_LOGO_PATH: &str = "/logo.png";
-
-/// The identity every message falls back to when its account has configured none: this app's own
-/// name and wordmark, with the colour rule in the fleet's default accent.
-///
-/// Before this the header block only appeared once an account had uploaded a logo of its own, so
-/// the credentials mail a BRAND-NEW customer receives — the first thing this product ever shows
-/// them — arrived with no wordmark at all, while the Email branding card's own preview said
-/// "Nothing is branded yet, so it carries the IncentiveSwift header" and then showed no header.
-/// An account's own branding still wins field by field.
-fn app_default_branding() -> crate::branding::Branding {
-    crate::branding::Branding {
-        brand_name: APP_NAME.to_string(),
-        // Empty = [`crate::branding::DEFAULT_BRAND_COLOR`], re-validated at render time.
-        brand_color: String::new(),
-        logo_url: APP_LOGO_PATH.to_string(),
-    }
-}
+// The app's own wordmark and the identity every message falls back to when its account has
+// configured none live in `crate::branding` (2026-10-24, kanban t_bf8a2c58): the QUEUED/lifecycle
+// funnel paints the same header through the same helpers, so the two cannot drift.
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
 ///
@@ -53,84 +33,27 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
     result
 }
 
-/// Bind the branding merge fields into a render's variable map (kanban t_feab8aff).
+/// Bind the app-wide merge fields the template surface advertises to EVERY type.
 ///
-/// They are PER-ACCOUNT, so they cannot live in a `&'static` default map: the account's own values
-/// when it has branding, the app's identity otherwise — so an admin-authored `{{brand_name}}` never
-/// reaches a recipient as literal text. Every other key of the map is left alone.
-///
-/// `branding` is the STORED document (2026-10-24), never the substituted effective one: an account
-/// with a name of its own but no logo must keep its own name here, and `logo_is_own` must answer
-/// "no" for a header this app supplied — the preview mail reads that flag to say truthfully whose
-/// logo the reader is looking at.
-fn bind_branding(vars: &mut serde_json::Value, branding: Option<&crate::branding::Branding>) {
+/// The console's merge-field list offers `{{app_name}}`, `{{login_url}}` and `{{app_url}}` for every
+/// template, but until 2026-10-13 only the SUBJECT default and the inline fallback ever saw them —
+/// a DB-row template that used them mailed the braces verbatim (measured live: the `password_reset`
+/// row rendered "Open {{login_url}} and click …" to a customer). Bound at the single funnel every
+/// transactional type passes through (kanban t_2349e6ce), and now also by the QUEUED/lifecycle
+/// funnel through the same function (kanban t_bf8a2c58) — a queued template that prints them must
+/// never mail braces either. A caller that already set a key keeps its own value.
+pub(crate) fn bind_app_fields(vars: &mut serde_json::Value) {
     if !vars.is_object() {
         *vars = json!({});
     }
-    let (name, logo) = match branding {
-        Some(b) => (
-            b.brand_name.clone(),
-            b.resolve_logo_url(APP_URL).unwrap_or_default(),
-        ),
-        // No branding at all: the merge fields carry the app's own identity, so a template that
-        // prints `{{logo_url}}` still prints a wordmark that resolves rather than an empty string.
-        None => (
-            APP_NAME.to_string(),
-            app_default_branding()
-                .resolve_logo_url(APP_URL)
-                .unwrap_or_default(),
-        ),
-    };
-    // Whether the logo above is the account's OWN upload or this app's wordmark standing in for
-    // one. `logo_url` is always non-empty now, so copy that wants to describe the header truthfully
-    // reads this flag instead of testing the URL.
-    let logo_is_own = branding.and_then(|b| b.resolve_logo_url(APP_URL)).is_some();
-    // Whether the account configured anything of its own at all. An account can have a display
-    // name and NO logo (its header is its name with no image), a third state the preview copy has
-    // to describe correctly — hence a second flag rather than inferring one from the other.
-    let brand_is_own = branding.is_some();
     if let Some(obj) = vars.as_object_mut() {
-        obj.insert("brand_name".to_string(), json!(name));
-        obj.insert("logo_url".to_string(), json!(logo));
-        obj.insert(
-            "logo_is_own".to_string(),
-            json!(if logo_is_own { "yes" } else { "no" }),
-        );
-        obj.insert(
-            "brand_is_own".to_string(),
-            json!(if brand_is_own { "yes" } else { "no" }),
-        );
+        obj.entry("app_name".to_string())
+            .or_insert_with(|| json!(APP_NAME));
+        obj.entry("login_url".to_string())
+            .or_insert_with(|| json!(APP_URL));
+        obj.entry("app_url".to_string())
+            .or_insert_with(|| json!(APP_URL));
     }
-}
-
-/// Put the branding at the TOP of a rendered message (kanban t_feab8aff).
-///
-/// The HTML part gains the header block (logo + name + colour rule); the text part gains the brand
-/// name as a one-line header (a text part cannot carry an image). When the message carries no HTML
-/// part — every inline fallback returns text only — one is built from the ESCAPED text so the logo
-/// still shows. `None` is a no-op, kept because the tests pin that shape; every SEND passes
-/// `Some(&branding)`, and the send funnel substitutes this app's own identity for an account that
-/// has configured none (2026-10-24), so a brand-new customer's first mail carries a wordmark too.
-fn with_branding_header(
-    branding: Option<&crate::branding::Branding>,
-    text: String,
-    html: String,
-) -> (String, String) {
-    let Some(b) = branding else {
-        return (text, html);
-    };
-    let logo = b.resolve_logo_url(APP_URL);
-    let header = b.header_html(logo.as_deref());
-    let html = if html.trim().is_empty() {
-        format!(
-            "{header}<div style=\"white-space:pre-wrap;font:14px/1.5 \
-             -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{}</div>",
-            crate::branding::escape_html(&text)
-        )
-    } else {
-        format!("{header}{html}")
-    };
-    (format!("{}{}", b.text_header(), text), html)
 }
 
 /// Send a templated email using database-stored templates.
@@ -168,26 +91,12 @@ pub async fn send_template_email(
         Some(id) => crate::branding::load(pool, id).await,
         None => None,
     };
-    let branding = stored_branding.clone().unwrap_or_else(app_default_branding);
+    let branding = effective_branding(stored_branding.clone());
     let mut vars = vars.clone();
-    // The template surface ADVERTISES `{{app_name}}` and `{{login_url}}` (the console's merge-field
-    // list), but until now only the SUBJECT default and the inline fallback ever saw them — a
-    // DB-ROW template that used them mailed the braces verbatim. Measured 2026-10-13 (cron
-    // `default`): the `password_reset` row rendered "Open {{login_url}} and click …" to a live
-    // customer. Bind them here, at the single funnel every transactional type passes through, the
-    // same fix FunnelSwift carries (kanban t_2349e6ce). A caller that already set either key keeps
-    // its own value.
-    if !vars.is_object() {
-        vars = json!({});
-    }
-    if let Some(obj) = vars.as_object_mut() {
-        obj.entry("app_name".to_string())
-            .or_insert_with(|| json!(APP_NAME));
-        obj.entry("login_url".to_string())
-            .or_insert_with(|| json!(APP_URL));
-        obj.entry("app_url".to_string())
-            .or_insert_with(|| json!(APP_URL));
-    }
+    // The app-wide merge fields (`{{app_name}}`, `{{login_url}}`, `{{app_url}}`) are bound by the
+    // ONE helper the queued funnel calls too (kanban t_bf8a2c58). A caller that already set a key
+    // keeps its own value.
+    bind_app_fields(&mut vars);
     bind_branding(&mut vars, stored_branding.as_ref());
     let vars = &vars;
 
@@ -695,6 +604,7 @@ pub(crate) async fn send_email_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::branding::app_default_branding;
 
     /// An account that has configured NOTHING still sends mail that says whose it is (2026-10-24).
     ///

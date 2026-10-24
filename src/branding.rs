@@ -161,6 +161,129 @@ impl Branding {
     }
 }
 
+/// Where this app's OWN wordmark is served (2026-10-24, lifted out of `email` so BOTH send funnels
+/// can paint it — kanban t_bf8a2c58).
+///
+/// Used for the header of every message sent for an account that has configured no branding of its
+/// own. A mail client fetches it over the network with NO session, so it is an absolute URL on a
+/// host that answers publicly — and it is a PNG, because Gmail and Outlook do not render the SVG
+/// the pages use. 400x80 with a transparent background; the header block centres it, and `alt`
+/// carries the name so a client that blocks images still says whose mail this is.
+pub const APP_LOGO_PATH: &str = "/logo.png";
+
+/// The identity every message falls back to when its account has configured none: this app's own
+/// name and wordmark, with the colour rule in the fleet's default accent.
+///
+/// Before this the header block only appeared once an account had uploaded a logo of its own, so
+/// the credentials mail a BRAND-NEW customer receives — the first thing this product ever shows
+/// them — arrived with no wordmark at all, while the Email branding card's own preview said
+/// "Nothing is branded yet, so it carries the IncentiveSwift header" and then showed no header.
+/// An account's own branding still wins field by field.
+pub fn app_default_branding() -> Branding {
+    Branding {
+        brand_name: crate::email::APP_NAME.to_string(),
+        // Empty = [`DEFAULT_BRAND_COLOR`], re-validated at render time.
+        brand_color: String::new(),
+        logo_url: APP_LOGO_PATH.to_string(),
+    }
+}
+
+/// What a SEND paints with: the account's STORED document when it has one, this app's own identity
+/// when it has not. Never `None` — an account with no branding gets this app's wordmark, not a
+/// header-less message.
+///
+/// ONE function so the two funnels cannot drift (kanban t_bf8a2c58): the transactional funnel
+/// (`crate::email::send_template_email`) and the queued/lifecycle one
+/// (`crate::delivery::sender::send_template_by_type` — `pending_emails`, entry and winner mail)
+/// both resolve their header here.
+pub fn effective_branding(stored: Option<Branding>) -> Branding {
+    stored.unwrap_or_else(app_default_branding)
+}
+
+/// Put the branding at the TOP of a rendered message (kanban t_feab8aff).
+///
+/// The HTML part gains the header block (logo + name + colour rule); the text part gains the brand
+/// name as a one-line header (a text part cannot carry an image). When the message carries no HTML
+/// part — every inline fallback returns text only — one is built from the ESCAPED text so the logo
+/// still shows. `None` is a no-op, kept because the tests pin that shape; every SEND passes
+/// `Some(&branding)`, and [`effective_branding`] substitutes this app's own identity for an account
+/// that has configured none (2026-10-24), so a brand-new customer's first mail carries a wordmark
+/// too.
+pub fn with_branding_header(
+    branding: Option<&Branding>,
+    text: String,
+    html: String,
+) -> (String, String) {
+    let Some(b) = branding else {
+        return (text, html);
+    };
+    let logo = b.resolve_logo_url(crate::email::APP_URL);
+    let header = b.header_html(logo.as_deref());
+    let html = if html.trim().is_empty() {
+        format!(
+            "{header}<div style=\"white-space:pre-wrap;font:14px/1.5 \
+             -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{}</div>",
+            escape_html(&text)
+        )
+    } else {
+        format!("{header}{html}")
+    };
+    (format!("{}{}", b.text_header(), text), html)
+}
+
+/// Bind the branding merge fields into a render's variable map (kanban t_feab8aff).
+///
+/// They are PER-ACCOUNT, so they cannot live in a `&'static` default map: the account's own values
+/// when it has branding, the app's identity otherwise — so an admin-authored `{{brand_name}}` never
+/// reaches a recipient as literal text. Every other key of the map is left alone.
+///
+/// `branding` is the STORED document (2026-10-24), never the substituted effective one: an account
+/// with a name of its own but no logo must keep its own name here, and `logo_is_own` must answer
+/// "no" for a header this app supplied — the preview mail reads that flag to say truthfully whose
+/// logo the reader is looking at.
+pub fn bind_branding(vars: &mut Value, branding: Option<&Branding>) {
+    if !vars.is_object() {
+        *vars = json!({});
+    }
+    let (name, logo) = match branding {
+        Some(b) => (
+            b.brand_name.clone(),
+            b.resolve_logo_url(crate::email::APP_URL)
+                .unwrap_or_default(),
+        ),
+        // No branding at all: the merge fields carry the app's own identity, so a template that
+        // prints `{{logo_url}}` still prints a wordmark that resolves rather than an empty string.
+        None => (
+            crate::email::APP_NAME.to_string(),
+            app_default_branding()
+                .resolve_logo_url(crate::email::APP_URL)
+                .unwrap_or_default(),
+        ),
+    };
+    // Whether the logo above is the account's OWN upload or this app's wordmark standing in for
+    // one. `logo_url` is always non-empty now, so copy that wants to describe the header truthfully
+    // reads this flag instead of testing the URL.
+    let logo_is_own = branding
+        .and_then(|b| b.resolve_logo_url(crate::email::APP_URL))
+        .is_some();
+    // Whether the account configured anything of its own at all. An account can have a display
+    // name and NO logo (its header is its name with no image), a third state the preview copy has
+    // to describe correctly — hence a second flag rather than inferring one from the other.
+    let brand_is_own = branding.is_some();
+    if let Some(obj) = vars.as_object_mut() {
+        obj.insert("brand_name".to_string(), json!(name));
+        obj.insert("logo_url".to_string(), json!(logo));
+        obj.insert(
+            "logo_is_own".to_string(),
+            json!(if logo_is_own { "yes" } else { "no" }),
+        );
+        obj.insert(
+            "brand_is_own".to_string(),
+            json!(if brand_is_own { "yes" } else { "no" }),
+        );
+    }
+}
+
 /// Load this tenant's branding. `None` on no row, an unreadable row, or nothing configured.
 ///
 /// A read failure is NOT fatal to a send: an email that cannot read its branding still goes out with

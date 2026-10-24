@@ -442,6 +442,26 @@ pub struct SelectedTemplate {
 /// Load an email template by type for the given account (account override first,
 /// then global default), render vars, and send via the tenant's SMTP.
 /// Returns Err if no template exists for that type OR no SMTP is configured.
+///
+/// # Branding (kanban t_bf8a2c58)
+///
+/// This is the QUEUED funnel: `email_queue::flush_account_batch` drains `pending_emails` through
+/// it, and the entry/winner lifecycle mail reaches it directly. Until 2026-10-24 it rendered the
+/// template row and handed the bytes straight to [`send_email`] — it never loaded
+/// `crate::branding` and never painted a header — so a lifecycle or campaign message carried NO
+/// logo and NO name for ANY account, not even one that had uploaded its own logo and name, while the
+/// Email branding card promised the opposite ("your logo and name … on every message your customers
+/// receive").
+///
+/// It now applies the SAME rule as the transactional funnel (`crate::email::send_template_email`)
+/// through the SAME helpers in `crate::branding`, so the two cannot drift:
+/// * the merge fields follow the account's STORED document (`logo_is_own`/`brand_is_own` answer
+///   "no" for anything this app supplied);
+/// * the header follows the stored document, or this app's own name and wordmark when the account
+///   has configured none ([`crate::branding::effective_branding`]).
+///
+/// The tenant/transport resolution is untouched: [`send_email`] still prefers the account's own
+/// mail server and falls back to the platform provider. This is the header bytes only.
 pub async fn send_template_by_type(
     pool: &PgPool,
     account_id: Uuid,
@@ -454,6 +474,15 @@ pub async fn send_template_by_type(
         .map_err(|e| format!("DB error loading template: {e}"))?
         .ok_or_else(|| format!("{NO_TEMPLATE_PREFIX} '{template_type}'"))?;
 
+    // The account's stored branding decides the MERGE FIELDS; the header is painted with the stored
+    // document or this app's own identity when there is none.
+    let stored_branding = crate::branding::load(pool, account_id).await;
+    let branding = crate::branding::effective_branding(stored_branding.clone());
+    let mut vars = vars.clone();
+    crate::email::bind_app_fields(&mut vars);
+    crate::branding::bind_branding(&mut vars, stored_branding.as_ref());
+    let vars = &vars;
+
     let subject = row
         .subject
         .unwrap_or_else(|| format!("IncentiveSwift: {}", template_type));
@@ -462,7 +491,86 @@ pub async fn send_template_by_type(
     let subject = render_template(&subject, vars);
     let body = render_template(&body, vars);
 
+    // A queued row carries ONE body column and [`send_email`] puts it in both parts, so the header
+    // is painted onto that body once and both parts of the message inherit it. An empty/body-less
+    // row is turned into an escaped HTML block by the helper, so it can still carry the wordmark.
+    let (_, body) = crate::branding::with_branding_header(Some(&branding), String::new(), body);
+
     send_email(pool, account_id, to, &subject, &body).await
+}
+
+#[cfg(test)]
+mod queued_branding_tests {
+    use super::*;
+
+    /// The composition `send_template_by_type` uses, without a database: bind the app-wide fields,
+    /// bind the branding merge fields from the STORED document, render, paint the header.
+    fn render_queued(stored: Option<crate::branding::Branding>, template: &str) -> (String, Value) {
+        let branding = crate::branding::effective_branding(stored.clone());
+        let mut vars = serde_json::json!({ "first_name": "Ada" });
+        crate::email::bind_app_fields(&mut vars);
+        crate::branding::bind_branding(&mut vars, stored.as_ref());
+        let body = render_template(template, &vars);
+        let (_, body) = crate::branding::with_branding_header(Some(&branding), String::new(), body);
+        (body, vars)
+    }
+
+    /// THE defect this card exists for (kanban t_bf8a2c58): the queued/lifecycle funnel handed the
+    /// rendered template straight to `send_email`, so a lifecycle or campaign message carried NO
+    /// header for ANY account — not even one with a logo of its own. An unbranded account must get
+    /// this app's own wordmark, exactly as the transactional funnel does.
+    #[test]
+    fn a_queued_body_for_an_unbranded_account_opens_with_the_apps_wordmark() {
+        let (body, vars) = render_queued(None, "<p>Hi {{first_name}}</p>");
+        assert!(body.starts_with("<div style=\"text-align:center"), "{body}");
+        assert!(
+            body.contains("src=\"https://app.incentiveswift.com/logo.png\""),
+            "the app wordmark must be absolute: {body}"
+        );
+        assert!(body.contains("alt=\"IncentiveSwift\""));
+        assert!(body.contains("Hi Ada"));
+        // the merge fields follow the STORED document: nothing of the account's own
+        assert_eq!(vars["brand_is_own"], serde_json::json!("no"));
+        assert_eq!(vars["logo_is_own"], serde_json::json!("no"));
+        assert_eq!(vars["app_name"], serde_json::json!("IncentiveSwift"));
+        assert_eq!(
+            vars["login_url"],
+            serde_json::json!("https://app.incentiveswift.com")
+        );
+    }
+
+    /// The other direction: an account that HAS uploaded a logo gets ITS logo, name and colour in
+    /// the queued mail — and the merge fields say the header is its own.
+    #[test]
+    fn a_queued_body_for_a_branded_account_carries_its_own_logo_and_name() {
+        let stored = Some(crate::branding::Branding {
+            brand_name: "Acme Rewards".to_string(),
+            brand_color: "#0ea5e9".to_string(),
+            logo_url: "/api/v1/branding/logo/abc?v=7".to_string(),
+        });
+        let (body, vars) = render_queued(
+            stored,
+            "<p>Hi {{first_name}} — {{brand_name}} / {{logo_is_own}} / {{brand_is_own}}</p>",
+        );
+        assert!(
+            body.contains("https://app.incentiveswift.com/api/v1/branding/logo/abc?v=7"),
+            "{body}"
+        );
+        assert!(body.contains("border-top:3px solid #0ea5e9"));
+        assert!(body.contains("Acme Rewards / yes / yes"));
+        assert!(!body.contains("https://app.incentiveswift.com/logo.png"));
+        assert_eq!(vars["brand_is_own"], serde_json::json!("yes"));
+    }
+
+    /// A queued row whose template printed the app-wide fields must not mail braces
+    /// (kanban t_2349e6ce on the transactional side; the same rule here).
+    #[test]
+    fn a_queued_template_can_print_the_app_wide_merge_fields() {
+        let (body, _) = render_queued(None, "<a href=\"{{login_url}}\">{{app_name}}</a>");
+        assert!(body.contains("href=\"https://app.incentiveswift.com\""));
+        assert!(body.contains(">IncentiveSwift</a>"));
+        assert!(!body.contains("{{"));
+    }
 }
 
 #[cfg(test)]
