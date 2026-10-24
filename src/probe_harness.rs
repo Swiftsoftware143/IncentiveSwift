@@ -86,7 +86,11 @@ pub fn for_signup(headers: &HeaderMap, email: &str) -> Option<String> {
     if let Some(marker) = from_headers(headers) {
         return Some(marker);
     }
-    crate::security::probe_addr::harness_domain(email).map(|domain| format!("auto-{domain}"))
+    // ATTRIBUTION, not suppression: `attribution_domain` also recognises the fleet's
+    // disposable inbox (`maxxspace.com`), whose mail must still be DELIVERED so the
+    // credential-delivery proof can read the generated password back (ported from
+    // ADASwift commit 96a16b2, measured 2026-10-24).
+    crate::security::probe_addr::attribution_domain(email).map(|domain| format!("auto-{domain}"))
 }
 
 #[cfg(test)]

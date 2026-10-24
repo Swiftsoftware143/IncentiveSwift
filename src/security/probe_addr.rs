@@ -38,6 +38,36 @@ pub const FLEET_HARNESS_DOMAINS: &[&str] = &[
     "test",
 ];
 
+/// Domains that make a SIGNUP fleet machinery WITHOUT being mail-suppressed.
+///
+/// `maxxspace.com` is the one domain served by the fleet's own disposable inbox (mail.tm): no
+/// customer can own an address there, so a workspace minted on it is a probe by construction. Its
+/// mail must still be DELIVERED, though — the credential-delivery proof reads the generated password
+/// out of that inbox, so adding it to [`FLEET_HARNESS_DOMAINS`] would delete the only end-to-end
+/// proof that a new customer's password reaches a mailbox. Hence a separate list, consulted by
+/// [`attribution_domain`] and never by the mail layer.
+///
+/// Measured 2026-10-24 on ADASwift: `probe-swsink165312@maxxspace.com` minted the workspace "Sink
+/// Probe swsink165312" with `probe_harness` NULL, so it sat in the operator's Tenants list until the
+/// residue sweep deleted it. Ported from ADASwift commit 96a16b2.
+pub const ATTRIBUTION_ONLY_DOMAINS: &[&str] = &["maxxspace.com"];
+
+/// The domain that makes a SIGNUP a probe: the fleet-harness class of [`harness_domain`] plus the
+/// attribution-only class above. The mail layer must keep using [`harness_domain`], never this.
+pub fn attribution_domain(addr: &str) -> Option<&'static str> {
+    if let Some(domain) = harness_domain(addr) {
+        return Some(domain);
+    }
+    let (_, domain) = addr.rsplit_once('@')?;
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if domain.is_empty() {
+        return None;
+    }
+    ATTRIBUTION_ONLY_DOMAINS.iter().copied().find(|d| {
+        domain == *d || (domain.len() > d.len() + 1 && domain.ends_with(&format!(".{d}")))
+    })
+}
+
 /// The fleet harness domain `addr` belongs to, if any. A subdomain counts
 /// (`probe@mail.swiftsoftware.dev` is still the harness class); a domain that merely CONTAINS the
 /// name does not (`x@notswiftsoftware.dev` is refused — the match is on the label boundary).
@@ -107,5 +137,32 @@ mod tests {
         assert_eq!(harness_domain("no-at-sign"), None);
         assert_eq!(harness_domain(""), None);
         assert_eq!(harness_domain("trailing@"), None);
+    }
+}
+
+/// The funnel's disposable inbox is a SIGNUP tell, never a mail-suppression tell.
+#[cfg(test)]
+mod attribution_only_tests {
+    use super::*;
+
+    #[test]
+    fn the_disposable_inbox_attributes_a_signup_but_does_not_suppress_its_mail() {
+        assert_eq!(
+            attribution_domain("probe-swsink165312@maxxspace.com"),
+            Some("maxxspace.com")
+        );
+        assert_eq!(
+            attribution_domain(" Probe@MAXXSPACE.com. "),
+            Some("maxxspace.com")
+        );
+        assert_eq!(
+            attribution_domain("x@mail.maxxspace.com"),
+            Some("maxxspace.com")
+        );
+        // The mail layer's own predicate must NOT learn this domain.
+        assert_eq!(harness_domain("probe-swsink165312@maxxspace.com"), None);
+        // A real customer is untouched by either arm.
+        assert_eq!(attribution_domain("certifiedtb143@yahoo.com"), None);
+        assert_eq!(attribution_domain("x@notmaxxspace.com"), None);
     }
 }
