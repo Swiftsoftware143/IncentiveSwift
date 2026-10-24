@@ -586,6 +586,11 @@ as the mail would paint it.</p>
 <p>Routes: <code>POST|DELETE /api/v1/settings/branding/logo</code> (authenticated, the caller's own
 account) and the <strong>public</strong> <code>GET /api/v1/branding/logo/:tenant_id</code> &mdash;
 public by design, because a mail client renders <code>&lt;img src&gt;</code> with no credential.
+The card's <strong>Preview</strong> button calls <code>POST /api/v1/settings/branding/preview</code>
+(authenticated, no body): it mails the <em>caller's own</em> address one sample of the branded mail
+through the platform mailer, so an account with no mail server of its own still sees the real header.
+It has no recipient field and cannot be used as a relay, and a caller whose address cannot receive
+mail is told the preview was withheld instead of being shown a false &ldquo;sent&rdquo;.
 Storage: the text lives in <code>tenant_settings</code> key <code>email_branding</code>; the logo bytes
 live in <code>tenant_logos</code> (migration <code>zz_is11_tenant_email_branding.sql</code>), one row
 per account, <code>ON DELETE CASCADE</code>. An account with no branding renders byte-identical mail
