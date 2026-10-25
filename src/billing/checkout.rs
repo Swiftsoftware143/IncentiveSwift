@@ -334,20 +334,42 @@ pub async fn create_checkout_session(
             &state.db, account_id, &plan_slug, &plan_name, amount, interval, None,
         )
         .await;
+        // A buyer must be told their ask was taken only when a row EXISTS (2026-10-25). This arm
+        // used to answer `"request_recorded": true` unconditionally, while `record_upgrade_request`
+        // returns None when its write fails — the same "promise with no write behind it" that
+        // FunnelSwift closed on 2026-10-24. The flag now follows the record and the sentence
+        // follows the flag, so a failed write no longer tells a buyer their ask is with the team.
+        //
+        // The buyer's body also stops carrying the operator's setup note. It used to end with
+        // "(Operator: add Stripe's keys … under Provider Keys / Payment providers …)": this
+        // response is painted into the CUSTOMER's upgrade panel, so that was an instruction
+        // addressed to somebody else on the one screen where a buyer is trying to give us money.
+        // It is logged below, where the operator actually reads it.
+        let request_recorded = plan_request.is_some();
+        let message = if request_recorded {
+            "No charge was made — nothing was sent to a payment provider, so you cannot be billed. \
+             Upgrades are not switched on for this installation yet: your request has been passed \
+             to the team that runs it, who can activate this plan for your workspace."
+        } else {
+            "No charge was made — nothing was sent to a payment provider, so you cannot be billed. \
+             Upgrades are not switched on for this installation yet, and your request could not be \
+             recorded this time. Press Upgrade again in a moment; if it keeps failing, contact \
+             support and name the plan above."
+        };
+        tracing::error!(
+            %account_id,
+            %plan_slug,
+            "checkout/create REFUSED: no active payment provider. OPERATOR: add a provider key on \
+             the operator's own account in the admin console under Provider Keys / Payment \
+             providers; that key then funds every workspace's plan purchase."
+        );
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "payment_provider_not_configured",
-                "message": "No charge was made — nothing was sent to a payment provider, so you \
-                            cannot be billed. Upgrades are not switched on for this installation \
-                            yet: your request has been recorded for the platform team, who can \
-                            activate this plan for your workspace by hand. (Operator: add Stripe's \
-                            keys on the operator's own account in the admin console under Provider \
-                            Keys / Payment providers; that key then funds every workspace's plan \
-                            purchase, and a workspace that brings its own Stripe account is charged \
-                            through its own.)",
+                "message": message,
                 "configured": false,
-                "request_recorded": true,
+                "request_recorded": request_recorded,
                 "plan_request": plan_request,
                 "requested": requested,
             })),
