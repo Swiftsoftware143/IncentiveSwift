@@ -180,6 +180,27 @@ pub async fn list_plans(
     Ok(Json(json!({ "plans": plans })))
 }
 
+/// A plan's `purchase_url` is a hosted payment page the OPERATOR types in, so refuse a typo at
+/// SAVE time instead of at the till.
+///
+/// The till already drops an unusable link (`billing::checkout::is_hosted_payment_url`) — but the
+/// operator only found out when a customer pressed Buy: measured live 2026-10-25,
+/// `POST /api/v1/admin/plans` stored `buy.stripe.com/not-a-url` and answered 201, after which every
+/// press on Upgrade fell through to the refusal arm on a plan the operator believed was sellable.
+/// A blank box stays allowed (a free plan, or one sold another way, carries no link).
+fn require_hosted_payment_url(raw: &str) -> Result<(), AppError> {
+    let u = raw.trim();
+    if u.is_empty() || crate::billing::checkout::is_hosted_payment_url(u) {
+        return Ok(());
+    }
+    Err(AppError::BadRequest(
+        "The payment link must be a full https:// address, for example https://buy.stripe.com/abc123. \
+         It is where a buyer is sent when they pick this plan, so a link without https:// cannot take \
+         a payment. Leave the box empty if this plan is not sold by link."
+            .to_string(),
+    ))
+}
+
 /// POST /api/v1/admin/plans
 pub async fn create_plan(
     State(state): State<AppState>,
@@ -201,6 +222,9 @@ pub async fn create_plan(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    if let Some(url) = purchase_url {
+        require_hosted_payment_url(url)?;
+    }
 
     sqlx::query(
         r#"INSERT INTO plans (id, name, slug, description, price_monthly, price, price_yearly, features, is_active, sort_order, payment_provider, purchase_url)
@@ -536,11 +560,15 @@ pub async fn update_plan(
     // sale-by-link), anything else stores the trimmed value. `billing::checkout` reads it per
     // purchase, so the next Upgrade press after a clear is refused again.
     let purchase_url: Option<String> = match body.purchase_url {
-        Some(supplied) => supplied
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string()),
+        // Only a link the REQUEST supplied is judged: an omitted field keeps whatever is stored, and
+        // re-judging stored bytes would refuse an unrelated save on a plan that predates this guard.
+        Some(supplied) => {
+            let trimmed = supplied.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if let Some(url) = trimmed {
+                require_hosted_payment_url(url)?;
+            }
+            trimmed.map(|s| s.to_string())
+        }
         None => existing.get("purchase_url"),
     };
 
