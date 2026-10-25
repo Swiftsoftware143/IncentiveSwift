@@ -155,6 +155,11 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
     <pre>POST /api/v1/admin/plans/assign   — Assign plan (fields: plan_id, account_id)</pre>
   </div>
   <div class="card">
+    <h3>Clearing Test Workspaces</h3>
+    <p>A workspace a test run minted is not a customer, so the list leaves it out. Tick <strong>show probe workspaces</strong> above the table and those rows come back wearing their <em>probe</em> badge — the address that minted them, or the test harness the signup named. <strong>Select probes (n)</strong> then ticks exactly those rows and <strong>Delete selected</strong> retires them; the tenancy-canary monitors keep their badge but are never ticked, because a monitor would only re-seed what you deleted. Untick the switch and you are back to customers only.</p>
+    <p>Why the switch exists: the list has always hidden harness-minted workspaces, and nothing offered a way to look at them, so the rows the hide covered could not be reviewed or cleared from this screen at all.</p>
+  </div>
+  <div class="card">
     <h3>Impersonating Tenants</h3>
     <p>Admins can impersonate a tenant for troubleshooting. In the console, the <strong>Portfolio Companies</strong> table carries a <strong>🔑 Impersonate</strong> button per row, and the <strong>Support impersonation</strong> section has <strong>Impersonate user</strong> (<code>POST /api/v1/admin/impersonate</code>) and <strong>Stop impersonation</strong> (<code>POST /api/v1/admin/stop-impersonation</code>).</p>
     <div class="callout warn"><strong>Security:</strong> All impersonation actions are logged in the audit trail with admin identity and timestamp.</div>
@@ -163,6 +168,12 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
 
 <section id="plans">
   <h2 class="sec-title"><span class="sec-num">3</span> Plan Management</h2>
+<p><strong>Payment link (optional).</strong> Each plan form in this console carries a
+Payment link box. Paste the checkout address your payment provider gives you for that price
+(a Stripe Payment Link, for example) and a buyer who picks that plan is sent straight to it.
+Leave the box empty when the plan is free, or when you take payment some other way — the
+plan then behaves exactly as it did before. The link is stored with the plan and is never used
+to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
   <div class="card">
     <h3>Two separate surfaces</h3>
     <p>The console keeps the <strong>marketing catalogue</strong> and <strong>entitlements</strong> apart, and so should you:</p>
