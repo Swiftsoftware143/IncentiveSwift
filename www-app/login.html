@@ -51,7 +51,7 @@ var e=document.getElementById("e").value.trim(),p=document.getElementById("p").v
 if(!e||!p){m.className="msg e";m.textContent="Enter email and password";return}
 m.className="msg i";m.textContent="Signing in...";b.disabled=true;
 fetch("/api/v1/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:e,password:p})})
-.then(function(r){if(!r.ok)throw new Error("Invalid credentials");return r.json()})
+.then(function(r){return r.json().catch(function(){return {}}).then(function(x){if(!r.ok)throw new Error((typeof x.error==="string"&&x.error)||(typeof x.message==="string"&&x.message)||"Invalid credentials");return x})})
 .then(function(d){var t=d.token||d.access_token;
 if(!t){m.className="msg e";m.textContent="Login response carried no session token";b.disabled=false;return}
 try{localStorage.setItem("ws_fs_token",t)}catch(ex){}
