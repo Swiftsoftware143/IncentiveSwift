@@ -76,7 +76,15 @@ function slugFromUrl() {
   if (p.get('slug')) return p.get('slug');
   if (p.get('campaign')) return p.get('campaign');
   var parts = window.location.pathname.split('/').filter(Boolean);
-  return parts.length ? decodeURIComponent(parts[parts.length - 1]) : '';
+  var last = parts.length ? decodeURIComponent(parts[parts.length - 1]) : '';
+  /* The page's OWN address is not a campaign. `/long-form-qualifier` and
+     `/long-form-qualifier.html` are the two ways this file itself is reached (the second is what
+     the guide documents, the first is what the sitemap used to advertise), so treating the last
+     path segment as the slug asked the server for a campaign *named after the page* and answered a
+     visitor with "Could not load this campaign: HTTP 404" (measured live 2026-10-24). A caller who
+     really wants a campaign passes ?slug=; the fallback below stays for /anything/<campaign>. */
+  if (/^long-form-qualifier(\.html)?$/i.test(last)) return '';
+  return last;
 }
 
 function renderForm(def) {
@@ -98,7 +106,13 @@ function renderForm(def) {
 function boot() {
   var slug = slugFromUrl();
   if (!slug) {
-    document.getElementById('lf-sub').textContent = 'No campaign slug in the URL (?slug=my-campaign).';
+    // Same graceful shape the sibling public tool page already uses (iqs-play.html: "Survey Not
+    // Found … No qualifying survey slug was provided."), so a visitor who lands here without a
+    // campaign link reads a sentence instead of a raw transport error.
+    document.getElementById('lf-title').textContent = 'Long-Form Qualifier';
+    document.getElementById('lf-sub').textContent =
+      'No campaign selected — open this page with a campaign link (?slug=your-campaign).';
+    document.getElementById('lf-form').innerHTML = '';
     return;
   }
   fetch('/api/v1/play/' + encodeURIComponent(slug), { headers: { Accept: 'application/json' } })
