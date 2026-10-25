@@ -5,7 +5,7 @@ use crate::security::auth::AuthenticatedUser;
 use crate::security::email_addr;
 use crate::state::AppState;
 use argon2::{
-    password_hash::{PasswordHash, PasswordVerifier},
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use axum::{
@@ -409,10 +409,41 @@ fn hash_password(password: &str) -> Result<String, AppError> {
 }
 
 /// POST /api/v1/auth/login
+/// Lazily-generated dummy Argon2 hash, so a sign-in for an address with NO account costs the
+/// same verify as a real one (cron 2026-10-25: measured live at ~1.7 ms for an unknown address
+/// against ~23.0 ms for a known one — a 13x gap that named which addresses are customers).
+fn dummy_password_hash() -> &'static str {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(b"incentiveswift-timing-equalizer", &salt)
+            .map(|h| h.to_string())
+            .unwrap_or_default()
+    })
+}
+
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginInput>,
 ) -> Result<Json<Value>, AppError> {
+    // Failed-sign-in throttle (cron 2026-10-25): before this, twenty-two consecutive wrong
+    // passwords were answered 401 with no limit of any kind. The counter is keyed on the
+    // CLIENT ADDRESS the fronting proxy reports, never on the account: a per-account lockout
+    // would hand an attacker a denial of service against any known customer. See
+    // `crate::login_throttle` (which also explains why nginx's 20 r/s is not enough).
+    let throttle_key = crate::login_throttle::client_identity(&headers);
+    if let Err(wait) = state.login_throttle.check(&throttle_key) {
+        tracing::warn!(
+            "sign-in paused for {}: failed-attempt allowance spent ({}s left)",
+            throttle_key,
+            wait
+        );
+        return Err(AppError::TooManyAttempts {
+            retry_after_secs: wait,
+        });
+    }
     // Look up account by email
     let row = sqlx::query(
         r#"SELECT id, email, password_hash, role
@@ -420,29 +451,40 @@ pub async fn login(
     )
     .bind(email_addr::lookup_key(&body.email))
     .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::Unauthorized("Invalid email or password".to_string()))?;
+    .await?;
+
+    // One closure for every failed-credential answer, so the counter can never be forgotten
+    // on one arm and not another.
+    let failed = |why: &str| {
+        state.login_throttle.record_failure(&throttle_key);
+        AppError::Unauthorized(why.to_string())
+    };
+
+    // ONE Argon2 verify either way: against the stored hash when it is a usable PHC string,
+    // otherwise against the dummy (see `dummy_password_hash`). A stored hash that is missing
+    // or unparsable is NOT a credential — no password can match it — so it answers the same
+    // generic 401 and never a 500 that announces a broken row.
+    let stored_hash: Option<String> = row
+        .as_ref()
+        .and_then(|r| r.get::<Option<String>, _>("password_hash"));
+    let hash_to_check = match stored_hash {
+        Some(hash) if PasswordHash::new(&hash).is_ok() => hash,
+        _ => dummy_password_hash().to_string(),
+    };
+    let valid = verify_password(&body.password, &hash_to_check);
+
+    let row = match (row, valid) {
+        (Some(row), true) => row,
+        _ => return Err(failed("Invalid email or password")),
+    };
+
+    // A correct password clears this address's failures, so a customer who mistyped twice
+    // inside the window is not left counting down.
+    state.login_throttle.clear(&throttle_key);
 
     let account_id: Uuid = row.get("id");
     let email: String = row.get("email");
     let role: String = row.get("role");
-    let password_hash: Option<String> = row.get("password_hash");
-
-    // Verify password
-    match password_hash {
-        Some(ref hash) => {
-            if !verify_password(&body.password, hash) {
-                return Err(AppError::Unauthorized(
-                    "Invalid email or password".to_string(),
-                ));
-            }
-        }
-        None => {
-            return Err(AppError::Unauthorized(
-                "Invalid email or password".to_string(),
-            ));
-        }
-    }
 
     // Generate JWT
     let token = create_jwt(

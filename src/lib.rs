@@ -36,6 +36,7 @@ pub mod handlers;
 pub mod image_store;
 pub mod iqs_validation;
 mod lifecycle_emails;
+mod login_throttle;
 pub mod mechanics;
 // Attribution for a workspace a test harness mints through the public signup
 // (`X-Swift-Harness`, kanban t_4a744754). Declared here as well as in `main.rs` because the

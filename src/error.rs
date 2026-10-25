@@ -37,6 +37,12 @@ pub enum AppError {
     /// the customer-facing message is actionable instead of "Rate limit exceeded".
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
+
+    /// 429 — too many FAILED sign-ins from one client address (`crate::login_throttle`). Its
+    /// own variant so the answer can carry `Retry-After` as well as a sentence naming how long
+    /// to wait; `TooManyRequests` above is the promo-code budget, which has no window to name.
+    #[error("Too many failed sign-ins")]
+    TooManyAttempts { retry_after_secs: u64 },
     #[error("Upgrade required: {0}")]
     UpgradeRequired(String),
 
@@ -102,6 +108,12 @@ pub enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // The paused-sign-in answer carries its retry budget in a header as well as in the
+        // sentence, so a client (and a log reader) can obey the pause without parsing prose.
+        let retry_after_secs = match &self {
+            AppError::TooManyAttempts { retry_after_secs } => Some(*retry_after_secs),
+            _ => None,
+        };
         let (status, message) = match &self {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
@@ -124,6 +136,18 @@ impl IntoResponse for AppError {
                 "Rate limit exceeded".to_string(),
             ),
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
+            AppError::TooManyAttempts { retry_after_secs } => {
+                let minutes = retry_after_secs.div_ceil(60).max(1);
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!(
+                        "Too many failed sign-in attempts from this address. Try again in about \
+                         {minutes} minute{}. If you have forgotten your password, use \
+                         \"Forgot your password?\".",
+                        if minutes == 1 { "" } else { "s" }
+                    ),
+                )
+            }
             AppError::Internal(msg) => {
                 tracing::error!("Internal error: {}", msg);
                 (
@@ -145,7 +169,15 @@ impl IntoResponse for AppError {
             "code": status.as_u16(),
         }));
 
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        if let Some(value) = retry_after_secs
+            .and_then(|secs| axum::http::HeaderValue::from_str(&secs.to_string()).ok())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 

@@ -9,6 +9,8 @@ pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Arc<AppConfig>,
     pub http_client: reqwest::Client,
+    /// Failed-sign-in counter, keyed by client address (`crate::login_throttle`).
+    pub login_throttle: crate::login_throttle::LoginThrottle,
 }
 
 impl AppState {
@@ -48,6 +50,7 @@ impl AppState {
             db: pool,
             config: Arc::clone(config),
             http_client,
+            login_throttle: crate::login_throttle::LoginThrottle::new(),
         })
     }
 }

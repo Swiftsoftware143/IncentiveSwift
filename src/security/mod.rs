@@ -4,6 +4,13 @@
 //! this app's `/api/` locations, keyed on Cloudflare's `CF-Connecting-IP`), because the app has
 //! no visitor IP to key on — nginx sends `X-Real-IP=$remote_addr` (the Cloudflare edge) and
 //! `axum::serve` never populates `ConnectInfo<SocketAddr>`. See kanban t_636d4979.
+//!
+//! ONE exception, corrected 2026-10-25: CREDENTIAL guessing is counted in-process by
+//! [`crate::login_throttle`]. nginx's 20 r/s with `burst=40` is a flood control — a guesser
+//! pacing 5/second stays under it for ever — so failed sign-ins are counted per client
+//! address there. The address comes from `X-Real-IP`, which `nginx.conf`'s `real_ip` block
+//! rewrites from `CF-Connecting-IP`, so it is the VISITOR, not the Cloudflare edge (this
+//! file previously said the edge).
 
 pub mod auth;
 pub mod display_name;

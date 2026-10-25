@@ -17,6 +17,7 @@ mod email;
 mod email_provider;
 mod email_queue;
 mod lifecycle_emails;
+mod login_throttle;
 
 pub mod access;
 /// The ONE mint of a self-serve signup unit (kanban t_3724204f) — see `account_mint`.
