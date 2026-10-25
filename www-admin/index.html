@@ -4508,17 +4508,24 @@ const BulkTenantDelete = () => {
   const [assignMsg, setAssignMsg] = useState(null);
   // Plan lifecycle feedback (2026-10-22).
   const [planMsg, setPlanMsg] = useState(null);
+  // Show the workspaces the API holds back from this list (cron 2026-10-25). `GET /admin/tenants`
+  // hides every row whose `accounts.probe_harness` tag is set — the attribution a test harness writes
+  // at signup — and offers `?include_probe=1` to see them. Until now no caller sent it, so those rows
+  // were unreachable from this screen: the [probe] badge and "Select probes (n)" could only ever
+  // count what the ADDRESS heuristic found on a row the list was willing to show. Measured live
+  // 2026-10-25: the same gap on FunnelSwift hid a harness-minted workspace completely.
+  const [showProbes, setShowProbes] = useState(false);
 
   const load = async () => {
     setErr(null);
     try {
-      const d = await OPSAPI.get('/admin/tenants');
+      const d = await OPSAPI.get('/admin/tenants' + (showProbes ? '?include_probe=1' : ''));
       setRows((d && d.tenants) || []);
     } catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
     try { const p = await OPSAPI.get('/admin/plans'); setPlans((p && p.plans) || []); }
     catch (e) { setPlans([]); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [showProbes]);
 
   const list = rows || [];
   const allSelected = list.length > 0 && sel.length === list.length;
@@ -4626,6 +4633,10 @@ const BulkTenantDelete = () => {
     <div class="flex flex-wrap items-center gap-2 mb-2">
       <span class="text-xs font-semibold text-gray-700">Mass delete (select-all)</span>
       <button class="px-2 py-0.5 rounded border text-xs" disabled=${busy} onClick=${load}>reload</button>
+      <label class="inline-flex items-center gap-1 text-xs text-gray-600" data-tenants="show-probes-label"
+        title="Probe workspaces a test harness minted. Hidden by default because they are not customers; ticking this lists them so Select probes can reach them.">
+        <input type="checkbox" data-tenants="show-probes" checked=${showProbes}
+          onChange=${(e) => { setSel([]); setShowProbes(!!e.target.checked); }} /> show probe workspaces</label>
       <button class="px-2 py-0.5 rounded border text-xs" data-tenants="select-probes"
         disabled=${busy || probeRows.length === 0} onClick=${() => setSel(probeRows.map((r) => r.id))}>
         Select probes (${probeRows.length})</button>
