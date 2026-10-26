@@ -1322,6 +1322,32 @@ pub async fn request_email_change(
         ));
     }
 
+    // NOTHING IS WRITTEN FOR AN ADDRESS THAT CANNOT BE MAILED (parity with FunnelSwift, 2026-10-26).
+    // This handler used to mint the token and write the pending row FIRST and only notice the
+    // reserved/undeliverable class at the response: the retire step below marked the customer's
+    // genuine pending change `used = true`, an unconfirmable 2-hour row was left behind, and the
+    // answer still said "Nothing has been changed". Check the address BEFORE the retire/insert, so
+    // the request the customer already had stays confirmable and no row is created at all.
+    if crate::email::recipient_is_undeliverable(&new_email) {
+        tracing::info!(
+            email = %new_email,
+            "email-change: reserved/undeliverable address refused before any write; nothing sent, nothing stored"
+        );
+        crate::email::record_withheld(
+            &state.db,
+            &new_email,
+            "sign-in address change",
+            "reserved / undeliverable recipient class",
+        )
+        .await;
+        return Ok(Json(json!({
+            "status": "pending",
+            "delivered": false,
+            "new_email": new_email,
+            "message": "This address is a reserved test address, so no mail was sent. Nothing has been changed."
+        })));
+    }
+
     let token = Uuid::new_v4().to_string();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(2);
 
