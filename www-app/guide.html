@@ -246,34 +246,69 @@
       <p style="font-size:13px;color:var(--text-muted);margin-top:-8px">Example figures — your dashboard shows your own numbers.</p>
 
       <h2 id="campaign-types">🎮 Campaign Types</h2>
-      <p>IncentiveSwift offers 6 campaign types, each with a unique user interaction mechanic. Choose the one that fits your audience and goal.</p>
+      <p>Your console's campaign builder offers <strong>fifteen mechanics</strong>. You pick one on the <strong>Campaigns → New campaign</strong> form, and it decides what a participant does when they open the campaign. Every campaign has one public address &mdash; <code>https://app.incentiveswift.com/play/&lt;slug&gt;</code> &mdash; and the builder starts each mechanic with the settings listed below. Those settings live in the campaign's <strong>Edit</strong> form (the config box), so you can change them at any time without leaving the console.</p>
 
       <div class="icon-grid">
-        <div class="icon-item"><span class="campaign-icon">🔄</span><span class="label">Spin Wheel</span><span>Users spin a wheel for instant wins</span></div>
-        <div class="icon-item"><span class="campaign-icon">🎟️</span><span class="label">Raffle</span><span>Enter for a chance to win later</span></div>
-        <div class="icon-item"><span class="campaign-icon">🪙</span><span class="label">Scratch Card</span><span>Virtual scratch-off for prizes</span></div>
-        <div class="icon-item"><span class="campaign-icon">🎰</span><span class="label">Slots</span><span>3-reel slot machine mechanic</span></div>
-        <div class="icon-item"><span class="campaign-icon">📝</span><span class="label">Quiz</span><span>Answer questions to qualify</span></div>
-        <div class="icon-item"><span class="campaign-icon">🎡</span><span class="label">Wheel of Fortune</span><span>Multi-tier prize wheel</span></div>
+        <div class="icon-item"><span class="campaign-icon">🔄</span><span class="label">Spin Wheel</span><span>Spin and land on a prize segment</span></div>
+        <div class="icon-item"><span class="campaign-icon">🪙</span><span class="label">Scratch Card</span><span>Scratch off to reveal a prize</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎟️</span><span class="label">Raffle &amp; Giveaway</span><span>Enter now, winners drawn later</span></div>
+        <div class="icon-item"><span class="campaign-icon">📝</span><span class="label">Quiz</span><span>Answer questions, pass a score</span></div>
+        <div class="icon-item"><span class="campaign-icon">🧠</span><span class="label">Personality Quiz</span><span>Answers sort the participant into an outcome</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎯</span><span class="label">Score Reveal</span><span>Answer, then see a banded score</span></div>
+        <div class="icon-item"><span class="campaign-icon">🧮</span><span class="label">Calculator</span><span>Enter figures, get a calculated answer</span></div>
+        <div class="icon-item"><span class="campaign-icon">🎁</span><span class="label">Mystery Reveal</span><span>Open a hidden reward</span></div>
+        <div class="icon-item"><span class="campaign-icon">⏳</span><span class="label">Countdown Timer</span><span>A time-boxed reveal or offer</span></div>
+        <div class="icon-item"><span class="campaign-icon">📊</span><span class="label">Poll</span><span>One question, a set of answers</span></div>
+        <div class="icon-item"><span class="campaign-icon">💬</span><span class="label">Chat Funnel</span><span>A guided conversation</span></div>
+        <div class="icon-item"><span class="campaign-icon">🏆</span><span class="label">Leaderboard</span><span>Ranked participants, ranked by score</span></div>
+        <div class="icon-item"><span class="campaign-icon">📋</span><span class="label">Long-Form Qualifier</span><span>A multi-section qualifying form</span></div>
+        <div class="icon-item"><span class="campaign-icon">🏪</span><span class="label">Loyalty</span><span>Hands out loyalty points on entry</span></div>
+        <div class="icon-item"><span class="campaign-icon">🤝</span><span class="label">B2B Loyalty</span><span>Loyalty mechanics for business accounts</span></div>
       </div>
 
-      <h3>🔄 Spin the Wheel</h3>
-      <p>The most popular campaign type. Users click a button, the wheel spins, and lands on a prize segment. Great for instant gratification giveaways, lead magnets, and promotional events. Configure segments with prize labels, colors, odds, and win/lose outcomes.</p>
-
-      <h3>🎟️ Raffle</h3>
-      <p>Users enter a raffle by submitting their information. Winners are drawn at a scheduled time. Best for longer-running campaigns where you want to collect entries over time and announce winners later. Set a draw date and time, and the system will automatically select winners.</p>
+      <h3>🔄 Spin Wheel</h3>
+      <p>The instant-win mechanic, and the one most campaigns use. The participant taps once and the wheel lands on a segment. Prizes are a list, so you can add as many as you like and give each its own label, colour and odds. Settings start as <code>{"prize_pool":{"prizes":[]}}</code> &mdash; the wheel has no segments until you add them.</p>
 
       <h3>🪙 Scratch Card</h3>
-      <p>A virtual scratch-off card. Users "scratch" (click/hover) to reveal hidden prizes. Three tiers allow for engaging reveal mechanics. Perfect for mobile audiences and email campaigns where quick interaction is key.</p>
+      <p>The participant scratches the card to reveal what is underneath. It carries the same prize list as the wheel plus <code>win_probability</code> (the builder starts it at 0.5), so you control how often a card is a winner.</p>
 
-      <h3>🎰 Slots</h3>
-      <p>3-reel slot machine with spinning animation. Configure symbols on each reel and set match rules for wins. Three matching symbols = grand prize, two matching = small prize. High engagement, especially for gamified experiences.</p>
+      <h3>🎟️ Raffle &amp; Giveaway</h3>
+      <p>Entries are collected over time and winners are drawn later, which suits a promotion that runs for a week rather than a single visit. The mechanic starts with no settings of its own: the schedule and the prize are yours to state on the campaign, and the entries are the list you draw from.</p>
 
       <h3>📝 Quiz</h3>
-      <p>Multiple-choice quiz where users answer questions to qualify. Configure correct answers, scoring, and outcomes. Great for educational content, product knowledge tests, and qualifying leads by knowledge level.</p>
+      <p>Multiple-choice questions with a pass mark. The builder starts the pass mark at 70 (<code>passing_score</code>), and questions are added to the campaign itself, so a quiz is a qualification gate as much as a game.</p>
 
-      <h3>🎡 Wheel of Fortune</h3>
-      <p>Similar to Spin the Wheel but with multi-tier mechanics — users can spin multiple times, unlock bonus rounds, or chain spins. More complex prize structures for advanced campaigns.</p>
+      <h3>🧠 Personality Quiz</h3>
+      <p>There is no right answer: the participant's choices sort them into one of the outcomes you define (<code>outcomes</code>). Use it for "which product suits me" style segmentation, where the outcome is the lead's tag.</p>
+
+      <h3>🎯 Score Reveal</h3>
+      <p>The participant answers, then sees a score placed in a band. Bands are <code>tiers</code> &mdash; each with a minimum, a maximum, a label and a message &mdash; so the same questions can read as a rating, a readiness check or a grade.</p>
+
+      <h3>🧮 Calculator</h3>
+      <p>The participant enters numbers and the campaign works out a figure from <code>formula</code>. Good for a savings, ROI or "how much is this costing you" pitch, where the number itself is the hook.</p>
+
+      <h3>🎁 Mystery Reveal</h3>
+      <p>A hidden reward the participant opens on the page. The reward's label is <code>reward.label</code>; the mechanic is the suspense of the reveal rather than a chance-based win.</p>
+
+      <h3>⏳ Countdown Timer</h3>
+      <p>A campaign built around a deadline: <code>target_at</code> holds the moment the timer counts to, and it starts at the end of the year. Use it for a launch, a drop or a closing offer.</p>
+
+      <h3>📊 Poll</h3>
+      <p>One question with a set of answers, starting as <code>question</code> "Your question here?" with <code>options</code> of Yes and No. Change both to your own wording &mdash; a poll is the lightest thing a visitor can take part in, which makes it a good first-touch campaign.</p>
+
+      <h3>💬 Chat Funnel</h3>
+      <p>A guided conversation instead of a form: <code>chat_flow</code> is the list of lines the participant is walked through, and <code>system_prompt</code> tells the assistant how to behave. Use it when the questions depend on what the person says.</p>
+
+      <h3>🏆 Leaderboard</h3>
+      <p>The same entries, ranked. A leaderboard campaign starts with no settings of its own because the ranking is the entries' own scores &mdash; publish it where a competitive audience can watch it move.</p>
+
+      <h3>📋 Long-Form Qualifier</h3>
+      <p>A multi-section qualifying form: <code>sections</code> hold the questions, <code>rules</code> decide what counts as qualified, and <code>outcomes</code> say what happens to each result. This is the mechanic to use when you need a real application rather than a game.</p>
+
+      <h3>🏪 Loyalty and 🤝 B2B Loyalty</h3>
+      <p>These two hand the campaign to your loyalty programme: a participant who takes part earns points, and the campaign can enrol them at the same time. Read the loyalty section below before you pick one &mdash; the points rate and the offers live there, not on the campaign.</p>
+
+      <p>Two mechanics you may have read about elsewhere &mdash; a three-reel <em>Slots</em> machine and a multi-tier <em>Wheel of Fortune</em> &mdash; are not offered in the builder. If a campaign of that kind is what you need, use Spin Wheel with more segments; it is the same wheel with the odds you set.</p>
 
       <!-- ==================== LOYALTY SECTION ==================== -->
       <h2 id="loyalty-overview">🏪 Loyalty Program</h2>
