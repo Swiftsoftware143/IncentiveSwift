@@ -34,8 +34,15 @@ pub async fn list_campaign_questions(
 /// GET /api/v1/play/{campaign_id}/questions — public view (no correct_answer)
 pub async fn play_campaign_questions(
     State(state): State<AppState>,
-    Path(campaign_id): Path<Uuid>,
+    Path(raw_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
+    // PLAY-TIME READ, fetched by a player's browser from a link, a QR or a directory listing: a
+    // stale, truncated or hand-typed id must answer the same clean 404 as an id with no campaign,
+    // not axum's `Path<Uuid>` refusal (400 "Invalid URL: UUID parsing failed…") which shows the
+    // player a parser sentence. Fleet contract measured 2026-10-26; same class as the public
+    // avatar/logo reads and FunnelSwift's QR images.
+    let campaign_id = Uuid::parse_str(raw_id.trim())
+        .map_err(|_| AppError::NotFound("Campaign not found".into()))?;
     // Play-time gate: loading the quiz questions is the first step of play, so gate
     // on the campaign owner's tier (402 before questions are served when subtracted).
     let campaign = campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
@@ -167,9 +174,13 @@ pub struct QuizResult {
 /// POST /api/v1/quiz/{campaign_id}/submit — submit quiz answers, score, create entry
 pub async fn submit_quiz(
     State(state): State<AppState>,
-    Path(campaign_id): Path<Uuid>,
+    Path(raw_id): Path<String>,
     Json(input): Json<QuizSubmitInput>,
 ) -> Result<Json<Value>, AppError> {
+    // Same play-time contract as the questions read above: a malformed id is "not found", never a
+    // 400 parser sentence shown to the player who just answered the questions.
+    let campaign_id = Uuid::parse_str(raw_id.trim())
+        .map_err(|_| AppError::NotFound("Campaign not found".into()))?;
     // Get campaign
     let campaign = campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
 
