@@ -49,17 +49,40 @@
         } catch (e) {}
         window.location.replace(DASH);
       })
-      .catch(function () {
+      .catch(function (err) {
         clearTimeout(settle);
-        // The handed-over token is not usable: drop it and let the sign-in form below take over.
-        try { localStorage.removeItem(STORE); } catch (e) {}
+        // A token the SERVER refused is dead: drop it from both stores and send the visitor to the
+        // canonical sign-in page, so the stale value can never be tried again on the next visit.
+        // A network/5xx failure says nothing about the token, so it is left in place and the form
+        // below takes over — a blip must not sign a customer out.
+        var refused = /HTTP 40[13]/.test(String((err && err.message) || err));
+        if (refused) {
+          try { sessionStorage.removeItem(TK); sessionStorage.removeItem(UK); } catch (e) {}
+          try { localStorage.removeItem(STORE); } catch (e) {}
+        }
         var b = document.getElementById('is-handoff-busy'); if (b && b.parentNode) b.parentNode.removeChild(b);
+        // Ask the sign-in page to SHOW the reason. `login.html` has carried the `?expired=1` arm
+        // (the sentence "Your session ended, so you were signed out") since it was written, but nothing ever
+        // asked for it: this redirect used the bare path, so a customer whose token the server
+        // refused was dropped on a silent sign-in form with no explanation. Measured live
+        // 2026-10-26 in Chromium: a bogus token at `/` landed on `/login` with an empty message.
+        if (refused) window.location.replace('/login?expired=1');
       });
   }
 
   function start() {
-    if (haveSession()) return;
-    var t = tokenFromHash();
+    // A VISITOR WHO IS ALREADY SIGNED IN BELONGS AT THE CONSOLE (measured defect, 2026-10-26).
+    // The console keeps its session in sessionStorage `is_token` (login.html hands the JWT over
+    // through localStorage `ws_fs_token`, and adopt() below copies it here). This block used to
+    // return the moment `haveSession()` was true, and the AUTH GUARD after it only looked at
+    // localStorage — so a customer who signed in and then opened the app root in the SAME tab was
+    // shown the sign-in form again, on a live session. Measured live in Chromium: a seeded valid
+    // session rendered "Sign in to your account" at `/`. Read the session token first and send it
+    // through adopt(), which VALIDATES it against /auth/me and only then redirects to the console;
+    // an expired token still falls through to the form (and is dropped from storage on the way).
+    var t = null;
+    try { t = sessionStorage.getItem(TK); } catch (e) {}
+    if (!t) t = tokenFromHash();
     if (t) { try { localStorage.setItem(STORE, t); } catch (e) {} }
     else { try { t = localStorage.getItem(STORE) || localStorage.getItem('token') || localStorage.getItem('access_token'); } catch (e) {} }
     if (!t) return;
@@ -84,7 +107,9 @@
 !function(){
   var p = window.location.pathname;
   if (p === '/login' || p === '/login.html' || p.startsWith('/api/') || p.startsWith('/ref/')) return;
-  var t = localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
+  var t = null;
+  try { t = sessionStorage.getItem('is_token'); } catch (e) {}
+  t = t || localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
   if (!t) window.location.replace('/login');
 }();
 </script>
