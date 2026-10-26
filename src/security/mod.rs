@@ -13,6 +13,7 @@
 //! file previously said the edge).
 
 pub mod auth;
+pub mod body_rejection;
 pub mod display_name;
 pub mod email_addr;
 pub mod headers;

@@ -1570,6 +1570,15 @@ async fn main() -> anyhow::Result<()> {
         .layer(middleware::map_response(
             security::path_rejection::bad_id_is_not_found,
         ))
+        // A malformed BODY answers this app's JSON with a sentence a customer can act on
+        // (measured 2026-10-26: register/login/forgot-password answered `text/plain` carrying
+        // "Failed to deserialize the JSON body into the target type: missing field `email`",
+        // so the console's `await r.json()` threw instead of showing a message). OUTERMOST so
+        // it sees the extractor's response; it only touches a 400/413/415/422 whose body is
+        // text/plain, so handler-written JSON errors pass through untouched.
+        .layer(middleware::map_response(
+            security::body_rejection::as_app_json,
+        ))
         .with_state(state);
 
     // Start background email ticker (flushes scheduled follow-ups/reminders)
