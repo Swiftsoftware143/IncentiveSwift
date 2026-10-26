@@ -17,6 +17,7 @@ pub mod display_name;
 pub mod email_addr;
 pub mod headers;
 pub mod jwt;
+pub mod path_rejection;
 pub mod probe_addr;
 pub mod provider_key_crypto;
 pub mod public_projection;

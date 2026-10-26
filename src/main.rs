@@ -1562,6 +1562,14 @@ async fn main() -> anyhow::Result<()> {
                 .allow_methods(tower_http::cors::Any)
                 .allow_headers(tower_http::cors::Any),
         )
+        // A malformed id answers the app's 404 envelope, not axum's parser sentence
+        // (measured 2026-10-26: 19 of this app's 124 id routes leaked
+        // "Invalid URL: UUID parsing failed…"). OUTERMOST on purpose so it can rewrite the
+        // response the extractor produced before any handler ran; it keeps every header the
+        // inner layers set and only touches a 400 whose body is the parser's own text/plain.
+        .layer(middleware::map_response(
+            security::path_rejection::bad_id_is_not_found,
+        ))
         .with_state(state);
 
     // Start background email ticker (flushes scheduled follow-ups/reminders)
