@@ -373,15 +373,34 @@ async function handleRegister(e) {
   }
   // No auto-login: the account exists and the credentials were emailed. Show the two-step
   // confirmation and stop — the visitor signs in with the password we sent (programme a).
-  successEl.innerHTML = 'Account created! Check your email — we sent your login details to ' + String(email).replace(/[<>&"]/g, '') + '.'
-   + '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
-   + 'Nothing in your inbox after a minute? Check your spam folder, then '
-   + '<a href="https://app.incentiveswift.com/forgot-password.html?email=' + encodeURIComponent(email) + '" style="font-weight:600;color:#6366f1">send yourself a reset code</a>'
-   + ' or <a href="https://app.incentiveswift.com/login.html" style="font-weight:600;color:#6366f1">sign in</a>.'
-   + '</div>';
+  // ── Did that mail actually LEAVE? (kanban t_41da58ca) ──────────────────────────────────────
+  // The API answers `credentials_emailed`; false means the send failed or the address is one the
+  // sender withholds. This modal used to claim the mail was sent either way — so a visitor whose
+  // mail never went was told to wait for a password that was never coming. Same branch as
+  // /signup.html, and the same shape FunnelSwift and ADASwift use.
+  var safeEmail = String(email).replace(/[<>&"]/g, '');
+  var resetLink = '<a href="https://app.incentiveswift.com/forgot-password.html?email=' + encodeURIComponent(email) + '" style="font-weight:600;color:#6366f1">send yourself a reset code</a>';
+  var emailed = !(data && data.credentials_emailed === false);
+  if (emailed) {
+   successEl.innerHTML = 'Account created! Check your email — we sent your login details to ' + safeEmail + '.'
+    + '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
+    + 'Nothing in your inbox after a minute? Check your spam folder, then '
+    + resetLink
+    + ' or <a href="https://app.incentiveswift.com/login.html" style="font-weight:600;color:#6366f1">sign in</a>.'
+    + '</div>';
+   btn.innerHTML = 'Check your email';
+  } else {
+   successEl.innerHTML = '<strong>Account created — but we could not send your login details to ' + safeEmail + '.</strong>'
+    + ' So there is nothing waiting in your inbox, and we will not pretend otherwise. Set your own password instead: '
+    + resetLink + ' and sign in with it.'
+    + '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
+    + 'If that reset code does not arrive either, the mail service for this site is having trouble — try again in a few minutes, '
+    + 'or write to <a href="mailto:support&#64;swiftsoftware.net" style="font-weight:600;color:#6366f1">support&#64;swiftsoftware.net</a> and we will let you in by hand.'
+    + '</div>';
+   btn.innerHTML = 'Set your password';
+  }
   successEl.style.display = 'block';
   btn.disabled = false;
-  btn.innerHTML = 'Check your email';
  } catch (err) {
   errEl.textContent = err.message || 'An error occurred. Please try again.';
   errEl.style.display = 'block';

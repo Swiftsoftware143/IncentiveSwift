@@ -259,47 +259,56 @@ pub async fn register(
     // leads reach CoreSwift through the shared push in the entry / IQS paths.
 
     // Send welcome email
-    let wl_pool = state.db.clone();
-    let wl_email = email.clone();
-    let wl_name = name.clone();
-    // The account this mail is FOR — the template lookup is tenant-scoped (kanban t_0fb81177).
-    let wl_account = account_id;
-    let wl_generated = generated_password.clone();
-    tokio::spawn(async move {
-        // `welcome_credentials` is the only template that carries a Password line, so it is sent
-        // exactly when THIS handler minted the password — through the SAME shared writer the
-        // tag-provision door uses, so both doors mail one rendering of the credential. A caller
-        // that brought its own password keeps the plain `welcome` mail, because mailing a password
-        // the user chose seconds ago is the thing the fleet's other credential mails avoid.
-        match wl_generated {
-            Some(pw) => {
-                crate::account_mint::send_credentials_email(
-                    &wl_pool, wl_account, &wl_email, &wl_name, &pw,
-                )
-                .await;
-            }
-            None => {
-                let vars = serde_json::json!({
-                    "name": wl_name,
-                    "email": wl_email,
-                    "password": "",
-                    "app_name": "IncentiveSwift",
-                    "login_url": "https://app.incentiveswift.com"
-                });
-                if let Err(e) = crate::email::send_template_email(
-                    &wl_pool,
-                    Some(wl_account),
-                    &wl_email,
-                    "welcome",
-                    &vars,
-                )
+    // ── AWAITED, and its outcome REPORTED (kanban t_41da58ca) ─────────────────────────────────
+    // This used to be a detached `tokio::spawn`: the handler answered before the send had happened,
+    // so the response carried nothing about it and the signup page had to promise "check your
+    // email" whether or not any mail left. A send error (or a withheld recipient) then stranded a
+    // customer holding an account whose generated password nobody could read. The send is therefore
+    // awaited and its outcome becomes `credentials_emailed` in the response below.
+    //
+    // The cost is deliberate: signup latency now includes one provider round-trip. It buys a
+    // truthful answer, which is the whole point of the mail being the only way in. The account is
+    // already committed before this line, so a slow or failing provider can never undo it — the
+    // worst case is the page saying "the mail could not be sent", which is true.
+    //
+    // `welcome_credentials` is the only template that carries a Password line, so it is sent
+    // exactly when THIS handler minted the password — through the SAME shared writer the
+    // tag-provision door uses, so both doors mail one rendering of the credential. A caller
+    // that brought its own password keeps the plain `welcome` mail, because mailing a password
+    // the user chose seconds ago is the thing the fleet's other credential mails avoid.
+    let credentials_emailed = match generated_password.as_deref() {
+        Some(pw) => {
+            crate::account_mint::send_credentials_email(&state.db, account_id, &email, &name, pw)
                 .await
-                {
-                    tracing::error!("Welcome email failed for {}: {}", wl_email, e);
+        }
+        None => {
+            let vars = serde_json::json!({
+                "name": name,
+                "email": email,
+                "password": "",
+                "app_name": "IncentiveSwift",
+                "login_url": "https://app.incentiveswift.com"
+            });
+            // Same truth rule as the credentials arm: a withheld recipient answers `Ok` from the
+            // email choke point (nothing was attempted), so it must not be reported as sent.
+            let withheld = crate::email::recipient_is_undeliverable(&email);
+            match crate::email::send_template_email(
+                &state.db,
+                Some(account_id),
+                &email,
+                "welcome",
+                &vars,
+            )
+            .await
+            {
+                Ok(()) => !withheld,
+                Err(e) => {
+                    tracing::error!("Welcome email failed for {}: {}", email, e);
+                    false
                 }
             }
         }
-    });
+    };
 
     // The tier the visitor picked on the pricing page, kept as a WORKABLE request (cron 2026-10-23).
     // The card carries `?plan=pro` into the signup page and that page told them "You picked Pro", but
@@ -331,6 +340,12 @@ pub async fn register(
     };
 
     Ok(Json(json!({
+        // Did the login mail actually leave? `false` means this customer has an account and NO
+        // password in their inbox — a send failure, or an address the sender withholds. The signup
+        // page must say so instead of promising mail that was never sent (kanban t_41da58ca). The
+        // shape is copied from ADASwift's register and FunnelSwift's public signup, so every fleet
+        // door answers the same question the same way.
+        "credentials_emailed": credentials_emailed,
         "token": token,
         "user": {
             "id": account_id,

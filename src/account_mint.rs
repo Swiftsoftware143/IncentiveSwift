@@ -259,13 +259,26 @@ pub fn hash_password(password: &str) -> Result<String, AppError> {
 /// A send failure is logged and swallowed — the account is already real, and a mail outage must
 /// not turn a completed mint into an error response. The template lookup is tenant-scoped, so
 /// `account_id` is the account the mail is FOR.
+///
+/// ## The RETURN VALUE is the outcome, and it is what the signup page reads (kanban t_41da58ca)
+///
+/// `true` means the mail actually left: the provider accepted it. `false` means this customer has an
+/// account whose generated password is in nobody's inbox — a send error, or a recipient the sender
+/// deliberately withholds (a reserved/harness address). Both are real and both must be reportable:
+/// the signup page used to promise "check your email" unconditionally, so a failure stranded the
+/// customer hunting a message that was never sent.
+///
+/// WHY `recipient_is_undeliverable` IS CONSULTED SEPARATELY: for a withheld recipient the choke
+/// point in `crate::email` records `withheld` and returns `Ok(())` (nothing was attempted, so
+/// nothing may read as a provider failure). Keying this on the `Result` alone would report `true`
+/// for a message that was never dispatched — the exact misreport this card is about.
 pub async fn send_credentials_email(
     db: &PgPool,
     account_id: Uuid,
     email: &str,
     name: &str,
     password: &str,
-) {
+) -> bool {
     let vars = serde_json::json!({
         "name": name,
         "email": email,
@@ -273,14 +286,33 @@ pub async fn send_credentials_email(
         "app_name": "IncentiveSwift",
         "login_url": "https://app.incentiveswift.com",
     });
-    if let Err(e) =
-        crate::email::send_template_email(db, Some(account_id), email, "welcome_credentials", &vars)
-            .await
+    // The send is attempted EITHER WAY: it is what writes the `withheld` history row the operator's
+    // Email panel reads, so skipping it for an undeliverable recipient would hide the reason.
+    let withheld = crate::email::recipient_is_undeliverable(email);
+    match crate::email::send_template_email(
+        db,
+        Some(account_id),
+        email,
+        "welcome_credentials",
+        &vars,
+    )
+    .await
     {
-        tracing::error!(
-            "CREDENTIAL EMAIL FAILED for {} — the account exists but its generated password was never sent: {}",
-            email,
-            e
-        );
+        Ok(()) if withheld => {
+            tracing::info!(
+                "credentials email for {} was WITHHELD — the account exists and the caller was told no mail was sent",
+                email
+            );
+            false
+        }
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!(
+                "CREDENTIAL EMAIL FAILED for {} — the account exists but its generated password was never sent: {}",
+                email,
+                e
+            );
+            false
+        }
     }
 }

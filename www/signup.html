@@ -146,18 +146,40 @@ async function handleSignup(e) {
     if (data && data.plan_request && data.plan_request.plan_name) {
       keptPlan = String(data.plan_request.plan_name).replace(/[<>&]/g, '');
     }
-    sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
-      email.replace(/[<>&]/g, '') + '.<br><br>You can change your password any time in your profile settings.' +
-      (keptPlan
-        ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
-          'Your <strong>' + keptPlan + '</strong> pick is with our team — your workspace starts on Free (no card taken) ' +
-          'and they make the switch for you.</div>'
-        : '') +
-      '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
-      'Nothing in your inbox after a minute? Check your spam folder, then ' +
-      '<a href="https://app.incentiveswift.com/forgot-password.html?email=' + encodeURIComponent(email) + '" ' +
-      'style="color:var(--accent);font-weight:600">send yourself a reset code</a>.' +
-      '</div>';
+    // ── Did the login mail actually LEAVE? (kanban t_41da58ca) ─────────────────────────────────
+    // The server now answers `credentials_emailed`: false when the send failed, and false for a
+    // reserved/test address the sender withholds. This page used to print "Check your email" no
+    // matter what, so a customer whose mail never went was left holding an account whose generated
+    // password nobody could read, hunting an inbox that would stay empty. Say what happened.
+    // Shape copied from FunnelSwift's signup.html; the reset page is the way in when the mail is lost.
+    var safeEmail = email.replace(/[<>&]/g, '');
+    var keptPlanNote = keptPlan
+      ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'Your <strong>' + keptPlan + '</strong> pick is with our team — your workspace starts on Free (no card taken) ' +
+        'and they make the switch for you.</div>'
+      : '';
+    var resetLink = '<a href="https://app.incentiveswift.com/forgot-password.html?email=' +
+      encodeURIComponent(email) + '" style="color:var(--accent);font-weight:600">send yourself a reset code</a>';
+    var emailed = !(data && data.credentials_emailed === false);
+    if (emailed) {
+      sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
+        safeEmail + '.<br><br>You can change your password any time in your profile settings.' +
+        keptPlanNote +
+        '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'Nothing in your inbox after a minute? Check your spam folder, then ' + resetLink + '.' +
+        '</div>';
+    } else {
+      sucDiv.innerHTML = '⚠️ <strong>Account created — but we could not send your login details to ' +
+        safeEmail + '.</strong><br>So there is nothing waiting in your inbox, and we will not pretend otherwise. ' +
+        'Set your own password instead: ' + resetLink + ' and sign in with it.' +
+        keptPlanNote +
+        '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'If that reset code does not arrive either, the mail service for this site is having trouble — ' +
+        'try again in a few minutes, or write to ' +
+        '<a href="mailto:support&#64;swiftsoftware.net" style="color:var(--accent);font-weight:600">support&#64;swiftsoftware.net</a> ' +
+        'and we will let you in by hand.' +
+        '</div>';
+    }
     sucDiv.style.display = 'block';
   } catch (e) {
     errDiv.textContent = e.message;
