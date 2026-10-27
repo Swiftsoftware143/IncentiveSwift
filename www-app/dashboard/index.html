@@ -102,6 +102,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" style="background:#64748b" onclick="location.href='/integrations.html'">🔌 Integrations</button>
     </div>
   </div>
+  <div class="card" id="dash-setup" data-first-steps="1" style="display:none"></div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your numbers</h2>
     <!-- Two routes this app already ships had NO caller on any served page: GET /api/v1/dashboard/stats
@@ -482,6 +483,38 @@ function dashMsg(id, text, kind) {
   el.style.color = (kind === 'e') ? '#dc2626' : '#64748b';
   el.textContent = text;
 }
+// cron 2026-10-27 — a brand-new workspace lands on this page as zeros with no next step: the two
+// things a customer MUST do before anyone can take part (build a campaign, and decide what a winner
+// redeems) live in the CONSOLE, on another screen this page only links to. This card names them, in
+// order, and each button deep-links the console's own screen (`#campaigns` / `#prizes`, both real
+// views of that console's hash router).
+//   * It paints only from a stats answer that actually carries the counts (`total_campaigns` and
+//     `total_entries` numeric), so a failed or partial read can never make a busy workspace look new.
+//   * It removes itself as soon as a campaign or an entry exists — never permanent furniture.
+//   * It promises only what this app does: a campaign is the page people take part in, a prize pool
+//     is what winners redeem.
+function paintSetup(d) {
+  var el = document.getElementById('dash-setup');
+  if (!el) return;
+  var c = Number(d && d.total_campaigns), e = Number(d && d.total_entries);
+  if (!isFinite(c) || !isFinite(e) || (d.total_campaigns == null) || (d.total_entries == null)) { el.style.display = 'none'; return; }
+  if (c > 0 || e > 0) { el.innerHTML = ''; el.style.display = 'none'; return; }
+  var steps = [
+    ['Create your first campaign', 'A campaign is the page people take part in \u2014 a quiz, a poll, a raffle or a loyalty card. Build it in the console\u2019s Campaigns screen.', '/admin/#campaigns', 'Open Campaigns'],
+    ['Set up what a winner redeems', 'A prize pool is the reward a winner claims. Without one a campaign still collects entries, but there is nothing to hand over.', '/admin/#prizes', 'Open Prize Pools']
+  ];
+  var h = '<h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 4px">Get set up</h2>'
+    + '<p style="color:#64748b;font-size:13px;margin:0 0 10px">Two steps and your first participant can take part. This card goes away once a campaign or an entry exists.</p>';
+  for (var i = 0; i < steps.length; i++) {
+    h += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0' + (i ? ';border-top:1px solid #e2e8f0' : '') + '">'
+      + '<div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">' + (i + 1) + '</div>'
+      + '<div style="flex:1"><div style="font-weight:600;font-size:14px">' + esc(steps[i][0]) + '</div>'
+      + '<div style="color:#64748b;font-size:12px;margin:2px 0 6px;max-width:60ch">' + esc(steps[i][1]) + '</div>'
+      + '<button type="button" class="btn" data-first-step="' + esc(steps[i][2]) + '" onclick="location.href=\'' + steps[i][2] + '\'">' + esc(steps[i][3]) + '</button></div></div>';
+  }
+  el.innerHTML = h;
+  el.style.display = '';
+}
 function loadStats() {
   fetch(window.location.origin + '/api/v1/dashboard/stats', {
     headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
@@ -504,6 +537,7 @@ function loadStats() {
         + '<div class="l">' + esc(tiles[i][0]) + '</div></div>';
     }
     el.innerHTML = h + '</div>';
+    paintSetup(d);
   }).catch(function () {
     dashMsg('dash-stats', 'Could not load your numbers right now.', 'e');
   });
