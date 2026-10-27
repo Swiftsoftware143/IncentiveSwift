@@ -141,6 +141,7 @@
       <li><strong>Plan</strong> — The plan the workspace is on, as a picker: choose a plan and it is assigned immediately</li>
       <li><strong>Billing</strong> — What that workspace is actually charged on its current plan: the plan tier's monthly price, or <em>free</em> for a zero-priced tier. A dash means the workspace has no plan at all. The figure comes from the same row the picker writes, so assigning a plan updates this column at the next load.</li>
       <li><strong>Status</strong> — Active (<span style="color:var(--green)">●</span>) or Suspended (<span style="color:var(--red)">●</span>)</li>
+      <li><strong>Last sign-in</strong> — When anyone in that workspace last signed in successfully, recorded on every login. <em>not recorded</em> means the app has no sign-in on file for it: this app only began recording sign-ins on 27 October 2026, so a workspace whose owner has used it before that date reads this way too. It is not a claim that the workspace is unused.</li>
       <li><strong>Users</strong> — Number of user accounts under this tenant</li>
       <li><strong>Created</strong> — Account creation date</li>
       <li><strong>Actions</strong> — View details (<code>GET /admin/tenants/:id</code>), read/write the credits rate, read a purchase PIN, adjust credits, and delete the tenant</li>
@@ -158,6 +159,12 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
     <h3>Clearing Test Workspaces</h3>
     <p>A workspace a test run minted is not a customer, so the list leaves it out. Tick <strong>show probe workspaces</strong> above the table and those rows come back wearing their <em>probe</em> badge — the address that minted them, or the test harness the signup named. <strong>Select probes (n)</strong> then ticks exactly those rows and <strong>Delete selected</strong> retires them; the tenancy-canary monitors keep their badge but are never ticked, because a monitor would only re-seed what you deleted. Untick the switch and you are back to customers only.</p>
     <p>Why the switch exists: the list has always hidden harness-minted workspaces, and nothing offered a way to look at them, so the rows the hide covered could not be reviewed or cleared from this screen at all.</p>
+  </div>
+  <div class="card">
+    <h3>Finding the workspaces that never got in</h3>
+    <p>A workspace is minted by a signup and its credentials are mailed, but whether the person ever came back was invisible: the list is ordered by creation date, so a workspace nobody has used sits beside one in daily use. The <strong>last sign-in</strong> column answers it per row, and the <strong>only never signed in (n)</strong> switch above the table narrows the list to just those rows — the number on the switch is how many are on file.</p>
+    <p>Use it before chasing a customer who says he never received his login: if his workspace appears under that switch, he has never completed a sign-in, so the problem is the message or the address rather than anything he did on the app. If it does not appear, he has signed in and the workspace is in use.</p>
+    <p>The switch only ever <em>narrows</em> what is drawn, and the bulk delete acts on the rows you tick, so filtering can never widen a destructive action.</p>
   </div>
   <div class="card">
     <h3>Impersonating Tenants</h3>
