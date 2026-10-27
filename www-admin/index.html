@@ -309,7 +309,13 @@ const LoginView = () => {
   // so the old `let email = '', pw = ''` blanked BOTH fields on every attempt.
   const f = viewState('login_form', { email: '', pw: '' });
   const submit = async (e) => { e.preventDefault(); S.loading = true; S.error = null; renderApp();
-    try { const r = await API.login(f.email, f.pw); API.setAuth(r.token, r.user); S.sessionEnded = false; f.email = ''; f.pw = ''; S.view = 'dashboard'; } catch(err) { S.error = err.message; }
+    try { const r = await API.login(f.email, f.pw); API.setAuth(r.token, r.user); S.sessionEnded = false; f.email = ''; f.pw = ''; S.view = 'dashboard';
+      // The login payload carries only email/id/role, so the sidebar's `S.me` stayed null
+      // until the next page load and painted a bare "Account" with an em-dash plan. Read the
+      // account once HERE, the same refresh the boot block does, so the name and the REAL
+      // tier appear the moment the operator signs in (kanban t_20261026-console-identity).
+      try { const d = await API.get('/auth/me'); if (d && d.user) { S.me = d.user; API.setAuth(API.token, Object.assign({}, API.user || {}, d.user)); } } catch (e) {}
+    } catch(err) { S.error = err.message; }
     S.loading = false; renderApp();
   };
   return html`<div class="flex items-center justify-center min-h-screen w-full">
@@ -337,8 +343,30 @@ const Dashboard = () => {
   if (!st._loaded) { st._loaded = true;
     API.get('/dashboard/stats').then(s => { Object.assign(st, s); renderApp(); }).catch(() => {});
   }
+  // GET SET UP (2026-10-27): a workspace that had never run anything saw five zeros and
+  // nothing to press — the same "wall of zeros" the customer dashboard no longer shows
+  // (bf4c1c83). Painted ONLY from a payload that actually CARRIES the count this account
+  // owns (`total_campaigns` present and zero), so a failed or in-flight load can never
+  // render it, and it disappears by itself the moment the first campaign exists.
+  const hasCount = st.total_campaigns !== undefined && st.total_campaigns !== null && isFinite(Number(st.total_campaigns));
+  const empty = hasCount && Number(st.total_campaigns) === 0;
+  const go = (id) => { S.view = id; setViewHash(id); renderApp(); };
   return html`<div>
     <h2 class="text-xl font-bold mb-4">Dashboard</h2>
+    ${empty && html`<div class="card mb-4" data-console="get-set-up">
+      <div class="flex items-start gap-3">
+        <div class="text-2xl">🚀</div>
+        <div>
+          <h3 class="text-base font-bold text-gray-800">Get set up</h3>
+          <p class="text-sm text-gray-600 mt-1">This workspace has no campaigns yet. A campaign is the page people take part in \u2014 a quiz, a poll, a raffle or a loyalty card. Create one and its prize pool, points and entries all start filling in here.</p>
+          <div class="flex flex-wrap gap-2 mt-3">
+            <button type="button" class="btn" data-step="campaigns" onClick=${() => go('campaigns')}>Create your first campaign</button>
+            <button type="button" class="btn" data-step="prizes" onClick=${() => go('prizes')}>Set up a prize pool</button>
+            <button type="button" class="btn" data-step="loyalty" onClick=${() => go('loyalty')}>See how loyalty works</button>
+          </div>
+        </div>
+      </div>
+    </div>`}
     <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
       <div class="stat-card"><div class="stat-value">${st.total_campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
       <div class="stat-card"><div class="stat-value">${st.total_participants ?? '...'}</div><div class="stat-label">Participants</div></div>
@@ -4515,6 +4543,10 @@ const BulkTenantDelete = () => {
   // count what the ADDRESS heuristic found on a row the list was willing to show. Measured live
   // 2026-10-25: the same gap on FunnelSwift hid a harness-minted workspace completely.
   const [showProbes, setShowProbes] = useState(false);
+  // "only never signed in" (2026-10-27): the column answered the question but could not be asked.
+  // It FILTERS WHAT IS DRAWN only — the delete path still acts on the ticked ids, so a filter can
+  // never widen a destructive action.
+  const [onlyNever, setOnlyNever] = useState(false);
 
   const load = async () => {
     setErr(null);
@@ -4528,9 +4560,14 @@ const BulkTenantDelete = () => {
   useEffect(() => { load(); }, [showProbes]);
 
   const list = rows || [];
-  const allSelected = list.length > 0 && sel.length === list.length;
+  // A NULL last_login_at is "nothing recorded", and that is exactly what an operator hunts for after
+  // a credentials mail goes out: workspace created, person never seen again.
+  const neverSignedIn = (r) => !r.last_login_at;
+  const neverCount = list.filter(neverSignedIn).length;
+  const shown = onlyNever ? list.filter(neverSignedIn) : list;
+  const allSelected = shown.length > 0 && shown.every((r) => sel.indexOf(r.id) >= 0);
   const toggle = (id) => setSel((s) => (s.indexOf(id) >= 0 ? s.filter((x) => x !== id) : s.concat([id])));
-  const toggleAll = () => setSel(allSelected ? [] : list.map((r) => r.id));
+  const toggleAll = () => setSel(allSelected ? [] : shown.map((r) => r.id));
   const chosen = list.filter((r) => sel.indexOf(r.id) >= 0);
   // One click selects exactly the probe rows (cron 2026-10-18). Same two arms the badge above uses —
   // the recorded harness OR a reserved/fleet-probe owner address — so the number on the button, the
@@ -4637,6 +4674,10 @@ const BulkTenantDelete = () => {
         title="Probe workspaces a test harness minted. Hidden by default because they are not customers; ticking this lists them so Select probes can reach them.">
         <input type="checkbox" data-tenants="show-probes" checked=${showProbes}
           onChange=${(e) => { setSel([]); setShowProbes(!!e.target.checked); }} /> show probe workspaces</label>
+      <label class="inline-flex items-center gap-1 text-xs text-gray-600" data-tenants="only-never-label"
+        title="Only the workspaces where no sign-in has ever been recorded. Recording began 27 Oct 2026, so an older workspace can appear here even if its owner signed in before that date. This filters the table only; it never ticks a row for deletion.">
+        <input type="checkbox" data-tenants="only-never" checked=${onlyNever}
+          onChange=${(e) => setOnlyNever(!!e.target.checked)} /> only never signed in (${neverCount})</label>
       <button class="px-2 py-0.5 rounded border text-xs" data-tenants="select-probes"
         disabled=${busy || probeRows.length === 0} onClick=${() => setSel(probeRows.map((r) => r.id))}>
         Select probes (${probeRows.length})</button>
@@ -4670,9 +4711,10 @@ const BulkTenantDelete = () => {
             <th class="text-left border-b px-2 py-1 bg-gray-100">plan</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">billing</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">users</th>
+            <th class="text-left border-b px-2 py-1 bg-gray-100" title="From the account's last successful sign-in. This app only started recording sign-ins on 27 Oct 2026, so 'not recorded' means nothing is on file - not that the person never signed in.">last signed in</th>
             <th class="text-left border-b px-2 py-1 bg-gray-100">id</th>
           </tr></thead>
-          <tbody>${list.map((r) => html`<tr>
+          <tbody>${shown.map((r) => html`<tr>
             <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
@@ -4680,10 +4722,12 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1">${planCell(r)}</td>
             <td class="border-b px-2 py-1" data-tenant-billing=${r.id || ''}>${billingCell(r)}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>
+            <td class="border-b px-2 py-1" data-tenant-last-login=${r.id || ''}
+              title=${r.last_login_at ? new Date(r.last_login_at).toLocaleString() : 'No sign-in recorded since this column began (27 Oct 2026). Sign-ins before then were not tracked, so this is "nothing recorded", not proof that nobody has signed in.'}>${r.last_login_at ? new Date(r.last_login_at).toLocaleString() : 'not recorded'}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
           </tr>`)}</tbody>
         </table></div>
-        <div class="text-xs text-gray-500 mt-1">${list.length} tenant(s) — tick the rows (or the header box for all), then press Delete selected.</div>`}
+        <div class="text-xs text-gray-500 mt-1">${shown.length} of ${list.length} workspace(s) shown${onlyNever ? ' (no sign-in recorded)' : ''} — tick the rows (or the header box for all), then press Delete selected.</div>`}
     ${result && html`<pre class="text-xs bg-white border rounded p-2 mt-1 overflow-auto" style="max-height:180px">${JSON.stringify(result.body, null, 1)}</pre>`}
     ${confirming && html`<div class="modal">
       <div class="modal-content">
