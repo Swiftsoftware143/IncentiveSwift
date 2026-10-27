@@ -941,7 +941,19 @@ function pbLoadRequests() {
           h += '<div data-plan-request="' + esc(t.id) + '" style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;background:#fff">'
             + '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center">'
             + '<span style="font-size:13.5px;color:#1e293b">' + esc(t.subject || 'Plan request') + '</span>'
+            + '<span style="display:flex;align-items:center;gap:8px;white-space:nowrap">'
             + '<span class="badge" data-request-state="' + esc(t.status || 'open') + '">' + esc(String(t.status || 'open').replace(/_/g, ' ')) + '</span>'
+            // Withdraw (cron 2026-10-27): a plan request this workspace filed can be taken back
+            // while it is still open. Shown only while it can succeed -- an applied switch or a
+            // closed request keeps its record, and an ordinary ticket is never erasable here.
+            + ((t.plan_slug && !t.plan_applied_at
+                && String(t.status || 'open').toLowerCase() !== 'resolved'
+                && String(t.status || 'open').toLowerCase() !== 'closed')
+                ? '<button class="btn btn-sm" data-withdraw="' + esc(t.id) + '"'
+                  + ' data-withdraw-name="' + esc(t.plan_name || pbPlanName(t.plan_slug) || t.plan_slug) + '"'
+                  + ' onclick="pbWithdrawRequest(this)">Withdraw</button>'
+                : '')
+            + '</span>'
             + '</div>'
             + ((t.plan_slug || t.plan_name)
                 ? '<div data-request-plan="' + esc(t.plan_slug || '') + '" style="font-size:12px;color:#475569;margin-top:6px">Plan asked for: <strong>'
@@ -971,6 +983,32 @@ function pbLoadRequests() {
       }
       el.innerHTML = h;
     }).catch(function () { el.innerHTML = ''; });
+}
+// Withdraw a plan request this workspace filed (cron 2026-10-27). The server permits it only on
+// our OWN request while it is still open, and it answers a sentence when it refuses; the row leaves
+// the team's queue, nothing was charged, and the customer can ask again.
+function pbWithdrawRequest(btn) {
+  var id = btn && btn.getAttribute('data-withdraw');
+  if (!id) return;
+  var name = String(btn.getAttribute('data-withdraw-name') || '').trim();
+  if (!window.confirm('Withdraw the request' + (name ? ' for ' + name : '') + '? Nothing has been charged, and you can ask again later.')) return;
+  btn.disabled = true;
+  fetch(window.location.origin + '/api/v1/support-tickets/' + encodeURIComponent(id), {
+    method: 'DELETE', headers: pbAuth(), cache: 'no-store'
+  }).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d || {} }; });
+  }).then(function (res) {
+    if (!res.ok) {
+      btn.disabled = false;
+      pbMsg(res.d.error || 'We could not withdraw that request.', 'e');
+      return;
+    }
+    pbMsg('That request is withdrawn. Nothing was charged, and you can ask again any time.', 's');
+    pbLoadRequests();
+  }).catch(function () {
+    btn.disabled = false;
+    pbMsg('We could not reach the server. Try again in a moment.', 'e');
+  });
 }
 function pbLoad() {
   fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })

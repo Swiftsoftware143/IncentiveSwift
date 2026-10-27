@@ -698,6 +698,19 @@ pub async fn update_ticket(
 }
 
 /// DELETE /api/v1/support-tickets/:id
+///
+/// TWO ARMS, decided by the caller's role (cron 2026-10-27).
+///
+/// * The OPERATOR arm is the console's Delete: it removes whichever row the console is looking at,
+///   exactly as before.
+/// * The CUSTOMER arm is a WITHDRAWAL. Pressing Upgrade on the Plan & billing screen files a plan
+///   request and tells the buyer "our team will switch this workspace"; until now there was no way to
+///   take that ask back, so a request filed by a mis-click (or one the workspace no longer wants) sat
+///   in the team's queue for ever while the customer's own card kept saying a switch was coming. A
+///   customer may therefore withdraw ONLY their OWN plan request, and only while it is still open: an
+///   ordinary ticket is the message they sent us (kept), and a request whose plan has already been
+///   applied is the record of that switch (kept). Each refusal is a 400 carrying a sentence, and an id
+///   belonging to another workspace is a 404 — never another workspace's row.
 pub async fn delete_ticket(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -706,7 +719,47 @@ pub async fn delete_ticket(
     let account = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
     let is_operator = caller_is_operator(&state, account).await;
-    sqlx::query(
+
+    if !is_operator {
+        let row: Option<(
+            String,
+            Option<String>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )> = sqlx::query_as(
+            "SELECT status, plan_slug, plan_applied_at FROM support_tickets
+                 WHERE id = $1 AND (tenant_id = $2 OR created_by = $2)",
+        )
+        .bind(id)
+        .bind(account)
+        .fetch_optional(&state.db)
+        .await?;
+        let (status, plan_slug, applied) = row.ok_or_else(|| {
+            AppError::NotFound("That request was not found on this workspace".to_string())
+        })?;
+        if plan_slug.as_deref().unwrap_or("").trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "Only a plan request can be withdrawn. Send us a message and we will pick it up"
+                    .to_string(),
+            ));
+        }
+        if applied.is_some() {
+            return Err(AppError::BadRequest(
+                "This request has already been completed, so there is nothing to withdraw"
+                    .to_string(),
+            ));
+        }
+        let st = status.to_ascii_lowercase();
+        if st == "closed" || st == "resolved" {
+            return Err(AppError::BadRequest(
+                "This request is already closed, so there is nothing to withdraw".to_string(),
+            ));
+        }
+    }
+
+    // The tenant scope is repeated in the WRITE, so a row that changed hands between the read above
+    // and this delete cannot be removed by this call. A zero-row delete is a 404 rather than the old
+    // unconditional `{"deleted": true}`, which told the caller a row was gone when nothing matched.
+    let r = sqlx::query(
         "DELETE FROM support_tickets
          WHERE id = $1 AND (tenant_id = $2 OR created_by = $2 OR $3)",
     )
@@ -715,7 +768,12 @@ pub async fn delete_ticket(
     .bind(is_operator)
     .execute(&state.db)
     .await?;
-    Ok(Json(json!({ "deleted": true })))
+    if r.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "That request was not found on this workspace".to_string(),
+        ));
+    }
+    Ok(Json(json!({ "deleted": true, "withdrawn": !is_operator })))
 }
 
 /// POST /api/v1/support-tickets/:id/messages
