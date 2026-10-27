@@ -379,6 +379,10 @@ pub async fn list_all_tenants(
             ), '') as catalog_plan_id,
             COALESCE(pt.price_monthly::float8, 0.0) as price_monthly,
             u.user_count,
+            -- Whether the customer ever actually got in (cron 2026-10-27). Stamped by the login
+            -- handler, so this list can tell a workspace in daily use from one whose credentials
+            -- were minted and never used -- the two read identically before this column existed.
+            a.last_login_at,
             COALESCE(a.probe_harness, '') as probe_harness
         FROM accounts a
         LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
@@ -420,6 +424,9 @@ pub async fn list_all_tenants(
             // ordinary-looking address read as a customer. COALESCEd to '' so a pre-column row is
             // empty, never null.
             let probe_harness: String = row.get("probe_harness");
+            // NULL means "never signed in", which is a real answer for the operator and not the
+            // same thing as an empty date -- published as null so the console can say so in words.
+            let last_login_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_login_at");
             let plan_effective_name: String = row.get("plan_effective_name");
             let plan_is_default: bool = row.get("plan_is_default");
             json!({
@@ -435,6 +442,7 @@ pub async fn list_all_tenants(
                 "price_monthly": price_monthly,
                 "user_count": user_count,
                 "probe_harness": probe_harness,
+                "last_login_at": last_login_at.map(|t| t.to_rfc3339()),
             })
         })
         .collect();

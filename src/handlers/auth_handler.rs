@@ -501,6 +501,20 @@ pub async fn login(
     let email: String = row.get("email");
     let role: String = row.get("role");
 
+    // STAMP THE SIGN-IN (cron 2026-10-27). Every signup mints an account and mails its
+    // credentials, but nothing recorded whether the person then actually got in — so on the
+    // operator's Tenants panel a workspace that was never once used read exactly like one in daily
+    // use. `accounts.last_login_at` (migration zz_is22) is that answer; this is its only writer.
+    // BEST EFFORT on purpose: a bookkeeping failure must never turn a correct password into a
+    // failed login, so the error is logged and the customer still receives their token.
+    if let Err(e) = sqlx::query("UPDATE accounts SET last_login_at = NOW() WHERE id = $1")
+        .bind(account_id)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not stamp last_login_at for {account_id}: {e}");
+    }
+
     // Generate JWT
     let token = create_jwt(
         &account_id.to_string(),
