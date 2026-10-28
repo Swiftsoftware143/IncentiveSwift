@@ -142,6 +142,9 @@ label.opt:hover{border-color:var(--brand)}
   function visitorMessage(status, data, fallback) {
     var raw = (data && (data.message || data.error)) || '';
     var s = String(raw);
+    // No body: nothing to translate, so the caller's own sentence is the most specific one
+    // available (the quiz path has one). Only a status/body pair says enough to override it.
+    if (!s) { return fallback || 'That did not work. Please try again.'; }
     if (/prize[_ ]?pool/i.test(s)) {
       return 'This campaign is not ready to play yet. Please check back soon.';
     }
@@ -151,7 +154,7 @@ label.opt:hover{border-color:var(--brand)}
     if (/not active|paused|is not available/i.test(s)) {
       return 'This campaign is not accepting entries right now.';
     }
-    return s || fallback || 'That did not work. Please try again.';
+    return s;
   }
 
   function applyTheme(t) {
