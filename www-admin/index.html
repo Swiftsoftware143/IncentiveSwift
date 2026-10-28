@@ -1180,6 +1180,14 @@ const Campaigns = () => {
   };
 
   const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
+  // A spin campaign with no prize to win cannot be PLAYED: the draw refuses with
+  // "Campaign has no prize_pool configured", so every participant who opens the shared link is
+  // turned away. The operator can only see that at the moment they hand the link out (Embed /
+  // Marketing Boost), which is too late — so the row says it here, before the link goes anywhere.
+  // Same predicate the draw uses: `config.prize_pool.prizes` must be a NON-EMPTY list.
+  const needsPrizePool = (c) => c.type === 'spin_wheel'
+    && !(c.config && c.config.prize_pool
+         && Array.isArray(c.config.prize_pool.prizes) && c.config.prize_pool.prizes.length);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
@@ -1189,7 +1197,7 @@ const Campaigns = () => {
       <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td>
-          <td><span class="badge badge-blue">${c.type || '—'}</span></td>
+          <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}</td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}

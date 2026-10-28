@@ -132,6 +132,28 @@ label.opt:hover{border-color:var(--brand)}
     if (banner) { el('playForm').style.display = 'none'; }
   }
 
+  // A visitor must never be shown the operator's diagnostic. The campaign API's refusals are
+  // written for the CONSOLE and say things only the campaign owner can act on -- "Campaign has no
+  // prize_pool configured", "... Upgrade to increase your limit." A participant who opened a shared
+  // link cannot set a prize pool or upgrade anything, so the public page translates the refusals it
+  // recognises into a sentence a player can understand. Anything else is passed through unchanged,
+  // so a genuinely unexpected refusal still gives the operator who is previewing their own campaign
+  // the exact server wording to search for.
+  function visitorMessage(status, data, fallback) {
+    var raw = (data && (data.message || data.error)) || '';
+    var s = String(raw);
+    if (/prize[_ ]?pool/i.test(s)) {
+      return 'This campaign is not ready to play yet. Please check back soon.';
+    }
+    if (status === 402 || /limit reached|upgrade to increase/i.test(s)) {
+      return 'This campaign has reached its entry limit for now. Please check back later.';
+    }
+    if (/not active|paused|is not available/i.test(s)) {
+      return 'This campaign is not accepting entries right now.';
+    }
+    return s || fallback || 'That did not work. Please try again.';
+  }
+
   function applyTheme(t) {
     if (!t) { return; }
     theme = t;
@@ -344,8 +366,8 @@ label.opt:hover{border-color:var(--brand)}
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }); })
       .then(function (res) {
         if (res.status === 402) {
-          show((res.data && (res.data.message || res.data.error)) ||
-            'This quiz is not available on the campaign owner\'s plan.', true);
+          show(visitorMessage(402, res.data,
+            'This quiz is not available on the campaign owner\'s plan.'), true);
           return;
         }
         if (!res.ok) { show('Could not load this quiz right now. Please try again.', true); return; }
@@ -618,7 +640,7 @@ label.opt:hover{border-color:var(--brand)}
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }); })
       .then(function (out) {
         if (!out.ok) {
-          var m = out.data && (out.data.message || out.data.error) ? (out.data.message || out.data.error) : 'That did not work. Please try again.';
+          var m = visitorMessage(out.status, out.data);
           el('error').textContent = m;
           el('error').style.display = 'block';
           btn.disabled = false; btn.textContent = original;
