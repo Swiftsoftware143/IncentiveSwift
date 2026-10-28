@@ -281,15 +281,69 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
     // agree. Sending them straight to the dashboard would hide a broken credential mail until their
     // first real sign-in.
     const email = document.getElementById('regEmail').value;
+    const safeEmail = email.replace(/[<>&]/g, '');
+    const signInButton = '<button class="btn" style="margin-top:14px" onclick="document.querySelector(\'.tab\').click()">Go to Sign In</button>';
+    if (data.credentials_emailed) {
+      document.getElementById('registerForm').innerHTML =
+        '<div style="text-align:center">' +
+        '<div style="font-size:34px;margin-bottom:8px">📬</div>' +
+        '<div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px">Account created</div>' +
+        '<div style="font-size:13.5px;color:#475569;line-height:1.5">We have emailed your password to ' +
+        '<strong>' + safeEmail + '</strong>.<br>Open that email and sign in with it &mdash; ' +
+        'you can change it from your profile afterwards.</div>' + signInButton +
+        '</div>';
+      return;
+    }
+    // The mail did NOT go out (the provider refused, or the address cannot receive). Telling the
+    // visitor to "check your email" here would strand them with an account whose password nobody
+    // has ever seen, so this page asks them to CHOOSE one now: the server accepts exactly one such
+    // password, on the signup token, while the account still carries the undelivered marker.
     document.getElementById('registerForm').innerHTML =
       '<div style="text-align:center">' +
-      '<div style="font-size:34px;margin-bottom:8px">📬</div>' +
-      '<div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px">Account created</div>' +
-      '<div style="font-size:13.5px;color:#475569;line-height:1.5">We have emailed your password to ' +
-      '<strong>' + email.replace(/[<>&]/g, '') + '</strong>.<br>Open that email and sign in with it &mdash; ' +
-      'you can change it from your profile afterwards.</div>' +
-      '<button class="btn" style="margin-top:14px" onclick="document.querySelector(\'.tab\').click()">Go to Sign In</button>' +
+      '<div style="font-size:34px;margin-bottom:8px">⚠️</div>' +
+      '<div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px">Account created &mdash; but we could not email your password</div>' +
+      '<div style="font-size:13.5px;color:#475569;line-height:1.5">No message reached <strong>' + safeEmail +
+      '</strong>. Check that address for a typo &mdash; that is the usual reason. Choose a password now and you can sign in straight away.</div>' +
+      '<div style="text-align:left;margin-top:14px">' +
+      '<label style="font-size:12.5px;font-weight:600;color:#0f172a;display:block;margin-bottom:4px">Choose a password</label>' +
+      '<input class="input" id="initPw" type="password" placeholder="At least 8 characters" style="width:100%;margin-bottom:8px">' +
+      '<input class="input" id="initPw2" type="password" placeholder="Type it again" style="width:100%">' +
+      '<div id="initErr" style="display:none;color:#b91c1c;font-size:12.5px;margin-top:8px"></div>' +
+      '<button class="btn" id="initBtn" style="width:100%;margin-top:12px">Set my password</button>' +
+      '</div>' +
+      '<div style="font-size:12px;color:#64748b;margin-top:10px">Got a working password already? ' +
+      '<a href="#" onclick="document.querySelector(\'.tab\').click();return false;" style="color:#4f46e5">Sign in</a></div>' +
       '</div>';
+    const initBtn = document.getElementById('initBtn');
+    initBtn.addEventListener('click', async () => {
+      const pw1 = document.getElementById('initPw').value;
+      const pw2 = document.getElementById('initPw2').value;
+      const errBox = document.getElementById('initErr');
+      const show = (m) => { errBox.textContent = m; errBox.style.display = 'block'; };
+      errBox.style.display = 'none';
+      if (pw1.length < 8) return show('Use at least 8 characters.');
+      if (pw1 !== pw2) return show('The two passwords do not match.');
+      initBtn.disabled = true; initBtn.textContent = 'Saving...';
+      try {
+        const r = await fetch(API_BASE + '/auth/initial-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + data.token },
+          body: JSON.stringify({ password: pw1 })
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || d.message || 'Could not set the password');
+        document.getElementById('registerForm').innerHTML =
+          '<div style="text-align:center">' +
+          '<div style="font-size:34px;margin-bottom:8px">✅</div>' +
+          '<div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px">Password saved</div>' +
+          '<div style="font-size:13.5px;color:#475569;line-height:1.5">Sign in with <strong>' + safeEmail +
+          '</strong> and the password you just chose.</div>' + signInButton +
+          '</div>';
+      } catch (e2) {
+        initBtn.disabled = false; initBtn.textContent = 'Set my password';
+        show(e2.message);
+      }
+    });
   } catch (err) {
     errorEl.textContent = err.message;
     errorEl.style.display = 'block';
