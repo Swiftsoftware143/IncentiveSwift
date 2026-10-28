@@ -169,6 +169,42 @@ pub async fn preview_branding_email(
     }
 }
 
+/// GET /api/v1/settings/branding/preview-body — the email this account's branding produces,
+/// rendered and returned, NOT sent (cron 2026-10-29, parity with FunnelSwift).
+///
+/// The Email branding card draws its sample in the browser, so it can describe a header the mailer
+/// does not actually emit. This answers with the bytes the real path produces — template selection,
+/// merge fields and branded header included — so an operator sees the mail a customer would receive
+/// without waiting for an inbox. Nothing is mailed, and the recipient fields describe the CALLER, so
+/// this cannot be used as a relay.
+pub async fn preview_branding_body(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let to = auth.email.trim().to_string();
+    let name: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error: {e}")))?
+        .filter(|n: &String| !n.trim().is_empty())
+        .unwrap_or_else(|| "there".to_string());
+    let rendered = crate::email::render_branding_preview(&state.db, account_id, &name, &to)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(json!({
+        "sent": false,
+        "to": to,
+        "subject": rendered.subject,
+        "html": rendered.html,
+        "text": rendered.text,
+        "branded": rendered.branded,
+        "logo_is_own": rendered.own_logo
+    })))
+}
+
 /// GET /api/v1/settings
 pub async fn get_settings(
     State(state): State<AppState>,

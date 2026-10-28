@@ -1362,6 +1362,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/settings/branding/preview",
             post(handlers::settings_handler::preview_branding_email),
         )
+        // The same email RENDERED and returned, not sent (cron 2026-10-29): the card asks for the
+        // exact bytes the mail path would emit, so its sample cannot drift from the renderer.
+        .route(
+            "/api/v1/settings/branding/preview-body",
+            get(handlers::settings_handler::preview_branding_body),
+        )
         // Analytics routes
         .route(
             "/api/v1/analytics/overview",

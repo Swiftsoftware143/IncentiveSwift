@@ -73,6 +73,28 @@ pub async fn send_template_email(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
+    let rendered = render_email(pool, account_id, to, template_type, vars).await?;
+    send_email_request(pool, to, &rendered.subject, &rendered.text, &rendered.html).await
+}
+
+/// The rendered parts of a transactional message — the exact bytes the mail path emits, before
+/// they are handed to the queue.
+pub struct RenderedEmail {
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+}
+
+/// Select the account's template, bind the merge fields and paint the branded header — WITHOUT
+/// sending. Split out of [`send_template_email`] (cron 2026-10-29) so the console can show the
+/// exact mail an account's branding produces, byte for byte, instead of a drawing of it.
+pub async fn render_email(
+    pool: &sqlx::PgPool,
+    account_id: Option<uuid::Uuid>,
+    to: &str,
+    template_type: &str,
+    vars: &serde_json::Value,
+) -> Result<RenderedEmail, String> {
     let app_name = APP_NAME;
     let app_url = APP_URL;
 
@@ -130,7 +152,51 @@ pub async fn send_template_email(
     // The account's branding — or, when they have configured none, this app's own identity — opens
     // both parts of the message.
     let (text_body, html_body) = with_branding_header(Some(&branding), text_body, html_body);
-    send_email_request(pool, to, &subject, &text_body, &html_body).await
+    Ok(RenderedEmail {
+        subject,
+        text: text_body,
+        html: html_body,
+    })
+}
+
+/// What the console's "Show the exact email" arm answers.
+pub struct BrandingPreview {
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+    pub branded: bool,
+    pub own_logo: bool,
+}
+
+/// The email this account's branding produces, RENDERED AND RETURNED, never sent (cron
+/// 2026-10-29, parity with FunnelSwift and MissedCall Respondr).
+///
+/// The card's "What your recipients see" block is drawn by the browser, so it can drift from the
+/// renderer. This runs the real path — the same template selection, the same merge fields, the same
+/// [`with_branding_header`] — and hands back the bytes, so an operator judges the REAL header
+/// (uploaded logo, display name, colour rule) without waiting for an inbox and without a send.
+/// No address is taken from the caller's request: both recipient fields describe the CALLER.
+pub async fn render_branding_preview(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    name: &str,
+    to: &str,
+) -> Result<BrandingPreview, String> {
+    let vars = json!({ "name": name, "email": to });
+    let rendered = render_email(pool, Some(account_id), to, "branding_preview", &vars).await?;
+    // Read AFTER the render so the flags describe the same branding rows the render used.
+    let stored = crate::branding::load(pool, account_id).await;
+    let own_logo = stored
+        .as_ref()
+        .and_then(|b| b.resolve_logo_url(APP_URL))
+        .is_some();
+    Ok(BrandingPreview {
+        subject: rendered.subject,
+        text: rendered.text,
+        html: rendered.html,
+        branded: stored.is_some(),
+        own_logo,
+    })
 }
 
 fn get_default_subject(template_type: &str, app_name: &str) -> String {
