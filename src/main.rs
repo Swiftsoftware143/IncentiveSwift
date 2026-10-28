@@ -889,6 +889,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/password",
             put(crate::handlers::auth_handler::change_password),
         )
+        // The way back in when signup MINTED a password and the mail carrying it did not go out
+        // (2026-10-28 cron). Authenticated like every other act on the caller's own account: the
+        // token the signup response already carried IS the credential, and the one-shot
+        // `accounts.password_undelivered` latch bounds the offer. Deliberately NOT public.
+        .route(
+            "/api/v1/auth/initial-password",
+            post(crate::handlers::auth_handler::set_initial_password),
+        )
         // The account's own profile picture (kanban t_4fcbe895). The UPLOAD is an authenticated act
         // on the caller's own account; the READ is deliberately public (see
         // `security::route_policy::PUBLIC_ROUTES`) because an HTML `<img src>` carries no bearer

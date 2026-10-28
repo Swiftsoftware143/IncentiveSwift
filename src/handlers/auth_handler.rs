@@ -33,6 +33,12 @@ pub struct ChangePasswordInput {
     pub new_password: String,
 }
 
+/// `POST /api/v1/auth/initial-password` body — the customer's OWN choice of first password.
+#[derive(Deserialize)]
+pub struct SetInitialPasswordInput {
+    pub password: String,
+}
+
 /// Forgot password request body.
 #[derive(Deserialize)]
 pub struct ForgotPasswordInput {
@@ -310,6 +316,22 @@ pub async fn register(
         }
     };
 
+    // The state both the signup page and `POST /auth/initial-password` key on: this door MINTED the
+    // first password and the mail carrying it did not go out, so the customer holds an account whose
+    // password nobody has ever read. Only the minted arm can set this — a caller who brought their
+    // own password already knows it, whatever the welcome mail did.
+    if generated_password.is_some() && !credentials_emailed {
+        if let Err(e) = sqlx::query("UPDATE accounts SET password_undelivered = true WHERE id = $1")
+            .bind(account_id)
+            .execute(&state.db)
+            .await
+        {
+            // Best-effort: the account is already minted, and refusing the signup here would be
+            // worse than the state it describes — the customer can still use the sign-in page.
+            tracing::warn!("register: could not mark the undelivered credential for {email}: {e}");
+        }
+    }
+
     // The tier the visitor picked on the pricing page, kept as a WORKABLE request (cron 2026-10-23).
     // The card carries `?plan=pro` into the signup page and that page told them "You picked Pro", but
     // the POST carried name+email only — so the pick died here and the operator's Plan requests view
@@ -513,6 +535,20 @@ pub async fn login(
         .await
     {
         tracing::warn!("could not stamp last_login_at for {account_id}: {e}");
+    }
+
+    // A sign-in that WORKED is proof the customer knows their password, whatever the signup mail
+    // did. Clearing the latch here closes the "choose your own password" door as soon as it is no
+    // longer needed, so the offer cannot outlive the reason it exists. Best effort: this is
+    // bookkeeping and must never turn a correct password into a failed sign-in.
+    if let Err(e) = sqlx::query(
+        "UPDATE accounts SET password_undelivered = false WHERE id = $1 AND password_undelivered",
+    )
+    .bind(account_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!("could not clear the undelivered-credential latch for {account_id}: {e}");
     }
 
     // Generate JWT
@@ -1033,6 +1069,59 @@ pub async fn change_password(
     .await?;
 
     Ok(Json(json!({ "status": "password_updated" })))
+}
+
+/// `POST /api/v1/auth/initial-password` — the customer sets the first password they will ever know.
+///
+/// Signup mints a password and MAILS it, and that mail is the only way in. When the send does not go
+/// out (the provider refuses, or the address is one the sender withholds) the account is left with a
+/// password nobody has seen — and until now the signup page still promised the mail, so the customer
+/// held an account they could not enter and had no self-service way to fix it.
+/// `accounts.password_undelivered` marks exactly that state and nothing else; this door is the way
+/// out, and it is deliberately ONE-SHOT: the UPDATE writes the chosen password and clears the latch
+/// in the same statement, so a second call finds nothing to set and is refused.
+///
+/// No current password is asked for — the state this door exists for is precisely "the customer has
+/// never seen a password". What authenticates the caller is the token the signup response already
+/// carried for that minted account, and the latch keeps the offer available only while nothing has
+/// delivered or been used.
+pub async fn set_initial_password(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<SetInitialPasswordInput>,
+) -> Result<Json<Value>, AppError> {
+    if body.password.len() < 8 {
+        return Err(AppError::BadRequest(
+            "Password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let account_uuid = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account id".to_string()))?;
+
+    let new_hash = hash_password(&body.password)?;
+
+    // One statement, one shot: the latch is a WHERE condition AND is cleared by the same write, so
+    // two racing calls cannot both succeed and a replay after the first finds no row.
+    let updated: Option<Uuid> = sqlx::query_scalar(
+        r#"UPDATE accounts
+              SET password_hash = $1, password_undelivered = false, sessions_valid_from = NOW()
+            WHERE id = $2 AND password_undelivered = true
+        RETURNING id"#,
+    )
+    .bind(&new_hash)
+    .bind(account_uuid)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match updated {
+        Some(_) => Ok(Json(json!({ "status": "password_set" }))),
+        // NOT a 400: the request was well-formed and the caller is entitled to the account — there
+        // is simply nothing left to do, because a password they can already use is on the row.
+        None => Err(AppError::Conflict(
+            "This account already has a password you can use. Sign in with it, or use \"Forgot password?\" to reset it.".to_string(),
+        )),
+    }
 }
 
 /// `POST /api/v1/auth/avatar` — store the caller's own profile picture.
