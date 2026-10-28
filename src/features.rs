@@ -11,6 +11,43 @@ use crate::error::AppError;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// The tier whose entitlements govern one account: the account's OWN `plan_tier_id`, or — when it
+/// holds none — the install's FREE tier (the price-0 row every self-serve signup is seated on).
+///
+/// Two states read as "no tier": an account whose `plan_tier_id` was never written (an ordinary
+/// signup always seats one — `account_mint::resolve_entry_tier` — but a hand-minted or fleet-probe
+/// row can skip it) and one whose tier row is gone. Both are ALREADY published to the operator as
+/// the base plan: `handlers::admin_handler` selects `(a.plan_tier_id IS NULL) as plan_is_default`
+/// and labels that workspace `Free`. Before this helper the gates disagreed with the panel — the
+/// console said Free while every limit was granted without a cap. Measured live 2026-10-28: an
+/// account holding `plan_tier_id = NULL` created 12 of 12 tags against the Free tier's cap of 10.
+///
+/// The fallback resolves by PRICE (0), the same predicate `account_mint` uses to seat a signup, so
+/// there is no slug literal to rot when an install renames its tiers. The ORDER is fixed so an
+/// install carrying more than one price-0 tier always bounds an account with the same row.
+///
+/// `Ok(None)` means the install has NO price-0 tier at all — there is then nothing to bound the
+/// workspace with, and the house "not configured is not a cap" convention still applies.
+async fn effective_tier_id(db: &PgPool, account_id: Uuid) -> Result<Option<Uuid>, AppError> {
+    let own: Option<Uuid> = sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(db)
+        .await?
+        .flatten();
+    if own.is_some() {
+        return Ok(own);
+    }
+    let free: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM plan_tiers \
+          WHERE COALESCE(price_monthly, 0) = 0 AND COALESCE(is_active, true) \
+          ORDER BY COALESCE(sort_order, 0), created_at NULLS LAST, slug \
+          LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(free)
+}
+
 pub async fn enforce_feature_limit(
     db: &PgPool,
     account_id: &str,
@@ -20,16 +57,12 @@ pub async fn enforce_feature_limit(
     // `accounts.id` is `uuid` — see `account_uuid`.
     let account_id = account_uuid(account_id)?;
 
-    // Resolve the account's plan tier.
-    let tier_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(db)
-            .await?
-            .flatten();
+    // Resolve the account's plan tier — its own, else the install's free tier (see
+    // [`effective_tier_id`]): a workspace with no tier is bounded, never unlimited.
+    let tier_id = effective_tier_id(db, account_id).await?;
 
     let Some(tier_id) = tier_id else {
-        return Ok(()); // No plan — allow
+        return Ok(()); // The install carries no free tier — nothing to bound this account with.
     };
 
     // Canonical per-feature numeric limit from tier_features.
