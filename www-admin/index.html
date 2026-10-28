@@ -5402,7 +5402,7 @@ const AVATAR_MAX_BYTES = 2031616;
 const ProfileView = () => {
   const st = viewState('profile', {
     me: null, err: null, saving: false, saved: '', savedErr: false,
-    nameDraft: null, companyDraft: null,
+    nameDraft: null, companyDraft: null, usernameDraft: null,
     avMsg: '', avKind: 'info', pwMsg: '', pwKind: 'info',
     np: '', np2: '', cp: '',
     // Sign-in address change (kanban t_6b2702e3): the typed address, and the sentence the server
@@ -5417,7 +5417,7 @@ const ProfileView = () => {
     API.get('/auth/me').then(d => {
       const u = (d && d.user) || null;
       st.me = u; st.err = null;
-      if (u) { S.me = u; st.nameDraft = u.name || ''; st.companyDraft = u.company || ''; }
+      if (u) { S.me = u; st.nameDraft = u.name || ''; st.companyDraft = u.company || ''; st.usernameDraft = u.username || ''; }
       renderApp();
     }).catch(e => { st.err = e.message; renderApp(); });
   };
@@ -5434,16 +5434,20 @@ const ProfileView = () => {
   const saveProfile = async () => {
     const n = String(st.nameDraft == null ? (me.name || '') : st.nameDraft).trim();
     const c = String(st.companyDraft == null ? (me.company || '') : st.companyDraft).trim();
+    // Username travels with the same PUT: the backend has accepted it since the fleet profile
+    // port (accounts.username, COALESCE'd so a blank CLEARS it), /auth/me returns it, and the
+    // customer dashboard already edits it — the console did not render a field for it.
+    const un = String(st.usernameDraft == null ? (me.username || '') : st.usernameDraft).trim();
     if (!n) { st.savedErr = true; st.saved = 'Enter your name'; renderApp(); return; }
     st.saving = true; st.saved = ''; renderApp();
     try {
       // The response carries the saved row back (same shape as /auth/me), so the form and the
       // header repaint from what the SERVER stored rather than from what was typed.
-      const d = await API.put('/auth/profile', { name: n, company: c });
+      const d = await API.put('/auth/profile', { name: n, company: c, username: un });
       const u = (d && d.user) || null;
-      const next = u || Object.assign({}, me, { name: n, company: c });
+      const next = u || Object.assign({}, me, { name: n, company: c, username: un });
       st.me = next; S.me = next;
-      st.nameDraft = next.name || ''; st.companyDraft = next.company || '';
+      st.nameDraft = next.name || ''; st.companyDraft = next.company || ''; st.usernameDraft = next.username || '';
       API.setAuth(API.token, Object.assign({}, API.user || {}, { name: next.name || '', company: next.company || '' }));
       st.savedErr = false; st.saved = 'Saved';
     } catch (e) { st.savedErr = true; st.saved = e.message || 'Could not save'; }
@@ -5569,6 +5573,11 @@ const ProfileView = () => {
       <div class="mb-3">
         <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-name">Name</label>
         <input class="input" id="pf-name" value=${st.nameDraft == null ? (me.name || '') : st.nameDraft} onInput=${e => { st.nameDraft = e.target.value; }} placeholder="Your name" />
+      </div>
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-user">Username</label>
+        <input class="input" id="pf-user" maxlength="255" value=${st.usernameDraft == null ? (me.username || '') : st.usernameDraft} onInput=${e => { st.usernameDraft = e.target.value; }} placeholder="Optional" />
+        <p class="text-xs text-gray-400" style="margin-top:4px">Optional. A short name the console can show in place of your full name. Clear it to remove it.</p>
       </div>
       <div class="mb-3">
         <label class="block text-sm font-medium text-gray-600 mb-1" for="pf-co">Company</label>
@@ -6123,7 +6132,7 @@ if (API.token) {
     S.me = u;
     API.setAuth(API.token, Object.assign({}, API.user || {}, u));
     var pf = S.views['profile'];
-    if (pf) { pf.me = u; pf.nameDraft = u.name || ''; pf.companyDraft = u.company || ''; }
+    if (pf) { pf.me = u; pf.nameDraft = u.name || ''; pf.companyDraft = u.company || ''; pf.usernameDraft = u.username || ''; }
     renderApp();
   }).catch(function () {});
 }
