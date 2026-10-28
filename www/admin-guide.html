@@ -652,6 +652,11 @@ was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
   <code>GET /api/v1/auth/avatar/&lt;account id&gt;</code>. The profile answer carries
   <code>avatar_url</code> with a version marker, so a replaced picture shows immediately instead of
   being served from the browser's cache.</p>
+  <p>The same <strong>Profile</strong> screen edits <strong>Name</strong> (required),
+  <strong>Username</strong> and <strong>Company</strong>, and changes the password. Username is
+  optional: it is a short name the console can show in place of the full name, and clearing the box
+  and pressing <strong>Save</strong> removes it again. What the form shows is read back from the
+  server each time the screen is opened, so it never displays a stale copy.</p>
 </section>
 
 <section id="campaign-analytics">
