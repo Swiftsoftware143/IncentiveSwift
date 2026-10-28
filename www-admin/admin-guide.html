@@ -601,6 +601,16 @@ wide, otherwise the name in 20&nbsp;px, then a 3&nbsp;px rule in the brand colou
 follows the fields as you type, so you can judge a colour or name before saving. It sends nothing and
 saves nothing; a colour that is not a hex value previews as the default <code>#4f46e5</code>, exactly
 as the mail would paint it.</p>
+<p>That block is drawn by the browser, so it can only ever be a drawing of the mail. The button
+beside it &mdash; <strong>Show the exact email</strong> &mdash; asks the server for the real thing:
+<code>GET /api/v1/settings/branding/preview-body</code> (authenticated, no body) runs the same
+renderer every send uses &mdash; the account's template, the merge fields, the branded header &mdash;
+and returns the message without mailing it. The card shows the subject line and the body in a frame,
+again following nothing as you type (press the button after saving), so an operator judges the actual
+bytes a customer would receive: the uploaded logo, the display name, the colour rule. Nothing is
+mailed, the recipient is always the caller's own address, and a reserved test address changes nothing
+here because no send is attempted. Use <strong>Send me a preview email</strong> when the proof you
+need is an inbox.</p>
 <p>Routes: <code>POST|DELETE /api/v1/settings/branding/logo</code> (authenticated, the caller's own
 account) and the <strong>public</strong> <code>GET /api/v1/branding/logo/:tenant_id</code> &mdash;
 public by design, because a mail client renders <code>&lt;img src&gt;</code> with no credential.
