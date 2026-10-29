@@ -902,6 +902,13 @@ function pbLimit(v) {
   if (v === null || v === undefined) return '\u2014';
   var n = Number(v);
   if (!isFinite(n)) return String(v);
+  // A NEGATIVE limit is the plan API's own "no limit" sentinel. `GET /auth/me` hands this page
+  // max_campaigns: -1, max_entries_per_month: -1 and features.max_leads/max_tags: -1 for a top tier,
+  // and this line used to read those numbers out literally: the customer's own plan summary said
+  // "Enterprise -- -1 campaigns - -1 entries/month - -1 leads - -1 tags" right beside a usage card that
+  // said "of unlimited" (measured in Chromium on app.incentiveswift.com/dashboard/, 2026-10-28).
+  // The usage card and the plan tiles already read -1 as unlimited; this is the one place that did not.
+  if (n < 0) return 'Unlimited';
   return (n === 0) ? 'None' : (n >= 1000000 ? 'Unlimited' : String(n));
 }
 function pbPlanLimits(p) {
