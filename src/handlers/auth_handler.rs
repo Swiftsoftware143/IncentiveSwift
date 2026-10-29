@@ -606,6 +606,17 @@ pub async fn me(
                   (SELECT ua.updated_at FROM user_avatars ua WHERE ua.user_id = a.id) AS avatar_updated_at,
                   t.name as plan_name,
                   t.slug as plan_slug,
+                  (t.id IS NOT NULL) as plan_assigned,
+                  CASE WHEN t.id IS NOT NULL THEN NULL ELSE (
+                      -- The tier the GATES actually bound a tier-less workspace with
+                      -- (features::effective_tier_id): the install's price-0, active tier in its
+                      -- fixed order. Same predicate, so the console names the tier its limits come
+                      -- from instead of inventing one.
+                      SELECT pt.name FROM plan_tiers pt
+                       WHERE COALESCE(pt.price_monthly, 0) = 0 AND COALESCE(pt.is_active, true)
+                       ORDER BY COALESCE(pt.sort_order, 0), pt.created_at NULLS LAST, pt.slug
+                       LIMIT 1
+                  ) END as plan_effective_name,
                   COALESCE((
                       -- An included BOOLEAN feature carries NO limit_value (the row is
                       -- enabled=true, limit_value NULL), so the old COALESCE turned every one of
@@ -654,9 +665,19 @@ pub async fn me(
             )
         })
         .unwrap_or_default();
-    // The tier, as the console paints it. A tier-less account reads "Free" rather than an empty
-    // badge — and never the raw role word ("User"), which is the stray label this card removes.
-    let plan_label = plan_name.clone().unwrap_or_else(|| "Free".to_string());
+    // The tier, as the console paints it. A tier-less account reads NO plan (the console says so,
+    // naming the tier its limits actually come from) rather than an empty badge or an invented
+    // "Free" — and never the raw role word ("User"), which is the stray label this card removes.
+    // The REAL tier name, never an invented one. An account whose tier did not come back (a
+    // hand-minted or fleet-probe row holding `plan_tier_id = NULL`) reads NULL here, so the console
+    // says "no plan chosen yet" instead of telling the workspace it is on a tier called Free — a
+    // false statement about what it bought (fleet rule: FunnelSwift / ADASwift / missedcall /
+    // WorkflowSwift all publish the same pair). `plan_assigned` is that distinction, and
+    // `plan_effective_name` names the tier the GATES actually bound the workspace with
+    // (features::effective_tier_id: the install's price-0 tier, same predicate).
+    let plan_label = plan_name.clone();
+    let plan_assigned: bool = row.get("plan_assigned");
+    let plan_effective_name: Option<String> = row.get("plan_effective_name");
     let plan_slug: Option<String> = row.get("plan_slug");
     let features: serde_json::Value = row.get("features");
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
@@ -711,6 +732,8 @@ pub async fn me(
             "company": company.clone().unwrap_or_default(),
             "avatar_url": avatar_url,
             "plan_name": plan_label,
+            "plan_assigned": plan_assigned,
+            "plan_effective_name": plan_effective_name,
             "plan_tier_id": plan_tier_id,
             "plan": {
                 "name": plan_name,
@@ -728,7 +751,9 @@ pub async fn me(
         // Flat twin of `user.plan_name`: the fleet contract names `plan_name` as a field of this
         // response, and a client must not have to know this app nests the account under `user`.
         // Both placements are the SAME computed string (`plan_label`), so they cannot disagree.
-        "plan_name": plan_label
+        "plan_name": plan_label,
+        "plan_assigned": plan_assigned,
+        "plan_effective_name": plan_effective_name
     })))
 }
 
@@ -890,6 +915,17 @@ pub async fn update_profile(
                   (SELECT ua.updated_at FROM user_avatars ua WHERE ua.user_id = a.id) AS avatar_updated_at,
                   t.name as plan_name,
                   t.slug as plan_slug,
+                  (t.id IS NOT NULL) as plan_assigned,
+                  CASE WHEN t.id IS NOT NULL THEN NULL ELSE (
+                      -- The tier the GATES actually bound a tier-less workspace with
+                      -- (features::effective_tier_id): the install's price-0, active tier in its
+                      -- fixed order. Same predicate, so the console names the tier its limits come
+                      -- from instead of inventing one.
+                      SELECT pt.name FROM plan_tiers pt
+                       WHERE COALESCE(pt.price_monthly, 0) = 0 AND COALESCE(pt.is_active, true)
+                       ORDER BY COALESCE(pt.sort_order, 0), pt.created_at NULLS LAST, pt.slug
+                       LIMIT 1
+                  ) END as plan_effective_name,
                   COALESCE((
                       -- An included BOOLEAN feature carries NO limit_value (the row is
                       -- enabled=true, limit_value NULL), so the old COALESCE turned every one of
@@ -965,7 +1001,16 @@ pub async fn update_profile(
         })
         .unwrap_or_default();
     let plan_name: Option<String> = row.get("plan_name");
-    let plan_label = plan_name.clone().unwrap_or_else(|| "Free".to_string());
+    // The REAL tier name, never an invented one. An account whose tier did not come back (a
+    // hand-minted or fleet-probe row holding `plan_tier_id = NULL`) reads NULL here, so the console
+    // says "no plan chosen yet" instead of telling the workspace it is on a tier called Free — a
+    // false statement about what it bought (fleet rule: FunnelSwift / ADASwift / missedcall /
+    // WorkflowSwift all publish the same pair). `plan_assigned` is that distinction, and
+    // `plan_effective_name` names the tier the GATES actually bound the workspace with
+    // (features::effective_tier_id: the install's price-0 tier, same predicate).
+    let plan_label = plan_name.clone();
+    let plan_assigned: bool = row.get("plan_assigned");
+    let plan_effective_name: Option<String> = row.get("plan_effective_name");
     let plan_slug: Option<String> = row.get("plan_slug");
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
     let max_campaigns: Option<i32> = row.get("max_campaigns");
@@ -988,6 +1033,8 @@ pub async fn update_profile(
             "company": company.clone().unwrap_or_default(),
             "avatar_url": avatar_url,
             "plan_name": plan_label,
+            "plan_assigned": plan_assigned,
+            "plan_effective_name": plan_effective_name,
             "plan_tier_id": plan_tier_id,
             "plan": {
                 "name": plan_name,

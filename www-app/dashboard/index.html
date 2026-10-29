@@ -257,12 +257,20 @@ if (!token) {
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
 function paintAccount(u) {
   PB.plan = u.plan || null;
+  // `plan_assigned` is the SERVER's own distinction (fleet rule, same pair FunnelSwift / ADASwift /
+  // missedcall / WorkflowSwift publish): false means this workspace holds no plan tier at all, so it
+  // must never be told it is on a tier called "Free". `plan_effective_name` names the tier the app's
+  // own gates actually bound it with, so the screens can say what happens instead of inventing a level.
+  PB.assigned = (u.plan_assigned !== false);
+  PB.effectiveName = u.plan_effective_name || '';
   if (PB.plans) pbRender();
   // The usage card shows a count beside the plan's allowance, so it repaints once the plan is read.
   if (USAGE.data) renderUsage();
   var nm = u.name || u.email || 'Your account';
-  // No invention: if the plan was not read, name none (the badge renders empty, not 'Free').
-  var plan = u.plan_name || (u.plan && u.plan.name) || '';
+  // No invention: if the plan was not read, name none (the badge renders empty, not 'Free'); a
+  // workspace with NO plan says exactly that rather than borrowing the name of a tier it is not on.
+  var plan = (u.plan_assigned === false) ? 'No plan chosen yet'
+    : (u.plan_name || (u.plan && u.plan.name) || '');
   var nameEl = document.getElementById('userName');
   var planEl = document.getElementById('userPlan');
   var av = document.getElementById('uav');
@@ -1057,9 +1065,16 @@ function pbRender() {
   var curSlug = cur.slug || '';
   var curEl = document.getElementById('pb-current');
   if (curEl) {
-    // No invention: an unread plan shows a dash, never the word Free.
-    curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || '\u2014') + '</span>'
-      + (pbPlanLimits(cur) ? ' <span style="color:#64748b">\u2014 ' + esc(pbPlanLimits(cur)) + '</span>' : '');
+    if (PB.assigned === false) {
+      // The workspace holds no plan tier: say so, and name the tier its limits come from (the app's
+      // own gates bound it with that one) instead of printing a level it is not on.
+      curEl.innerHTML = 'Your plan: <span class="badge" style="background:#fef3c7;color:#92400e">No plan chosen yet</span>'
+        + (PB.effectiveName ? ' <span style="color:#64748b">\u2014 this workspace runs on ' + esc(PB.effectiveName) + ' until a plan is chosen</span>' : '');
+    } else {
+      // No invention: an unread plan shows a dash, never the word Free.
+      curEl.innerHTML = 'Your plan: <span class="badge">' + esc(cur.name || curSlug || '\u2014') + '</span>'
+        + (pbPlanLimits(cur) ? ' <span style="color:#64748b">\u2014 ' + esc(pbPlanLimits(cur)) + '</span>' : '');
+    }
   }
   pbTermBar();
   var wrap = document.getElementById('pb-plans');
