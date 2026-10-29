@@ -179,9 +179,49 @@ pub fn is_reserved_address(email: &str) -> bool {
     }
 }
 
+/// A CAPTURE-door address check: a PERSON's optional address — allowed to be ABSENT, refused when it
+/// is not an address, and NEVER rewritten (the caller's value is the value stored; [`normalize`] is
+/// used only to decide).
+///
+/// [`normalize`] guards LOGIN identities (`accounts.email`), where empty is meaningless. A captured
+/// contact's address is a different boundary (kanban t_5230513b): every write path into
+/// `contacts.email` funnels through [`crate::db::contacts`], and the console form plus the
+/// cross-app tag-provision push all accepted `not-an-email` verbatim — measured live 2026-10-29:
+/// `POST /api/v1/contacts {"email":"not-an-email","first_name":"P"}` answered 200 and stored the
+/// row, a contact no campaign mail or receipt could ever reach. Absent stays allowed (a contact
+/// captured by phone alone is complete). Same shape as the FunnelSwift reference
+/// (`security::email_addr::check_lead_address`, a5bf9fa).
+pub fn check_lead_address(raw: &str) -> Result<(), String> {
+    if raw.trim().is_empty() {
+        return Ok(());
+    }
+    normalize(raw).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_captured_address_may_be_absent_but_never_malformed() {
+        // Absent is a complete contact (a person captured by phone alone).
+        assert!(check_lead_address("").is_ok());
+        assert!(check_lead_address("   ").is_ok());
+        // A real address passes in any case and is not rewritten by this check.
+        assert!(check_lead_address("ada@example.com").is_ok());
+        assert!(check_lead_address(" Ada@Example.COM ").is_ok());
+        // Measured live 2026-10-29: this literal was stored by POST /api/v1/contacts.
+        for bad in [
+            "not-an-email",
+            "bad",
+            "a@b@c",
+            "@example.com",
+            "ada@",
+            "ada lovelace@example.com",
+        ] {
+            assert!(check_lead_address(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
 
     #[test]
     fn rejects_the_literal_that_minted_the_dead_account() {

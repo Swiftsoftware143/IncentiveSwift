@@ -94,6 +94,14 @@ pub async fn upsert_contact(
     account_id: Option<Uuid>,
     source: &str,
 ) -> Result<Uuid, AppError> {
+    // A capture door, not a login door (kanban t_5230513b): the address may be absent, but a value
+    // no mail system could deliver is refused BEFORE the SELECT — otherwise it becomes the dedup key
+    // of a contact nobody can ever mail. Guarded in this shared writer so every capture path that
+    // funnels here inherits it.
+    if let Some(ref email) = input.email {
+        crate::security::email_addr::check_lead_address(email)
+            .map_err(AppError::UnprocessableEntity)?;
+    }
     // First try to find by email (case-insensitive)
     if let Some(ref email) = input.email {
         let existing: Option<Uuid> =
@@ -247,6 +255,14 @@ pub async fn create_contact(
     input: &ContactInput,
     source: &str,
 ) -> Result<Contact, AppError> {
+    // The console's "new contact" door (kanban t_5230513b): same capture guard as `upsert_contact`.
+    // Measured live 2026-10-29: POST /api/v1/contacts {"email":"not-an-email"} answered 200 and
+    // stored the row. Refused here, before the dedup SELECT, so a malformed address can never
+    // become a contact's identity.
+    if let Some(ref email) = input.email {
+        crate::security::email_addr::check_lead_address(email)
+            .map_err(AppError::UnprocessableEntity)?;
+    }
     // Check for existing contact by email (case-insensitive)
     if let Some(ref email) = input.email {
         let existing: Option<Uuid> =
@@ -289,6 +305,13 @@ pub async fn update_contact(
     contact_id: &Uuid,
     input: &ContactInput,
 ) -> Result<Contact, AppError> {
+    // The console's Edit door (kanban t_5230513b): a PROVIDED address must be an address. The
+    // stored fallback below is not re-checked — it was admitted by a guarded writer when it was
+    // captured, so an edit that does not touch the address cannot fail on history.
+    if let Some(ref email) = input.email {
+        crate::security::email_addr::check_lead_address(email)
+            .map_err(AppError::UnprocessableEntity)?;
+    }
     let existing = get_contact(pool, account_id, contact_id).await?;
 
     // Use input values where provided, fall back to existing values

@@ -68,6 +68,11 @@ pub async fn handle_tag_provision(
         .unwrap_or("")
         .trim()
         .to_lowercase();
+    // A cross-app capture door (kanban t_5230513b): this push writes `contacts.email` below, so an
+    // address no mail system could deliver is refused here rather than stored as the contact's
+    // identity. Absent stays allowed — a tag may carry no address.
+    crate::security::email_addr::check_lead_address(&email)
+        .map_err(AppError::UnprocessableEntity)?;
     let first_name = req
         .contact
         .first_name

@@ -33,6 +33,9 @@ pub async fn tag_provision(
     if email.is_empty() {
         return Err(AppError::BadRequest("contact.email is required".into()));
     }
+    // The cross-app push writes this straight into `contacts.email` (kanban t_5230513b): an address
+    // no mail system could deliver is refused at the door, before it becomes a contact's identity.
+    crate::security::email_addr::check_lead_address(&email).map_err(AppError::BadRequest)?;
 
     let name = contact
         .and_then(|c| c.get("first_name"))
