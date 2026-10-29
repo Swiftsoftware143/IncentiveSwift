@@ -515,17 +515,37 @@ pub async fn admin_dashboard(
     .await
     .unwrap_or(0);
 
-    // Recent scans (last 20)
-    let recent: Vec<Value> = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, String, i32, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, member_id, business_name, scan_type, points_awarded, scanned_at FROM loyalty_scans WHERE program_id = $1 ORDER BY scanned_at DESC LIMIT 20"
+    // Total redemptions. The console's fourth card reads `total_redemptions`, which this payload
+    // never carried — so the card printed 0 whatever the ledger held (measured 2026-10-29).
+    let total_redemptions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM point_redemption_log WHERE program_id = $1")
+            .bind(program_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+
+    // Recent scans (last 20).
+    //
+    // `member_name` is joined, not stored: `loyalty_scans` carries the member ID only, so the
+    // console's Member column had nothing to render and printed "?" for every row (measured
+    // 2026-10-29). The name is the contact's first+last, falling back to the email when the
+    // contact was created without one, so a row always names somebody.
+    let recent: Vec<Value> = sqlx::query_as::<_, (Uuid, Uuid, Option<String>, String, i32, chrono::DateTime<chrono::Utc>, Option<String>)>(
+        "SELECT s.id, s.member_id, s.business_name, s.scan_type, s.points_awarded, s.scanned_at, \
+                COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), ''), c.email) AS member_name \
+           FROM loyalty_scans s \
+           LEFT JOIN loyalty_members lm ON lm.id = s.member_id \
+           LEFT JOIN contacts c ON c.id = lm.contact_id \
+          WHERE s.program_id = $1 ORDER BY s.scanned_at DESC LIMIT 20"
     )
     .bind(program_id)
     .fetch_all(&state.db)
     .await?
     .into_iter()
-    .map(|(id, mid, bn, st, pa, at)| json!({
+    .map(|(id, mid, bn, st, pa, at, member_name)| json!({
         "scan_id": id.to_string(),
         "member_id": mid.to_string(),
+        "member_name": member_name,
         "business_name": bn,
         "scan_type": st,
         "points_awarded": pa,
@@ -542,6 +562,7 @@ pub async fn admin_dashboard(
         "enrolled_businesses": enrolled_businesses,
         "enrolled_suppliers": enrolled_suppliers,
         "scans_this_month": scans_this_month,
+        "total_redemptions": total_redemptions,
         "recent_scans": recent,
     })))
 }

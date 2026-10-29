@@ -1976,16 +1976,16 @@ const LoyaltyPrograms = () => {
   const dashboardTab = html`<div>
     <h2 class="text-xl font-bold mb-4">Loyalty Dashboard</h2>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_members||st.dashboard?.enrolled_businesses||0}</div><div class="stat-label">Businesses</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.enrolled_businesses??0}</div><div class="stat-label">Businesses</div></div>
       <div class="stat-card"><div class="stat-value">${st.dashboard?.total_suppliers||st.dashboard?.enrolled_suppliers||0}</div><div class="stat-label">Suppliers</div></div>
-      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_members||st.dashboard?.total_scans||0}</div><div class="stat-label">Scans</div></div>
-      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_redemptions||0}</div><div class="stat-label">Redemptions</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.scans_this_month??0}</div><div class="stat-label">Scans this month</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_redemptions??0}</div><div class="stat-label">Redemptions</div></div>
     </div>
     ${st.dashboard?.recent_scans ? html`<div class="card p-0 overflow-hidden"><h3 class="font-bold p-4 pb-0">Recent Scans</h3>
       <table class="table"><thead><tr><th>Member</th><th>Business</th><th>Points</th><th>Time</th></tr></thead>
         <tbody>${(st.dashboard.recent_scans||[]).map(s => html`<tr>
-          <td>${s.member_name||'?'}</td><td>${s.business_name||'?'}</td>
-          <td>${s.points_earned||0}</td><td>${new Date(s.created_at).toLocaleString()}</td>
+          <td>${s.member_name||'\u2014'}</td><td>${s.business_name||'\u2014'}</td>
+          <td>${s.points_awarded||0}</td><td>${s.scanned_at?new Date(s.scanned_at).toLocaleString():'\u2014'}</td>
         </tr>`)}</tbody></table></div>` : html`<div class="card text-center py-8 text-gray-400">Select a program above to load dashboard data.</div>`}
   </div>`;
 
