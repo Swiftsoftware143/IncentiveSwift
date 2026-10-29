@@ -169,9 +169,13 @@ async function handleSignup(e) {
         'Nothing in your inbox after a minute? Check your spam folder, then ' + resetLink + '.' +
         '</div>';
     } else {
+      window.__signupToken = (data && data.token) || '';
       sucDiv.innerHTML = '⚠️ <strong>Account created — but we could not send your login details to ' +
         safeEmail + '.</strong><br>So there is nothing waiting in your inbox, and we will not pretend otherwise. ' +
-        'Set your own password instead: ' + resetLink + ' and sign in with it.' +
+        'Choose a password below and sign in with it - no email needed.' +
+        initialPwBoxHtml() +
+        '<div style="font-size:13px;margin-top:8px">Prefer a code? ' + resetLink +
+        ' (it uses the same email that just failed).</div>' +
         keptPlanNote +
         '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
         'If that reset code does not arrive either, the mail service for this site is having trouble — ' +
@@ -186,6 +190,36 @@ async function handleSignup(e) {
     errDiv.style.display = 'block';
     btn.disabled = false;
     btn.textContent = 'Create Free Account →';
+  }
+}
+
+// The mail-independent way in (2026-10-29). `POST /api/v1/auth/initial-password` already exists for
+// exactly this state: it takes the SIGNUP session's own token, needs no email at all, and is gated in
+// SQL on `accounts.password_undelivered`, so it can never overwrite a password the customer already
+// knows. ADASwift, FunnelSwift, MissedCall and WorkflowSwift all offer it on the same arm; this page
+// pointed the customer at the reset page, which travels the SAME mail path that had just failed.
+function initialPwBoxHtml() {
+  return '<div style="margin-top:12px;padding:12px;border:1px solid rgba(52,211,153,.35);background:rgba(16,185,129,.08);border-radius:8px;text-align:left">' +
+    '<strong style="font-size:14px">Set your password now</strong>' +
+    '<div style="font-size:13px;margin:6px 0">You are already signed up - choose the password you will sign in with:</div>' +
+    '<input id="initPw" type="password" minlength="8" placeholder="At least 8 characters" style="width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px">' +
+    '<button type="button" onclick="saveInitialPassword()" style="margin-top:8px;width:100%;padding:9px 10px;border:0;border-radius:6px;background:#0d9488;color:#fff;font-weight:600;cursor:pointer">Save password</button>' +
+    '<div id="initPwMsg" style="font-size:13px;margin-top:8px"></div>' +
+    '</div>';
+}
+async function saveInitialPassword() {
+  var box = document.getElementById('initPwMsg');
+  var pw = (document.getElementById('initPw') || {}).value || '';
+  if (pw.length < 8) { box.innerHTML = '<span style="color:#b91c1c">That is shorter than 8 characters - try again.</span>'; return; }
+  if (!window.__signupToken) { box.innerHTML = '<span style="color:#b91c1c">Your signup session has expired. Use the reset code above, or write to support.</span>'; return; }
+  try {
+    var r = await fetch('/api/v1/auth/initial-password', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + window.__signupToken }, body: JSON.stringify({ password: pw }) });
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) throw new Error(d.message || d.error || 'Could not save that password.');
+    box.innerHTML = '<span style="color:#15803d"><strong>Password saved.</strong> Taking you to sign in...</span>';
+    setTimeout(function(){ window.location = 'https://app.incentiveswift.com/login.html'; }, 900);
+  } catch (err) {
+    box.innerHTML = '<span style="color:#b91c1c">' + String(err.message).replace(/[<>&]/g, '') + '</span>';
   }
 }
 </script>
