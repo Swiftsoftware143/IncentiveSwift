@@ -91,6 +91,26 @@ pub async fn has_mechanic_access(
     }
 }
 
+/// Does `mechanic_<type>` name a feature this install knows at all?
+///
+/// The gate maps a campaign `type` to `mechanic_<type>` and, when no such row exists, falls back to
+/// the `all_mechanics` catch-all. That is right for a real mechanic an operator has not assigned to a
+/// tier — but for a type that names NO feature anywhere (a typo, or an API caller inventing `"spin"`
+/// when the install's vocabulary says `"spin_wheel"`) the fallback produced the UpgradeRequired
+/// sentence, so the customer was told to PAY for a mechanic that does not exist. Callers use this to
+/// answer 400 "unknown type" instead.
+pub async fn mechanic_type_is_known(
+    state: &AppState,
+    mechanic_type: &str,
+) -> Result<bool, AppError> {
+    let key = format!("mechanic_{}", mechanic_type);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM features WHERE key = $1)")
+        .bind(&key)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(exists)
+}
+
 /// Enforce that an account's plan tier can play a given mechanic.
 /// Returns `AppError::UpgradeRequired` (402) when the account's tier does not
 /// include the `mechanic_<type>` feature (or the `all_mechanics` catch-all).

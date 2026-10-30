@@ -284,6 +284,19 @@ pub async fn create_campaign(
     let has_access =
         feature_gate::has_mechanic_access(&state, &user.account_id, &body.r#type).await?;
     if !has_access {
+        // A type that names no `mechanic_<type>` feature anywhere is a BAD REQUEST, not an upgrade.
+        // Measured live 2026-10-30: `type:"spin"` (this install's vocabulary is `spin_wheel`) was
+        // answered `403 "Your plan does not include the 'spin' mechanic. Upgrade to access this
+        // feature."` — i.e. the customer was asked to pay for a mechanic that does not exist. An
+        // `all_mechanics` holder never reaches this arm (the catch-all allows them), so converting
+        // an unknown type to 400 cannot regress them.
+        if !feature_gate::mechanic_type_is_known(&state, &body.r#type).await? {
+            return Err(AppError::BadRequest(format!(
+                "Unknown campaign type '{}'. A campaign type must be one of this install's \
+                 mechanics (for example `spin_wheel`, `quiz`, `raffle`).",
+                body.r#type
+            )));
+        }
         return Err(AppError::Forbidden(format!(
             "Your plan does not include the '{}' mechanic. Upgrade to access this feature.",
             body.r#type
