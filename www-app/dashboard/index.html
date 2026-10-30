@@ -56,37 +56,6 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 </div>
 <div style="max-width:1100px;margin:24px auto;padding:0 24px">
   <div class="card">
-    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
-    <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
-         sign-in page had cached). It is now the account's real row, read from /api/v1/auth/me, with
-         the REAL plan name and the inline editor for name, company, username and password. -->
-    <div id="account" style="color:#64748b;font-size:14px">Loading your account…</div>
-  </div>
-  <div class="card">
-    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Profile picture</h2>
-    <!-- The account's own face, on the customer's OWN dashboard. The other five apps let a tenant set
-         their picture from their dashboard; here the upload lived only on the Profile screen inside
-         the admin console, so a customer had to leave their dashboard to change it. This drives the
-         SAME two endpoints that screen drives - POST|DELETE /api/v1/auth/avatar - so there is one
-         store (`user_avatars`) and one writer, never two. -->
-    <p style="color:#64748b;font-size:14px;margin:0 0 14px">The picture that appears beside your name on this dashboard and in the console. PNG, JPEG, GIF or WebP, up to 2&nbsp;MB. Leave it unset and your initial is shown instead.</p>
-    <div id="pp-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
-    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
-      <div style="min-width:200px">
-        <div style="font-size:12px;color:#64748b;margin-bottom:6px">Current picture</div>
-        <img id="pp-prev" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:none;border:1px solid #e2e8f0;background:#fff">
-        <span id="pp-ph" class="uav-ph" style="width:56px;height:56px;font-size:22px">?</span>
-        <!-- The visible "Current picture" text above is a heading, not a label, so the file control
-             had no accessible name (measured 2026-10-22 in this page's accessibility census). -->
-        <input id="pp-file" type="file" aria-label="Profile picture file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
-      </div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn" onclick="ppUpload()">Upload picture</button>
-      <button class="btn" id="pp-rm" style="background:#64748b;display:none" onclick="ppRemove()">Remove picture</button>
-    </div>
-  </div>
-  <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Dashboard</h2>
     <p style="color:#64748b;font-size:14px;margin:0">Welcome to IncentiveSwift. Your user portal is active.</p>
     <p style="color:#64748b;font-size:14px;margin:8px 0 0">Your admin console manages your campaigns, loyalty programs, leads, tags, API keys and settings.</p>
@@ -127,6 +96,37 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Recent activity</h2>
     <div id="dash-activity" style="color:#64748b;font-size:14px">Loading recent activity&hellip;</div>
+  </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
+    <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
+         sign-in page had cached). It is now the account's real row, read from /api/v1/auth/me, with
+         the REAL plan name and the inline editor for name, company, username and password. -->
+    <div id="account" style="color:#64748b;font-size:14px">Loading your account…</div>
+  </div>
+  <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Profile picture</h2>
+    <!-- The account's own face, on the customer's OWN dashboard. The other five apps let a tenant set
+         their picture from their dashboard; here the upload lived only on the Profile screen inside
+         the admin console, so a customer had to leave their dashboard to change it. This drives the
+         SAME two endpoints that screen drives - POST|DELETE /api/v1/auth/avatar - so there is one
+         store (`user_avatars`) and one writer, never two. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">The picture that appears beside your name on this dashboard and in the console. PNG, JPEG, GIF or WebP, up to 2&nbsp;MB. Leave it unset and your initial is shown instead.</p>
+    <div id="pp-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+      <div style="min-width:200px">
+        <div style="font-size:12px;color:#64748b;margin-bottom:6px">Current picture</div>
+        <img id="pp-prev" alt="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:none;border:1px solid #e2e8f0;background:#fff">
+        <span id="pp-ph" class="uav-ph" style="width:56px;height:56px;font-size:22px">?</span>
+        <!-- The visible "Current picture" text above is a heading, not a label, so the file control
+             had no accessible name (measured 2026-10-22 in this page's accessibility census). -->
+        <input id="pp-file" type="file" aria-label="Profile picture file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn" onclick="ppUpload()">Upload picture</button>
+      <button class="btn" id="pp-rm" style="background:#64748b;display:none" onclick="ppRemove()">Remove picture</button>
+    </div>
   </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Email branding</h2>
@@ -190,6 +190,9 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
          otherwise its refusal sentence verbatim. A price or a promise is never written in this page. -->
     <p style="color:#64748b;font-size:14px;margin:0 0 14px">What this workspace is on, what each plan includes, and the way up. Prices are the ones your plan records carry.</p>
     <div id="pb-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <!-- THE RETURN FROM A CHECKOUT (2026-10-29): the banner a customer sees after a payment
+         page hands them back. Filled by pbCheckoutReturn(), hidden until then. -->
+    <div id="pb-return" style="display:none;font-size:13.5px;line-height:1.5;margin:0 0 12px;padding:10px 12px;border-radius:8px"></div>
     <div id="pb-current" style="font-size:13.5px;color:#334155;margin:0 0 14px">Loading your plan&hellip;</div>
     <!-- BILLING TERM (2026-10-24). Checkout can sell either term; until this switch existed this
          screen only ever quoted the monthly rate, so the yearly price these plan records carry could
@@ -249,6 +252,7 @@ if (!token) {
   ebLoad();
   ebWirePreview();
   pbLoad();
+  pbCheckoutReturn();
   loadStats();
   loadActivity();
   loadUsage();
@@ -1025,6 +1029,59 @@ function pbWithdrawRequest(btn) {
     pbMsg('We could not reach the server. Try again in a moment.', 'e');
   });
 }
+// ── THE RETURN FROM A CHECKOUT (2026-10-29) ──────────────────────────────────────────────
+// `pbUpgrade` hands the customer to a payment page and this page is where they come back:
+// `success_url`/`cancel_url` both point at /dashboard/ with a `checkout=` flag. Until now NOTHING
+// read that flag, so a customer who had just paid saw the same old plan and not one word about it —
+// indistinguishable from a payment that failed, which invites a second payment. It also never said
+// anything on the way OUT: the payment-link arm redirects instantly, so a customer sent to a hosted
+// page is not told that this installation switches the plan by hand and cannot see the payment.
+// Two arms, both read from what the code itself wrote (the query flag, or the hand-off marker set
+// just before the redirect) — never guessed.
+function pbCheckoutReturn() {
+  var box = document.getElementById('pb-return');
+  if (!box) return;
+  var flag = null;
+  try { flag = new URLSearchParams(window.location.search).get('checkout'); } catch (e) { flag = null; }
+  var handoff = null;
+  try { handoff = sessionStorage.getItem('is_checkout_handoff'); } catch (e) { handoff = null; }
+  var note = null, fg = '#065f46', bg = '#ecfdf5', bd = '#a7f3d0';
+  if (flag === 'success') {
+    note = 'Payment received \u2014 thank you. The payment page took the payment; the plan on this '
+         + 'workspace is switched by the team that runs this installation, and you will get an email '
+         + 'when it is on. Nothing else is needed from you, so please do not pay twice.';
+  } else if (flag === 'cancelled') {
+    note = 'Checkout cancelled \u2014 nothing was charged. You can pick a plan again at any time.';
+    fg = '#92400e'; bg = '#fffbeb'; bd = '#fcd34d';
+  } else if (handoff) {
+    note = 'You were sent to our payment page for the ' + handoff + ' plan. If you completed the '
+         + 'payment, the team switches this workspace onto it by hand and you will get an email when '
+         + 'it is on \u2014 the plan below will NOT change by itself, so do not pay twice.';
+    fg = '#1e40af'; bg = '#eff6ff'; bd = '#bfdbfe';
+  }
+  if (handoff) { try { sessionStorage.removeItem('is_checkout_handoff'); } catch (e) {} }
+  if (!note) return;
+  box.style.display = 'block';
+  box.style.color = fg; box.style.background = bg; box.style.border = '1px solid ' + bd;
+  box.textContent = note;
+  var see = document.createElement('button');
+  see.type = 'button'; see.textContent = 'See my plan requests';
+  see.style.cssText = 'margin-left:10px;font-size:12px;padding:3px 8px;border:1px solid #cbd5e1;background:#fff;border-radius:6px;cursor:pointer';
+  see.onclick = function () { var r = document.getElementById('pb-requests'); if (r) r.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+  box.appendChild(see);
+  var no = document.createElement('button');
+  no.type = 'button'; no.textContent = 'Dismiss';
+  no.style.cssText = 'margin-left:8px;font-size:12px;padding:3px 8px;border:0;background:transparent;color:#64748b;cursor:pointer;text-decoration:underline';
+  no.onclick = function () { box.style.display = 'none'; };
+  box.appendChild(no);
+  // Clear the flag from the address bar so a reload (or a bookmark of this URL) never repeats a
+  // message about a payment the customer has already read.
+  try {
+    var u = new URL(window.location.href);
+    u.searchParams.delete('checkout');
+    window.history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
+  } catch (e) {}
+}
 function pbLoad() {
   fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -1259,6 +1316,9 @@ function pbUpgrade(slug, price, planId, name, term) {
   var t = (term === 'year') ? 'year' : 'month';
   var planName = name || pbPlanName(slug);
   var shown = '$' + (Math.round(Number(price) * 100) / 100) + '/' + t;
+  // The term as a WORD for the sentence this page prints after a recorded request. The
+  // response-parsing callback below shadows `t` with the response TEXT, so it cannot use `t`.
+  var termWord = (t === 'year') ? 'yearly' : 'monthly';
   if (!window.confirm('Move this workspace to ' + planName + ' \u2014 ' + shown + '?\n\nNothing is charged until the payment provider confirms the payment.')) return;
   PB.busy = true;
   pbMsg('Starting checkout\u2026', 'i');
@@ -1282,7 +1342,10 @@ function pbUpgrade(slug, price, planId, name, term) {
       PB.busy = false;
       if (r.ok) {
         var u = d && (d.url || d.checkout_url || d.session_url);
-        if (u) { pbMsg('Opening secure checkout\u2026', 's'); window.location.href = u; return; }
+        // Remember which plan the customer was sent to pay for: the hosted page cannot tell
+        // this installation anything, so on the way back the dashboard has to say that by itself.
+        if (u) { try { sessionStorage.setItem('is_checkout_handoff', planName); } catch (e) {}
+          pbMsg('Opening secure checkout\u2026', 's'); window.location.href = u; return; }
         pbMsg((d && d.message) || 'The checkout session was created.', 's');
         return;
       }
@@ -1302,6 +1365,25 @@ function pbUpgrade(slug, price, planId, name, term) {
         // answered 503 and only PAINTED a second "Request the plan" button, so a single click filed
         // NOTHING — the customer had to press twice before a request existed, while the sibling apps
         // file on the first press. The button is kept for the retry case, when filing itself fails.
+        //
+        // THE REFUSAL ALREADY FILED IT (measured live 2026-10-29 on this install). The 503 body
+        // carries `request_recorded: true` and `plan_request.already_open: false`: the SERVER records
+        // the request in the same press that refuses the checkout — the contract ADASwift's
+        // dashboard has read since 2026-10-24. This page ignored it, posted /support-tickets a
+        // SECOND time (the server deduped it to the row it had just written) and then printed the
+        // dedupe sentence — "You already have an open request for the Pro plan" — on the customer's
+        // FIRST press, as if they had asked before. Read the server's flag: confirm what actually
+        // happened, and only file through /support-tickets when the server did NOT record it.
+        var rec = !!(d && d.request_recorded === true);
+        var pr = (d && d.plan_request) || {};
+        if (rec) {
+          pbMsg((pr.already_open === true)
+            ? 'You already have an open request for the ' + planName + ' plan \u2014 our team is on it, and its live status is listed below.'
+            : 'Request recorded \u2014 nothing was charged. Our team will switch this workspace to '
+              + planName + ' (' + termWord + ') and email you when it is on; its live status is listed below.', 's');
+          pbLoadRequests();
+          return;
+        }
         pbRequest(slug, price, null, function () { pbAsk(slug, price, detail); }, t);
         return;
       }
@@ -1314,7 +1396,7 @@ function pbUpgrade(slug, price, planId, name, term) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited right here in the Your account card; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited in the Your account card, below your numbers on this page; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available; when a payment page hands you back to this screen it says so at the top of that card, and because this installation switches a paid plan on by hand, the plan will not change by itself \u2014 you are emailed when it is on", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>
