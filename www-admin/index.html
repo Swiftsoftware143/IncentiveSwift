@@ -274,10 +274,23 @@ window.fetch = function (url, opts) {
   });
 };
 
-const S = { view: 'dashboard', loading: false, error: null, sessionEnded: false, views: {} };
+const S = { view: 'dashboard', loading: false, error: null, sessionEnded: false, views: {}, loadError: null };
 // Wrap API to catch 402 upgrade prompts
 const _get = API.get, _post = API.post, _put = API.put, _del = API.del;
-API.get = async (p) => _get(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+// A FAILED READ MUST NEVER READ AS AN EMPTY SCREEN (2026-10-29). Thirteen list loaders here catch a
+// failed GET with `console.error(e)` only, so an API failure left the operator reading "No plans yet."
+// — a statement about their DATA that was really a statement about the REQUEST. The shell prints the
+// failure above the view until the screen loads again.
+API.get = async (p) => _get(p)
+  .then(d => { if (S.loadError) { S.loadError = null; } return d; })
+  .catch(e => {
+    if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message);
+    if (e && e.message && !/session ended/i.test(e.message)) {
+      S.loadError = e.message;
+      try { renderApp(); } catch (_) { /* first paint: renderApp arrives below */ }
+    }
+    throw e;
+  });
 API.post = async (p, b) => _post(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 API.put = async (p, b) => _put(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 API.del = async (p) => _del(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
@@ -414,7 +427,7 @@ const Portfolio = () => {
           <td class="font-medium">${c.name}</td><td class="text-gray-500">${c.slug || c.domain || '-'}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
-        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center text-gray-400 py-8">No portfolio companies yet.</td></tr>`}
+        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No portfolio companies yet.'}</td></tr>`}
       </tbody></table>
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
@@ -510,7 +523,7 @@ const Plans = () => {
           <td class="text-gray-500">${p.purchase_url ? 'Set' : '-'}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button></td>
         </tr>`)}
-        ${st.list.length === 0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No plans yet.</td></tr>`}
+        ${st.list.length === 0 && html`<tr><td colspan="5" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No plans yet.'}</td></tr>`}
       </tbody></table>
       <div class="text-xs text-gray-400 px-3 py-2">Monthly is the price the public pricing page lists for this plan. The tier an account is actually seated on is on the Tiers screen.</div>
     </div>
@@ -1201,7 +1214,7 @@ const Campaigns = () => {
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
-        ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No campaigns yet.</td></tr>`}
+        ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No campaigns yet.'}</td></tr>`}
       </tbody></table>
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
@@ -1902,7 +1915,7 @@ const LoyaltyPrograms = () => {
           <td>${t.cost == null ? '—' : t.cost}</td>
           <td>${t.requires_approval ? html`<span class="badge badge-yellow">Needs approval</span>` : html`<span class="badge badge-green">Auto</span>`}</td>
         </tr>`)}
-        ${st.rewards.length===0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">No reward tiers yet.</td></tr>`}
+        ${st.rewards.length===0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No reward tiers yet.'}</td></tr>`}
       </tbody></table>
     </div>
   </div>`;
@@ -1945,7 +1958,7 @@ const LoyaltyPrograms = () => {
           <td>${r.points_earned||0}</td>
           <td>${new Date(r.created_at).toLocaleDateString()}</td>
         </tr>`)}
-        ${st.referrals.length===0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No referrals yet.</td></tr>`}
+        ${st.referrals.length===0 && html`<tr><td colspan="7" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No referrals yet.'}</td></tr>`}
       </tbody></table>
     </div>`}
   </div>`;
@@ -2272,7 +2285,7 @@ const ledgerTab = html`<div>
         <td>${r.points||0}</td>
         <td>$${Number(r.billed||0).toFixed(2)}</td>
       </tr>`)}
-      ${(!st.issuanceLog||!st.issuanceLog.items||st.issuanceLog.items.length===0) ? html`<tr><td colspan="5" class="text-center text-gray-400 py-8">No points issued yet.</td></tr>` : null}
+      ${(!st.issuanceLog||!st.issuanceLog.items||st.issuanceLog.items.length===0) ? html`<tr><td colspan="5" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No points issued yet.'}</td></tr>` : null}
     </tbody></table>
   </div>
 </div>`;
@@ -6112,6 +6125,10 @@ const EntriesAnswers = () => {
       </button>
     </div>
     <div class="main flex-1 p-6 overflow-auto">
+      ${S.loadError && html`<div data-load-error="1" style="margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:10px;font-size:13px;display:flex;gap:10px;align-items:flex-start">
+        <span style="flex:1"><strong>This screen could not load.</strong> The panel was not told what is on it, so any empty list below may be empty because the request failed, not because you have no records. (${S.loadError})</span>
+        <button type="button" style="background:#fff;border:1px solid #fecaca;border-radius:8px;padding:2px 10px;color:#991b1b;cursor:pointer" onClick=${() => { S.loadError = null; renderApp(); }}>Dismiss</button>
+      </div>`}
       ${impersonationBanner()}
       <${CurrentView} />
     </div>
