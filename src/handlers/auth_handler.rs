@@ -98,7 +98,9 @@ pub async fn register(
     // became a real, permanently-unreachable account. Normalises (trim + lowercase) as well as
     // validates, and the normalised value is what is checked, derived from, stored, put in the
     // token and mailed.
-    let email = email_addr::normalize(&body.email).map_err(AppError::BadRequest)?;
+    // 422 (not 400) for a refused address: the fleet's field-level refusal status, matching the
+    // FunnelSwift reference (auth::handlers::register) and this app's own body-rejection arm.
+    let email = email_addr::normalize(&body.email).map_err(AppError::UnprocessableEntity)?;
     // Harness attribution for the account this door is about to mint — the header arm names the
     // harness, the address arm derives it from the recipient's own harness/reserved domain.
     let probe_harness = crate::probe_harness::for_signup(&headers, &email);

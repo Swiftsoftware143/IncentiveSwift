@@ -71,6 +71,26 @@ pub fn normalize(raw: &str) -> Result<String, String> {
         return Err("email: domain has an empty dot-separated part".into());
     }
 
+    // Shapes that pass every rule above but can never receive mail (kanban t_3c6a471b, ported from the
+    // FunnelSwift reference 4701236 where it was measured live). A domain LABEL may not start or end
+    // with a hyphen (RFC 1035 hostname syntax), a bracketed literal (`user@[1.2.3.4]`) is not a name
+    // the provider will accept, and a quoted local part (`"ab"@x.com`) is a form nothing in this fleet
+    // parses — the address would be stored verbatim and every message to it would bounce. That is the
+    // same dead-account class this module exists to stop: `accounts.email` is the ONLY address a login
+    // can ever be mailed to. Measured live 2026-10-30 before this guard: `x@-.com` and `x@[1.2.3.4]`
+    // both answered 200 at `POST /api/v1/auth/register` and minted an account.
+    for label in domain.split('.') {
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err("email: a part of the domain starts or ends with a hyphen".into());
+        }
+    }
+    if domain.contains('[') || domain.contains(']') {
+        return Err("email: the domain must be a name, not a bracketed address".into());
+    }
+    if local.contains('"') {
+        return Err("email: must not contain quote marks".into());
+    }
+
     Ok(value)
 }
 
@@ -278,6 +298,12 @@ mod tests {
             "user@x..com",
             "user@x.com.",
             "user@x@y.com",
+            // Measured live 2026-10-30: these shapes answered 200 at POST /api/v1/auth/register and
+            // minted an account whose credentials mail can never arrive (kanban t_3c6a471b).
+            "user@-.com",
+            "user@x-.com",
+            "user@[1.2.3.4]",
+            "\"ab\"@x.com",
         ] {
             assert!(normalize(bad).is_err(), "{bad:?} must be refused");
         }
