@@ -83,7 +83,7 @@ footer .links a:hover{color:#d1d5db}
   <h1>Simple, honest <span class="gradient-text">pricing</span></h1>
   <p class="sub">Every plan below is the one this install actually sells. Start on Free — no credit card — and move up when you need more leads, more campaign types, or your own branding.</p>
 
-  <div class="grid">
+  <div class="grid" id="plans">
 
     <div class="card">
       <h3>Free</h3>
@@ -159,5 +159,55 @@ footer .links a:hover{color:#d1d5db}
   </div>
 </footer>
 
+<script>
+(function () {
+  // The cards below are painted from GET /api/v1/plans — the same plan records the app enforces —
+  // so a price changed (or a plan renamed) in the operator console shows up here on the next load.
+  // The hand-written cards above stay in the document as the no-JavaScript / failed-fetch fallback
+  // and match the install's own records as of 2026-10-30. Curated per-plan copy is keyed by slug, so
+  // a price change never rewrites the wording; a plan the console adds renders its own features.
+  var CURATED = {
+    free: [['h','Limits'],['l','20 leads total'],['l','10 tags total'],['h','Campaigns'],['l','Quiz / Trivia'],['l','Raffle &amp; Giveaway'],['l','Spin to Win']],
+    pro: [['h','Limits'],['l','100 leads total'],['l','50 tags total'],['h','Every campaign type'],['l','Quiz / Trivia, Personality Quiz'],['l','Raffle &amp; Giveaway, Spin to Win, Scratch Card'],['l','Poll, Score Reveal, Mystery Reveal'],['l','Countdown Timer, Calculator, Leaderboard'],['l','Chat Funnel, Long-Form Qualifier'],['l','B2B Loyalty, Loyalty Campaign']],
+    enterprise: [['h','Unlimited'],['l','Leads, tags, campaigns and monthly credits'],['l','Credit overdraft and industry dashboards'],['h','Delivery &amp; branding'],['l','Stripe credit top-ups'],['l','Direct API delivery and webhook delivery'],['l','Custom domains and white label'],['l','Widget embed, full page experience, tablet mode'],['h','And'],['l','All campaign mechanics, including the loyalty program']]
+  };
+  var grid = document.getElementById('plans');
+  if (!grid) return;
+  function money(n) { var v = Number(n); if (!isFinite(v)) return '$' + n; return '$' + (v % 1 === 0 ? String(v) : v.toFixed(2)); }
+  fetch('/api/v1/plans', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+    var plans = (d && d.plans) || [];
+    if (!plans.length) return;
+    plans.sort(function (a, b) { return Number(a.monthly_price) - Number(b.monthly_price); });
+    var frag = document.createDocumentFragment();
+    plans.forEach(function (p) {
+      var slug = String(p.slug || '');
+      var card = document.createElement('div');
+      card.className = 'card' + (slug === 'pro' ? ' popular' : '');
+      card.setAttribute('data-plan', slug);
+      if (slug === 'pro') { var bg = document.createElement('div'); bg.className = 'badge'; bg.textContent = 'Most popular'; card.appendChild(bg); }
+      var h = document.createElement('h3'); h.textContent = p.name || 'Plan'; card.appendChild(h);
+      var pr = document.createElement('div'); pr.className = 'price';
+      var amt = document.createElement('span'); amt.className = 'amt'; amt.textContent = money(p.monthly_price);
+      var per = document.createElement('span'); per.className = 'per'; per.textContent = '/month';
+      pr.appendChild(amt); pr.appendChild(per); card.appendChild(pr);
+      var yr = document.createElement('p'); yr.className = 'yr';
+      yr.textContent = Number(p.annual_price) > 0 ? 'or ' + money(p.annual_price) + '/year'
+        : (slug === 'free' ? 'Free forever \u2014 no card required' : '');
+      card.appendChild(yr);
+      var ul = document.createElement('ul');
+      var rows = CURATED[slug];
+      if (!rows) { rows = [['h', 'Included']]; (p.features || []).forEach(function (f) { rows.push(['l', f]); }); }
+      rows.forEach(function (row) { var li = document.createElement('li'); if (row[0] === 'h') li.className = 'head'; li.innerHTML = row[1]; ul.appendChild(li); });
+      card.appendChild(ul);
+      var a = document.createElement('a'); a.className = 'cta'; a.href = '/signup?plan=' + encodeURIComponent(slug);
+      a.textContent = slug === 'free' ? 'Start free' : 'Get ' + (p.name || 'this plan');
+      card.appendChild(a);
+      frag.appendChild(card);
+    });
+    grid.innerHTML = '';
+    grid.appendChild(frag);
+  }).catch(function () { /* keep the hand-written cards */ });
+})();
+</script>
 </body>
 </html>
