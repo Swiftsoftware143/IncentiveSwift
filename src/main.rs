@@ -1206,6 +1206,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/email-log",
             get(handlers::email_settings_handler::email_log),
         )
+        // The ACTION beside that history (cron 2026-10-31): the log tells the operator a customer's
+        // credentials mail was refused, and until this route there was nothing to do about it from
+        // the panel. A customer who receives no mail from us cannot complete "forgot password"
+        // either, so this mints a fresh one-hour token for the address and sends the app's own
+        // password_reset template through the same sender the public flow uses.
+        .route(
+            "/api/v1/admin/email-log/send-reset",
+            post(handlers::email_settings_handler::send_reset_for_log),
+        )
         // Tag-provisioning console (kanban t_3724204f): the master switch and the entry-tier
         // picker. `/api/v1/admin/*` is covered by `security::auth::admin_guard` (platform
         // operator only), so a tenant owner is refused here exactly like every other admin route.

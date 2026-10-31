@@ -2600,7 +2600,7 @@ const PaymentProviderModal = ({ st, closeForm, submit, testKey }) => {
 // (`email::send_email_request`, the choke point every transactional type passes through) and by the
 // test button below, and is read back from `GET /api/v1/admin/email-settings`.
 const EmailProvider = () => {
-  const st = viewState('email-provider', { cfg: null, providers: [], last: null, log: [], configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '', credentialPresent: false, sealed: false });
+  const st = viewState('email-provider', { cfg: null, providers: [], last: null, log: [], configured: false, provider: 'smtp', err: null, msg: null, busy: false, testing: false, test: null, testTo: '', credentialPresent: false, sealed: false, reset: null, resetBusy: '' });
   // `api_key` / `smtp_password` come back MASKED (••••••••) when a value is stored; the server keeps
   // the stored secret when it reads the mask back, so sending the field unchanged never clears it.
   const TEXT_FIELDS = [['from_name', 'From name'], ['from_address', 'From address'], ['domain', 'Mailgun domain'], ['api_url', 'Provider API URL'], ['smtp_host', 'SMTP host'], ['smtp_port', 'SMTP port'], ['smtp_username', 'SMTP username']];
@@ -2646,6 +2646,20 @@ const EmailProvider = () => {
     } catch (e) { st.test = { success: false, detail: e.message }; }
     st.testing = false; await load();
   };
+  // The operator's remedy for "the credentials mail never arrived" (cron 2026-10-31). Parity with
+  // FunnelSwift and ADASwift: a customer who receives no mail from this app cannot use "forgot
+  // password" either, so the panel has to be able to issue the reset itself. The server answers with
+  // its own sentence in every arm, and that sentence is what the operator sees — never a guess.
+  const sendReset = async (email) => {
+    if (!email) return;
+    st.resetBusy = email; st.reset = null; renderApp();
+    try {
+      st.reset = { email, ...(await API.post('/admin/email-log/send-reset', { email })) };
+    } catch (e) {
+      st.reset = { email, sent: false, message: e.message };
+    }
+    st.resetBusy = ''; renderApp();
+  };
   const inp = 'border rounded px-3 py-2 w-full text-sm';
   const cfg = st.cfg || {};
   // A withheld send is NOT a failure (2026-10-14). `email::send_email_request` records a
@@ -2678,9 +2692,10 @@ const EmailProvider = () => {
       <p class="text-sm text-gray-500 mb-2">The last 50 transactional emails this installation actually attempted to a real address. The line above answers only "what happened to the most recent one" — this history keeps a credentials mail that failed at signup visible after any later mail succeeds. Reserved test addresses are not listed: ${st.logWithheld || 0} were withheld in the last 7 days and none of them were attempts.</p>
       ${(!st.log || !st.log.length)
         ? html`<div class="text-sm text-gray-400">No sends recorded yet.</div>`
-        : html`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-gray-500"><th class="py-1 pr-3">When</th><th class="py-1 pr-3">To</th><th class="py-1 pr-3">Subject</th><th class="py-1">Outcome</th></tr></thead><tbody>
-            ${st.log.map(s => html`<tr class="border-t"><td class="py-1 pr-3 text-gray-500">${s.at ? new Date(s.at).toLocaleString() : ''}</td><td class="py-1 pr-3">${s.to || ''}</td><td class="py-1 pr-3">${s.subject || ''}</td><td class=${"py-1 " + (s.status === "sent" ? "text-green-700" : (s.status === "withheld" ? "text-amber-700" : "text-red-700"))}>${s.status === "sent" ? "sent" : (s.status === "withheld" ? "withheld" : "failed")}${s.detail ? html`<div class="text-xs text-gray-500">${s.detail}</div>` : null}</td></tr>`)}
+        : html`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-gray-500"><th class="py-1 pr-3">When</th><th class="py-1 pr-3">To</th><th class="py-1 pr-3">Subject</th><th class="py-1 pr-3">Outcome</th><th class="py-1">Sign-in help</th></tr></thead><tbody>
+            ${st.log.map(s => html`<tr class="border-t"><td class="py-1 pr-3 text-gray-500">${s.at ? new Date(s.at).toLocaleString() : ''}</td><td class="py-1 pr-3">${s.to || ''}</td><td class="py-1 pr-3">${s.subject || ''}</td><td class=${"py-1 " + (s.status === "sent" ? "text-green-700" : (s.status === "withheld" ? "text-amber-700" : "text-red-700"))}>${s.status === "sent" ? "sent" : (s.status === "withheld" ? "withheld" : "failed")}${s.detail ? html`<div class="text-xs text-gray-500">${s.detail}</div>` : null}</td><td class="py-1"><button class="btn btn-sm btn-outline" data-send-reset=${s.to || ''} disabled=${st.resetBusy === s.to} onClick=${() => sendReset(s.to)}>${st.resetBusy === s.to ? 'Sending…' : 'Send reset'}</button></td></tr>`)}
           </tbody></table></div>`}
+      ${st.reset ? html`<div data-send-reset-result=${st.reset.reason || (st.reset.sent ? 'sent' : 'failed')} class=${'text-sm mt-2 ' + (st.reset.sent ? 'text-green-700' : (st.reset.withheld ? 'text-amber-700' : 'text-red-700'))}>${st.reset.message || 'No answer from the server.'}</div>` : null}
     </div>
     <div class="card mb-4">
       <h3 class="font-semibold mb-2">Provider</h3>
