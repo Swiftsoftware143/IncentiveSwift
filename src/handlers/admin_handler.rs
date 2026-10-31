@@ -332,6 +332,25 @@ pub async fn bulk_delete_tenants(
     })))
 }
 
+/// Is this workspace OWNER's address fleet machinery rather than a customer?
+///
+/// Two arms, both the fleet's own definitions rather than a guess at intent:
+///  * `security::probe_addr::attribution_domain` — the harness domains the mail layer suppresses
+///    (`swiftsoftware.dev/.net/.local`, `example.*`, `.invalid`, `.test`) plus the fleet's
+///    disposable inbox (`maxxspace.com`). An account minted on one is a probe BY CONSTRUCTION.
+///  * `security::email_addr::is_reserved_address` — the RFC 2606/6761 class, which can never
+///    receive mail and so cannot be a customer's login.
+///
+/// An ordinary address on a routable domain answers `false`, so a real customer row is untouched.
+fn owner_is_fleet_machinery(email: &str) -> bool {
+    let addr = email.trim();
+    if addr.is_empty() {
+        return false;
+    }
+    crate::security::probe_addr::attribution_domain(addr).is_some()
+        || crate::security::email_addr::is_reserved_address(addr)
+}
+
 /// GET /api/v1/admin/tenants
 /// Lists all accounts with their plan info — for the super admin dashboard.
 pub async fn list_all_tenants(
@@ -403,6 +422,28 @@ pub async fn list_all_tenants(
     .fetch_all(&state.db)
     .await?;
 
+    // A HARNESS THAT NEVER SENT THE HEADER IS STILL NOT A CUSTOMER (measured live 2026-10-31).
+    // `accounts.probe_harness` is stamped only from the `X-Swift-Harness` header (or the signup
+    // door's server-derived domain arm, which post-dates these rows), so an address-only probe row
+    // carried NO marker: this install's operator list served "Tenancy Canary A/B"
+    // (`probe-canary-a/b@swiftsoftware.dev`) as customers — 9 accounts, 2 of them machinery — while
+    // the console already badged them and its own comment says the API holds probe rows back.
+    //
+    // The ADDRESS is the second signal every account has, and it is the one the request cannot
+    // fake: an address on a reserved / fleet-harness domain cannot receive mail and cannot belong to
+    // a customer. Such a row is now held back exactly like a tagged harness row and published with
+    // `reserved_owner: true` under `?include_probe=1` — the same rule FunnelSwift and
+    // missedcallrespondr ship, so every operator list counts customers the same way.
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|row| {
+            include_probe || {
+                let email: String = row.get("email");
+                !owner_is_fleet_machinery(&email)
+            }
+        })
+        .collect();
+
     let tenants: Vec<Value> = rows
         .iter()
         .map(|row| {
@@ -429,6 +470,10 @@ pub async fn list_all_tenants(
             let last_login_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_login_at");
             let plan_effective_name: String = row.get("plan_effective_name");
             let plan_is_default: bool = row.get("plan_is_default");
+            // Computed BEFORE the `json!` below moves `email` into the payload. true => the owner's
+            // address is on a reserved / fleet-harness domain, i.e. this account is fleet machinery
+            // rather than a customer (only reachable with `?include_probe=1`).
+            let reserved_owner = owner_is_fleet_machinery(&email);
             json!({
                 "id": id.to_string(),
                 "name": name.unwrap_or_default(),
@@ -442,6 +487,7 @@ pub async fn list_all_tenants(
                 "price_monthly": price_monthly,
                 "user_count": user_count,
                 "probe_harness": probe_harness,
+                "reserved_owner": reserved_owner,
                 "last_login_at": last_login_at.map(|t| t.to_rfc3339()),
             })
         })
