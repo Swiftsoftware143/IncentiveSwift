@@ -16,6 +16,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::Row;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -685,10 +686,47 @@ pub async fn spin_status(
     let status =
         prize_draw::get_spin_status(&state.db, &campaign.id, &contact_id, &campaign.config).await?;
 
+    // A WINNER MUST BE ABLE TO SEE WHAT THEY WON AGAIN (2026-11-01). The play page renders the
+    // prize label and the redemption code straight out of the SPIN response and stores neither, so
+    // a player who reloads the page — or comes back later — had no way to retrieve a code they had
+    // already been awarded. The only other copy is the win EMAIL, which does not exist for a player
+    // who gave no address. `campaign_wins` has carried the label and the code since `record_win`
+    // shipped; nothing ever surfaced them back to the player whose win it is.
+    //
+    // ADDITIVE on purpose: `status` keeps its existing shape (this endpoint answers "how many spins
+    // are left", and its `won`/`prize_*` fields are placeholders for that query, so they are left
+    // exactly as they were). The player's own most recent win on THIS campaign is reported beside
+    // it, looked up through the contact this call already resolved from the caller's own id, email
+    // or phone — there is no parameter that could name somebody else's win.
+    let last_win = sqlx::query(
+        r#"SELECT prize_label, redemption_code, redeemed, created_at
+             FROM campaign_wins
+            WHERE campaign_id = $1 AND contact_id = $2
+            ORDER BY created_at DESC
+            LIMIT 1"#,
+    )
+    .bind(campaign.id)
+    .bind(contact_id)
+    .fetch_optional(&state.db)
+    .await?
+    .map(|row| {
+        let label: Option<String> = row.try_get("prize_label").ok();
+        let code: Option<String> = row.try_get("redemption_code").ok();
+        let redeemed: bool = row.try_get("redeemed").unwrap_or(false);
+        let at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("created_at").ok();
+        json!({
+            "prize_label": label,
+            "redemption_code": code,
+            "redeemed": redeemed,
+            "won_at": at.map(|t| t.to_rfc3339()),
+        })
+    });
+
     Ok(Json(json!({
         "status": status,
         "contact_id": contact_id,
         "campaign_id": campaign.id,
+        "last_win": last_win,
     })))
 }
 
