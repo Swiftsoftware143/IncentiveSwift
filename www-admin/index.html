@@ -6089,6 +6089,114 @@ const EntriesAnswers = () => {
     </div>
   </div>`;
 };
+
+// ---- PROMO CODES (a campaign's secret codes) ----
+// Why this screen exists (2026-11-01): the customer guide told an operator that promo codes are
+// "managed from the admin console's 16 - Campaign secret codes", which is the generic API form. The
+// backend has carried GET|POST /campaigns/:id/secret-codes and PUT|DELETE
+// /campaigns/:id/secret-codes/:code_id since 2026-10-17, and no screen ever read them - a backend
+// route with no UI is a defect, and a customer who is not reading API hints could not run a promo.
+// Every field here is the column the handler actually writes (src/handlers/campaign_secret_codes.rs):
+// code (upper-cased by the server), points, max_uses (blank = unlimited), expires_at (blank = never).
+const PromoCodes = () => {
+  const blank = () => ({ code: '', points: 100, max_uses: '', expires_at: '' });
+  const st = viewState('promo-codes', { campaigns: [], campaignId: '', list: [], msg: null, form: blank() });
+  if (!st.form) st.form = blank();
+
+  const loadCampaigns = async () => {
+    try {
+      const d = await API.get('/campaigns');
+      const arr = Array.isArray(d) ? d : (d.campaigns || []);
+      st.campaigns = arr;
+      if (!st.campaignId && arr.length) st.campaignId = arr[0].id;
+      renderApp();
+      if (st.campaignId) loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const loadCodes = async () => {
+    if (!st.campaignId) return;
+    try {
+      const d = await API.get('/campaigns/' + st.campaignId + '/secret-codes');
+      const payload = (d && d.data) || d || {};
+      st.list = payload.secret_codes || [];
+      renderApp();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  if (!st._loaded) { st._loaded = true; loadCampaigns(); }
+
+  const create = async () => {
+    const f = st.form;
+    const code = String(f.code || '').trim().toUpperCase();
+    if (!code) { st.msg = { kind: 'err', text: 'Type the code the customer will enter.' }; renderApp(); return; }
+    const body = { code: code, points: Number(f.points) || 100 };
+    if (String(f.max_uses).trim() !== '') body.max_uses = Number(f.max_uses);
+    if (f.expires_at) body.expires_at = new Date(f.expires_at + 'T23:59:59Z').toISOString();
+    try {
+      await API.post('/campaigns/' + st.campaignId + '/secret-codes', body);
+      st.form = blank();
+      st.msg = { kind: 'ok', text: 'Code ' + code + ' is live: a customer who types it on this campaign gets its points.' };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const toggle = async (c) => {
+    try {
+      await API.put('/campaigns/' + st.campaignId + '/secret-codes/' + c.id, { is_active: !c.is_active });
+      st.msg = { kind: 'ok', text: c.is_active ? ('Code ' + c.code + ' is paused: typing it no longer earns anything.') : ('Code ' + c.code + ' is live again.') };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const remove = async (c) => {
+    if (!confirm('Delete the code ' + c.code + '? It can no longer be redeemed.')) return;
+    try {
+      await API.del('/campaigns/' + st.campaignId + '/secret-codes/' + c.id);
+      st.msg = { kind: 'ok', text: 'Code ' + c.code + ' deleted.' };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch (e) { return '—'; } };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Promo Codes</h2><p class="text-sm text-gray-500">Codes a customer types on a campaign to earn its points</p></div>
+      <select class="border rounded px-3 py-1.5 text-sm" value=${st.campaignId} onChange=${e => { st.campaignId = e.target.value; st.list = []; st.msg = null; renderApp(); loadCodes(); }}>
+        ${st.campaigns.map(c => html`<option value=${c.id} selected=${c.id === st.campaignId}>${c.name}</option>`)}
+      </select>
+    </div>
+    ${!st.campaigns.length ? html`<div class="card p-6 text-center text-gray-500">Create a campaign first — a promo code belongs to one campaign.</div>` : html`<div>
+      <div class="card mb-4">
+        <h3 class="font-semibold text-sm mb-3">New promo code</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div><label class="block text-xs font-medium mb-1">Code</label><input class="input text-sm" placeholder="SPRING25" value=${st.form.code} onInput=${e => { st.form.code = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Points</label><input class="input text-sm" type="number" min="1" value=${st.form.points} onInput=${e => { st.form.points = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Max uses (blank = unlimited)</label><input class="input text-sm" type="number" min="1" placeholder="unlimited" value=${st.form.max_uses} onInput=${e => { st.form.max_uses = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Expires (blank = never)</label><input class="input text-sm" type="date" value=${st.form.expires_at} onInput=${e => { st.form.expires_at = e.target.value; renderApp(); }} /></div>
+        </div>
+        <button class="btn btn-sm mt-3" onClick=${create}>Create code</button>
+        ${st.msg ? html`<div class="text-sm mt-2" style="color:${st.msg.kind === 'err' ? '#b91c1c' : '#15803d'}">${st.msg.text}</div>` : null}
+      </div>
+      <div class="card overflow-hidden">
+        <table class="table w-full">
+          <thead><tr><th>Code</th><th>Points</th><th>Uses</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${st.list.map(c => html`<tr>
+              <td class="font-medium text-sm">${c.code}</td>
+              <td class="text-sm">${c.points}</td>
+              <td class="text-sm">${c.uses_count}${c.max_uses ? ' of ' + c.max_uses : ''}</td>
+              <td class="text-sm text-gray-500">${c.expires_at ? fmtDate(c.expires_at) : 'never'}</td>
+              <td>${c.is_active ? html`<span class="badge badge-green">Live</span>` : html`<span class="badge badge-yellow">Paused</span>`}</td>
+              <td class="text-right whitespace-nowrap">
+                <button class="text-blue-600 text-xs mr-2" onClick=${() => toggle(c)}>${c.is_active ? 'Pause' : 'Resume'}</button>
+                <button class="text-red-600 text-xs" onClick=${() => remove(c)}>Delete</button>
+              </td>
+            </tr>`)}
+            ${!st.list.length ? html`<tr><td colspan="6" class="text-center text-gray-400 py-6">No promo codes for this campaign yet.</td></tr>` : null}
+          </tbody>
+        </table>
+      </div>
+    </div>`}
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
@@ -6096,6 +6204,7 @@ const EntriesAnswers = () => {
     { id: 'analytics', label: 'Analytics', icon: '📈' },
     { id: 'profile', label: 'Profile', icon: '👤' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
+    { id: 'promo-codes', label: 'Promo Codes', icon: '🎟' },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'wins', label: 'Wins & Redemptions', icon: '🏆' },
     { id: 'entries', label: 'Entries & Answers', icon: '📝' },
@@ -6123,7 +6232,7 @@ const EntriesAnswers = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
