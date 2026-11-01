@@ -15,6 +15,7 @@
 pub mod auth;
 pub mod body_rejection;
 pub mod display_name;
+pub mod domain_name;
 pub mod email_addr;
 pub mod headers;
 pub mod jwt;

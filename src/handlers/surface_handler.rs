@@ -1018,16 +1018,38 @@ pub async fn register_domain(
         .target_type
         .unwrap_or_else(|| "incentiveswift".to_string());
 
+    // MEASURED DEFECT, 2026-11-01: this route bound `body.domain` STRAIGHT into the table, so a
+    // real customer's POST of `https://Evil.Example.COM/some/path?x=1`, `asdf not a site` and `""`
+    // were all answered 200 and stored — hosts that can never be verified, with verification
+    // instructions the customer cannot act on (and a second `""` answering a bare 500 off the
+    // unique index). Refused BEFORE the write, in the same request, with a sentence the console
+    // shows; a pasted URL is salvaged down to the host it names.
+    let domain =
+        crate::security::domain_name::normalise_host(&body.domain).map_err(AppError::BadRequest)?;
+
     sqlx::query(
         r#"INSERT INTO custom_domains (id, tenant_id, domain, target_type)
            VALUES ($1, $2, $3, $4)"#,
     )
     .bind(id)
     .bind(tenant_id)
-    .bind(&body.domain)
+    .bind(&domain)
     .bind(&target_type)
     .execute(&state.db)
-    .await?;
+    .await
+    .map_err(|e| match e {
+        // The host is UNIQUE platform-wide (`custom_domains_domain_key`): a duplicate used to
+        // surface as `500 Database error`, which tells the customer nothing. Say what happened.
+        sqlx::Error::Database(ref db_err)
+            if db_err.constraint() == Some("custom_domains_domain_key") =>
+        {
+            AppError::Conflict(format!(
+                "`{domain}` is already registered. Each host can serve one workspace — remove it \
+                 from the account that holds it first."
+            ))
+        }
+        other => AppError::from(other),
+    })?;
 
     let domain = sqlx::query_as::<_, CustomDomain>(
         r#"SELECT id, tenant_id, domain, target_type, verification_token,
@@ -1042,7 +1064,7 @@ pub async fn register_domain(
         "domain": domain,
         "verification_instructions": format!(
             "Add a TXT record for _swift-verify.{} with value '{}'",
-            body.domain, domain.verification_token
+            domain.domain, domain.verification_token
         ),
     })))
 }
