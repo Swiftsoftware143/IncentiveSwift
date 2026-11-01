@@ -1181,6 +1181,25 @@ if (!match) {
   // Load funnel
   loadFunnel();
 
+  // QUESTION-TYPE SPELLINGS (2026-11-01, cron `default`). Two vocabularies reach this list: the
+  // builder's own Type dropdown (`www-app/iqs.html`, Q_TYPES) writes BARE names — `number`, `email`,
+  // `phone`, `url`, `text`, `rating`, `date`, `slider`, `dropdown`, `image_choice`, `matrix` — while
+  // the renderer below switches on the `field_*` spellings. A bare-typed question therefore fell
+  // through to the choice branch, which draws its options from `q.options`: a required question with
+  // NO control at all, so the respondent could never answer it or finish the survey. Measured live
+  // 2026-11-01 through the edge — a `number` question rendered its text and zero inputs, and the
+  // Review button answered "This question is required". Normalise ONCE at load so render, collect and
+  // validate all read the same spelling; unknown/absent types are left untouched.
+  const FIELD_TYPE = {
+    text: 'field_text', textarea: 'field_textarea', email: 'field_email', phone: 'field_phone',
+    url: 'field_url', number: 'field_number', rating: 'field_rating', date: 'field_date',
+    file: 'field_file', consent: 'field_consent', slider: 'field_slider', dropdown: 'field_dropdown',
+    select: 'field_select', image_choice: 'field_image_choice', matrix: 'field_matrix'
+  };
+  const normaliseType = q => Object.assign({}, q, {
+    question_type: FIELD_TYPE[q.question_type] || q.question_type
+  });
+
   async function loadFunnel() {
     try {
       state.error = null;
@@ -1189,7 +1208,7 @@ if (!match) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Survey not found');
       state.funnel = data.funnel;
-      state.questions = data.questions;
+      state.questions = (data.questions || []).map(normaliseType);
       state.currentStep = -1; // Start with contact form
       render();
     } catch (err) {

@@ -335,7 +335,8 @@ function renderEditor() {
   <div style="margin-top:20px">
     <button class="btn" onclick="saveAll()">💾 Save Funnel</button>
     <button class="btn gray sm" onclick="publishToggle()">${currentFunnel.status==='active'?'Set Draft':'Publish'}</button>
-  </div>`;
+  </div>
+  ${shareBoxHtml()}`;
 
   el.innerHTML = html;
 }
@@ -549,6 +550,49 @@ async function publishToggle() {
     msg('Funnel ' + (newStatus === 'active' ? 'published' : 'set to draft'), 'ok');
     renderEditor();
   } catch (e) { msg(e.message, 'err'); }
+}
+
+// ---------- the share link (2026-11-01, cron `default`) ----------
+// A published survey had NO shareable address anywhere in this builder: the public player is
+// `www-app/iqs-play.html` (it reads the slug from the PATH, `^\/iqs\/play\/([^/]+)`), and the nginx
+// location that serves it at `/iqs/play/<slug>` did not exist, so the one URL a customer would
+// hand a respondent answered 404. The customer could build, add questions and press Publish and
+// still have no way to put the survey in front of a single person. This box shows the exact
+// address the player reads, with Copy, and says plainly that it answers "not found" until the
+// survey is published.
+function shareUrlFor(f) {
+  return window.location.origin + '/iqs/play/' + (f && f.slug ? f.slug : '');
+}
+function shareBoxHtml() {
+  const f = currentFunnel || {};
+  if (!f.slug) return '';
+  const url = shareUrlFor(f);
+  const live = f.status === 'active';
+  const href = esc(url);
+  return `<div style="border-top:1px solid #e2e8f0;margin:20px 0 0"></div>
+  <h3 style="margin-top:14px">🔗 Your survey link</h3>
+  <p class="muted" style="margin:4px 0 10px">${live
+    ? 'Live — anyone who opens this address can fill in the survey, and the lead lands under Submissions.'
+    : 'This address answers “not found” until you press Publish above.'}</p>
+  <div class="row" style="margin:0">
+    <input class="input grow" id="shareUrl" readonly value="${href}" onclick="this.select()">
+    <button class="btn sm" onclick="copyShare()">Copy</button>
+    <a class="btn gray sm" href="${href}" target="_blank" rel="noopener"${live ? '' : ' onclick="event.preventDefault();msg(\'Publish the survey first — the link 404s until then\',\'err\')"'}>Open</a>
+  </div>`;
+}
+function copyShare() {
+  const el = document.getElementById('shareUrl');
+  if (!el || !el.value) return;
+  const done = () => msg('Survey link copied — paste it wherever your respondents are', 'ok');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value).then(done).catch(() => { el.select(); try { document.execCommand('copy'); } catch (e) {} done(); });
+      return;
+    }
+  } catch (e) {}
+  el.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  done();
 }
 
 // ---------- submissions ----------
