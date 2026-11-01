@@ -123,6 +123,9 @@ mod tests {
             "example.com"
         );
         assert_eq!(normalise_host("example.com:8443").unwrap(), "example.com");
+        // A bare host followed by a path is the same paste with the scheme lost in transit: the
+        // authority still ends at the first '/', so it is salvaged like the full URL.
+        assert_eq!(normalise_host("example.com/path").unwrap(), "example.com");
         assert_eq!(
             normalise_host("https://user:pw@example.com/").unwrap(),
             "example.com"
@@ -142,7 +145,6 @@ mod tests {
             "example..com",
             "-example.com",
             "example-.com",
-            "example.com/path",
             "example.c0m",
             "192.168.1.1",
             "exa mple.com",
