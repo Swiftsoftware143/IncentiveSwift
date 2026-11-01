@@ -334,6 +334,26 @@ function paintAccount(u) {
      + '<label for="ecNew" style="display:block;font-size:12px;color:#64748b;margin:0 0 3px">New email address</label>'
      + '<input id="ecNew" type="email" maxlength="254" autocomplete="email" placeholder="you@yourcompany.com" style="width:100%;max-width:380px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
      + '<div style="margin-top:12px"><button class="btn btn-sm" id="ecSendBtn" onclick="ecSend()">Send confirmation link</button></div>'
+     + '</div>'
+     // ── SIGN-IN SECURITY: end the OTHER devices (2026-11-01) ────────────────────────────────────
+     // The backend verb shipped (POST /api/v1/auth/logout-all) and nothing on any screen could reach
+     // it, so a customer whose old phone was still signed in had exactly one remedy: change the
+     // password they already knew. This is the control. Deliberate TWO STEP: arming the button only
+     // reveals the confirm row, because the action signs out every other device and a single
+     // misclick would look like the app had randomly logged people out.
+     + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0" id="loCard">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Signed-in devices</div>'
+     + '<div style="font-size:12.5px;color:#64748b;margin:0 0 8px;line-height:1.5">'
+     + 'If a phone, tablet or old computer is still signed in to this account, this ends it. '
+     + 'This browser stays signed in; every other device has to sign in again.</div>'
+     + '<div id="loMsg" role="status" aria-live="polite" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<div id="loArmRow"><button class="btn btn-sm" id="loArmBtn" onclick="loArm()">Sign out of every other device</button></div>'
+     + '<div id="loConfirmRow" style="display:none;padding:10px;border:1px solid #fca5a5;border-radius:8px;background:#fef2f2;max-width:420px">'
+     + '<div style="font-size:12.5px;color:#991b1b;margin:0 0 8px;line-height:1.5">End every other session on this account? '
+     + 'Anyone signed in on another device will have to sign in again.</div>'
+     + '<button class="btn btn-sm" id="loDoBtn" onclick="loDo()">Yes, sign the other devices out</button>'
+     + ' <button class="btn btn-sm" id="loCancelBtn" onclick="loCancel()" style="background:#fff;color:#334155;border:1px solid #cbd5e1">Cancel</button>'
+     + '</div>'
      + '</div>';
   document.getElementById('account').innerHTML = h;
   acctFill(u);
@@ -415,6 +435,61 @@ function pwSave() {
       acctNote('pwMsg', 'Password updated.', 'ok');
     });
   }).catch(function (e) { acctNote('pwMsg', e.message || 'Could not change the password', 'e'); });
+}
+
+// ── SIGN-IN SECURITY: end the OTHER devices (2026-11-01) ────────────────────────────────────────
+// POST /api/v1/auth/logout-all moves the same `accounts.sessions_valid_from` line a password change
+// moves, so every JWT minted before it is refused at its next request. It also re-mints THIS tab's
+// token, because the caller's own old bearer is dead too — a 200 that silently signed the person out
+// of the tab they were looking at would be a trap. So the fresh token is adopted into both stores
+// before anything else, and the result is confirmed by re-reading /auth/me with that new token
+// rather than by trusting the write's echo.
+function loArm() {
+  var a = document.getElementById('loArmRow'), c = document.getElementById('loConfirmRow');
+  acctNote('loMsg', '', 'i');
+  if (a) a.style.display = 'none';
+  if (c) c.style.display = 'block';
+}
+function loCancel() {
+  var a = document.getElementById('loArmRow'), c = document.getElementById('loConfirmRow');
+  if (c) c.style.display = 'none';
+  if (a) a.style.display = 'block';
+}
+function loDo() {
+  var btn = document.getElementById('loDoBtn');
+  if (btn) btn.disabled = true;
+  acctNote('loMsg', 'Signing the other devices out…', 'i');
+  __rawFetch(window.location.origin + '/api/v1/auth/logout-all', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: '{}'
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = {}; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error(d.message || d.error || ('HTTP ' + r.status));
+      return d;
+    });
+  }).then(function (d) {
+    if (!d || !d.token) throw new Error('The server did not return a session for this device.');
+    token = d.token;
+    try { sessionStorage.setItem(TOKEN_KEY, d.token); } catch (e) {}
+    try { localStorage.setItem(STORE_KEY, d.token); } catch (e) {}
+    loCancel();
+    // Non-vacuous: the new bearer is exercised before the success sentence is shown, so "stays
+    // signed in" is a fact about this tab and not a hope.
+    return __rawFetch(window.location.origin + '/api/v1/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + d.token }, cache: 'no-store'
+    }).then(function (rr) {
+      if (!rr.ok) throw new Error('The other devices are signed out, but this tab could not confirm its new session. Reload the page.');
+      acctNote('loMsg', d.message || 'Every other device has been signed out. This one stays signed in.', 'ok');
+    });
+  }).catch(function (e) {
+    loCancel();
+    acctNote('loMsg', e.message || 'Could not sign the other devices out', 'e');
+  }).then(function () {
+    var b = document.getElementById('loDoBtn');
+    if (b) b.disabled = false;
+  });
 }
 
 // Ask for a change of sign-in address (kanban t_6b2702e3). Posts the NEW address; the API writes a
