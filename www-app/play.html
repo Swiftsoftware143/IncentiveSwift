@@ -55,6 +55,16 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .consent input{width:auto;margin:2px 0 0}
 .spin{background:linear-gradient(135deg,var(--brand),rgba(0,0,0,.35));font-size:18px;padding:18px}
 .codebox{border-top:1px solid #e2e8f0;margin-top:22px;padding-top:16px}
+/* Participant leaderboard: the campaign's own points board. Rendered from
+   GET /api/v1/campaigns/<slug>/leaderboard — a PUBLIC endpoint that, until now, no surface called. */
+.boardwrap{border-top:1px solid #e2e8f0;margin-top:22px;padding-top:16px}
+.boardwrap h2{font-size:15px;margin:0 0 10px;color:#0f172a}
+.boardrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:14px}
+.boardrow:last-child{border-bottom:0}
+.boardrank{width:22px;text-align:right;color:#64748b;font-variant-numeric:tabular-nums;font-weight:600}
+.boardname{flex:1;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.boardpts{color:var(--brand);font-weight:600;font-variant-numeric:tabular-nums}
+.boardnote{font-size:12px;color:#94a3b8;margin:8px 0 0}
 /* quiz mechanic: one block per question, its answer options as tappable rows */
 .qblock{margin:0 0 14px}
 .qblock>label.qtext{font-weight:600;color:var(--text);font-size:15px;margin-bottom:8px}
@@ -108,6 +118,18 @@ label.opt:hover{border-color:var(--brand)}
       <div class="msg err" id="codeError"></div>
       <div class="msg ok" id="codeSuccess"></div>
       <p class="hint">We'll credit the email you entered above.</p>
+    </div>
+
+    <!-- The campaign's points board. `GET /api/v1/campaigns/<slug>/leaderboard` is public and has
+         existed since the viral mechanic shipped, but NO surface ever called it — the operator could
+         pick "Leaderboard" in the campaign editor and the people playing saw nothing. Rendered here;
+         hidden while there are no points on the board yet, so an idle campaign shows no empty table.
+         Names are shown as first name + last initial and the response's `email` field is never
+         printed. -->
+    <div class="boardwrap" id="boardWrap" style="display:none">
+      <h2>Top players</h2>
+      <div id="board"></div>
+      <p class="boardnote" id="boardNote"></p>
     </div>
   </div>
 </div>
@@ -495,6 +517,49 @@ label.opt:hover{border-color:var(--brand)}
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // The campaign's points board.
+  //
+  // `GET /api/v1/campaigns/<slug>/leaderboard?limit=N` is PUBLIC (route_policy.rs) and returns
+  // `{leaderboard:[{contact_id,name,email,lifetime_points,current_balance}]}`. It shipped with the
+  // viral mechanic and never had a caller on any served surface, so "Leaderboard" in the campaign
+  // editor rendered nothing for the visitor. This is that surface.
+  //
+  // PRIVACY: the payload carries `email`; it is NEVER printed here. A participant is shown as
+  // first name + last initial, and a row with no name is "Player" — the board is public, so it must
+  // not become a directory of the business's customers.
+  function boardName(row) {
+    var full = (row && row.name ? String(row.name) : '').trim();
+    if (!full) { return 'Player'; }
+    var parts = full.split(/\s+/);
+    if (parts.length === 1) { return parts[0]; }
+    return parts[0] + ' ' + parts[parts.length - 1].charAt(0).toUpperCase() + '.';
+  }
+
+  function loadLeaderboard() {
+    if (!campaign || !campaign.slug) { return; }
+    fetch(api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/leaderboard?limit=10')
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        var rows = (res.ok && res.data && Array.isArray(res.data.leaderboard)) ? res.data.leaderboard : [];
+        // Points-only board: an entry with no lifetime points is not a player yet, so it is not shown.
+        rows = rows.filter(function (row) { return row && Number(row.lifetime_points) > 0; });
+        var wrap = el('boardWrap'), box = el('board'), note = el('boardNote');
+        if (!wrap || !box || !note) { return; }
+        if (!rows.length) { wrap.style.display = 'none'; return; }
+        box.innerHTML = rows.map(function (row, i) {
+          return '<div class="boardrow">' +
+            '<span class="boardrank">' + (i + 1) + '</span>' +
+            '<span class="boardname">' + escapeHtml(boardName(row)) + '</span>' +
+            '<span class="boardpts">' + escapeHtml(String(Number(row.lifetime_points))) + ' pts</span>' +
+            '</div>';
+        }).join('');
+        note.textContent = 'Play and collect points to join the board.';
+        wrap.style.display = 'block';
+      })
+      .catch(function () { /* the board is an extra; never break the play page over it */ });
+  }
+
   if (!slug) { show('This campaign link is incomplete. Please use the link you were given.', true); return; }
 
   fetch(api + '/play/' + encodeURIComponent(slug))
@@ -520,6 +585,8 @@ label.opt:hover{border-color:var(--brand)}
       el('panel').style.display = 'block';
       // The quiz player renders its questions into the same form (the identity fields stay).
       if (campaign.type === 'quiz') { loadQuizQuestions(); }
+      // The points board, once the campaign is known (no campaign, no slug to ask about).
+      loadLeaderboard();
     })
     .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
 
@@ -654,6 +721,8 @@ label.opt:hover{border-color:var(--brand)}
           return;
         }
         render(out.data && out.data.result, out.data);
+        // The visitor may have just earned points: re-read the board so it is not stale on screen.
+        loadLeaderboard();
       })
       .catch(function () {
         el('error').textContent = 'Something went wrong. Please try again.';
