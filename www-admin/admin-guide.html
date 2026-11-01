@@ -646,6 +646,17 @@ subject and recipient, a red &ldquo;❌ Last email was NOT delivered &mdash; the
 nothing&rdquo; line with the provider's own reason, or an explicit withheld line for an address that
 was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
 <code>POST /api/v1/admin/email-settings/test</code> (optional <code>?to=address</code>).</p>
+<p><strong>Recent sends</strong> is the history beside that single line: the last 50 messages this
+installation genuinely attempted to a real address, so a credentials mail that failed at signup stays
+readable after any later mail succeeds. Addresses that can never receive mail are not listed there and
+are counted separately instead, because those were never attempts. When a customer says they never got
+in, each row carries <strong>Send reset</strong>: it issues a fresh one-hour reset link for that address
+and sends the app's own password-reset mail, closing the case where &ldquo;forgot password&rdquo; cannot
+help because the customer receives no mail from us at all. The button reports the server's own answer
+in a sentence &mdash; no account on that address, reserved test address so nothing was sent, the reset
+link is on its way, or the provider's refusal &mdash; and pressing it twice retires the earlier link so
+only one is ever live. Route: <code>POST /api/v1/admin/email-log/send-reset</code> with
+<code>{"email":"&lt;address&gt;"}</code>.</p>
 </section>
 
 <section id="profile-picture">
@@ -734,6 +745,11 @@ was never sent to. Routes: <code>GET|PUT /api/v1/admin/email-settings</code> and
     same person can belong to more than one business. Each row carries their name, email, phone, the
     business they belong to, their tags, how many entries they have made, when they were last seen,
     and their history.</p>
+    <p><strong>Three CSV exports</strong> sit on this screen — <strong>Contacts</strong> (every person
+    captured or imported), <strong>Campaigns</strong> (one row per campaign with its status, total
+    entries, unique contacts, wins and win rate) and <strong>Entries</strong> (every participation
+    record, so the ledger can be reconciled). Each one downloads under the server's own file name, and
+    a report that cannot be produced says why instead of saving an empty file.</p>
   </div>
   <div class="card">
     <h3>🎫 Support Tickets</h3>

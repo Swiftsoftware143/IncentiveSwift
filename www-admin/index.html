@@ -2998,9 +2998,13 @@ const ContactsView = () => {
     if (typeof v === 'number' || typeof v === 'boolean') return String(v);
     try { return JSON.stringify(v); } catch (e) { return String(v); }
   };
-  const exportCsv = async () => {
+  // All THREE analytics reports this API serves are reachable from here (campaigns, contacts,
+  // entries). It used to hard-code `type=contacts` with the download name 'contacts.csv', so the
+  // other two had a route and no UI at all -- an operator had to hand-build the URL.
+  const exportCsv = async (type) => {
+    const wanted = type || 'contacts';
     try {
-      const r = await fetch(window.location.origin + '/api/v1/analytics/export?type=contacts', { headers: { 'Authorization': ['Bearer', API.token].join(' ') } });
+      const r = await fetch(window.location.origin + '/api/v1/analytics/export?type=' + encodeURIComponent(wanted), { headers: { 'Authorization': ['Bearer', API.token].join(' ') } });
       // A refused export used to say only "Export failed: HTTP 400" -- a status code with no reason.
       // The server's own sentence (e.g. "export type 'contact' is not supported -- use 'campaigns',
       // 'contacts' or 'entries'") is what tells the operator what to fix, so read the body first and
@@ -3011,7 +3015,13 @@ const ContactsView = () => {
         throw new Error(why);
       }
       const b = await r.blob();
-      const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'contacts.csv';
+      // The server names the file (Content-Disposition). Fall back to the type so a report is
+      // never saved under another report's name.
+      let name = wanted + '.csv';
+      const cd = r.headers.get('content-disposition') || '';
+      const m = /filename="([^"]+)"/.exec(cd);
+      if (m) name = m[1];
+      const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name;
       document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
     } catch (e) { alert('Export failed: ' + e.message); }
   };
@@ -3027,7 +3037,10 @@ const ContactsView = () => {
       <div><h2 class="text-xl font-bold">Contacts</h2><p class="text-sm text-gray-500">Everyone your business has captured or imported. One row per person — the same person can belong to more than one business.</p></div>
       <div class="flex items-center gap-2">
         <input class="border rounded px-3 py-1.5 text-sm w-44" placeholder="Search..." value=${st.search} onInput=${e => { st.search = e.target.value; renderApp(); }} />
-        <button class="border rounded px-3 py-1.5 text-sm" onClick=${exportCsv}>Export CSV</button>
+        <span class="text-xs text-gray-500">Export:</span>
+        <button class="border rounded px-3 py-1.5 text-sm" onClick=${() => exportCsv('contacts')} title="Every contact your business has captured or imported">Contacts CSV</button>
+        <button class="border rounded px-3 py-1.5 text-sm" onClick=${() => exportCsv('campaigns')} title="One row per campaign: its status, entries and performance">Campaigns CSV</button>
+        <button class="border rounded px-3 py-1.5 text-sm" onClick=${() => exportCsv('entries')} title="Every participation record, so the ledger can be reconciled">Entries CSV</button>
         <button class="bg-blue-600 text-white rounded px-4 py-1.5 text-sm" onClick=${() => { st.impOpen = true; st.impMsg = ''; renderApp(); }}>Import CSV</button>
       </div>
     </div>
