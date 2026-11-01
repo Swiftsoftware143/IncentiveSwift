@@ -678,6 +678,12 @@ only one is ever live. Route: <code>POST /api/v1/admin/email-log/send-reset</cod
   optional: it is a short name the console can show in place of the full name, and clearing the box
   and pressing <strong>Save</strong> removes it again. What the form shows is read back from the
   server each time the screen is opened, so it never displays a stale copy.</p>
+  <p>Below the password card is <strong>Signed-in devices</strong>. If you think someone else is
+  signed in to your account &mdash; an old phone you sold, a shared computer, a password somebody
+  saw &mdash; press <strong>Sign out every other device</strong>. Every other session is ended at its
+  next request and the tab you pressed it from stays signed in, so you do not have to sign yourself
+  back in. You do not need to know or change your password to do this. Route:
+  <code>POST /api/v1/auth/logout-all</code>; it answers a fresh token for the pressing device.</p>
 </section>
 
 <section id="campaign-analytics">

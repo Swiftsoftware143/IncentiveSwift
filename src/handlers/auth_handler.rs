@@ -1120,6 +1120,62 @@ pub async fn change_password(
     Ok(Json(json!({ "status": "password_updated" })))
 }
 
+/// `POST /api/v1/auth/logout-all` — end every OTHER signed-in device on this account.
+///
+/// The machinery already existed and nothing could reach it: a password change or reset bumps
+/// `accounts.sessions_valid_from`, and the boundary read (`security::auth::guard_account_exists`)
+/// refuses any JWT minted before it. Measured 2026-11-01: no route and no console control would bump
+/// that column on its own, so a customer who believes someone else is in their account had exactly
+/// one option — change the password they already know — and a customer whose picture of the intruder
+/// is "an old phone I sold" had none at all.
+///
+/// This is the missing verb. It bumps the same column and then mints a FRESH token in the same
+/// second, so the device that pressed the button stays signed in (the boundary read floors the
+/// column to a second, so a session minted in the same second as the change is allowed) while every
+/// other JWT dies at its next request. The new token is in the response because the caller's own old
+/// token is now dead too — a 200 that silently signed the caller out of the tab they were looking at
+/// would be a trap.
+///
+/// Idempotent: pressing it twice costs nothing, the second bump only moves the line forward. The
+/// account comes from the caller's own token, so there is no id in the path to spoof.
+pub async fn logout_all(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_uuid = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
+
+    // The row is read (not the claims) so the re-minted token carries the account's CURRENT email
+    // and role: a claim that has since been narrowed must not be re-blessed by this route.
+    let row = sqlx::query("SELECT email, role FROM accounts WHERE id = $1")
+        .bind(account_uuid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("Account not found".to_string()))?;
+    let email: String = row.get("email");
+    let role: String = row.get("role");
+
+    sqlx::query(
+        "UPDATE accounts SET sessions_valid_from = NOW(), updated_at = NOW() WHERE id = $1",
+    )
+    .bind(account_uuid)
+    .execute(&state.db)
+    .await?;
+
+    let token = create_jwt(
+        &account_uuid.to_string(),
+        &email,
+        &role,
+        &state.config.jwt_secret,
+    )?;
+
+    Ok(Json(json!({
+        "status": "ok",
+        "message": "Every other device has been signed out. This one stays signed in.",
+        "token": token,
+    })))
+}
+
 /// `POST /api/v1/auth/initial-password` — the customer sets the first password they will ever know.
 ///
 /// Signup mints a password and MAILS it, and that mail is the only way in. When the send does not go

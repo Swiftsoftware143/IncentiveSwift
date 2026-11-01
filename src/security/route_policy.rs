@@ -554,6 +554,10 @@ mod tests {
             "/api/v1/loyalty/supplier/milestones/0a1b2c3d",
             "/api/v1/credits/balance",
             "/api/v1/auth/me",
+            // Ending every other session (2026-11-01) is an act on the caller's OWN account, so it
+            // takes a credential like the password change beside it: no id in the path, nothing to
+            // spoof, and an anonymous caller must never be able to end a session.
+            "/api/v1/auth/logout-all",
             // The WRITE twin of the public avatar read (kanban t_4fcbe895): uploading a picture is
             // an authenticated act on the caller's own account, so it must stay private.
             "/api/v1/auth/avatar",

@@ -178,7 +178,7 @@ window.appGuidePages = {
   analytics:      { title: "Analytics", desc: "How your account is performing: campaigns, entries, wins, the win rate, redemptions, loyalty members and points issued. Below the totals, click a campaign's name to open that campaign's own numbers \u2014 its entries, redemptions and redemption rate, average score, the loyalty members it brought in, where the entries came from, which prizes were won and whether automatic loyalty enrolment is on. A campaign with no play yet says so rather than showing a zero, and a failed read names the reason.", actions: ["Read the account totals", "Click a campaign's name to open its own numbers", "Close the detail card when you are done"] },
   entries:        { title: "Entries & Answers", desc: "The raw record of play, one row per entry: when it was made, who made it, what the result was and its delivery state. This is the row to check when an entry is disputed, rather than the summary counts.", actions: ["Find an entry", "Check its result and delivery state"] },
   offers:         { title: "Offers", desc: "The offers you can hand out \u2014 each one's name, its discount, any cap on it and whether it is active. Deactivating stops an offer being handed out without deleting its history, and reactivating brings it back.", actions: ["Add an offer", "Edit one", "Deactivate it, or reactivate it later"] },
-  profile:        { title: "Profile", desc: "Your own account: change your name and company, change your password (your current one must verify first), and set or remove your profile picture. The picture is PNG, JPEG, GIF or WebP up to 2 MB, and its type is read from the file's own bytes rather than its name.", actions: ["Update your name and company", "Change your password", "Upload or remove a picture"] },
+  profile:        { title: "Profile", desc: "Your own account: change your name and company, change your password (your current one must verify first), set or remove your profile picture, and sign every OTHER device out if you think someone else is signed in. The picture is PNG, JPEG, GIF or WebP up to 2 MB, and its type is read from the file's own bytes rather than its name.", actions: ["Update your name and company", "Change your password", "Upload or remove a picture", "Press Sign out every other device to end an old session without changing your password"] },
   "email-provider": { title: "Email Provider", desc: "The platform-wide mail server every outgoing message goes through: its host, port, credentials and the from-address, with a Test button that sends one message. Changing it here changes the sender for every workspace on this deployment.", actions: ["Review the current mail server", "Send a test message", "Save a change"] }
 };
 </script>
@@ -5477,6 +5477,10 @@ const ProfileView = () => {
     nameDraft: null, companyDraft: null, usernameDraft: null,
     avMsg: '', avKind: 'info', pwMsg: '', pwKind: 'info',
     np: '', np2: '', cp: '',
+    // Sign out every other device (2026-11-01): the sentence the server hands back, and the busy
+    // flag for the one button. The 401 here is a real refusal, so it lands in this message and
+    // never in the global "session expired" path.
+    soMsg: '', soKind: 'info', soBusy: false,
     // Sign-in address change (kanban t_6b2702e3): the typed address, and the sentence the server
     // hands back after a request. `delivered:false` means the address is a reserved test address,
     // so the message says "no mail was sent" rather than "check your inbox".
@@ -5616,6 +5620,19 @@ const ProfileView = () => {
     renderApp();
   };
 
+  // Ends every OTHER signed-in device on this account and ADOPTS the fresh token the server
+  // returns, so the tab the customer pressed from stays signed in. Before this the only way to
+  // end an old session was to change a password you already knew.
+  const signOutOthers = async () => {
+    st.soBusy = true; st.soKind = 'info'; st.soMsg = 'Signing out…'; renderApp();
+    try {
+      const d = await API.post('/auth/logout-all');
+      if (d && d.token) API.setAuth(d.token, API.user || {});
+      st.soKind = 'ok'; st.soMsg = (d && d.message) || 'Every other device has been signed out.';
+    } catch (e) { st.soKind = 'err'; st.soMsg = e.message || 'Could not sign the other devices out'; }
+    st.soBusy = false; renderApp();
+  };
+
   const initial = (String(me.name || me.email || '?') + '?').charAt(0).toUpperCase();
 
   return html`<div>
@@ -5686,6 +5703,12 @@ const ProfileView = () => {
       </div>
       <button class="btn" onClick=${changePw}>Save</button>
       <span style=${pwMsgStyle}>${st.pwMsg}</span>
+    </div>
+    <div class="card" id="signout-others-card">
+      <h3 class="text-base font-semibold mb-1">Signed-in devices</h3>
+      <p class="text-sm text-gray-500 mb-3">If you think someone else is signed in — an old phone you sold, a shared computer, a password someone saw — end every other session now. This device stays signed in; every other one has to sign in again.</p>
+      <button class="btn" id="signout-others" onClick=${signOutOthers} disabled=${st.soBusy}>${st.soBusy ? 'Signing out…' : 'Sign out every other device'}</button>
+      <span id="signout-others-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.soKind === 'err' ? '#dc2626' : (st.soKind === 'ok' ? '#059669' : '#64748b'))}>${st.soMsg}</span>
     </div>`}
   </div>`;
 };

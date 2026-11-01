@@ -889,6 +889,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/password",
             put(crate::handlers::auth_handler::change_password),
         )
+        // "Sign out every other device" (cron 2026-11-01). The machinery behind it already
+        // existed — a password change or reset bumps `accounts.sessions_valid_from` and the
+        // boundary read refuses every session minted before it — but nothing could reach it, so a
+        // customer whose old phone was still signed in had no way to end that session without also
+        // changing the password they knew. Private like its neighbours: the account comes from the
+        // caller's own token, so there is no id in the path to spoof.
+        .route(
+            "/api/v1/auth/logout-all",
+            post(crate::handlers::auth_handler::logout_all),
+        )
         // The way back in when signup MINTED a password and the mail carrying it did not go out
         // (2026-10-28 cron). Authenticated like every other act on the caller's own account: the
         // token the signup response already carried IS the credential, and the one-shot
