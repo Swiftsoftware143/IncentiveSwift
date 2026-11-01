@@ -4,9 +4,11 @@
 //! `INSERT INTO custom_domains (…, domain, …)`, so three live POSTs as a real signed-in customer
 //! were all answered **200** and written to the table:
 //!
-//!     https://Evil.Example.COM/some/path?x=1     -> stored verbatim
-//!     asdf not a site                            -> stored verbatim
-//!     ""                                         -> stored as an empty host
+//! ```text
+//! https://Evil.Example.COM/some/path?x=1     -> stored verbatim
+//! asdf not a site                            -> stored verbatim
+//! ""                                         -> stored as an empty host
+//! ```
 //!
 //! None of the three can ever be verified: the row is rendered in the customer's console, and the
 //! response's own verification instructions read
