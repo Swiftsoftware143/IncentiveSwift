@@ -79,14 +79,15 @@ where
             impersonating: claims.impersonating.clone(),
         };
         // `claims.iat` is what lets a password change or reset end the sessions that predate it
-        // (see [`IssuedAt`] and the module doc: SESSION REVOCATION).
-        guard_account_exists(
-            &app_state.db,
-            &method,
-            &user.account_id,
-            IssuedAt::Session(claims.iat),
-        )
-        .await?;
+        // (see [`IssuedAt`] and the module doc: SESSION REVOCATION). A token minted by this app
+        // since 2026-11-01 also carries the account's session VERSION, which is judged instead of
+        // the timestamp: a counter has no whole-second floor, so a revoke reaches a device that
+        // signed in during the same second (measured live before this change: it did not).
+        let issued = match claims.sv {
+            Some(sv) => IssuedAt::Versioned(sv),
+            None => IssuedAt::Session(claims.iat),
+        };
+        guard_account_exists(&app_state.db, &method, &user.account_id, issued).await?;
         Ok(user)
     }
 }
@@ -185,8 +186,24 @@ pub(crate) fn refusal_for(method: &Method, names_a_row: bool) -> Option<AppError
 pub(crate) enum IssuedAt {
     /// A session JWT and its `iat` (seconds since the epoch, when the mint recorded one).
     Session(Option<i64>),
+    /// A session JWT that carries the account's session VERSION (`sv`, minted by this app since
+    /// 2026-11-01). The version is authoritative: it is compared to `accounts.session_epoch` and
+    /// the `iat` floor is not consulted, because a counter cannot be ambiguous about whole seconds.
+    Versioned(i64),
     /// A durable, non-session credential (an issued API key).
     Durable,
+}
+
+/// Is a session VERSION older than the account's current one?
+///
+/// Only a versioned session can answer; a token minted before the column existed carries no `sv`
+/// and is judged by [`token_predates_password_change`] instead (`false` here, so the two rules can
+/// never both refuse — or both allow — the same token).
+pub(crate) fn session_version_is_stale(issued: IssuedAt, current: Option<i64>) -> bool {
+    match issued {
+        IssuedAt::Versioned(sv) => current.map(|cur| sv != cur).unwrap_or(true),
+        IssuedAt::Session(_) | IssuedAt::Durable => false,
+    }
 }
 
 /// Is a JWT older than the instant its account last changed or reset its password?
@@ -233,13 +250,14 @@ async fn guard_account_exists(
     account_id: &str,
     issued: IssuedAt,
 ) -> Result<(), AppError> {
-    // ONE read answers both questions: does the row exist, and (if it exists) when were its
-    // sessions last invalidated. `COALESCE(..., 0)` keeps a NULL — the ordinary case — as "no
-    // restriction" without a second column read.
-    let valid_from = match uuid::Uuid::parse_str(account_id) {
+    // ONE read answers both questions: does the row exist, and (if it exists) which session version
+    // its owner is on. `COALESCE(..., 0)` keeps a NULL `sessions_valid_from` — the ordinary case — as
+    // "no timestamp restriction" without a second column read.
+    let row = match uuid::Uuid::parse_str(account_id) {
         Ok(id) => {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(floor(EXTRACT(EPOCH FROM sessions_valid_from))::bigint, 0)
+            sqlx::query_as::<_, (i64, i64)>(
+                "SELECT COALESCE(floor(EXTRACT(EPOCH FROM sessions_valid_from))::bigint, 0),
+                        COALESCE(session_epoch, 0)::bigint
                    FROM accounts WHERE id = $1",
             )
             .bind(id)
@@ -248,9 +266,19 @@ async fn guard_account_exists(
         }
         Err(_) => None,
     };
-    let names_a_row = valid_from.is_some();
-    if names_a_row && token_predates_password_change(issued, valid_from.filter(|v| *v > 0)) {
-        return Err(session_ended());
+    let names_a_row = row.is_some();
+    if let Some((valid_from, epoch)) = row {
+        // A versioned session is judged by the COUNTER, never by the second: that is what lets a
+        // revoke reach a device that signed in during the same wall-clock second as the bump.
+        if session_version_is_stale(issued, Some(epoch)) {
+            return Err(session_ended());
+        }
+        // Only an unversioned token (minted before the column existed) falls back to the timestamp.
+        if !matches!(issued, IssuedAt::Versioned(_))
+            && token_predates_password_change(issued, Some(valid_from).filter(|v| *v > 0))
+        {
+            return Err(session_ended());
+        }
     }
     match refusal_for(method, names_a_row) {
         Some(e) => Err(e),
@@ -635,8 +663,8 @@ mod tests {
     use super::{
         account_gate, admin_surface_denied_for, claim_backed_by_row, is_admin_surface,
         is_platform_admin, is_state_changing, is_stop_impersonation, issued_key_prefix,
-        refusal_for, session_ended, token_predates_password_change, unknown_account, AccountGate,
-        IssuedAt, KEY_PREFIX_LEN, SESSION_ENDED,
+        refusal_for, session_ended, session_version_is_stale, token_predates_password_change,
+        unknown_account, AccountGate, IssuedAt, KEY_PREFIX_LEN, SESSION_ENDED,
     };
     use crate::error::AppError;
     use axum::http::Method;
@@ -922,6 +950,35 @@ mod tests {
         // A durable API key is an integration credential, not a session: never revoked by this.
         assert!(!token_predates_password_change(
             IssuedAt::Durable,
+            Some(2_000)
+        ));
+    }
+
+    /// The version rule, and the reason it exists (2026-11-01): the timestamp rule above spans a
+    /// whole second, so a device that signed in during the same second as a logout-all was
+    /// indistinguishable from the fresh token and stayed signed in (measured live). A counter has
+    /// no such floor, so a versioned session is judged ONLY by the counter — one that matches is
+    /// alive, anything else is dead, and the old timestamp rule is never consulted for it.
+    #[test]
+    fn a_versioned_session_is_judged_only_by_its_version() {
+        // Matching version -> alive, whatever the second was.
+        assert!(!session_version_is_stale(IssuedAt::Versioned(4), Some(4)));
+        // Any other version -> dead: this is the same-second other device, and the old token after
+        // a revoke. Both are the case the timestamp rule could not settle.
+        assert!(session_version_is_stale(IssuedAt::Versioned(3), Some(4)));
+        assert!(session_version_is_stale(IssuedAt::Versioned(5), Some(4)));
+        // A row with no readable version cannot confirm a versioned session: fail closed.
+        assert!(session_version_is_stale(IssuedAt::Versioned(4), None));
+        // Tokens minted before the column existed carry no `sv` and are NOT judged here, so the two
+        // rules can never both refuse a token that was fine a moment ago.
+        assert!(!session_version_is_stale(
+            IssuedAt::Session(Some(1_000)),
+            Some(4)
+        ));
+        assert!(!session_version_is_stale(IssuedAt::Durable, Some(4)));
+        // And the timestamp rule does not start refusing versioned tokens either.
+        assert!(!token_predates_password_change(
+            IssuedAt::Versioned(1),
             Some(2_000)
         ));
     }

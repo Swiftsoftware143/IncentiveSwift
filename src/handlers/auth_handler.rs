@@ -154,12 +154,23 @@ pub async fn register(
     };
     let account_id = minted.account_id;
 
-    // Generate JWT
+    // Generate JWT. The token carries the new account's session version, so a later revoke is a
+    // counter bump and not a comparison of whole seconds (2026-11-01). One primary-key read: the
+    // column defaults to 1 and is written by this app only. Cast to bigint: the column is integer,
+    // and a typed decode of INT4 into i64 is a 500 on a path every signup walks.
+    let session_epoch = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(session_epoch, 1)::bigint FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or(1);
     let token = create_jwt(
         &account_id.to_string(),
         &email,
         "company_admin",
         &state.config.jwt_secret,
+        Some(session_epoch),
     )?;
 
     // Award referral bonus if referral_code provided
@@ -388,7 +399,13 @@ pub async fn register(
 }
 
 /// Create a signed JWT token for an authenticated user.
-fn create_jwt(account_id: &str, email: &str, role: &str, secret: &str) -> Result<String, AppError> {
+fn create_jwt(
+    account_id: &str,
+    email: &str,
+    role: &str,
+    secret: &str,
+    session_epoch: Option<i64>,
+) -> Result<String, AppError> {
     use base64::Engine;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -401,13 +418,20 @@ fn create_jwt(account_id: &str, email: &str, role: &str, secret: &str) -> Result
     });
 
     let now = chrono::Utc::now().timestamp();
-    let payload = json!({
+    let mut payload = json!({
         "sub": account_id,
         "email": email,
         "role": role,
         "iat": now,
         "exp": now + 86400, // 24 hours
     });
+    // The session VERSION this token is minted under (2026-11-01). `security::auth` refuses a token
+    // whose `sv` no longer matches the account's `session_epoch`, which is how a revoke reaches a
+    // device signed in during the same wall-clock second as the bump. Absent only for a minted
+    // impersonation token, which keeps the older `iat` rule.
+    if let Some(sv) = session_epoch {
+        payload["sv"] = json!(sv);
+    }
 
     let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .encode(serde_json::to_string(&header).unwrap().as_bytes());
@@ -485,7 +509,8 @@ pub async fn login(
     }
     // Look up account by email
     let row = sqlx::query(
-        r#"SELECT id, email, password_hash, role
+        r#"SELECT id, email, password_hash, role,
+                  COALESCE(session_epoch, 1)::bigint AS session_epoch
            FROM accounts WHERE lower(email) = $1"#,
     )
     .bind(email_addr::lookup_key(&body.email))
@@ -553,12 +578,17 @@ pub async fn login(
         tracing::warn!("could not clear the undelivered-credential latch for {account_id}: {e}");
     }
 
-    // Generate JWT
+    // Generate JWT. The token carries the account's session version, so a revoke after this
+    // sign-in reaches it without depending on a whole-second comparison (2026-11-01). `try_get`
+    // with a 1 fallback: a decode surprise must never turn a correct password into a 500 (measured
+    // 2026-11-01 — an INT4 column read as i64 panicked here and killed the request).
+    let session_epoch: i64 = row.try_get("session_epoch").unwrap_or(1);
     let token = create_jwt(
         &account_id.to_string(),
         &email,
         &role,
         &state.config.jwt_secret,
+        Some(session_epoch),
     )?;
 
     Ok(Json(json!({
@@ -1110,7 +1140,11 @@ pub async fn change_password(
     // Measured before this: a token minted before the change kept answering 200 afterwards, so the
     // one action a user takes when they believe their session is stolen revoked nothing.
     sqlx::query(
-        "UPDATE accounts SET password_hash = $1, sessions_valid_from = NOW() WHERE id = $2",
+        "UPDATE accounts
+            SET password_hash = $1,
+                sessions_valid_from = NOW(),
+                session_epoch = COALESCE(session_epoch, 1) + 1
+          WHERE id = $2",
     )
     .bind(&new_hash)
     .bind(account_uuid)
@@ -1155,11 +1189,20 @@ pub async fn logout_all(
     let email: String = row.get("email");
     let role: String = row.get("role");
 
-    sqlx::query(
-        "UPDATE accounts SET sessions_valid_from = NOW(), updated_at = NOW() WHERE id = $1",
+    // A counter bump, not just a timestamp (2026-11-01): the row's version moves, so every token
+    // minted under the old one is refused at its next request — including a device that signed in
+    // during this same wall-clock second, which the floored timestamp could not tell apart from the
+    // fresh token below (measured live: it stayed signed in).
+    let session_epoch: i64 = sqlx::query_scalar(
+        "UPDATE accounts
+            SET sessions_valid_from = NOW(),
+                session_epoch = COALESCE(session_epoch, 1) + 1,
+                updated_at = NOW()
+          WHERE id = $1
+      RETURNING session_epoch::bigint",
     )
     .bind(account_uuid)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await?;
 
     let token = create_jwt(
@@ -1167,6 +1210,7 @@ pub async fn logout_all(
         &email,
         &role,
         &state.config.jwt_secret,
+        Some(session_epoch),
     )?;
 
     Ok(Json(json!({
@@ -1210,7 +1254,9 @@ pub async fn set_initial_password(
     // two racing calls cannot both succeed and a replay after the first finds no row.
     let updated: Option<Uuid> = sqlx::query_scalar(
         r#"UPDATE accounts
-              SET password_hash = $1, password_undelivered = false, sessions_valid_from = NOW()
+              SET password_hash = $1, password_undelivered = false,
+                  sessions_valid_from = NOW(),
+                  session_epoch = COALESCE(session_epoch, 1) + 1
             WHERE id = $2 AND password_undelivered = true
         RETURNING id"#,
     )
@@ -1461,7 +1507,11 @@ pub async fn reset_password(
     // also ends every JWT issued BEFORE it — measured before this: a token minted before a reset
     // still answered 200 from `/auth/me` afterwards, which is the whole point of resetting.
     sqlx::query(
-        "UPDATE accounts SET password_hash = $1, sessions_valid_from = NOW() WHERE id = $2",
+        "UPDATE accounts
+            SET password_hash = $1,
+                sessions_valid_from = NOW(),
+                session_epoch = COALESCE(session_epoch, 1) + 1
+          WHERE id = $2",
     )
     .bind(&new_hash)
     .bind(account_id)

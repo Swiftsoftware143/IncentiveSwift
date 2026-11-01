@@ -20,6 +20,13 @@ pub struct AppClaims {
     pub role: Option<String>,
     pub iat: Option<i64>,
     pub exp: Option<i64>,
+    /// The account's SESSION VERSION this token was minted under (2026-11-01).
+    ///
+    /// `security::auth` refuses a token whose `sv` no longer matches `accounts.session_epoch`, so
+    /// revoking a session is a counter bump rather than a comparison of whole seconds. Absent on
+    /// tokens minted before the column existed — those keep the older `iat` rule.
+    #[serde(default)]
+    pub sv: Option<i64>,
     /// When present, this JWT is an impersonation token.
     /// Value is the admin account_id who initiated the impersonation.
     pub impersonating: Option<String>,
