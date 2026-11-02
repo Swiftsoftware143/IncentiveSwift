@@ -522,7 +522,18 @@ mod queued_branding_tests {
     #[test]
     fn a_queued_body_for_an_unbranded_account_opens_with_the_apps_wordmark() {
         let (body, vars) = render_queued(None, "<p>Hi {{first_name}}</p>");
-        assert!(body.starts_with("<div style=\"text-align:center"), "{body}");
+        // The wordmark must OPEN the message body — it is no longer the first byte of the string,
+        // because the header now sits INSIDE a real document (see `branding::place_header`, live
+        // measurement 2026-11-01) instead of in front of a fragment. Assert the doc and the order.
+        assert!(body.starts_with("<!DOCTYPE html>"), "{body}");
+        let body_at = body.find("<body").expect("a document must carry a body");
+        let mark_at = body
+            .find("<div style=\"text-align:center")
+            .expect("the app wordmark must be painted");
+        assert!(
+            mark_at > body_at,
+            "the wordmark must be inside <body>: {body}"
+        );
         assert!(
             body.contains("src=\"https://app.incentiveswift.com/logo.png\""),
             "the app wordmark must be absolute: {body}"
