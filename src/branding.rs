@@ -200,6 +200,44 @@ pub fn effective_branding(stored: Option<Branding>) -> Branding {
     stored.unwrap_or_else(app_default_branding)
 }
 
+/// Put the branding INSIDE the message document, never in front of it.
+///
+/// Measured live 2026-11-01 (GET `/api/v1/settings/branding/preview-body`, no mail sent): the
+/// rendered HTML part of a branded message was 976 bytes starting `<div style="text-align:center…`
+/// with **no `<!DOCTYPE>`, no `<html>` and no `<body>` anywhere** — the app's templates supply bare
+/// FRAGMENTS (`<h2>…</h2><p>…</p>`, see `email_templates.html_body`), and the header was simply
+/// concatenated in front of one. So every message this app mails is a document-less HTML part: a
+/// client that rebuilds the body (Outlook's Word renderer, Gmail's sanitiser) is free to drop
+/// whatever sits outside it — which is the account's own logo and brand colour.
+///
+/// Two placements, decided by the input:
+/// * a whole document already (has `<html`/`<body`) — insert the header right after `<body …>`,
+///   else after `<html …>`, else after `</head>`;
+/// * a fragment — wrap it in a minimal document (`<!DOCTYPE html>`, charset, viewport) with the
+///   header as the first thing inside `<body>`.
+///
+/// A message with no HTML part at all is unaffected: the caller builds its own pre-wrap `<div>` and
+/// hands it here, so it lands inside the same document.
+pub fn place_header(html: &str, header: &str) -> String {
+    // `to_ascii_lowercase` never changes a byte COUNT, so an index into `lower` is the same index
+    // into `html` — which is what makes the slicing below safe for non-ASCII message bodies.
+    let lower = html.to_ascii_lowercase();
+    let end_of = |open: usize| html[open..].find('>').map(|j| open + j + 1);
+    for tag in ["<body", "<html"] {
+        if let Some(at) = lower.find(tag).and_then(end_of) {
+            return format!("{}{}{}", &html[..at], header, &html[at..]);
+        }
+    }
+    if let Some(at) = lower.find("</head>").map(|i| i + "</head>".len()) {
+        return format!("{}{}{}", &html[..at], header, &html[at..]);
+    }
+    format!(
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>\n\
+         <body style=\"margin:0;padding:0;background:#f4f4f5;\">{header}{html}</body></html>"
+    )
+}
+
 /// Put the branding at the TOP of a rendered message (kanban t_feab8aff).
 ///
 /// The HTML part gains the header block (logo + name + colour rule); the text part gains the brand
@@ -226,7 +264,17 @@ pub fn with_branding_header(
             escape_html(&text)
         )
     } else {
-        format!("{header}{html}")
+        // Inside the document, not in front of it — see `place_header` for the live measurement.
+        place_header(&html, &header)
+    };
+    // The text-only fallback above ALSO started with the header, so it is a fragment too: give it
+    // the same document when it was built here (`place_header` already ran for a real HTML part).
+    let html = if html.trim_start().starts_with("<!DOCTYPE")
+        || html.to_ascii_lowercase().contains("<html")
+    {
+        html
+    } else {
+        place_header(&html, "")
     };
     (format!("{}{}", b.text_header(), text), html)
 }
