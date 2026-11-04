@@ -265,7 +265,21 @@ pub async fn create_funnel(
     Json(body): Json<CreateFunnelInput>,
 ) -> Result<Json<Value>, AppError> {
     let id = Uuid::new_v4();
-    let slug = body.slug.unwrap_or_else(|| slugify(&body.name));
+    // A NAME IS NOT A LAND GRAB (2026-11-04). `iqs_funnels.slug` is unique across the WHOLE
+    // install because the public player answers by it (`/iqs/play/<slug>`), and this handler
+    // used to refuse a name-derived slug that any other workspace already held — 400 "A funnel
+    // with slug 'x' already exists". Measured live: a brand-new account could not create a
+    // survey called "Probe builder survey" because a probe workspace had minted it, the builder
+    // has no slug field to edit, and the sentence told the customer another workspace held that
+    // name. A DERIVED slug takes the next free suffix below; a CALLER-SUPPLIED slug keeps the
+    // strict refusal, because that caller asked for that exact address.
+    let requested_slug = body.slug.clone();
+    let mut slug = requested_slug
+        .clone()
+        .unwrap_or_else(|| slugify(&body.name));
+    // The base every suffixed candidate is built from: the ORIGINAL derived slug, never the one the
+    // loop is holding (re-deriving from it would eat the name's own trailing digits).
+    let derived_slug = slug.clone();
     let funnel_type = body.funnel_type.unwrap_or_else(|| "survey".to_string());
     check_funnel_text(&[
         ("name", &body.name, FUNNEL_NAME_CHARS),
@@ -300,18 +314,44 @@ pub async fn create_funnel(
         })
     });
 
-    // Check slug uniqueness
-    let existing: Option<String> =
-        sqlx::query_scalar("SELECT slug FROM iqs_funnels WHERE slug = $1")
-            .bind(&slug)
-            .fetch_optional(&state.db)
-            .await?;
-
-    if existing.is_some() {
-        return Err(AppError::BadRequest(format!(
-            "A funnel with slug '{}' already exists",
-            slug
-        )));
+    // SLUG UNIQUENESS: a derived slug walks suffixes until one is free; an explicit one is exact.
+    let mut n: u32 = 2;
+    loop {
+        let taken: Option<String> =
+            sqlx::query_scalar("SELECT slug FROM iqs_funnels WHERE slug = $1")
+                .bind(&slug)
+                .fetch_optional(&state.db)
+                .await?;
+        if taken.is_none() {
+            break;
+        }
+        if requested_slug.is_some() {
+            return Err(AppError::BadRequest(format!(
+                "A funnel with slug '{}' already exists",
+                slug
+            )));
+        }
+        // The SUFFIX is what must survive the column: trim the BASE, never the counter.
+        let suffix = format!("-{n}");
+        let keep = FUNNEL_SLUG_CHARS.saturating_sub(suffix.len()).max(1);
+        let base: String = derived_slug
+            .trim_end_matches('-')
+            .chars()
+            .take(keep)
+            .collect();
+        let base = if base.is_empty() {
+            "survey".to_string()
+        } else {
+            base
+        };
+        slug = format!("{base}{suffix}");
+        n += 1;
+        if n > 100 {
+            return Err(AppError::Conflict(
+                "Could not find a free survey address — rename the survey and try again."
+                    .to_string(),
+            ));
+        }
     }
 
     sqlx::query(
