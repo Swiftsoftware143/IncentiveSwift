@@ -968,6 +968,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/tenants/:id",
             delete(crate::handlers::admin_handler::delete_tenant),
         )
+        // The operator's remedy for a customer who never received their first password
+        // (cron 2026-11-05). `accounts.password_undelivered` marks exactly that state; the list
+        // publishes it on the row (see `list_all_tenants`) and this is the action behind the badge.
+        // POST, not PUT: the call mints a NEW password and mails it, so a retry is a new credential
+        // rather than an idempotent write.
+        .route(
+            "/api/v1/admin/tenants/:id/resend-credentials",
+            post(crate::handlers::admin_handler::resend_account_credentials),
+        )
         // Bulk tenant retirement for the console's "Delete selected" control (kanban t_9f3d85dc).
         // POST, not DELETE: the id list IS the request body, so it cannot ride a path. The
         // single-id DELETE above is unchanged, and both call the same one-transaction retire.

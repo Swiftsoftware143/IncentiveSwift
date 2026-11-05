@@ -402,7 +402,17 @@ pub async fn list_all_tenants(
             -- handler, so this list can tell a workspace in daily use from one whose credentials
             -- were minted and never used -- the two read identically before this column existed.
             a.last_login_at,
-            COALESCE(a.probe_harness, '') as probe_harness
+            COALESCE(a.probe_harness, '') as probe_harness,
+            -- WHOSE FIRST PASSWORD NOBODY HAS EVER READ (cron 2026-11-05). `accounts.
+            -- password_undelivered` is set by the signup door when it mints the first password and
+            -- the credentials mail does not go out (the provider refused, or the address is reserved
+            -- and the sender withheld it) and cleared when that person chooses a password. That is
+            -- the state behind "the customer says they never got the email and cannot sign in", and
+            -- no operator surface published it: the row read like any other account, so the only
+            -- remedies were "delete and re-mint" (which throws away the account's history) or
+            -- direct SQL. Published here so the owner cell can badge it and offer the ONE recovery
+            -- action the app already has the plumbing for.
+            a.password_undelivered
         FROM accounts a
         LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
         LEFT JOIN (
@@ -470,6 +480,9 @@ pub async fn list_all_tenants(
             let last_login_at: Option<chrono::DateTime<chrono::Utc>> = row.get("last_login_at");
             let plan_effective_name: String = row.get("plan_effective_name");
             let plan_is_default: bool = row.get("plan_is_default");
+            // TRUE when the first password was minted and the mail carrying it never went out,
+            // so nobody has ever read this customer's password (see the SELECT's comment).
+            let credentials_undelivered: bool = row.get("password_undelivered");
             // Computed BEFORE the `json!` below moves `email` into the payload. true => the owner's
             // address is on a reserved / fleet-harness domain, i.e. this account is fleet machinery
             // rather than a customer (only reachable with `?include_probe=1`).
@@ -488,6 +501,10 @@ pub async fn list_all_tenants(
                 "user_count": user_count,
                 "probe_harness": probe_harness,
                 "reserved_owner": reserved_owner,
+                // true => the first password was minted and the mail carrying it never went out, so
+                // nobody has ever read this customer's password. The owner cell badges it and offers
+                // the resend action below.
+                "credentials_undelivered": credentials_undelivered,
                 "last_login_at": last_login_at.map(|t| t.to_rfc3339()),
             })
         })
@@ -495,6 +512,87 @@ pub async fn list_all_tenants(
 
     Ok(Json(json!({
         "tenants": tenants
+    })))
+}
+
+/// POST /api/v1/admin/tenants/:id/resend-credentials
+///
+/// THE OPERATOR'S REMEDY FOR "I never got the email and I can't sign in" (cron 2026-11-05).
+///
+/// `accounts.password_undelivered` has recorded that state since the signup door started minting
+/// first passwords, but no surface published it and no door could clear it from the console: the
+/// operator's only options were to retire the account (throwing away its campaigns, leads and
+/// credits) or to edit the hash in SQL. The list now badges the row; this is the action behind the
+/// badge.
+///
+/// It mints a NEW password, stores only its hash, clears the latch, ends the account's existing
+/// sessions (a re-issued password means the old one is no longer a credential, so a token minted
+/// from it must not outlive it) and mails it through the SAME credentials template the signup door
+/// uses. The value is returned in the response ONLY when no mail left -- a reserved/harness address,
+/// or a provider refusal -- because otherwise the operator would have nothing to hand the customer.
+/// The full password is never logged.
+pub async fn resend_account_credentials(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    if user.role != "super_admin" && user.role != "admin" {
+        return Err(AppError::Forbidden("Admin only".to_string()));
+    }
+    let account_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // An unknown id is a 404, not a silent no-op, so the console can tell "the account is gone"
+    // from "the mail failed".
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT email, COALESCE(NULLIF(name, ''), email) FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (email, name) =
+        row.ok_or_else(|| AppError::NotFound(format!("Account not found: {id}")))?;
+
+    // The same generator the mint doors use: 12 hex characters from a v4 UUID.
+    let generated_password: String = Uuid::new_v4()
+        .to_string()
+        .replace('-', "")
+        .chars()
+        .take(12)
+        .collect();
+    let password_hash = crate::account_mint::hash_password(&generated_password)?;
+    sqlx::query(
+        "UPDATE accounts \
+            SET password_hash = $1, \
+                password_undelivered = false, \
+                session_epoch = COALESCE(session_epoch, 1) + 1, \
+                updated_at = NOW() \
+          WHERE id = $2",
+    )
+    .bind(&password_hash)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
+
+    // The sender records whether the recipient was withheld (reserved / harness address) and still
+    // writes the history row the operator's Email panel reads, so it is always called.
+    let emailed = crate::account_mint::send_credentials_email(
+        &state.db,
+        account_id,
+        &email,
+        &name,
+        &generated_password,
+    )
+    .await;
+
+    Ok(Json(json!({
+        "id": account_id.to_string(),
+        "email": email,
+        "credentials_emailed": emailed,
+        // Published so the console can say WHY it is handing over a password instead of claiming
+        // "check your email" for a message that was deliberately never sent.
+        "withheld": crate::email::recipient_is_undeliverable(&email),
+        "handover_password": if emailed { Value::Null } else { json!(generated_password) },
     })))
 }
 
