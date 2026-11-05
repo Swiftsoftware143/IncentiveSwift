@@ -329,6 +329,21 @@ pub struct LoyaltyProgramInput {
     pub currency_name: Option<String>,
     pub currency_icon: Option<String>,
     pub currency_color: Option<String>,
+    // The console's "+ Add Program" modal has carried these seven controls since it was written
+    // and sends them on every save (`streak_bonus`, `streak_days`, `referral_bonus`,
+    // `birthday_bonus`, `streak_enabled`, `tiers_enabled`, `milestones_enabled`) — but this
+    // struct did not declare them, so serde dropped them and neither the INSERT nor the UPDATE
+    // named their columns. Measured live 2026-11-05: a save with Streak Bonus 25 / Referral
+    // Bonus 50 / Birthday Bonus 100 and the "Tiers" box ticked left the row at the DB defaults
+    // (0/0/0, tiers_enabled = false) behind a green success toast, so the programme ran with
+    // tiers, streaks and referrals off no matter what the operator entered.
+    pub streak_bonus: Option<i32>,
+    pub streak_days: Option<i32>,
+    pub referral_bonus: Option<i32>,
+    pub birthday_bonus: Option<i32>,
+    pub streak_enabled: Option<bool>,
+    pub tiers_enabled: Option<bool>,
+    pub milestones_enabled: Option<bool>,
 }
 
 /// Query for listing tiers.
@@ -422,8 +437,12 @@ pub async fn create_program(
         match sqlx::query(
             r#"INSERT INTO loyalty_programs (id, campaign_id, name, slug, recognition_method,
                 points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
-                currency_name, currency_icon, currency_color, account_id)
-               VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11, $12)"#,
+                currency_name, currency_icon, currency_color, account_id,
+                streak_bonus, streak_days, referral_bonus, birthday_bonus,
+                streak_enabled, tiers_enabled, milestones_enabled)
+               VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11, $12,
+                       COALESCE($13, 0), COALESCE($14, 7), COALESCE($15, 0), COALESCE($16, 0),
+                       COALESCE($17, false), COALESCE($18, false), COALESCE($19, false))"#,
         )
         .bind(id)
         .bind(campaign_id)
@@ -437,6 +456,13 @@ pub async fn create_program(
         .bind(&currency_icon)
         .bind(&currency_color)
         .bind(account_id)
+        .bind(body.streak_bonus)
+        .bind(body.streak_days)
+        .bind(body.referral_bonus)
+        .bind(body.birthday_bonus)
+        .bind(body.streak_enabled)
+        .bind(body.tiers_enabled)
+        .bind(body.milestones_enabled)
         .execute(&state.db)
         .await
         {
@@ -520,13 +546,20 @@ pub async fn update_program(
                is_active = COALESCE($5, lp.is_active),
                currency_name = COALESCE($6, lp.currency_name),
                currency_icon = COALESCE($7, lp.currency_icon),
-               currency_color = COALESCE($8, lp.currency_color)
-           WHERE lp.id = $9
-             AND (lp.account_id = $10
+               currency_color = COALESCE($8, lp.currency_color),
+               streak_bonus = COALESCE($9, lp.streak_bonus),
+               streak_days = COALESCE($10, lp.streak_days),
+               referral_bonus = COALESCE($11, lp.referral_bonus),
+               birthday_bonus = COALESCE($12, lp.birthday_bonus),
+               streak_enabled = COALESCE($13, lp.streak_enabled),
+               tiers_enabled = COALESCE($14, lp.tiers_enabled),
+               milestones_enabled = COALESCE($15, lp.milestones_enabled)
+           WHERE lp.id = $16
+             AND (lp.account_id = $17
                   OR EXISTS (SELECT 1 FROM campaigns c
-                              WHERE c.id = lp.campaign_id AND c.account_id = $10)
+                              WHERE c.id = lp.campaign_id AND c.account_id = $17)
                   OR EXISTS (SELECT 1 FROM campaigns fwd
-                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $10))"#,
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $17))"#,
     )
     .bind(&body.name)
     .bind(body.points_per_checkin)
@@ -536,6 +569,13 @@ pub async fn update_program(
     .bind(body.currency_name)
     .bind(body.currency_icon)
     .bind(body.currency_color)
+    .bind(body.streak_bonus)
+    .bind(body.streak_days)
+    .bind(body.referral_bonus)
+    .bind(body.birthday_bonus)
+    .bind(body.streak_enabled)
+    .bind(body.tiers_enabled)
+    .bind(body.milestones_enabled)
     .bind(program_id)
     .bind(account_id)
     .execute(&state.db)
