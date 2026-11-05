@@ -198,18 +198,36 @@ pub async fn approve_reward(
     };
 
     // Apply reward tag to contact
+    let mut notified = false;
     if let Some(member) = &member {
         loyalty::apply_reward_tag(&state.db, &member.contact_id, &tier.reward_tag).await?;
+        // ...and TELL the member (this card). A manually-approved reward used to be settled in
+        // silence: the tag went on, the console showed "approved", and the customer who earned it
+        // was never sent anything. Same best-effort sender the auto-approve path uses, so the mail
+        // carries the account's own logo/name and a harness recipient is withheld, not mailed.
+        notified = crate::mechanics::loyalty_checkin::push_reward_notification(
+            &state,
+            &tier.program_id.to_string(),
+            &member.contact_id.to_string(),
+            &tier.name,
+        )
+        .await
+        .unwrap_or(false);
     }
 
     Ok(Json(json!({
         "status": "approved",
         "reward_id": id,
         "reward_tag": tier.reward_tag,
-        "message": if member.is_some() {
-            "Reward approved and tag applied".to_string()
-        } else {
+        "notified": notified,
+        "message": if member.is_none() {
             "Reward approved; the redemption has no loyalty member, so no tag was applied".to_string()
+        } else if notified {
+            "Reward approved, tag applied, and the reward email was sent to the member".to_string()
+        } else {
+            "Reward approved and tag applied; the reward email was NOT sent (no address, or the mail \
+             path refused it — see the log)"
+                .to_string()
         }
     })))
 }

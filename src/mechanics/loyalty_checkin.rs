@@ -76,7 +76,7 @@ pub async fn process_checkin(
             apply_reward_tag(state, contact_id, &tier.reward_tag).await?;
 
             // Push delivery
-            let _ = push_reward_notification(state, contact_id, &tier.name).await;
+            let _ = push_reward_notification(state, program_id, contact_id, &tier.name).await;
 
             rewards_awarded.push(RewardInfo {
                 id: reward_id,
@@ -496,19 +496,108 @@ async fn apply_reward_tag(state: &AppState, contact_id: &str, tag: &str) -> Resu
     crate::db::loyalty::apply_reward_tag(&state.db, &contact_uuid, tag).await
 }
 
-async fn push_reward_notification(
-    _state: &AppState,
+/// Tell the member they earned a reward — a real message, not a log line.
+///
+/// Until this card the whole body of this function was `tracing::info!("Reward notification would
+/// be sent for: …")`. Both auto-approve call sites in this module call it, so a member who crossed
+/// a tier's points threshold got a `loyalty_rewards_earned` row, a tag on the contact, and silence:
+/// the console showed the reward and the person who earned it never heard. `handlers::loyalty::
+/// approve_reward` settles a manually-approved reward and did not notify either; it calls this now.
+///
+/// The message goes through the app's ONE queued/template path
+/// ([`crate::delivery::sender::send_template_by_type`]) so it carries the account's own logo and name
+/// exactly like every other customer-facing mail, and a fleet-harness recipient is WITHHELD at that
+/// path's choke point instead of being mailed. The template row is `loyalty_reward_earned`
+/// (`migrations/20261105_loyalty_reward_earned_template.sql`).
+///
+/// Best-effort by design, and this is why it returns `Result` it never fails on a send: a member
+/// with no address, or an account with no provider configured, must never fail the check-in that
+/// earned the reward. Every failure is logged with its cause.
+///
+/// The `Ok` value answers "did this reach the member", so a caller that reports it (the console's
+/// approve action does) can never claim a send that did not happen: `true` means the message was
+/// handed to the mail path (or recorded as withheld for a probe address), `false` means it was
+/// skipped or refused.
+pub async fn push_reward_notification(
+    state: &AppState,
+    program_id: &str,
     contact_id: &str,
-    _reward_name: &str,
-) -> Result<(), AppError> {
-    // In production, push notification via delivery system
-    // For now, this is a placeholder
-    tracing::info!(
-        "Reward notification would be sent for: {} (contact: {})",
-        _reward_name,
-        contact_id
-    );
-    Ok(())
+    reward_name: &str,
+) -> Result<bool, AppError> {
+    // The contact row carries the address; the programme row carries the account the mail is sent
+    // FOR (branding + mail server are per-account). `contacts` has no account column of its own, so
+    // the programme is what scopes this send — the check-in already knows which programme it is.
+    let row = sqlx::query(
+        "SELECT c.email, c.first_name, p.account_id::text AS account_id, p.name AS program_name
+           FROM contacts c
+           JOIN loyalty_programs p ON p.id = $2::uuid
+          WHERE c.id = $1::uuid",
+    )
+    .bind(contact_id)
+    .bind(program_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some(row) = row else {
+        tracing::warn!(
+            contact = %contact_id,
+            program = %program_id,
+            "reward notification skipped: no contact/programme row"
+        );
+        return Ok(false);
+    };
+
+    let email: Option<String> = row.get("email");
+    let Some(to) = email.filter(|e| !e.trim().is_empty()) else {
+        tracing::info!(
+            contact = %contact_id,
+            reward = %reward_name,
+            "reward notification skipped: the member has no email address"
+        );
+        return Ok(false);
+    };
+    let first_name: Option<String> = row.get("first_name");
+    let program_name: Option<String> = row.get("program_name");
+    let account_id = match Uuid::parse_str(row.get::<String, _>("account_id").as_str()) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(contact = %contact_id, "reward notification skipped: bad account id: {e}");
+            return Ok(false);
+        }
+    };
+
+    let vars = serde_json::json!({
+        "first_name": first_name.unwrap_or_default(),
+        "reward_name": reward_name,
+        "program_name": program_name.unwrap_or_default(),
+    });
+
+    match crate::delivery::sender::send_template_by_type(
+        &state.db,
+        account_id,
+        &to,
+        "loyalty_reward_earned",
+        &vars,
+    )
+    .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                to = %to,
+                reward = %reward_name,
+                "reward notification sent to the member who earned it"
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            tracing::warn!(
+                to = %to,
+                reward = %reward_name,
+                "reward notification not sent: {e}"
+            );
+            Ok(false)
+        }
+    }
 }
 
 /// Process a loyalty check-in triggered from a campaign entry (spin, raffle, etc).
@@ -567,7 +656,7 @@ pub async fn process_checkin_from_entry(
             // Auto-approve
             let reward_id = create_reward(state, &member_id, &tier.id, "approved").await?;
             apply_reward_tag(state, contact_id, &tier.reward_tag).await?;
-            let _ = push_reward_notification(state, contact_id, &tier.name).await;
+            let _ = push_reward_notification(state, program_id, contact_id, &tier.name).await;
 
             rewards_awarded.push(RewardInfo {
                 id: reward_id,
