@@ -269,6 +269,42 @@ pub async fn list_programs(
     .fetch_all(&state.db)
     .await?;
 
+    // Which campaign SERVES each programme, so the console can state per row whether the programme
+    // is linked. The canonical link is the forward pointer `campaigns.loyalty_program_id`;
+    // `loyalty_programs.campaign_id` is only the reverse one `create_program` may set. Reading the
+    // reverse pointer alone labelled the live ZaarHub programme "Standalone" while a campaign
+    // served it — a false statement on the operator's own row (kanban t_b2a052c9).
+    let ids: Vec<Uuid> = programs.iter().map(|p| p.id).collect();
+    let links: Vec<(Uuid, Option<String>)> = sqlx::query_as::<_, (Uuid, Option<String>)>(
+        r#"SELECT lp.id,
+                  COALESCE(
+                    (SELECT c.slug FROM campaigns c
+                      WHERE c.loyalty_program_id = lp.id
+                      ORDER BY c.created_at DESC LIMIT 1),
+                    (SELECT c2.slug FROM campaigns c2 WHERE c2.id = lp.campaign_id))
+             FROM loyalty_programs lp
+            WHERE lp.id = ANY($1)"#,
+    )
+    .bind(&ids)
+    .fetch_all(&state.db)
+    .await?;
+    let linked: std::collections::HashMap<Uuid, Option<String>> = links.into_iter().collect();
+
+    let programs: Vec<Value> = programs
+        .into_iter()
+        .map(|p| {
+            let pid = p.id;
+            let mut v = json!(p);
+            if let Value::Object(ref mut map) = v {
+                map.insert(
+                    "campaign_slug".to_string(),
+                    json!(linked.get(&pid).cloned().flatten()),
+                );
+            }
+            v
+        })
+        .collect();
+
     Ok(Json(json!({ "programs": programs })))
 }
 
