@@ -560,6 +560,33 @@ label.opt:hover{border-color:var(--brand)}
       .catch(function () { /* the board is an extra; never break the play page over it */ });
   }
 
+  // A returning player keeps what they won (2026-11-01).
+  //
+  // The prize label and the redemption code are said ONCE, in the spin response, and this page used
+  // to forget them the moment they were painted — so a winner who reloaded the page (or came back
+  // an hour later) had no way to read a code they had already been given, unless the win mail
+  // happened to exist. The address this device played with is remembered locally and the campaign's
+  // own status route now answers that player's most recent win, so the code can be shown again.
+  // Only the address is kept, only on this device, and only for this host.
+  function showLastWin() {
+    var who = '';
+    try { who = localStorage.getItem('iw_played_email') || ''; } catch (e) { return; }
+    if (!who || !campaign) { return; }
+    fetch(api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/spin-status?email=' + encodeURIComponent(who))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var w = d && d.last_win;
+        if (!w || !w.prize_label) { return; }
+        var html = '<div class="big" style="color:#166534">You already won: ' + escapeHtml(w.prize_label) + '</div>' +
+          (w.redemption_code ? '<div class="code">Your code: <b>' + escapeHtml(w.redemption_code) + '</b></div>' : '') +
+          '<p style="text-align:center;color:#64748b;font-size:13px;margin:6px 0 0">' +
+          (w.redeemed ? 'Already redeemed.' : 'Show this code to claim it.') + '</p>';
+        el('success').innerHTML = html;
+        el('success').style.display = 'block';
+      })
+      .catch(function () { /* the reminder is an extra; never break the play page over it */ });
+  }
+
   if (!slug) { show('This campaign link is incomplete. Please use the link you were given.', true); return; }
 
   fetch(api + '/play/' + encodeURIComponent(slug))
@@ -587,6 +614,8 @@ label.opt:hover{border-color:var(--brand)}
       if (campaign.type === 'quiz') { loadQuizQuestions(); }
       // The points board, once the campaign is known (no campaign, no slug to ask about).
       loadLeaderboard();
+      // What this device's player already won, if anything.
+      showLastWin();
     })
     .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
 
@@ -721,6 +750,11 @@ label.opt:hover{border-color:var(--brand)}
           return;
         }
         render(out.data && out.data.result, out.data);
+        // Remember who played so a return visit can show the prize they already won.
+        try {
+          var who = (body.contact && body.contact.email) || '';
+          if (who) { localStorage.setItem('iw_played_email', who); }
+        } catch (e) { /* private mode: the reminder is an extra, not the play */ }
         // The visitor may have just earned points: re-read the board so it is not stale on screen.
         loadLeaderboard();
       })

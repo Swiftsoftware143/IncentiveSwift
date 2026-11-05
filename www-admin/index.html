@@ -356,6 +356,12 @@ const Dashboard = () => {
   if (!st._loaded) { st._loaded = true;
     API.get('/dashboard/stats').then(s => { Object.assign(st, s); renderApp(); }).catch(() => {});
   }
+  // GET /api/v1/dashboard/activity had no caller on any served screen (route census, 2026-11-04):
+  // an account-scoped feed of the last 20 entries across this workspace's own campaigns. Loaded
+  // once alongside the counts; a failed load renders no panel rather than a false "nothing yet".
+  if (!st._actLoaded) { st._actLoaded = true;
+    API.get('/dashboard/activity').then(r => { st.activities = (r && Array.isArray(r.activities)) ? r.activities : []; renderApp(); }).catch(() => { st.activities = null; renderApp(); });
+  }
   // GET SET UP (2026-10-27): a workspace that had never run anything saw five zeros and
   // nothing to press — the same "wall of zeros" the customer dashboard no longer shows
   // (bf4c1c83). Painted ONLY from a payload that actually CARRIES the count this account
@@ -388,6 +394,12 @@ const Dashboard = () => {
       <div class="stat-card"><div class="stat-value">${st.total_rewards ?? '...'}</div><div class="stat-label">Rewards</div></div>
     </div>
     <p class="text-xs text-gray-500 mt-4">Every figure is this account's own activity.</p>
+    <div class="card mt-4" data-console="recent-activity">
+      <h3 class="text-base font-bold text-gray-800">Recent activity</h3>
+      <p class="text-xs text-gray-500 mb-2">The newest entries across your campaigns, latest first.</p>
+      ${Array.isArray(st.activities) && st.activities.length === 0 && html`<p class="text-sm text-gray-500" data-activity-empty="1">No entries yet. When someone takes part in one of your campaigns, it appears here.</p>`}
+      ${Array.isArray(st.activities) && st.activities.length > 0 && html`<ul class="text-sm divide-y">${st.activities.slice(0, 10).map(a => html`<li class="py-2 flex items-start justify-between gap-3" data-activity-row="1"><span><span class="font-medium text-gray-800">${a.participant}</span> · ${a.action}</span><span class="text-xs text-gray-400 whitespace-nowrap">${a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span></li>`)}</ul>`}
+    </div>
   </div>`;
 };
 
@@ -3919,7 +3931,7 @@ const SupportTickets = () => {
       <div class="bg-white rounded-xl p-6 w-[620px] shadow-xl max-h-[85vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
           <h3 class="font-bold text-lg">${st.detail.ticket.subject}</h3>
-          <button class="text-gray-500 text-xl" onClick=${closeDetail}>×</button>
+          <button class="text-gray-500 text-xl" aria-label="Close details" onClick=${closeDetail}>×</button>
         </div>
         <div class="flex gap-3 mb-4">
           <span class=${badge(st.detail.ticket.status)}>${st.detail.ticket.status}</span>
@@ -4682,6 +4694,31 @@ const BulkTenantDelete = () => {
     setBusy(false);
   };
 
+  // ── CREDENTIALS THAT NEVER ARRIVED (cron 2026-11-05) ──
+  // `accounts.password_undelivered` is set by the signup door when it mints a first password and the
+  // mail carrying it does not go out (provider refused, or the address is reserved so the sender
+  // withholds it). No screen said so and no control could clear it, so a customer who never got that
+  // mail read as "cannot sign in, nothing to do from here" while the operator's only remedies were
+  // deleting the account (losing its campaigns, leads and credits) or editing the hash in SQL.
+  // The badge names the state on the row; this mints a NEW password, mails it through the same
+  // credentials template the signup door uses, and shows the value when nothing could be sent so the
+  // operator can hand it over.
+  const resendCredentials = async (row) => {
+    const who = row.name || row.email || row.id;
+    if (!confirm('Issue a NEW password for "' + who + '" and email it to ' + (row.email || 'them') + '?\n\nTheir current password stops working immediately.')) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await OPSAPI.post('/admin/tenants/' + encodeURIComponent(row.id) + '/resend-credentials', {});
+      setResult({ ok: true, body: r.handover_password
+        ? Object.assign({}, r, { note: 'No email could be sent, so hand this password to the customer: ' + r.handover_password })
+        : Object.assign({}, r, { note: 'New password emailed to ' + (row.email || 'the customer') + '.' }) });
+      await load();
+    } catch (e) {
+      setResult({ ok: false, body: { error: String((e && e.message) || e) } });
+    }
+    setBusy(false);
+  };
   // ── THE PLAN CELL (2026-10-19) ──
   // It was a static `plan_name` string: the operator could SEE that a workspace was on "No Plan"
   // and had no way to put it on one from this screen. `POST /api/v1/admin/plans/assign` has existed
@@ -4798,7 +4835,10 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
             <td class="border-b px-2 py-1">${r.name || ''}</td>
-            <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
+            <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}${r.credentials_undelivered ? html`<button class="px-1 ml-1 rounded border border-red-300 bg-red-50 text-red-700" style="font-size:10px"
+              data-credentials-undelivered=${r.id} disabled=${busy}
+              title="The first password was minted but the email carrying it never went out, so nobody has ever read this customer's password. This mints a new one and emails it."
+              onClick=${() => resendCredentials(r)}>no password delivered — issue one</button>` : ''}</td>
             <td class="border-b px-2 py-1">${planCell(r)}</td>
             <td class="border-b px-2 py-1" data-tenant-billing=${r.id || ''}>${billingCell(r)}</td>
             <td class="border-b px-2 py-1">${r.user_count == null ? '' : r.user_count}</td>

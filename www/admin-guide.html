@@ -142,6 +142,7 @@
       <li><strong>Billing</strong> — What that workspace is actually charged on its current plan: the plan tier's monthly price, or <em>free</em> for a zero-priced tier. A dash means the workspace has no plan at all. The figure comes from the same row the picker writes, so assigning a plan updates this column at the next load.</li>
       <li><strong>Status</strong> — Active (<span style="color:var(--green)">●</span>) or Suspended (<span style="color:var(--red)">●</span>)</li>
       <li><strong>Last sign-in</strong> — When anyone in that workspace last signed in successfully, recorded on every login. <em>not recorded</em> means the app has no sign-in on file for it: this app only began recording sign-ins on 27 October 2026, so a workspace whose owner has used it before that date reads this way too. It is not a claim that the workspace is unused.</li>
+      <li><strong>Email</strong> — The account's sign-in address. When the first password was minted but the email carrying it never went out, a red <strong>no password delivered — issue one</strong> button sits beside the address (see <em>A customer who never received their first password</em> below).</li>
       <li><strong>Users</strong> — Number of user accounts under this tenant</li>
       <li><strong>Created</strong> — Account creation date</li>
       <li><strong>Actions</strong> — View details (<code>GET /admin/tenants/:id</code>), read/write the credits rate, read a purchase PIN, adjust credits, and delete the tenant</li>
@@ -165,6 +166,15 @@ GET /api/v1/admin/tenants/:id      — Tenant details</pre>
     <p>A workspace is minted by a signup and its credentials are mailed, but whether the person ever came back was invisible: the list is ordered by creation date, so a workspace nobody has used sits beside one in daily use. The <strong>last sign-in</strong> column answers it per row, and the <strong>only never signed in (n)</strong> switch above the table narrows the list to just those rows — the number on the switch is how many are on file.</p>
     <p>Use it before chasing a customer who says he never received his login: if his workspace appears under that switch, he has never completed a sign-in, so the problem is the message or the address rather than anything he did on the app. If it does not appear, he has signed in and the workspace is in use.</p>
     <p>The switch only ever <em>narrows</em> what is drawn, and the bulk delete acts on the rows you tick, so filtering can never widen a destructive action.</p>
+  </div>
+  <div class="card">
+    <h3>A customer who never received their first password</h3>
+    <p>Signing up mints the first password and emails it. When that message never leaves — the mail provider refuses it, or the address is a reserved test address the sender deliberately withholds — the workspace still exists but nobody has ever read the password. The customer cannot sign in, and <strong>forgot password</strong> only mails the same address that just failed.</p>
+    <p>The row says so instead of staying silent: a red <strong>no password delivered — issue one</strong> button appears beside that workspace's address. Press it and the console mints a <strong>new</strong> password, ends every session the account had, clears the warning and emails the new password through the same credentials email a signup uses — so the branding, the template wording and the reserved-address rules behave exactly as they do at signup. The previous password stops working at that moment.</p>
+    <p>If the new message cannot be sent either, the console does not claim it was: it shows the new password on the screen so you can pass it to the customer yourself. It is shown once — the app stores only its hash — so hand it over before you leave the screen.</p>
+    <pre>POST /api/v1/admin/tenants/:id/resend-credentials
+  → { "credentials_emailed": true,  "withheld": false, "handover_password": null }
+  → { "credentials_emailed": false, "withheld": true,  "handover_password": "…12 characters…" }</pre>
   </div>
   <div class="card">
     <h3>Impersonating Tenants</h3>
