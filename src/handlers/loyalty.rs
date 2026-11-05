@@ -393,6 +393,29 @@ fn slugify_program_name(name: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+/// The name is REQUIRED and bounded. It is not only a label: `create_program` slugifies it into the
+/// identifier a printed counter QR carries. Measured live 2026-11-05, the create arm accepted a
+/// 400-character name, which produced a 400-character slug and therefore a check-in link no phone
+/// can hold — the row sat in the operator's own console as an unusable programme. The console's
+/// form has no maxlength either, so the API is the only place this can be enforced. 120 characters
+/// is generous for a business name and still leaves a slug short enough to print.
+fn checked_program_name(name: &str) -> Result<&str, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest(
+            "A loyalty programme needs a name".to_string(),
+        ));
+    }
+    if trimmed.chars().count() > 120 {
+        return Err(AppError::BadRequest(
+            "A loyalty programme name must be 120 characters or fewer — it becomes the QR code's \
+             link, so a very long name produces a check-in URL that cannot be scanned"
+                .to_string(),
+        ));
+    }
+    Ok(trimmed)
+}
+
 /// POST /api/v1/loyalty/programs — create program.
 pub async fn create_program(
     State(state): State<AppState>,
@@ -402,6 +425,7 @@ pub async fn create_program(
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
+    let program_name = checked_program_name(&body.name)?;
     let id = Uuid::new_v4();
     let campaign_id = body.campaign_id.and_then(|s| Uuid::parse_str(&s).ok());
 
@@ -411,11 +435,13 @@ pub async fn create_program(
     // INSERT, which raises 23505 on `loyalty_programs_slug_uidx`; take the next suffixed
     // candidate instead.
     let base = {
-        let s = slugify_program_name(&body.name);
+        let s = slugify_program_name(program_name);
         if s.is_empty() {
             "program".to_string()
         } else {
-            s
+            // The slug travels in a printed QR; 64 bytes is plenty and keeps the link short.
+            let capped: String = s.chars().take(64).collect();
+            capped.trim_end_matches('-').to_string()
         }
     };
     let points_per_checkin = body.points_per_checkin.unwrap_or(10);
@@ -446,7 +472,7 @@ pub async fn create_program(
         )
         .bind(id)
         .bind(campaign_id)
-        .bind(&body.name)
+        .bind(program_name)
         .bind(&slug)
         .bind(points_per_checkin)
         .bind(max_checkins_per_day)
@@ -530,6 +556,8 @@ pub async fn update_program(
 
     let _ = existing;
 
+    let program_name = checked_program_name(&body.name)?;
+
     // NOTE: `slug` is deliberately NOT updated here. It is the identifier a printed counter QR
     // carries (kanban t_25e9f950), so a rename must not silently invalidate a QR already on a
     // business's counter; the lookup resolves the printed slug first and only falls back to the
@@ -561,7 +589,7 @@ pub async fn update_program(
                   OR EXISTS (SELECT 1 FROM campaigns fwd
                               WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $17))"#,
     )
-    .bind(&body.name)
+    .bind(program_name)
     .bind(body.points_per_checkin)
     .bind(body.max_checkins_per_day)
     .bind(body.point_decay_days)
