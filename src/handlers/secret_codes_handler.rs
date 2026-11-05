@@ -215,20 +215,15 @@ pub async fn verify_secret_code(
         ));
     }
 
-    // Get program by slug (resolves campaign → program).
-    //
-    // `program_slug` is a *campaign* slug, and `db::loyalty::get_program`
-    // resolves `WHERE id = $1` — a PROGRAM id — so handing it `campaign.id`
-    // could never resolve and answered 404 to every caller. `campaigns`
-    // carries the canonical forward link (`loyalty_program_id`) and
-    // `loyalty_programs.campaign_id` is the reverse pointer `create_program`
-    // can also set; the public check-in route accepts either
-    // (handlers/loyalty.rs:51-54), so this does too.
-    let campaign = crate::db::campaigns::get_campaign_by_slug(&state.db, program_slug).await?;
-    let program = match campaign.loyalty_program_id {
-        Some(program_id) => crate::db::loyalty::get_program(&state.db, &program_id).await?,
-        None => crate::db::loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
-    };
+    // Resolve the identifier EXACTLY the way the check-in door does (kanban t_b2a052c9): a
+    // campaign slug, or — for a programme created from the console's "+ Add Program", which has no
+    // campaign — the programme's own slug. Sharing
+    // `mechanics::loyalty_checkin::resolve_public_program` is what keeps the two doors on one
+    // check-in page from disagreeing about which programme a scanned QR means; this door used to
+    // resolve a campaign only, so a standalone programme's secret code was unredeemable.
+    let target =
+        crate::mechanics::loyalty_checkin::resolve_public_program(&state, program_slug).await?;
+    let program = target.program;
 
     // Look up the secret code in the loyalty_secret_codes table
     let code_record = sqlx::query_as::<_, SecretCode>(
@@ -295,12 +290,13 @@ pub async fn verify_secret_code(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
     };
-    // The contact is linked to the loyalty programme's campaign owner (contact_tenants, kanban
-    // t_369cb159): the code was redeemed against THIS campaign, so its owner owns the lead.
+    // The contact is linked to the loyalty programme's OWNER (contact_tenants, kanban
+    // t_369cb159): the code was redeemed against THIS programme, so its owner owns the lead —
+    // whether that owner arrives through a campaign or is the programme's own account_id.
     let contact_id = crate::db::contacts::upsert_contact(
         &state.db,
         &contact_input,
-        Some(campaign.account_id),
+        Some(target.account_id),
         "secret_code",
     )
     .await?;

@@ -138,9 +138,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            // the CAMPAIGN slug from the API, not the slug that was in the URL —
-            // the QR carries a program-name slug and only the campaign slug resolves
-            program_slug: d.campaign_slug,
+            // `checkin_slug` from the API: the campaign slug when the programme is linked to a
+            // campaign, otherwise the programme's own slug. Both are resolved by the same server
+            // resolver, so the QR works for a programme the console created with no campaign.
+            program_slug: d.checkin_slug || d.campaign_slug,
             method: 'qr',
             contact: {
               first_name: el('firstName').value,
@@ -190,7 +191,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            program_slug: d.campaign_slug,
+            program_slug: d.checkin_slug || d.campaign_slug,
             secret_code: code,
             contact: {
               first_name: el('firstName').value || null,

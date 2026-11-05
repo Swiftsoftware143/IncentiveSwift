@@ -727,6 +727,139 @@ pub async fn program_campaign_id(
     Ok(forward.flatten())
 }
 
+/// A public check-in identifier resolved to everything the two public doors need.
+pub struct PublicProgram {
+    /// The programme the check-in awards (active — a paused programme is refused here).
+    pub program: crate::db::loyalty::LoyaltyProgram,
+    /// The account the visitor's contact is linked to and the lead belongs to.
+    pub account_id: Uuid,
+    /// The campaign that serves this programme, when one does: `(id, slug, name)`.
+    ///
+    /// A programme created from the console's "+ Add Program" modal has no campaign at all — its
+    /// own `account_id` is its owner and it is a complete check-in target on its own (kanban
+    /// t_b2a052c9). A campaign is an optional wrapper that adds delivery and milestones to the
+    /// same points; it was never required to award them.
+    pub campaign: Option<(Uuid, String, String)>,
+}
+
+/// Resolve the identifier a public check-in page carries to the programme it awards and the
+/// account that owns it.
+///
+/// One resolver, used by every door the check-in page calls (`GET /loyalty/public/program/:slug`,
+/// `POST /loyalty/checkin`, `POST /loyalty/secret-code/verify`). The page used to resolve one way
+/// and the award doors another, which is exactly how a programme the console created came to render
+/// its QR link as 404 "not linked to a campaign" while the campaign-linked shape worked.
+///
+/// Accepted forms, in order:
+///   1. a CAMPAIGN slug (`campaigns.slug`, what every existing printed QR posts);
+///   2. a PROGRAMME slug (`loyalty_programs.slug`, UNIQUE, the identifier `create_program` derives
+///      from the programme's name and the only one a campaign-less programme has);
+///   3. the LEGACY name-derived slug old QRs carry, resolved ONLY when it matches exactly one
+///      programme — an ambiguous string carries no tenant, so it must resolve to nothing rather
+///      than guess a winner (kanban t_25e9f950 measured one tenant's QR crediting another's
+///      campaign).
+pub async fn resolve_public_program(
+    state: &AppState,
+    identifier: &str,
+) -> Result<PublicProgram, AppError> {
+    // 1. A campaign slug: the campaign carries the canonical forward link to its programme
+    //    (`campaigns.loyalty_program_id`) and `loyalty_programs.campaign_id` is the reverse pointer
+    //    `create_program` can also set. Accept either wiring, as every other loyalty path does.
+    match crate::db::campaigns::get_campaign_by_slug(&state.db, identifier).await {
+        Ok(campaign) => {
+            let program = match campaign.loyalty_program_id {
+                Some(program_id) => crate::db::loyalty::get_program(&state.db, &program_id).await?,
+                None => {
+                    crate::db::loyalty::get_program_by_campaign(&state.db, &campaign.id).await?
+                }
+            };
+            return Ok(PublicProgram {
+                program,
+                account_id: campaign.account_id,
+                campaign: Some((campaign.id, campaign.slug, campaign.name)),
+            });
+        }
+        Err(AppError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+
+    // 2. A programme's own slug — the identifier the printed counter QR carries for a programme
+    //    created from the console (no campaign).
+    let program = match crate::db::loyalty::find_program_by_slug(&state.db, identifier).await? {
+        Some(p) => Some(p),
+        None => {
+            // 3. LEGACY name-derived slug, resolved only when unambiguous.
+            let matches: i64 = sqlx::query_scalar(
+                r#"SELECT count(*) FROM loyalty_programs
+                    WHERE lower(replace(name, ' ', '-')) = lower($1)"#,
+            )
+            .bind(identifier)
+            .fetch_one(&state.db)
+            .await?;
+
+            if matches > 1 {
+                return Err(AppError::NotFound(
+                    "That check-in link matches more than one business — ask the business to reprint its QR code."
+                        .to_string(),
+                ));
+            }
+            if matches == 0 {
+                return Err(AppError::NotFound(
+                    "No loyalty program or campaign for that link".to_string(),
+                ));
+            }
+            let id: Uuid = sqlx::query_scalar(
+                r#"SELECT id FROM loyalty_programs
+                    WHERE lower(replace(name, ' ', '-')) = lower($1)
+                    LIMIT 1"#,
+            )
+            .bind(identifier)
+            .fetch_one(&state.db)
+            .await?;
+            crate::db::loyalty::find_program_by_id_any_state(&state.db, &id).await?
+        }
+    };
+
+    let program = program.ok_or_else(|| {
+        AppError::NotFound("No loyalty program or campaign for that link".to_string())
+    })?;
+
+    // A paused programme is not taking check-ins. Say so, rather than "no such link" — the business
+    // paused it on purpose and the person at the counter needs to know that.
+    if !program.is_active {
+        return Err(AppError::NotFound(
+            "This loyalty programme is paused, so it is not taking check-ins right now."
+                .to_string(),
+        ));
+    }
+
+    let account_id = crate::db::loyalty::program_owner_account(&state.db, &program.id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound(
+                "That loyalty programme is not attached to a business account yet — save it again from the console to give it an owner."
+                    .to_string(),
+            )
+        })?;
+
+    // The campaign that serves it, when one does: the forward pointer first (canonical), resolved
+    // to its row so the check-in page can post that campaign's slug and keep delivery/milestone
+    // attribution.
+    let campaign = match program_campaign_id(state, &program.id.to_string()).await? {
+        Some(campaign_id) => {
+            let c = crate::db::campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
+            Some((c.id, c.slug, c.name))
+        }
+        None => None,
+    };
+
+    Ok(PublicProgram {
+        program,
+        account_id,
+        campaign,
+    })
+}
+
 /// Fire campaign milestones for a completed points award; returns the milestones
 /// that triggered as (name, action_type).
 ///

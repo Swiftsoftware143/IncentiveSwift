@@ -173,6 +173,87 @@ pub async fn get_program_by_campaign(
     Ok(program)
 }
 
+/// Find a programme by the slug its printed counter QR carries (`loyalty_programs.slug`, UNIQUE
+/// since migration 20261004_loyalty_program_slug_unique.sql) — in ANY state.
+///
+/// The active rule is the CALLER's, not this lookup's (kanban t_b2a052c9): a paused programme must
+/// be answered "paused" on a scanned counter QR, not "no such link", and only the caller knows
+/// which of the two it needs to say. `get_program` / `get_program_by_campaign` keep their
+/// active-only contract because every other caller of those resolves an id it already holds.
+///
+/// A programme created from the console's "+ Add Program" modal carries no `campaign_id` at all —
+/// this slug is its ONLY public identifier, so the check-in flow must resolve it directly.
+pub async fn find_program_by_slug(
+    pool: &PgPool,
+    slug: &str,
+) -> Result<Option<LoyaltyProgram>, AppError> {
+    let program = sqlx::query_as::<_, LoyaltyProgram>(
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
+                  points_per_checkin, max_checkins_per_day,
+                  point_decay_days, is_active, created_at,
+                  tiers_enabled, milestones_enabled, streak_enabled,
+                  streak_bonus, streak_days, referral_bonus, birthday_bonus,
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
+           FROM loyalty_programs WHERE slug = $1"#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(program)
+}
+
+/// Find a programme by its id in ANY state — the same lookup `find_program_by_slug` performs, for
+/// the legacy name-slug arm of the public resolver (which finds the id by name, not by slug).
+pub async fn find_program_by_id_any_state(
+    pool: &PgPool,
+    program_id: &Uuid,
+) -> Result<Option<LoyaltyProgram>, AppError> {
+    let program = sqlx::query_as::<_, LoyaltyProgram>(
+        r#"SELECT id, campaign_id, name, slug, recognition_method,
+                  points_per_checkin, max_checkins_per_day,
+                  point_decay_days, is_active, created_at,
+                  tiers_enabled, milestones_enabled, streak_enabled,
+                  streak_bonus, streak_days, referral_bonus, birthday_bonus,
+                  points_expire_days, social_share_points, points_per_visit,
+                  currency_name, currency_icon, currency_color
+           FROM loyalty_programs WHERE id = $1"#,
+    )
+    .bind(program_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(program)
+}
+
+/// The account that owns a programme: its own `account_id` (written by `create_program`, and the
+/// column `list_programs` scopes by) falling back to the campaign that serves it for a row written
+/// before the owner column existed (migration 20261005_loyalty_program_account_owner.sql).
+///
+/// `None` means the row has neither — a programme predating both the owner column and any campaign
+/// link. Callers must REFUSE rather than guess: a check-in credits a programme, and a programme with
+/// no account has no tenant to attribute the lead or the points to.
+pub async fn program_owner_account(
+    pool: &PgPool,
+    program_id: &Uuid,
+) -> Result<Option<Uuid>, AppError> {
+    let owner: Option<Option<Uuid>> = sqlx::query_scalar(
+        r#"SELECT COALESCE(
+               lp.account_id,
+               (SELECT c.account_id FROM campaigns c
+                 WHERE c.loyalty_program_id = lp.id
+                 ORDER BY c.created_at DESC LIMIT 1),
+               (SELECT c2.account_id FROM campaigns c2 WHERE c2.id = lp.campaign_id))
+             FROM loyalty_programs lp WHERE lp.id = $1"#,
+    )
+    .bind(program_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(owner.flatten())
+}
+
 /// Check if a reward threshold has just been crossed.
 /// Returns the reward tier that was crossed (if any).
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]

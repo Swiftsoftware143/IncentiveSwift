@@ -23,19 +23,26 @@ pub struct CheckinBody {
 }
 
 /// POST /api/v1/loyalty/checkin — public-but-scoped.
-/// Full flow: upsert contact -> find/create member -> check daily cap -> create entry
-/// -> award points -> check thresholds -> auto-approve or pending -> push delivery.
+/// Full flow: resolve the programme and its owner -> upsert contact -> find/create member ->
+/// check daily cap -> create entry -> award points -> check thresholds -> auto-approve or
+/// pending -> push delivery.
+///
+/// `program_slug` is resolved by the SAME resolver the public page used to render
+/// (`mechanics::loyalty_checkin::resolve_public_program`), so a campaign slug and a programme slug
+/// mean the same thing on both doors. A programme the console's "+ Add Program" modal creates has
+/// no campaign — its own slug and its own `account_id` are all this flow needs (kanban t_b2a052c9);
+/// before that, every scan of such a programme's printed QR answered 404.
 pub async fn checkin(
     State(state): State<AppState>,
     Json(body): Json<CheckinBody>,
 ) -> Result<Json<Value>, AppError> {
-    // 1. Resolve the campaign FIRST — the contact captured at check-in belongs to the campaign's
-    //    owner, and the `contact_tenants` link the upsert writes below is what makes them visible
-    //    to that owner (kanban t_369cb159).
-    let campaign =
-        crate::db::campaigns::get_campaign_by_slug(&state.db, &body.program_slug).await?;
+    // 1. Resolve the identifier to the programme being credited and the account that owns it. The
+    //    account is what the contact captured at check-in belongs to, and the `contact_tenants`
+    //    link the upsert writes below is what makes them visible to that owner (kanban t_369cb159).
+    let target = loyalty_checkin::resolve_public_program(&state, &body.program_slug).await?;
+    let program = target.program;
 
-    // 2. Upsert contact (shared identity row) and link it to the campaign's account.
+    // 2. Upsert contact (shared identity row) and link it to the owning account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),
         last_name: body.contact.last_name.clone(),
@@ -47,23 +54,12 @@ pub async fn checkin(
     let contact_id = contacts::upsert_contact(
         &state.db,
         &contact_input,
-        Some(campaign.account_id),
+        Some(target.account_id),
         "checkin",
     )
     .await?;
 
-    // 3. Resolve the loyalty program wired to this campaign. `program_slug` is
-    //    a *campaign* slug: the campaigns row carries the canonical forward
-    //    link (loyalty_program_id), and loyalty_programs.campaign_id is the
-    //    reverse pointer, which create_program can also set. Accept either —
-    //    passing the campaign id straight to get_program() (which looks up by
-    //    program id) could never resolve.
-    let program = match campaign.loyalty_program_id {
-        Some(program_id) => loyalty::get_program(&state.db, &program_id).await?,
-        None => loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
-    };
-
-    // 3. Process checkin
+    // 3. Process checkin against the resolved programme.
     let result = loyalty_checkin::process_checkin(
         &state,
         &program.id.to_string(),
@@ -1495,124 +1491,65 @@ pub async fn set_secret_code(
 /// answers with only what that page renders — never a member balance, a contact
 /// or a secret — and returns 404 for anything unknown.
 ///
-/// `slug` is accepted in BOTH forms the app itself produces:
-///   1. a CAMPAIGN slug (`campaigns.slug`, globally unique) — what the
-///      check-in endpoint itself resolves; and
+/// `slug` is accepted in EVERY form the app itself produces, through the one
+/// resolver the two award doors also use
+/// (`mechanics::loyalty_checkin::resolve_public_program`):
+///   1. a CAMPAIGN slug (`campaigns.slug`, globally unique);
 ///   2. a PROGRAMME slug (`loyalty_programs.slug`, UNIQUE since migration
 ///      `20261004_loyalty_program_slug_unique.sql` and written by
-///      `create_program`) — the identifier the printed QR carries.
-/// The response always carries the campaign slug, so a page loaded from either
-/// form can still complete a check-in.
+///      `create_program`) — the identifier the printed QR carries, and the ONLY
+///      one a programme created from the console has (its "+ Add Program" modal
+///      sends no campaign_id); and
+///   3. the LEGACY name-derived slug old QRs carry
+///      (`name.to_lowercase().replace(' ', "-")`, the way the retired `program_qr`
+///      built them), resolved only when it identifies EXACTLY ONE programme — an
+///      ambiguous string carries no tenant, so it must resolve to nothing rather
+///      than guess a winner (kanban t_25e9f950: it used to pick the OLDEST row
+///      across all tenants, so one tenant's QR rendered and credited another
+///      tenant's programme).
 ///
-/// A third, LEGACY form is still honoured: the name-derived slug old QRs carry
-/// (`name.to_lowercase().replace(' ', "-")`, the way the retired `program_qr`
-/// built them). It resolves only when it identifies EXACTLY ONE programme —
-/// an ambiguous string carries no tenant, so it must resolve to nothing rather
-/// than guess a winner (kanban t_25e9f950: it used to pick the OLDEST row
-/// across all tenants, so one tenant's QR rendered and credited another
-/// tenant's programme).
+/// The response carries `checkin_slug`: the identifier the page must POST to
+/// `/loyalty/checkin` to award the points. That is the campaign's slug when a
+/// campaign serves the programme (delivery and milestones keep their
+/// attribution) and the programme's own slug when none does — kanban t_b2a052c9,
+/// where a console-created programme's QR link answered 404 "not linked to a
+/// campaign" because this endpoint refused to render without one.
 pub async fn public_program(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let campaign = match crate::db::campaigns::get_campaign_by_slug(&state.db, &slug).await {
-        Ok(c) => c,
-        Err(AppError::NotFound(_)) => {
-            // 1. The identifier the printed QR carries for a programme: `loyalty_programs.slug`,
-            //    UNIQUE since migration 20261004_loyalty_program_slug_unique.sql and written by
-            //    create_program below. One programme = one account, so this arm is tenant-scoped
-            //    by construction.
-            let by_slug: Option<Uuid> =
-                sqlx::query_scalar("SELECT id FROM loyalty_programs WHERE slug = $1")
-                    .bind(&slug)
-                    .fetch_optional(&state.db)
-                    .await?;
-
-            let program_id = match by_slug {
-                Some(id) => id,
-                None => {
-                    // 2. LEGACY form: the programme-name slug older QRs carry, spelled exactly
-                    //    the way the retired program_qr derived it. Resolve it ONLY when it
-                    //    identifies exactly ONE programme.
-                    //
-                    //    This arm used to be `... ORDER BY created_at ASC LIMIT 1` with no
-                    //    account predicate, so two tenants with the same programme name BOTH
-                    //    resolved to the OLDER tenant's programme — measured live (kanban
-                    //    t_25e9f950): tenant B's QR rendered business_name=ProbeCollideA and
-                    //    currency_name=AAA-CURRENCY, then POSTed the returned campaign slug to
-                    //    /loyalty/checkin, crediting tenant A's campaign. A string that matches
-                    //    more than one programme is genuinely ambiguous — the QR itself carries
-                    //    no tenant — so it must resolve to NOTHING. Refusing beats guessing
-                    //    wrong; the business reprints a QR carrying its own unique slug.
-                    let matches: i64 = sqlx::query_scalar(
-                        r#"SELECT count(*) FROM loyalty_programs
-                            WHERE lower(replace(name, ' ', '-')) = lower($1)"#,
-                    )
-                    .bind(&slug)
-                    .fetch_one(&state.db)
-                    .await?;
-
-                    if matches > 1 {
-                        return Err(AppError::NotFound(
-                            "That check-in link matches more than one business — ask the business to reprint its QR code."
-                                .to_string(),
-                        ));
-                    }
-
-                    sqlx::query_scalar(
-                        r#"SELECT id FROM loyalty_programs
-                            WHERE lower(replace(name, ' ', '-')) = lower($1)
-                            LIMIT 1"#,
-                    )
-                    .bind(&slug)
-                    .fetch_optional(&state.db)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::NotFound(
-                            "No loyalty program or campaign for that link".to_string(),
-                        )
-                    })?
-                }
-            };
-            // Which campaign serves this programme? Resolve it the way EVERY other loyalty
-            // path already does — the canonical forward link `campaigns.loyalty_program_id`
-            // first, and only then the historical reverse pointer `loyalty_programs.campaign_id`
-            // (see handlers/loyalty.rs::checkin, handlers/secret_codes_handler.rs, and
-            // mechanics/loyalty_checkin.rs::program_campaign_id, which this reuses).
-            //
-            // Reading the reverse pointer ALONE — as this arm used to — answered 404 to the
-            // programme-name slug that `program_qr` itself writes into the printed counter QR
-            // for every programme the console creates, because `create_program` only sets that
-            // pointer when the caller passes a campaign_id, while the console wires the link
-            // the canonical way (the campaign editor). Measured live (kanban t_2968cb33).
-            let campaign_id = crate::mechanics::loyalty_checkin::program_campaign_id(
-                &state,
-                &program_id.to_string(),
-            )
-            .await?
-            .ok_or_else(|| {
-                AppError::NotFound("That program is not linked to a campaign".to_string())
-            })?;
-            crate::db::campaigns::get_campaign_by_id(&state.db, &campaign_id).await?
-        }
-        Err(e) => return Err(e),
-    };
-
-    let program = match campaign.loyalty_program_id {
-        Some(program_id) => loyalty::get_program(&state.db, &program_id).await?,
-        None => loyalty::get_program_by_campaign(&state.db, &campaign.id).await?,
-    };
+    let target = crate::mechanics::loyalty_checkin::resolve_public_program(&state, &slug).await?;
+    let program = target.program;
 
     let business_name: Option<String> =
         sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
-            .bind(campaign.account_id)
+            .bind(target.account_id)
             .fetch_optional(&state.db)
             .await?
             .flatten();
 
+    // What the page posts to award the points. A campaign slug when one serves this programme;
+    // otherwise the programme's own slug — a first-class check-in target, not a fallback.
+    let checkin_slug = match &target.campaign {
+        Some((_, campaign_slug, _)) => campaign_slug.clone(),
+        None => program.slug.clone().ok_or_else(|| {
+            AppError::NotFound(
+                "That loyalty programme has no check-in link — re-save it from the console."
+                    .to_string(),
+            )
+        })?,
+    };
+    let campaign_name = match &target.campaign {
+        Some((_, _, name)) => name.clone(),
+        None => program.name.clone(),
+    };
+
     Ok(Json(json!({
-        "campaign_slug": campaign.slug,
-        "campaign_name": campaign.name,
+        // Kept for every existing reader/cached page; `checkin_slug` is the field to use.
+        "campaign_slug": checkin_slug,
+        "checkin_slug": checkin_slug,
+        "campaign_name": campaign_name,
+        "linked_to_campaign": target.campaign.is_some(),
         "business_name": business_name,
         "program_name": program.name,
         "points_per_checkin": program.points_per_checkin,
