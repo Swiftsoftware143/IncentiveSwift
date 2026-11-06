@@ -1279,13 +1279,23 @@ pub async fn set_initial_password(
 
     // One statement, one shot: the latch is a WHERE condition AND is cleared by the same write, so
     // two racing calls cannot both succeed and a replay after the first finds no row.
-    let updated: Option<Uuid> = sqlx::query_scalar(
+    // THIS DOOR RE-MINTS THE CALLER'S SESSION (2026-11-06). The UPDATE above moves
+    // `sessions_valid_from` and bumps `session_epoch`, so the signup token that authenticated this
+    // very call is dead the moment it commits: the customer who just chose the first password they
+    // will ever know was answered 200 and then threw out of the tab, straight onto the sign-in form
+    // to type it. Measured live 2026-11-06: initial-password 200 {"status":"password_set"}, then
+    // GET /auth/me with the same bearer 401 "This session is no longer valid". Mint from the SAME
+    // statement's `session_epoch` (the counter, not a floored timestamp, so a device that signed in
+    // during this same wall-clock second is still told apart) and hand the token back — the shape
+    // `change_password` and `logout_all` already use. Email and role are read from the row, never
+    // echoed from the claim, so a claim narrowed since cannot be re-blessed here.
+    let updated = sqlx::query(
         r#"UPDATE accounts
               SET password_hash = $1, password_undelivered = false,
                   sessions_valid_from = NOW(),
                   session_epoch = COALESCE(session_epoch, 1) + 1
             WHERE id = $2 AND password_undelivered = true
-        RETURNING id"#,
+        RETURNING session_epoch::bigint, email, role"#,
     )
     .bind(&new_hash)
     .bind(account_uuid)
@@ -1293,7 +1303,19 @@ pub async fn set_initial_password(
     .await?;
 
     match updated {
-        Some(_) => Ok(Json(json!({ "status": "password_set" }))),
+        Some(row) => {
+            let session_epoch: i64 = row.get("session_epoch");
+            let email: String = row.get("email");
+            let role: String = row.get("role");
+            let token = create_jwt(
+                &account_uuid.to_string(),
+                &email,
+                &role,
+                &state.config.jwt_secret,
+                Some(session_epoch),
+            )?;
+            Ok(Json(json!({ "status": "password_set", "token": token })))
+        }
         // NOT a 400: the request was well-formed and the caller is entitled to the account — there
         // is simply nothing left to do, because a password they can already use is on the row.
         None => Err(AppError::Conflict(

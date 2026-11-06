@@ -213,6 +213,24 @@ var USER_KEY = 'is_user';
 var STORE_KEY = 'ws_fs_token';
 // The token this page runs on: the app shell's own sessionStorage pair, or the bearer the hand-off
 // put in localStorage ('ws_fs_token') when sessionStorage is empty in a fresh tab.
+// ── SESSION HAND-OFF (2026-11-06) ─────────────────────────────────────────────────────────────
+// The signup page's "choose your password now" box re-mints the session (POST /auth/initial-password
+// answers with a fresh token, because that write bumps session_epoch and kills the signup token) and
+// hands it over in the URL FRAGMENT. Without this reader the customer chose the password they will
+// use and was then asked to type it on the sign-in form. Fragments never reach a server.
+(function () {
+  var h = window.location.hash || '';
+  if (h.indexOf('token=') < 0) return;
+  var t = '';
+  h.slice(1).split('&').forEach(function (kv) {
+    var i = kv.indexOf('=');
+    if (i > 0 && kv.slice(0, i) === 'token') t = decodeURIComponent(kv.slice(i + 1));
+  });
+  if (!t) return;
+  try { sessionStorage.setItem(TOKEN_KEY, t); } catch (e) {}
+  try { localStorage.setItem(STORE_KEY, t); } catch (e) {}
+  try { history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+})();
 var token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(STORE_KEY);
 var user = null;
 // Plan-ladder state. Declared HERE, above the boot block: `paintAccount()` (called at boot) writes
