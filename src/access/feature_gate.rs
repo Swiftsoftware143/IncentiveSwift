@@ -112,8 +112,21 @@ pub async fn mechanic_type_is_known(
 }
 
 /// Enforce that an account's plan tier can play a given mechanic.
-/// Returns `AppError::UpgradeRequired` (402) when the account's tier does not
-/// include the `mechanic_<type>` feature (or the `all_mechanics` catch-all).
+///
+/// **The reader is a PARTICIPANT.** Every caller is one of the campaign's public play doors
+/// (`handlers::mechanic_common::gate_mechanic`'s seven mechanics, the spin wheel, the quiz's
+/// questions and submit arms, and the calculator arm of `POST /api/v1/entries`), so a refusal must
+/// never carry the account holder's sentence — "The 'scratch_card' mechanic is not available on
+/// your current plan. Upgrade to unlock it." tells a member of the customer's own audience about
+/// that customer's billing, and offers them an upgrade they cannot buy. Measured live 2026-11-06
+/// on the Free tier, which carries no `mechanic_scratch_card` row: `POST
+/// /api/v1/campaigns/<slug>/scratch-card` answered a participant 402 with that sentence.
+///
+/// It answers [`AppError::ServiceUnavailable`] with [`PARTICIPANT_PLAN_REFUSAL`] instead, and logs
+/// the ceiling (tenant + mechanic) so the owner's own cap stays visible in the app log. The gate
+/// itself is unchanged: a mechanic the tier does not include is still refused.
+///
+/// Console surfaces that need the ANSWER (not a refusal) call [`has_mechanic_access`] directly.
 pub async fn enforce_mechanic_feature(
     state: &AppState,
     account_id: &str,
@@ -122,9 +135,13 @@ pub async fn enforce_mechanic_feature(
     if has_mechanic_access(state, account_id, mechanic_type).await? {
         Ok(())
     } else {
-        Err(AppError::UpgradeRequired(format!(
-            "The '{}' mechanic is not available on your current plan. Upgrade to unlock it.",
-            mechanic_type
-        )))
+        tracing::warn!(
+            account_id = %account_id,
+            mechanic = mechanic_type,
+            "campaign play refused: the owner's plan does not include this mechanic"
+        );
+        Err(AppError::ServiceUnavailable(
+            crate::error::PARTICIPANT_PLAN_REFUSAL.to_string(),
+        ))
     }
 }

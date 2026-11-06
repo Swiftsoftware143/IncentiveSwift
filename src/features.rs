@@ -137,6 +137,15 @@ pub async fn enforce_feature_limit(
 ///
 /// An account with no tier, or a tier with no `max_leads` row, is ALLOWED (the
 /// `enforce_feature_limit` convention: "not configured" is not a cap).
+///
+/// **The READER here is a participant, not the account holder** — every caller above is one of the
+/// campaign's public doors (a prospect filling in a form, a player spinning, a raffle entrant), so
+/// the refusal is [`AppError::ServiceUnavailable`] carrying [`PARTICIPANT_PLAN_REFUSAL`] and the
+/// ceiling is logged for the owner instead of being described to the stranger. Measured live
+/// 2026-11-06: a Free workspace (max_leads 20) answered its 21st entrant
+/// `402 "Leads limit reached (20/20). Upgrade to increase your limit."`, and
+/// `www/long-form-qualifier.html` prints the server's message verbatim. The ceiling still binds —
+/// the entry is refused and no row is written — only the sentence changes reader.
 pub async fn enforce_lead_limit_for_campaign(
     db: &PgPool,
     campaign_id: Uuid,
@@ -152,7 +161,21 @@ pub async fn enforce_lead_limit_for_campaign(
         return Ok(());
     };
 
-    enforce_feature_limit(db, &owner.to_string(), "max_leads", "Leads").await
+    match enforce_feature_limit(db, &owner.to_string(), "max_leads", "Leads").await {
+        Ok(()) => Ok(()),
+        Err(AppError::UpgradeRequired(_)) => {
+            tracing::warn!(
+                campaign_id = %campaign_id,
+                account_id = %owner,
+                feature = "max_leads",
+                "campaign refused a participant: the workspace is at the lead ceiling its plan allows"
+            );
+            Err(AppError::ServiceUnavailable(
+                crate::error::PARTICIPANT_PLAN_REFUSAL.to_string(),
+            ))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn check_limit(

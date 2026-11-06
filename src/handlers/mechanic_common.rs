@@ -71,8 +71,12 @@ pub fn extract_source(headers: &HeaderMap) -> (Option<String>, Option<String>) {
     (user_agent, ip_address)
 }
 
-/// Gate play on the campaign owner's plan tier. Free-tier accounts are blocked
-/// with 402 (UpgradeRequired); pro/enterprise pass.
+/// Gate play on the campaign owner's plan tier.
+///
+/// The caller is a PARTICIPANT (a member of the customer's own audience), so a refusal answers the
+/// neutral [`crate::error::PARTICIPANT_PLAN_REFUSAL`] with **503** — never the account holder's
+/// "not available on your current plan … Upgrade to unlock it".  See
+/// `access::feature_gate::enforce_mechanic_feature`.
 pub async fn gate_mechanic(
     state: &AppState,
     account_id: &Uuid,

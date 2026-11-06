@@ -106,6 +106,25 @@ pub enum AppError {
     Database(String),
 }
 
+/// The sentence a PARTICIPANT reads when the CAMPAIGN OWNER's plan ceiling refuses their action.
+///
+/// Every plan refusal in this app is written for the account holder — `check_limit` answers
+/// "Leads limit reached (20/20). Upgrade to increase your limit." and
+/// `access::feature_gate` "The 'scratch_card' mechanic is not available on your current plan.
+/// Upgrade to unlock it." The person filling in a campaign, though, is a member of the customer's
+/// own audience: they cannot upgrade anything, and the sentence tells them the workspace's billing
+/// state. `www-app/play.html` already translates the refusals it recognises for exactly this
+/// reason, but `www/long-form-qualifier.html` prints `res.j.message` verbatim and every non-browser
+/// client sees the raw body — measured live 2026-11-06, when a Free workspace at its lead ceiling
+/// answered a participant with the owner's upsell.
+///
+/// So the participant-facing arms answer THIS instead: same refusal, no plan named, no upgrade
+/// offered, and it words the state the same way the served play page already does ("not accepting
+/// entries right now"). 503 (not 402) so the sentence cannot be read as an upsell, and so it
+/// passes through Cloudflare untouched.
+pub const PARTICIPANT_PLAN_REFUSAL: &str =
+    "This campaign isn't accepting entries right now. Please contact the business directly.";
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         // The paused-sign-in answer carries its retry budget in a header as well as in the

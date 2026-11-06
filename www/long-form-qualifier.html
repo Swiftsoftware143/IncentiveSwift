@@ -150,7 +150,11 @@ function boot() {
         })
           .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
           .then(function (res) {
-            if (!res.ok) { out.textContent = 'Error: ' + (res.j.message || JSON.stringify(res.j)); return; }
+            // `error` BEFORE `message`: this app's error envelope is `{code, error}` (see
+            // src/error.rs::IntoResponse), and reading only `message` printed the raw JSON blob to
+            // the visitor — measured live 2026-11-06 on a campaign whose mechanic the owner's plan
+            // did not include. Either key is rendered as its own sentence.
+            if (!res.ok) { out.textContent = (res.j && (res.j.error || res.j.message)) || 'That did not work. Please try again.'; return; }
             var d = res.j;
             out.textContent = 'Score: ' + d.score + '\nOutcome: ' + d.outcome +
                               (d.qualified ? '  ✅' : '') + '\nTag: ' + d.tag;
