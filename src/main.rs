@@ -837,6 +837,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/support-tickets/:id/messages",
             post(handlers::support_tickets::add_message),
         )
+        // The contact page's filing arm (2026-11-06). A visitor who is NOT signed in posts here; the
+        // row carries no workspace (migration zz_is10) and lands in the operator's support queue.
+        .route(
+            "/api/v1/public/support-request",
+            post(handlers::support_tickets::create_public_ticket),
+        )
         // Reviews & Ratings
         .route(
             "/api/v1/reviews",

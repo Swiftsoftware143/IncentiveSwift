@@ -125,18 +125,39 @@ async fn notify_requester(
     status_word: &str,
     reply: &str,
 ) {
-    let row = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String)>(
-        "SELECT tenant_id, created_by, subject FROM support_tickets WHERE id = $1",
+    let row = sqlx::query_as::<_, (Option<Uuid>, Option<Uuid>, String, String)>(
+        "SELECT tenant_id, created_by, subject, requested_by FROM support_tickets WHERE id = $1",
     )
     .bind(ticket_id)
     .fetch_optional(&state.db)
     .await;
 
-    let Ok(Some((tenant_id, created_by, subject))) = row else {
+    let Ok(Some((tenant_id, created_by, subject, requested_by))) = row else {
         return;
     };
     // The workspace that filed it; `created_by` is the fallback for a ticket opened outside one.
     let Some(target) = tenant_id.or(created_by) else {
+        // ── A MESSAGE FROM THE CONTACT PAGE (2026-11-06) ─────────────────────────────────────
+        // This row belongs to no workspace and was filed by no account: the address to answer is
+        // the one the visitor typed, in `requested_by`. Without this arm the operator's answer
+        // would be stored and the visitor told nothing — the exact dead end the contact form
+        // exists to close. A reserved/harness recipient is withheld by the send funnel itself, so
+        // a probe is never mailed.
+        let visitor = requested_by.trim().to_string();
+        if visitor.is_empty() {
+            return;
+        }
+        if let Err(e) = crate::email::send_public_support_reply_email(
+            &state.db,
+            &visitor,
+            &subject,
+            status_word,
+            reply,
+        )
+        .await
+        {
+            tracing::warn!("public support reply mail to {} failed: {}", visitor, e);
+        }
         return;
     };
     // Never mail the account that just made the change (an operator answering their own ticket).
@@ -205,7 +226,8 @@ pub async fn list_tickets(
             r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
                       t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
                       t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
-                      COALESCE(p.name, t.plan_slug) AS plan_name, a.email AS account_email
+                      COALESCE(p.name, t.plan_slug) AS plan_name,
+                      COALESCE(a.email, t.requested_by) AS account_email
                FROM support_tickets t
                LEFT JOIN accounts a ON a.id = t.tenant_id
                LEFT JOIN plans p ON p.slug = t.plan_slug
@@ -423,6 +445,151 @@ pub async fn create_ticket(
         "ticket": row,
         "plan_name": plan_name,
     })))
+}
+
+/// A message from someone who is NOT signed in — the served contact page's form.
+///
+/// `name` is context for the operator; `email` is the address the team replies to and the one the
+/// hourly bound counts. Nothing here identifies a workspace, because a visitor has none.
+#[derive(Deserialize)]
+pub struct PublicTicketInput {
+    #[serde(default)]
+    pub name: String,
+    pub email: String,
+    pub subject: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// At most this many messages from one address within an hour. A visitor with no account cannot be
+/// trusted to be one visitor, so the bound is on the ADDRESS they type — the only thing the team can
+/// reply to.
+const PUBLIC_HOURLY_LIMIT: i64 = 3;
+
+/// `POST /api/v1/public/support-request` — file a help request from the contact page.
+///
+/// WHY THIS EXISTS (measured 2026-11-06 on dns.google and cloudflare-dns.com): every support
+/// address this product printed — the login page, the 404 page, the marketing pages and the
+/// transactional footers — lived on a domain publishing **MX = 0**, and nothing on this host listens
+/// on port 25. A locked-out customer's "write to support@…" message therefore BOUNCED, and they had
+/// no way back in. This arm files the same kind of row the signed-in arm writes, attached to no
+/// workspace and filed by no account, so it lands in the operator queue the team already answers.
+///
+/// Deliberately narrow: no workspace is created, nothing is mailed at filing time, no plan moves.
+/// The row IS the effect. A double press with the same subject while the first is still open returns
+/// that row instead of minting a second one for the operator to reconcile.
+pub async fn create_public_ticket(
+    State(state): State<AppState>,
+    Json(body): Json<PublicTicketInput>,
+) -> Result<(axum::http::StatusCode, Json<Value>), AppError> {
+    let email = body.email.trim().to_lowercase();
+    let at = email.find('@').unwrap_or(0);
+    if at == 0
+        || at == email.len() - 1
+        || email.len() > 254
+        || email.chars().any(|c| c.is_whitespace() || c.is_control())
+        || !email[at + 1..].contains('.')
+    {
+        return Err(AppError::BadRequest(
+            "Enter an email address we can reply to.".to_string(),
+        ));
+    }
+
+    let subject: String = body
+        .subject
+        .trim()
+        .chars()
+        .take(200)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if subject.is_empty() {
+        return Err(AppError::BadRequest(
+            "Give your message a short subject so the team knows what it is about.".to_string(),
+        ));
+    }
+    let message: String = body
+        .description
+        .trim()
+        .chars()
+        .take(4000)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if message.is_empty() {
+        return Err(AppError::BadRequest(
+            "Write your message so the team knows what you need.".to_string(),
+        ));
+    }
+    let name: String = body.name.trim().chars().take(120).collect();
+    let description = if name.trim().is_empty() {
+        message
+    } else {
+        format!("{} wrote:\n\n{}", name.trim(), message)
+    };
+
+    let recent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM support_tickets \
+         WHERE lower(requested_by) = $1 AND created_at > now() - interval '1 hour'",
+    )
+    .bind(&email)
+    .fetch_one(&state.db)
+    .await?;
+    if recent >= PUBLIC_HOURLY_LIMIT {
+        // Its OWN sentence: `AppError::RateLimited` is the promo-code/guess throttle's copy, which
+        // would tell a visitor who never guessed anything something plainly untrue.
+        return Ok((
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "status": 429,
+                "error": "You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.",
+                "retry_after_seconds": 3600
+            })),
+        ));
+    }
+
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM support_tickets \
+          WHERE tenant_id IS NULL AND lower(requested_by) = $1 \
+            AND lower(subject) = lower($2) AND status IN ('open', 'in_progress') \
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&email)
+    .bind(&subject)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(id) = existing {
+        return Ok((
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "id": id,
+                "status": "existing",
+                "message": "We already have your message with that subject — the team will reply to the address you gave."
+            })),
+        ));
+    }
+
+    let id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO support_tickets
+             (id, tenant_id, subject, description, status, priority, category, source, created_by, requested_by)
+           VALUES ($1, NULL, $2, $3, 'open', 'normal', 'other', 'contact_form', NULL, $4)"#,
+    )
+    .bind(id)
+    .bind(&subject)
+    .bind(&description)
+    .bind(&email)
+    .execute(&state.db)
+    .await?;
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "status": "open",
+            "message": "Your message is with our team. We will reply to the address you gave."
+        })),
+    ))
 }
 
 /// GET /api/v1/support-tickets/:id

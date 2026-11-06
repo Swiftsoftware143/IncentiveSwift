@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Contact us — IncentiveSwift</title>
+<meta name="robots" content="noindex">
+<style>
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f8fafc;color:#0f172a}
+.wrap{max-width:520px;margin:0 auto;padding:40px 20px}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
+h1{font-size:20px;margin:0 0 6px}
+p.sub{margin:0 0 20px;color:#475569;font-size:14px;line-height:1.5}
+label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
+input,textarea{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit;color:#0f172a}
+input:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
+textarea{min-height:120px;resize:vertical}
+button{width:100%;margin-top:18px;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+button:hover{background:#4f46e5}
+button:disabled{opacity:.6;cursor:default}
+.msg{margin-top:14px;font-size:14px;display:none;line-height:1.5}
+.msg.ok{display:block;color:#047857}
+.msg.err{display:block;color:#b91c1c}
+.back{margin-top:18px;font-size:13px;text-align:center}
+.back a{color:#6366f1;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>Contact us</h1>
+    <p class="sub">Locked out, missing your password email, or just have a question? Send us a message and we will reply to the address you give — no sign-in needed.</p>
+    <form id="f" novalidate>
+      <label for="nm">Your name <span style="font-weight:400;color:#64748b">(optional)</span></label>
+      <input id="nm" type="text" autocomplete="name" maxlength="120">
+      <label for="em">Email we should reply to</label>
+      <input id="em" type="email" autocomplete="email" required maxlength="254">
+      <label for="sb">Subject</label>
+      <input id="sb" type="text" required maxlength="200">
+      <label for="bd">Message</label>
+      <textarea id="bd" required maxlength="4000"></textarea>
+      <button id="send" type="submit">Send message</button>
+      <div id="m" class="msg" role="status" aria-live="polite"></div>
+    </form>
+    <div class="back"><a href="/login">&larr; Back to sign in</a></div>
+  </div>
+</div>
+<script>
+(function(){
+  var f=document.getElementById('f'), m=document.getElementById('m'), b=document.getElementById('send');
+  function say(t,ok){ m.textContent=t; m.className='msg '+(ok?'ok':'err'); }
+  function val(id){ return (document.getElementById(id).value||'').trim(); }
+  f.addEventListener('submit', function(e){
+    e.preventDefault();
+    var email=val('em'), subject=val('sb'), body=val('bd');
+    if(!email){ say('Enter the email address we should reply to.',false); return; }
+    if(subject.length<2){ say('Give your message a short subject.',false); return; }
+    if(body.length<2){ say('Write your message so we know what you need.',false); return; }
+    b.disabled=true;
+    fetch('/api/v1/public/support-request',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:val('nm'),email:email,subject:subject,description:body})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        if(res.ok){
+          say((res.body&&res.body.message)||'Your message is with our team.',true);
+          f.querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
+          b.disabled=true; b.textContent='Sent';
+        } else if(res.status===429){
+          say('You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.',false);
+          b.disabled=false;
+        } else {
+          say((res.body&&(res.body.error||res.body.message))||'That did not go through. Try again in a moment.',false);
+          b.disabled=false;
+        }
+      })
+      .catch(function(){ say('That did not go through. Check your connection and try again.',false); b.disabled=false; });
+  });
+})();
+</script>
+</body>
+</html>

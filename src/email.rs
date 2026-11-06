@@ -244,14 +244,14 @@ async fn send_inline(
         // that type is absent (see `send_welcome_email`).
         "welcome" | "welcome_credentials" => {
             let body = format!(
-                "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, contact support@swiftsoftware.net\n\nBest regards,\nThe {} Team",
+                "Welcome to {}, {}!\n\nYour account has been created successfully.\n\nHere are your login credentials:\n\nEmail: {}\nPassword: {}\n\nLogin at: {}/login\n\nYou can now:\n- Create loyalty programs\n- Manage customer rewards\n- Track engagement metrics\n\nFor help, send us a message at https://app.incentiveswift.com/contact.html (no sign-in needed)\n\nBest regards,\nThe {} Team",
                 app_name, name, email, password, app_url, app_name
             );
             Ok((format!("Welcome to {}!", app_name), body, String::new()))
         }
         "purchase_confirmed" => {
             let body = format!(
-                "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, please contact support@swiftsoftware.net\n\nBest regards,\nThe {} Team",
+                "Hi {},\n\nThank you for your purchase! Your payment for the {} plan has been received successfully.\n\nYou can access your dashboard at: {}/dashboard\n\nIf you have any questions, send us a message at https://app.incentiveswift.com/contact.html\n\nBest regards,\nThe {} Team",
                 name, plan_name_val, app_url, app_name
             );
             Ok((
@@ -501,6 +501,31 @@ pub async fn send_support_request_receipt_email(
         "app_url": APP_URL,
     });
     send_template_email(pool, Some(account_id), to, "support_request_receipt", &vars).await
+}
+
+/// Tell the VISITOR who used the contact page that their message moved (2026-11-06).
+///
+/// Same mail as [`send_plan_request_update_email`], but the asker has no workspace: a nil account
+/// resolves no stored template and no stored branding, so the app's own header and default copy are
+/// used. The address is the one the visitor typed; a reserved/harness recipient is withheld by the
+/// send funnel itself, so a probe is never mailed.
+pub async fn send_public_support_reply_email(
+    pool: &sqlx::PgPool,
+    to: &str,
+    request: &str,
+    status_word: &str,
+    reply: &str,
+) -> Result<(), String> {
+    let vars = json!({
+        "name": "there",
+        "request": request,
+        "status_word": status_word.replace('_', " "),
+        "reply": reply,
+        "app_name": APP_NAME,
+        "login_url": APP_URL,
+        "app_url": APP_URL,
+    });
+    send_template_email(pool, None, to, "plan_request_update", &vars).await
 }
 
 /// The operator's view of the LAST transactional send this installation attempted.

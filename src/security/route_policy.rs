@@ -101,6 +101,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/business/register",
     // --- public catalogues ------------------------------------------------------
     "/api/v1/plans",
+    // --- the contact page's own filing arm (2026-11-06) --------------------------
+    // A visitor who is NOT signed in files a help request. Every support address this product
+    // printed lived on a domain publishing MX = 0, so a locked-out customer's message bounced; the
+    // form now files it into the operator's support queue instead. The handler takes no credential
+    // and reads no workspace: ONE row with a NULL tenant, the address the visitor typed and a
+    // bounded message, at most three per address per hour.
+    "/api/v1/public/support-request",
     // A sibling service verifies a pasted API key here by contract (the app's own
     // `POST /api/v1/api-keys/verify` answers `{"valid": …}` for any well-formed request).
     "/api/v1/api-keys/verify",
