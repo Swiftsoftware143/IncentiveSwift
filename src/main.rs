@@ -843,6 +843,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/public/support-request",
             post(handlers::support_tickets::create_public_ticket),
         )
+        // READING the answer to that message (2026-11-06). The visitor is not signed in, so the
+        // answer cannot sit behind a session: the reference plus the address they filed with ARE
+        // the credential, and anything else answers one neutral 404.
+        .route(
+            "/api/v1/public/support-answer",
+            post(handlers::support_tickets::public_answer),
+        )
         // Reviews & Ratings
         .route(
             "/api/v1/reviews",

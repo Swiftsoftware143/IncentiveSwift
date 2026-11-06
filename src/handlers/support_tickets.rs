@@ -592,6 +592,83 @@ pub async fn create_public_ticket(
     ))
 }
 
+/// `POST /api/v1/public/support-answer` — read the team's answer to a message filed from the
+/// contact page (2026-11-06).
+///
+/// WHY THIS EXISTS. A visitor who filed from `contact.html` is not signed in and has no workspace,
+/// so there is no Support screen they could ever load: the answer an operator writes was stored on
+/// a row nobody who asked could open. Mail is one channel and mail gets lost (spam folder, a
+/// mistyped address), so the answer needs a second door. ADASwift, WorkflowSwift and FunnelSwift
+/// already ship this read-back; this app mailed and could not show.
+///
+/// The reference is an unguessable uuid and the address is the one they filed with, so the PAIR is
+/// the credential. Either one alone answers the same neutral 404, which keeps the route from
+/// confirming that a reference exists. Narrow by construction: ONE row, only when it carries no
+/// workspace (a workspace ticket is read by its own signed-in users), returning the subject, the
+/// status and the team's visible answers — never the description, never a list of tickets, never
+/// another visitor's row.
+#[derive(Debug, Deserialize)]
+pub struct PublicAnswerInput {
+    pub ticket_id: String,
+    pub email: String,
+}
+
+pub async fn public_answer(
+    State(state): State<AppState>,
+    Json(body): Json<PublicAnswerInput>,
+) -> Result<Json<Value>, AppError> {
+    // Neutral by design: an unknown reference, a malformed one and a reference that belongs to a
+    // different address all read the same, so the route cannot be used to test whether a reference
+    // is real.
+    let missing = || {
+        AppError::NotFound(
+            "We have no message from that address with that reference. Check the reference and the \
+             email address you filed with."
+                .to_string(),
+        )
+    };
+    let id = Uuid::parse_str(body.ticket_id.trim()).map_err(|_| missing())?;
+    // The filing arm stores the address lower-cased, so the lookup normalises the same way —
+    // `Probe@Example.com ` must find the row filed as `probe@example.com`.
+    let email = body.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return Err(missing());
+    }
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT subject, status FROM support_tickets \
+          WHERE id = $1 AND tenant_id IS NULL AND lower(requested_by) = $2",
+    )
+    .bind(id)
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((subject, status)) = row else {
+        return Err(missing());
+    };
+    // The team's answers live in the thread. `is_internal = false` is the SAME filter the
+    // signed-in customer read applies: a private note is never delivered to the browser of the
+    // person who asked. A contact-form row has no customer user at all (`created_by IS NULL`), so
+    // every visible message on it is the team's.
+    let replies: Vec<(String, String)> = sqlx::query_as(
+        "SELECT body, created_at::text FROM support_ticket_messages \
+          WHERE ticket_id = $1 AND is_internal = false ORDER BY created_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(json!({
+        "id": id.to_string(),
+        "subject": subject,
+        "status": status,
+        // An empty list means "not answered yet", which the page says in its own words rather
+        // than showing an empty green box.
+        "replies": replies
+            .iter()
+            .map(|(b, t)| json!({ "body": b, "sent_at": t }))
+            .collect::<Vec<_>>(),
+    })))
+}
+
 /// GET /api/v1/support-tickets/:id
 pub async fn get_ticket(
     State(state): State<AppState>,

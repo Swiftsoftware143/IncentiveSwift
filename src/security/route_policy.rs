@@ -108,6 +108,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // and reads no workspace: ONE row with a NULL tenant, the address the visitor typed and a
     // bounded message, at most three per address per hour.
     "/api/v1/public/support-request",
+    // --- reading the ANSWER to that message (2026-11-06) ------------------------
+    // The visitor who filed it is not signed in, so the answer cannot sit behind a session. The
+    // reference (an unguessable uuid) plus the address they filed with ARE the credential;
+    // anything that does not match BOTH answers one neutral 404. Narrow by construction: ONE
+    // workspace-less row, returning the subject, the status and the team's visible answers.
+    "/api/v1/public/support-answer",
     // A sibling service verifies a pasted API key here by contract (the app's own
     // `POST /api/v1/api-keys/verify` answers `{"valid": …}` for any well-formed request).
     "/api/v1/api-keys/verify",
