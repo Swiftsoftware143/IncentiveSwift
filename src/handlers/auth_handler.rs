@@ -1139,19 +1139,46 @@ pub async fn change_password(
     // SESSION REVOCATION (2026-10-20): changing the password also ends every JWT issued BEFORE it.
     // Measured before this: a token minted before the change kept answering 200 afterwards, so the
     // one action a user takes when they believe their session is stolen revoked nothing.
-    sqlx::query(
+    //
+    // ...AND THE CALLER'S OWN SESSION IS RE-MINTED (cron 2026-11-06). The bump above kills the token
+    // in hand as well, so this used to answer 200 and leave the tab that pressed the button holding
+    // a dead JWT: the Profile screen said "Password changed" while every panel behind it answered
+    // 401 until the customer signed out and back in. `logout_all` below has carried the fix since it
+    // shipped — mint from the SAME statement's `session_epoch` (the counter, not a floored
+    // timestamp, so a device that signed in during this same wall-clock second is still told apart
+    // from the fresh token) and return it. Doing it here makes the fleet consistent: FunnelSwift,
+    // ADASwift and MissedCall never invalidate the caller's session on a password change; this app
+    // and WorkflowSwift did.
+    //
+    // The re-minted token carries the account's CURRENT email and role read from the same row, never
+    // echoed from the old claim, so a claim narrowed since cannot be re-blessed here.
+    let row = sqlx::query(
         "UPDATE accounts
             SET password_hash = $1,
                 sessions_valid_from = NOW(),
                 session_epoch = COALESCE(session_epoch, 1) + 1
-          WHERE id = $2",
+          WHERE id = $2
+      RETURNING session_epoch::bigint, email, role",
     )
     .bind(&new_hash)
     .bind(account_uuid)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(json!({ "status": "password_updated" })))
+    let session_epoch: i64 = row.get("session_epoch");
+    let email: String = row.get("email");
+    let role: String = row.get("role");
+    let token = create_jwt(
+        &account_uuid.to_string(),
+        &email,
+        &role,
+        &state.config.jwt_secret,
+        Some(session_epoch),
+    )?;
+
+    Ok(Json(
+        json!({ "status": "password_updated", "token": token }),
+    ))
 }
 
 /// `POST /api/v1/auth/logout-all` — end every OTHER signed-in device on this account.
