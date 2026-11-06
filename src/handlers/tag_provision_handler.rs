@@ -470,6 +470,8 @@ pub async fn handle_provision_free_account(
     }
 
     let password = crate::billing::webhooks::generate_temp_password();
+    // Attribution from the address alone: this door has no browser to carry a harness header.
+    let probe_harness = crate::probe_harness::for_machine_door(&email);
     let minted = crate::account_mint::mint_account(
         &state.db,
         crate::account_mint::MintRequest {
@@ -477,11 +479,14 @@ pub async fn handle_provision_free_account(
             name: &full_name,
             password: &password,
             entry_plan_slug: &entry_plan_slug,
-            // DELIBERATELY `None`: this is an AUTHENTICATED machine door (`INTERNAL_SYNC_KEY`,
-            // reached by FunnelSwift when a lead is tagged), not the served signup. Only the
-            // anonymous signup records the `X-Swift-Harness` marker (kanban t_4a744754), so a
-            // workspace this door mints stays byte-identical to what it minted before.
-            probe_harness: None,
+            // ATTRIBUTION FROM THE ADDRESS (2026-11-06): this is an AUTHENTICATED machine door
+            // (`INTERNAL_SYNC_KEY`, reached by FunnelSwift when a lead is tagged) with no browser,
+            // so `X-Swift-Harness` cannot exist here. The recipient's own domain is the signal: a
+            // fleet-owned / RFC-reserved address can only belong to fleet machinery, and before
+            // this arm such a probe sat in the operator's account list with `probe_harness = NULL`,
+            // indistinguishable from a customer's. A real lead's domain matches neither list, so
+            // the answer is `None` and their account is written exactly as before.
+            probe_harness: probe_harness.as_deref(),
         },
     )
     .await?;
