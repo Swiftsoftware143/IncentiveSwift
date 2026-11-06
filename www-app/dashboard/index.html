@@ -551,6 +551,16 @@ function esc(s) {
     return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c];
   });
 }
+/* The API hands back UTC (`2026-11-06 17:53:45+00`). Rendering that raw showed a customer in Florida a
+   time five hours in the future, so every stamp on this page goes through localStamp() and is printed
+   in the reader's own timezone, keeping the same YYYY-MM-DD HH:MM shape. */
+function _utcMs(v){if(v===null||v===undefined)return null;var s=String(v).trim();if(!s)return null;
+  if(/^\d{4}-\d{2}-\d{2}[ T]/.test(s)&&!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s))s=s+"Z";
+  var d=new Date(s);return isNaN(d.getTime())?null:d.getTime();}
+function localStamp(v){var ms=_utcMs(v);if(ms===null)return v?String(v).slice(0,16):"";
+  var d=new Date(ms),z=function(n){return (n<10?"0":"")+n;};
+  return d.getFullYear()+"-"+z(d.getMonth()+1)+"-"+z(d.getDate())+" "+z(d.getHours())+":"+z(d.getMinutes());}
+
 
 function fetchAccount() {
   fetch(window.location.origin + '/api/v1/auth/me', {
@@ -662,7 +672,7 @@ function loadActivity() {
     var h = '';
     for (var i = 0; i < list.length && i < 10; i++) {
       var a = list[i] || {};
-      var when = String(a.created_at || '').slice(0, 16).replace('T', ' ');
+      var when = localStamp(a.created_at);
       h += '<div class="act"><div><span class="a-c">' + esc(a.campaign || '') + '</span>'
         + ' <span class="a-w">— ' + esc(a.participant || 'Anonymous') + '</span></div>'
         + '<div class="a-w">' + esc(when) + '</div></div>';
