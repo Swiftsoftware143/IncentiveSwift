@@ -5653,7 +5653,12 @@ const ProfileView = () => {
     if (!cp) { st.pwKind = 'err'; st.pwMsg = 'Enter your current password to confirm'; renderApp(); return; }
     st.pwKind = 'info'; st.pwMsg = 'Saving…'; renderApp();
     try {
-      await API.put('/auth/password', { current_password: cp, new_password: np });
+      const d = await API.put('/auth/password', { current_password: cp, new_password: np });
+      // A password change moves the account's session line, so the token in hand dies with it.
+      // The route now mints a FRESH token for the tab that pressed the button (cron 2026-11-06);
+      // adopt it exactly as "Sign out every other device" below already does, or this screen says
+      // "Password changed" while every panel behind it answers 401 until the customer signs in again.
+      if (d && d.token) API.setAuth(d.token, API.user || {});
       st.np = ''; st.np2 = ''; st.cp = '';
       st.pwKind = 'ok'; st.pwMsg = 'Password changed';
     } catch (e) { st.pwKind = 'err'; st.pwMsg = e.message || 'Could not change the password'; }
