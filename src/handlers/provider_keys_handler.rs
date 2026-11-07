@@ -116,7 +116,30 @@ pub async fn upsert_provider_key(
     // FAILS CLOSED (500) when PROVIDER_KEY_ENC_SECRET is missing — a plaintext credential is
     // never stored as a fallback. A blank/omitted api_key stays '' so the ON CONFLICT CASE
     // below keeps the previously stored ciphertext untouched.
-    let plaintext = body.api_key.as_deref().unwrap_or("").trim().to_string();
+    let plaintext_raw = body.api_key.as_deref().unwrap_or("").trim().to_string();
+    // THE MASKED ROUND-TRIP (see provider_key_crypto::is_mask_like). A value that is really the
+    // preview this app displays for a saved key means what a blank value means here — keep the
+    // stored credential — and a preview with nothing stored is refused instead of creating a
+    // connection that can never authenticate.
+    let plaintext = if crate::security::provider_key_crypto::is_mask_like(&plaintext_raw) {
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT COALESCE(api_key,'') FROM provider_keys WHERE account_id = $1 AND provider = $2",
+        )
+        .bind(account_id)
+        .bind(&body.provider)
+        .fetch_optional(&state.db)
+        .await?;
+        if stored.map(|s| !s.trim().is_empty()).unwrap_or(false) {
+            String::new()
+        } else {
+            return Err(AppError::BadRequest(
+                "That is the masked preview of a saved key, not the key itself — paste the full credential."
+                    .to_string(),
+            ));
+        }
+    } else {
+        plaintext_raw
+    };
     let stored_api_key =
         crate::security::provider_key_crypto::encrypt_for_storage(&state.db, &plaintext).await?;
 

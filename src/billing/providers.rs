@@ -358,13 +358,58 @@ pub async fn upsert_payment_provider(
     // CLOSED (500) when PROVIDER_KEY_ENC_SECRET is missing — a payment credential is never stored
     // in the clear as a fallback. A blank/omitted credential encrypts to '' , which is exactly the
     // "keep the stored value" signal the ON CONFLICT CASE below depends on.
-    let plain_key = body.api_key.as_deref().unwrap_or("").trim().to_string();
-    let plain_webhook = body
+    let plain_key_raw = body.api_key.as_deref().unwrap_or("").trim().to_string();
+    let plain_webhook_raw = body
         .webhook_secret
         .as_deref()
         .unwrap_or("")
         .trim()
         .to_string();
+    // THE MASKED ROUND-TRIP (see provider_key_crypto::is_mask_like; measured live on FunnelSwift
+    // 2026-11-07 where the same shape replaced a real key with its own preview). Here a mask means
+    // exactly what a blank field means — keep the stored credential — and a mask with nothing
+    // stored is refused instead of saving a provider row that can never authenticate.
+    let existing: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT COALESCE(api_key,''), webhook_secret FROM payment_providers \
+          WHERE account_id = $1 AND provider_type = $2",
+    )
+    .bind(account_id)
+    .bind(&body.provider_type)
+    .fetch_optional(&state.db)
+    .await?;
+    let has_stored_key = existing
+        .as_ref()
+        .map(|(k, _)| !k.trim().is_empty())
+        .unwrap_or(false);
+    let has_stored_secret = existing
+        .as_ref()
+        .and_then(|(_, s)| s.as_deref())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let plain_key = if crate::security::provider_key_crypto::is_mask_like(&plain_key_raw) {
+        if has_stored_key {
+            String::new()
+        } else {
+            return Err(AppError::BadRequest(
+                    "That is the masked preview of a saved key, not the key itself — paste the full credential."
+                        .to_string(),
+                ));
+        }
+    } else {
+        plain_key_raw
+    };
+    let plain_webhook = if crate::security::provider_key_crypto::is_mask_like(&plain_webhook_raw) {
+        if has_stored_secret {
+            String::new()
+        } else {
+            return Err(AppError::BadRequest(
+                    "That is the masked preview of a saved signing secret, not the secret itself — paste the full webhook signing secret."
+                        .to_string(),
+                ));
+        }
+    } else {
+        plain_webhook_raw
+    };
     let stored_api_key = encrypt_for_storage(&state.db, &plain_key).await?;
     let stored_webhook_secret = encrypt_for_storage(&state.db, &plain_webhook).await?;
 

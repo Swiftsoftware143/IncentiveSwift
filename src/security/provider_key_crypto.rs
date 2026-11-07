@@ -141,6 +141,24 @@ pub fn mask(key: &str) -> String {
     format!("{}...{}", first, last)
 }
 
+/// True when a submitted credential is really the MASKED PREVIEW of a value already saved, rather
+/// than a new credential — the "masked round-trip".
+///
+/// Measured live 2026-11-07 on FunnelSwift's sibling surface: saving a key and then re-saving the
+/// value the panel displays replaced a 38-character credential with the 15-byte preview (the
+/// encrypted column shrank 143 -> 115 bytes) and the payment provider was then handed the DISPLAY
+/// STRING (`Invalid API Key provided: sk_test_***0000`). The operator's screen looks unchanged, so
+/// the only symptom is a cryptic provider refusal at checkout.
+///
+/// Recognition is by MARKER, never by length. [`mask`] above produces `abc...xyz`, the mail-config
+/// panels use a bullet, FunnelSwift's read-back uses an ellipsis, and an operator who copies a
+/// provider's own error text brings the provider's asterisks with it. A real payment/integration
+/// credential is alphanumeric plus `_`/`-`, so none of these can occur inside one.
+pub fn is_mask_like(v: &str) -> bool {
+    let t = v.trim();
+    t.contains('…') || t.contains('•') || t.contains('*') || t.contains("...")
+}
+
 /// Encrypt a provider credential for storage. Fail-closed: without a master key this errors
 /// instead of returning the plaintext.
 pub async fn encrypt_for_storage(db: &PgPool, plaintext: &str) -> Result<String, CryptoError> {
@@ -195,5 +213,36 @@ pub async fn decrypt_optional(
     match stored {
         Some(s) if !s.trim().is_empty() => Ok(Some(decrypt_from_storage(db, s.trim()).await?)),
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod masked_round_trip_tests {
+    use super::*;
+
+    /// The shape this app displays for a saved key must be recognised as a mask, not a credential.
+    #[test]
+    fn the_displayed_mask_is_recognised() {
+        let shown = mask("sk_test_PROBE_FAKE_KEY_000000000000");
+        assert_eq!(shown, "sk_...000");
+        assert!(is_mask_like(&shown));
+    }
+
+    #[test]
+    fn providers_and_panels_masks_are_recognised() {
+        assert!(is_mask_like("sk_test_***0000"));
+        assert!(is_mask_like("••••••••"));
+        assert!(is_mask_like("sk_test_…0000"));
+        assert!(is_mask_like("***"));
+    }
+
+    /// Blank keeps its existing meaning ("keep the stored credential"), so it must NOT be treated as
+    /// a mask — and a real credential must never be mistaken for one.
+    #[test]
+    fn real_credentials_and_blanks_are_not_masks() {
+        assert!(!is_mask_like("sk_test_PROBE_FAKE_KEY_000000000000"));
+        assert!(!is_mask_like("key-1a2b3c4d5e6f7a8b9c0d"));
+        assert!(!is_mask_like(""));
+        assert!(!is_mask_like("   "));
     }
 }
