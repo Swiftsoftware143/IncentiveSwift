@@ -277,6 +277,15 @@ window.fetch = function (url, opts) {
 const S = { view: 'dashboard', loading: false, error: null, sessionEnded: false, views: {}, loadError: null };
 // Wrap API to catch 402 upgrade prompts
 const _get = API.get, _post = API.post, _put = API.put, _del = API.del;
+// The operator console's own role rule, in ONE place and the same list the server applies
+// (`security::auth::is_platform_admin` — admin|super_admin). Operator-only READS go through this
+// gate and the RAW `_get`, because the wrapped `API.get` below paints the shell's "This screen
+// could not load" banner on ANY failed read — measured 2026-11-07 in Chromium on a `company_admin`
+// session, where an operator-only badge read put that banner on a customer's own dashboard.
+const isOperatorSession = () => {
+  const r = String((S.me && S.me.role) || (API.user && API.user.role) || '');
+  return r === 'admin' || r === 'super_admin';
+};
 // A FAILED READ MUST NEVER READ AS AN EMPTY SCREEN (2026-10-29). Thirteen list loaders here catch a
 // failed GET with `console.error(e)` only, so an API failure left the operator reading "No plans yet."
 // — a statement about their DATA that was really a statement about the REQUEST. The shell prints the
@@ -365,6 +374,39 @@ const Dashboard = () => {
   if (!st._actLoaded) { st._actLoaded = true;
     API.get('/dashboard/activity').then(r => { st.activities = (r && Array.isArray(r.activities)) ? r.activities : []; renderApp(); }).catch(() => { st.activities = null; renderApp(); });
   }
+  // MONEY READINESS (2026-11-07): whether THIS installation can actually take money -- the one
+  // question an operator has no answer to on the dashboard, while every refused Upgrade is only a
+  // 503 in a server log. Two reads, both already served to an operator session: the install's
+  // payment-provider rows (`api_key_set` is what tells "a row exists" apart from "a row carries a
+  // usable key") and the plan list (`purchase_url` is the hosted payment page an operator can paste
+  // INSTEAD of keys, so a plan carrying one is sellable with no API key at all).
+  // OPERATOR ONLY — measured 2026-11-07 in Chromium on a `company_admin` session: `/admin/plans`
+  // answers 403 for a tenant (which the wrapped `API.get` turned into the shell's "This screen could
+  // not load" banner), while `/payment-providers` IS tenant-readable — so this card rendered on a
+  // CUSTOMER's dashboard telling them to "Press Provider Keys to connect Stripe" and that "none of
+  // the 0 paid plans" carried a link, where 0 was the failed read and not the catalogue. The gate is
+  // the server's own role rule, and the reads are the RAW getter, so a refusal cannot reach the banner.
+  if (!st._moneyLoaded && isOperatorSession()) { st._moneyLoaded = true;
+    Promise.all([
+      _get('/payment-providers').catch(() => null),
+      _get('/admin/plans').catch(() => null)
+    ]).then(([pv, pl]) => {
+      const items = pv && Array.isArray(pv.items) ? pv.items : null;
+      if (!items) { st.money = null; renderApp(); return; }
+      const usable = items.filter(p => p.api_key_set && p.is_active !== false);
+      const plans = pl && Array.isArray(pl.plans) ? pl.plans : (Array.isArray(pl) ? pl : []);
+      const paid = plans.filter(p => p.is_active !== false && (Number(p.price_monthly || 0) + Number(p.price_yearly || 0)) > 0);
+      const linked = paid.filter(p => p.purchase_url && String(p.purchase_url).trim() !== '');
+      st.money = {
+        on: usable.length > 0,
+        provider: usable[0] ? String(usable[0].provider_type || '') : '',
+        paid: paid.length,
+        linked: linked.length,
+        linkedNames: linked.map(p => p.name).slice(0, 4)
+      };
+      renderApp();
+    });
+  }
   // GET SET UP (2026-10-27): a workspace that had never run anything saw five zeros and
   // nothing to press — the same "wall of zeros" the customer dashboard no longer shows
   // (bf4c1c83). Painted ONLY from a payload that actually CARRIES the count this account
@@ -375,6 +417,13 @@ const Dashboard = () => {
   const go = (id) => { S.view = id; setViewHash(id); renderApp(); };
   return html`<div>
     <h2 class="text-xl font-bold mb-4">Dashboard</h2>
+    ${st.money && html`<div class="card mb-4" data-console="money-readiness" data-money-state=${st.money.on ? 'open' : (st.money.linked ? 'links' : 'closed')}>
+      ${st.money.on
+        ? html`<p class="text-sm text-gray-700">✅ <strong>Upgrades are open.</strong> Pressing Upgrade sends a buyer to ${st.money.provider ? st.money.provider.charAt(0).toUpperCase() + st.money.provider.slice(1) : 'the connected provider'} to pay, and the provider tells this installation when the money arrived.</p>`
+        : (st.money.linked
+          ? html`<p class="text-sm text-gray-700">✅ <strong>Upgrades work on ${st.money.linked} paid plan${st.money.linked === 1 ? '' : 's'}.</strong> ${st.money.linkedNames.join(', ')} carr${st.money.linked === 1 ? 'ies' : 'y'} a payment link, so pressing Upgrade there opens that page and you switch the plan on once you confirm the payment. ${Math.max(0, st.money.paid - st.money.linked) === 0 ? 'Every paid plan can be bought.' : 'The other ' + Math.max(0, st.money.paid - st.money.linked) + ' paid plan' + (Math.max(0, st.money.paid - st.money.linked) === 1 ? '' : 's') + ' can only ask the team.'}</p>`
+          : html`<p class="text-sm text-gray-700">⚠️ <strong>This installation cannot take money yet.</strong> No payment provider is connected and none of the ${st.money.paid} paid plan${st.money.paid === 1 ? '' : 's'} carries a payment link, so every press on Upgrade can only ask the team. Press <strong>Provider Keys</strong> to connect Stripe, or paste a payment link on a paid plan in <strong>Plans</strong>.</p>`)}
+    </div>`}
     ${empty && html`<div class="card mb-4" data-console="get-set-up">
       <div class="flex items-start gap-3">
         <div class="text-2xl">🚀</div>
@@ -6364,9 +6413,14 @@ const PromoCodes = () => {
 let buyReqLoaded = false;
 async function loadBuyRequests(force) {
   if (!API.token || (buyReqLoaded && !force)) return;
+  // A tenant has no operator queue: asking answers 403, and the wrapped getter turns that refusal
+  // into a false data-error banner on the customer's own console (measured 2026-11-07). Gate first,
+  // then read through the RAW getter, so neither a tenant's refusal nor an operator's transient
+  // failure can claim that the screen failed to load.
+  if (!isOperatorSession()) return;
   buyReqLoaded = true;
   try {
-    const r = await API.get('/admin/checkout-requests?limit=500');
+    const r = await _get('/admin/checkout-requests?limit=500');
     const rows = (r && r.requests) || [];
     const waiting = rows.filter(q => q && q.status === 'provider_missing').length;
     if (waiting !== S.buyRequestsWaiting) { S.buyRequestsWaiting = waiting; renderApp(); }
