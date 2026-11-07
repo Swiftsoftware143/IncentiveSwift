@@ -212,6 +212,11 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The customer's own plan request / billing ticket was answered (2026-10-19). Named for
         // the thing the customer asked about, so it reads as an answer and not as a system notice.
         "plan_request_update" => format!("About your request — {app_name}"),
+        // The answer to a message filed from /contact.html by someone with NO account (2026-11-07).
+        // Named as an answer, not a system notice, because the recipient asked a question and this
+        // is the reply. Kept separate from `plan_request_update` above: that arm tells the reader to
+        // open their dashboard, which this reader does not have.
+        "public_support_reply" => format!("About your message — {app_name}"),
         // The moment the customer FILES the request (cron 2026-10-20). Named so it is obvious in an
         // inbox that it is the acknowledgement of the thing they just did, not the answer to it.
         "support_request_receipt" => format!("We have your request — {app_name}"),
@@ -321,6 +326,48 @@ async fn send_inline(
             );
             Ok((
                 format!("About your request — {}", app_name),
+                body,
+                String::new(),
+            ))
+        }
+        // THE ANSWER TO A MESSAGE FROM /contact.html (2026-11-07). This arm exists because the
+        // `plan_request_update` body above was being reused for a CONTACT-PAGE VISITOR, and it
+        // tells the reader to open `{app_url}/dashboard/` — a door someone with no account cannot
+        // unlock, and the reference they were handed at filing time appeared nowhere in the mail.
+        // The one route that DOES work (contact.html plus reference plus the address they wrote
+        // from) was never named. So name it, and never mention a dashboard here.
+        "public_support_reply" => {
+            let asked = vars
+                .get("request")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your message");
+            let status_word = vars
+                .get("status_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or("answered");
+            let reply = vars.get("reply").and_then(|v| v.as_str()).unwrap_or("");
+            let reference = vars
+                .get("reference")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let body = format!(
+                "Hi {},\n\nYou wrote to us about \"{}\". Our answer is below.\n\n{}\n\n\
+                 Your message now reads {}.\n\n\
+                 You do not need an account to read this again: open {}/contact.html and enter your \
+                 reference {} together with the email address you wrote from. Keep this reference — \
+                 it is only usable together with that address.\n\n\
+                 You can reply to this email and it reaches the same team, so you never have to file \
+                 a second message.\n\n- The {} Team",
+                name,
+                asked,
+                reply.trim(),
+                status_word,
+                app_url,
+                reference,
+                app_name
+            );
+            Ok((
+                format!("About your message — {}", app_name),
                 body,
                 String::new(),
             ))
@@ -512,6 +559,7 @@ pub async fn send_support_request_receipt_email(
 pub async fn send_public_support_reply_email(
     pool: &sqlx::PgPool,
     to: &str,
+    reference: &str,
     request: &str,
     status_word: &str,
     reply: &str,
@@ -521,11 +569,16 @@ pub async fn send_public_support_reply_email(
         "request": request,
         "status_word": status_word.replace('_', " "),
         "reply": reply,
+        // The reference the visitor was handed at filing time (the ticket id). It is the OTHER half
+        // of the credential that reads the answer back on /contact.html, so it must travel in the
+        // mail — an earlier version reused the `plan_request_update` body, which sent this reader
+        // to a dashboard they have no account for and never named the reference at all.
+        "reference": reference,
         "app_name": APP_NAME,
         "login_url": APP_URL,
         "app_url": APP_URL,
     });
-    send_template_email(pool, None, to, "plan_request_update", &vars).await
+    send_template_email(pool, None, to, "public_support_reply", &vars).await
 }
 
 /// The operator's view of the LAST transactional send this installation attempted.

@@ -150,6 +150,7 @@ async fn notify_requester(
         if let Err(e) = crate::email::send_public_support_reply_email(
             &state.db,
             &visitor,
+            &ticket_id.to_string(),
             &subject,
             status_word,
             reply,
