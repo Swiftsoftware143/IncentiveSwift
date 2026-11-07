@@ -13,16 +13,22 @@ h1{font-size:20px;margin:0 0 6px}
 p.sub{margin:0 0 20px;color:#475569;font-size:14px;line-height:1.5}
 label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
 input,textarea{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit;color:#0f172a}
-input:focus,textarea:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
+input:focus,textarea:focus{outline:none;border-color:#4f46e5;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
 textarea{min-height:120px;resize:vertical}
-button{width:100%;margin-top:18px;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+button{width:100%;margin-top:18px;padding:12px;background:#4f46e5;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
 button:hover{background:#4f46e5}
 button:disabled{opacity:.6;cursor:default}
 .msg{margin-top:14px;font-size:14px;display:none;line-height:1.5}
 .msg.ok{display:block;color:#047857}
 .msg.err{display:block;color:#b91c1c}
 .back{margin-top:18px;font-size:13px;text-align:center}
-.back a{color:#6366f1;text-decoration:none}
+.back a{color:#4f46e5;text-decoration:none}
+.card+.card{margin-top:18px}
+.ref{margin-top:16px;padding:12px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;font-size:13px;line-height:1.5;color:#312e81;display:none}
+.ref code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all}
+.ans{margin-top:14px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:14px;line-height:1.55;display:none}
+.ans .who{font-size:12px;color:#64748b;margin-bottom:6px}
+.ans .txt{white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -41,8 +47,22 @@ button:disabled{opacity:.6;cursor:default}
       <textarea id="bd" required maxlength="4000"></textarea>
       <button id="send" type="submit">Send message</button>
       <div id="m" class="msg" role="status" aria-live="polite"></div>
+      <div id="ref" class="ref" role="status"></div>
     </form>
     <div class="back"><a href="/login">&larr; Back to sign in</a></div>
+  </div>
+  <div class="card">
+    <h1>Check the team's answer</h1>
+    <p class="sub">Sent us a message from this page and not signed in? Enter the reference you were given and the email address you filed with, and you can read the answer here — no account needed.</p>
+    <form id="af" novalidate>
+      <label for="ar">Your reference</label>
+      <input id="ar" type="text" autocomplete="off" spellcheck="false" placeholder="Paste the reference from this page or our email">
+      <label for="ae">Email you filed with</label>
+      <input id="ae" type="email" autocomplete="email" required maxlength="254">
+      <button id="ashow" type="submit">Show the answer</button>
+      <div id="am" class="msg" role="status" aria-live="polite"></div>
+      <div id="aa" class="ans" role="status" aria-live="polite"></div>
+    </form>
   </div>
 </div>
 <script>
@@ -65,6 +85,15 @@ button:disabled{opacity:.6;cursor:default}
       .then(function(res){
         if(res.ok){
           say((res.body&&res.body.message)||'Your message is with our team.',true);
+          var id=(res.body&&res.body.id)||'';
+          var refBox=document.getElementById('ref');
+          if(id){
+            refBox.innerHTML='Your reference: <code>'+id+'</code><br>Keep this page or note it down — with this reference and your email address you can read the team&#39;s answer here at any time.';
+            refBox.style.display='block';
+            document.getElementById('ar').value=id;
+            try{ localStorage.setItem('is_support_ref',id); }catch(e){}
+          }
+          document.getElementById('ae').value=email;
           f.querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
           b.disabled=true; b.textContent='Sent';
         } else if(res.status===429){
@@ -76,6 +105,54 @@ button:disabled{opacity:.6;cursor:default}
         }
       })
       .catch(function(){ say('That did not go through. Check your connection and try again.',false); b.disabled=false; });
+  });
+
+  // Reading the team's answer, with no account: the reference plus the address filed with ARE the
+  // credential. Anything that does not match both answers one neutral sentence.
+  var af=document.getElementById('af'), am=document.getElementById('am'), aa=document.getElementById('aa'),
+      aShow=document.getElementById('ashow');
+  function asay(t,ok){ am.textContent=t; am.className='msg '+(ok?'ok':'err'); }
+  try{
+    var saved=localStorage.getItem('is_support_ref');
+    if(saved){ document.getElementById('ar').value=saved; }
+  }catch(e){}
+  af.addEventListener('submit', function(e){
+    e.preventDefault();
+    var ref=(document.getElementById('ar').value||'').trim();
+    var mail=(document.getElementById('ae').value||'').trim();
+    if(!ref){ asay('Enter the reference you were given.',false); return; }
+    if(!mail){ asay('Enter the email address you filed with.',false); return; }
+    aShow.disabled=true;
+    fetch('/api/v1/public/support-answer',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ticket_id:ref,email:mail})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        aShow.disabled=false;
+        if(!res.ok){
+          aa.style.display='none';
+          asay((res.body&&res.body.error)||'We have no message from that address with that reference.',false);
+          return;
+        }
+        var b2=res.body||{};
+        var answers=b2.replies||[];
+        var state=b2.status==='resolved'||b2.status==='answered'||b2.status==='closed'
+          ? 'This message is ' + (b2.status==='closed'?'closed':'answered') + '.'
+          : 'Your message is with our team.';
+        var html='<div class="who">About: '+(b2.subject||'your message')+'</div>';
+        if(!answers.length){
+          html+='<div class="txt">'+state+' Nobody has answered it yet — the answer will appear here as soon as it is written.</div>';
+        } else {
+          answers.forEach(function(a){
+            html+='<div class="ans-item"><div class="who">'+(a.sent_at?('Team, '+a.sent_at):'Team')+'</div><div class="txt">'+
+              String(a.body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div></div>';
+          });
+        }
+        aa.innerHTML=html; aa.style.display='block';
+        asay('Here is what the team has written.',true);
+      })
+      .catch(function(){ aShow.disabled=false; asay('That did not go through. Check your connection and try again.',false); });
   });
 })();
 </script>
