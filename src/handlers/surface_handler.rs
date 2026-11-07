@@ -631,6 +631,42 @@ pub async fn get_play_view(
         payload["form_sections"] = json!(super::form_sections::resolve_form_sections(&config));
     }
 
+    // THE OWNER'S BRAND ON THEIR OWN CAMPAIGN PAGE (2026-11-07). This is the one surface a
+    // BUSINESS's customers see, and it carried only theme colours: a participant opening a
+    // shared link saw the campaign name on an unbranded page, while the same tenant's
+    // transactional email opens with their own name and logo. The brand lives in
+    // `tenant_settings.email_branding` (with the logo pointer verified against `tenant_logos` by
+    // `branding::load`), and both fields are ALREADY public by design — the logo is served by
+    // GET /api/v1/branding/logo/:tenant_id on `PUBLIC_ROUTES`, and the name is the tenant's own
+    // marketing text — so projecting them here leaks nothing new, and a logo pointer whose bytes
+    // are gone is dropped by the same read the mailers use (never a broken image on a public page).
+    // Present ONLY for a tenant that configured something: an unbranded tenant's payload is
+    // byte-identical to before this change.
+    let brand_owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT account_id FROM campaigns WHERE id = $1",
+    )
+    .bind(cid)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or_else(|e| {
+        // A read failure must not break the player: the campaign still renders, just unbranded.
+        tracing::warn!(
+            campaign = %cid,
+            error = %e,
+            "campaign owner could not be read — serving the player without the owner's brand"
+        );
+        None
+    });
+    if let Some(owner) = brand_owner {
+        if let Some(b) = crate::branding::load(&state.db, owner).await {
+            payload["brand"] = json!({
+                "name": b.brand_name,
+                "color": b.effective_color(),
+                "logo_url": b.logo_url,
+            });
+        }
+    }
+
     Ok(Json(payload))
 }
 
