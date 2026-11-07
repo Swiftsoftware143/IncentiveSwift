@@ -182,7 +182,7 @@ window.appGuidePages = {
   "email-provider": { title: "Email Provider", desc: "The platform-wide mail server every outgoing message goes through: its host, port, credentials and the from-address, with a Test button that sends one message. Changing it here changes the sender for every workspace on this deployment.", actions: ["Review the current mail server", "Send a test message", "Save a change"] }
 };
 </script>
-<script src="/inline-guide-widget.js?v=20261021a"></script>
+<script src="/inline-guide-widget.js?v=20261106a"></script>
 
 <script type="module">
 import { h, render } from './vendor/preact.js';
@@ -328,6 +328,9 @@ const LoginView = () => {
       // account once HERE, the same refresh the boot block does, so the name and the REAL
       // tier appear the moment the operator signs in (kanban t_20261026-console-identity).
       try { const d = await API.get('/auth/me'); if (d && d.user) { S.me = d.user; API.setAuth(API.token, Object.assign({}, API.user || {}, d.user)); } } catch (e) {}
+      // A fresh sign-in never reloads the page, so the boot-time waiting-purchase read has not run
+      // yet: fire it here too, or an operator sees the badge only after a manual refresh.
+      loadBuyRequests();
     } catch(err) { S.error = err.message; }
     S.loading = false; renderApp();
   };
@@ -513,6 +516,9 @@ const Plans = () => {
     try {
       await API.post('/admin/plans/assign', { account_id: q.account_id, plan_id: q.plan_id });
       st.busyReq = null; load();
+      // The nav badge counts the same rows the assignment just closed: re-read it, or the operator
+      // seats a workspace and still sees the old number.
+      loadBuyRequests(true);
     } catch (e) {
       st.busyReq = null; renderApp();
       alert('Could not switch that workspace: ' + (e && e.message ? e.message : e));
@@ -2291,7 +2297,7 @@ const ledgerTab = html`<div>
   <div class="card p-0 overflow-hidden">
     <table class="table"><thead><tr><th>When</th><th>Business</th><th>Member</th><th>Points</th><th>Billed</th></tr></thead>
       <tbody>${(((st.issuanceLog&&st.issuanceLog.items)||[])).map(r => html`<tr>
-        <td class="text-xs text-gray-500">${String(r.time||'').replace('T',' ').slice(0,19) || '—'}</td>
+        <td class="text-xs text-gray-500">${(r.time ? new Date(r.time).toLocaleString() : '') || '—'}</td>
         <td class="font-medium">${r.business_name||'—'}</td>
         <td class="text-xs text-gray-500">${r.member_id||'—'}</td>
         <td>${r.points||0}</td>
@@ -5292,7 +5298,11 @@ const CallLogs = () => {
     try { await API.del('/call-logs/' + c.id); st.msg = 'Call log deleted.'; await load(); }
     catch (e) { st.msg = e.message; renderApp(); }
   };
-  const fmt = (v) => v ? String(v).slice(0,16).replace('T',' ') : '—';
+  // The API sends `called_at` as RFC3339 UTC (`…Z`). Slicing it printed UTC on an operator's
+  // screen — a call logged at 17:03 EST read "22:03" — so this converts to the reader's own clock
+  // (the same `new Date(...).toLocaleString()` idiom the rest of this console uses). A value the
+  // platform cannot parse is shown verbatim rather than as "Invalid Date".
+  const fmt = (v) => { if (!v) return '—'; const d = new Date(v); return isNaN(d.getTime()) ? String(v) : d.toLocaleString(); };
   return html`<div class="p-6">
     <div class="flex items-center justify-between mb-4">
       <div><h1 class="text-2xl font-bold">Call Logs</h1>
@@ -6314,8 +6324,11 @@ const PromoCodes = () => {
         </div>
       </div>
       <div class="flex-1 space-y-1">
-        ${nav.map(n => html`<button type="button" class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }} aria-label=${n.label}>
+        ${nav.map(n => html`<button type="button" class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }} aria-label=${n.label + (n.id === 'plans' && (S.buyRequestsWaiting || 0) > 0 ? ', ' + plural(S.buyRequestsWaiting, 'customer is', 'customers are') + ' waiting to be activated' : '')}>
           <span>${n.icon}</span><span class="nav-text">${n.label}</span>
+          ${n.id === 'plans' && (S.buyRequestsWaiting || 0) > 0
+            ? html`<span class="badge badge-yellow" data-buy-requests=${S.buyRequestsWaiting} style="margin-left:auto" title=${plural(S.buyRequestsWaiting, 'customer is', 'customers are') + ' waiting for a plan to be activated'}>${S.buyRequestsWaiting}</span>`
+            : null}
         </button>`)}
       </div>
       ${/* Admin Guide entry point (kanban t_15f0bf7d, fleet standard t_c504d969): the admin guide is
@@ -6339,6 +6352,26 @@ const PromoCodes = () => {
     </div>
   </div>`;
 };
+
+/* A customer asking to BUY must be visible BEFORE an operator opens Plans (2026-11-07).
+   `POST /api/v1/checkout/create` records every refused upgrade as
+   `checkout_sessions.status = 'provider_missing'` and tells the CUSTOMER "the platform team can
+   activate this plan for your workspace by hand". Plans reads those rows, but nothing outside that
+   screen said one existed — so the ask waited until somebody thought to open it, exactly the defect
+   the plan-request and support-request queues were badge-fixed for elsewhere in the fleet.
+   One read at boot (operator only; a tenant's 403 is swallowed, so a customer console shows no
+   badge and no false zero) and every assignment re-reads it. */
+let buyReqLoaded = false;
+async function loadBuyRequests(force) {
+  if (!API.token || (buyReqLoaded && !force)) return;
+  buyReqLoaded = true;
+  try {
+    const r = await API.get('/admin/checkout-requests?limit=500');
+    const rows = (r && r.requests) || [];
+    const waiting = rows.filter(q => q && q.status === 'provider_missing').length;
+    if (waiting !== S.buyRequestsWaiting) { S.buyRequestsWaiting = waiting; renderApp(); }
+  } catch (e) { /* not a platform operator, or the queue is unreadable: no badge, never a false zero */ }
+}
 
 const renderApp = () => {
   render(html`<${App} />`, document.getElementById('app'));
@@ -6389,6 +6422,9 @@ if (API.token) {
     renderApp();
   }).catch(function () {});
 }
+// The waiting-purchase count rides the same boot as the identity read: an operator who is signed in
+// sees a customer asking to buy without opening Plans.
+if (API.token) loadBuyRequests();
 if (wsAdopting) (async () => {
   const show = () => { try { document.documentElement.style.visibility = ''; } catch (e) {} };
   const settle = setTimeout(show, 10000);
@@ -6401,6 +6437,7 @@ if (wsAdopting) (async () => {
     S.me = (d && d.user) || null;
     S.view = VIEW_FROM_HASH || 'dashboard';
     renderApp();
+    loadBuyRequests();
   } catch (e) {
     clearTimeout(settle);
     try { localStorage.removeItem('ws_fs_token'); } catch (x) {}
