@@ -759,12 +759,15 @@ mod tests {
     /// source text, so a regression in the wording is a red test.
     #[tokio::test]
     async fn the_contact_page_answer_names_the_page_and_the_reference() {
+        // Deliberately NOT a uuid literal: the gate refuses hardcoded UUIDs in src/, and this test
+        // only needs a reference the body must echo back.
+        let reference = "probe-reference-abc123";
         let vars = json!({
             "name": "there",
             "request": "Locked out of my account",
             "status_word": "answered",
             "reply": "Use the reset link on the sign-in page.",
-            "reference": "5443e97b-ac60-4332-821c-2f69585b56d2",
+            "reference": reference,
             "app_name": APP_NAME,
             "app_url": APP_URL,
             "login_url": APP_URL,
@@ -780,10 +783,7 @@ mod tests {
         .expect("the contact-page answer renders");
         assert_eq!(subject, format!("About your message — {APP_NAME}"));
         assert!(body.contains("/contact.html"), "{body}");
-        assert!(
-            body.contains("5443e97b-ac60-4332-821c-2f69585b56d2"),
-            "{body}"
-        );
+        assert!(body.contains(reference), "{body}");
         assert!(
             body.contains("Use the reset link on the sign-in page."),
             "{body}"
