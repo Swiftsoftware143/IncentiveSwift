@@ -11,7 +11,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f1f5f9;margin:0;color:#0
 .hdr a{color:#cbd5e1;text-decoration:none;font-size:13px;margin-left:18px}
 .hdr a:hover{color:#fff}
 .wrap{max-width:1200px;margin:0 auto;padding:24px 20px}
-.btn{display:inline-flex;align-items:center;gap:6px;background:#6366f1;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
+.btn{display:inline-flex;align-items:center;gap:6px;background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}
 .btn:hover{background:#4f46e5}
 .btn.gray{background:#e2e8f0;color:#334155}
 .btn.gray:hover{background:#cbd5e1}
@@ -19,7 +19,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f1f5f9;margin:0;color:#0
 .btn.sm{padding:5px 10px;font-size:12px}
 .card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px;margin-bottom:16px}
 .input,select,textarea{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;font-size:14px;outline:0}
-.input:focus,select:focus,textarea:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
+.input:focus,select:focus,textarea:focus{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(99,102,241,.12)}
 label{font-size:12px;font-weight:600;color:#475569;display:block;margin:12px 0 4px}
 .row{display:flex;gap:12px;flex-wrap:wrap}
 .grow{flex:1;min-width:200px}
@@ -34,11 +34,11 @@ label{font-size:12px;font-weight:600;color:#475569;display:block;margin:12px 0 4
 .nav{position:static}
 .tabbar{display:flex;gap:4px;border-bottom:2px solid #e2e8f0;margin-bottom:20px;overflow-x:auto}
 .tab{padding:10px 16px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-2px}
-.tab.on{color:#6366f1;border-bottom-color:#6366f1}
+.tab.on{color:#4f46e5;border-bottom-color:#4f46e5}
 .msg{padding:10px 14px;border-radius:8px;font-size:13px;margin:12px 0;display:none}
 .msg.ok{background:#dcfce7;color:#166534;display:block}
 .msg.err{background:#fee2e2;color:#991b1b;display:block}
-.spinner{border:2px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;width:14px;height:14px;display:inline-block;animation:spin .6s linear infinite;vertical-align:-2px}
+.spinner{border:2px solid #e2e8f0;border-top-color:#4f46e5;border-radius:50%;width:14px;height:14px;display:inline-block;animation:spin .6s linear infinite;vertical-align:-2px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none}
 h2{font-size:16px;font-weight:700;margin:0 0 8px}
@@ -161,7 +161,7 @@ async function loadFunnels() {
     if (!funnels.length) { el.innerHTML = '<p class="muted">No funnels yet. Create your first qualifying survey.</p>'; return; }
     el.innerHTML = '<table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Responses</th><th>Slug</th><th></th></tr></thead><tbody>' +
       funnels.map(f => `<tr>
-        <td><a href="#" style="color:#6366f1;font-weight:600" onclick="openEditor('${f.id}')">${esc(f.name)}</a></td>
+        <td><a href="#" style="color:#4f46e5;font-weight:600" onclick="openEditor('${f.id}')">${esc(f.name)}</a></td>
         <td>${esc(f.funnel_type||'survey')}</td>
         <td><span class="badge ${f.status==='active'?'active':'draft'}">${esc(f.status||'draft')}</span></td>
         <td>${f.response_count||0}</td>

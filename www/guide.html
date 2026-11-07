@@ -73,8 +73,10 @@
   .badge-purple { background: var(--accent-glow); color: var(--accent); }
   .badge-green { background: rgba(34,197,94,0.15); color: var(--success); }
   .badge-orange { background: rgba(249,115,22,0.15); color: var(--warning); }
-  .badge-red { background: rgba(239,68,68,0.15); color: var(--danger); }
-  .badge-blue { background: rgba(59,130,246,0.15); color: var(--info); }
+  /* 2026-11-07 AA: --danger #ef4444 on this chip was 4.41:1 */
+  .badge-red { background: rgba(239,68,68,0.15); color: #f87171; }
+  /* 2026-11-07 AA: --info #3b82f6 on this chip was 4.43:1 */
+  .badge-blue { background: rgba(59,130,246,0.15); color: #60a5fa; }
 
   .step-list { list-style: none; counter-reset: step; }
   .step-list li { counter-increment: step; padding: 16px 16px 16px 52px; position: relative; margin-bottom: 8px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border); }

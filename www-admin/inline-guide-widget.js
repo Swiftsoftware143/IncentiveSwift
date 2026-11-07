@@ -125,7 +125,7 @@
       '</style>' +
       '<button id="ig-toggle" aria-label="Help" title="Guide">?</button>' +
       '<div id="ig-panel">' +
-        '<div id="ig-header"><h3 id="ig-title"></h3><button id="ig-close" aria-label="Close guide">\u2715</button></div>' +
+        '<div id="ig-header"><h3 id="ig-title">Help</h3><button id="ig-close" aria-label="Close guide">\u2715</button></div>' +
         '<div id="ig-body">' +
           '<p id="ig-desc"></p>' +
           '<p id="ig-actions-title" style="display:none">What you can do here</p>' +
