@@ -97,6 +97,20 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Recent activity</h2>
     <div id="dash-activity" style="color:#64748b;font-size:14px">Loading recent activity&hellip;</div>
   </div>
+  <div class="card" id="your-data-card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your data</h2>
+    <!-- GET /api/v1/analytics/export (types campaigns|contacts|entries, src/handlers/analytics_handler.rs)
+         shipped with NO screen in the customer console: the only reader was the operator's. A customer
+         asked for their own records had to ask us. Buttons below drive that same route with the
+         tenant's own session, so there is one export path, not two. -->
+    <p style="font-size:13px;color:#64748b;margin:0 0 10px">Download a spreadsheet of your own records. These are your rows only — nothing from any other workspace.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" id="dl-contacts" onclick="downloadMyCsv('contacts', this)">Contacts (CSV)</button>
+      <button class="btn" id="dl-campaigns" onclick="downloadMyCsv('campaigns', this)">Campaigns (CSV)</button>
+      <button class="btn" id="dl-entries" onclick="downloadMyCsv('entries', this)">Loyalty entries (CSV)</button>
+    </div>
+    <div id="your-data-msg" role="status" style="font-size:13px;margin-top:8px"></div>
+  </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
     <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
@@ -1499,6 +1513,44 @@ function pbUpgrade(slug, price, planId, name, term) {
 window.appGuidePages = {
   "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited in the Your account card, below your numbers on this page; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available; when a payment page hands you back to this screen it says so at the top of that card, and because this installation switches a paid plan on by hand, the plan will not change by itself \u2014 you are emailed when it is on", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
+
+// ── Your data: the customer-facing face of GET /api/v1/analytics/export ─────────────────────────
+// The route existed with no screen in this console (an operator-only reader), so a customer who
+// wanted their own records had to ask. One path, one auth header (ppAuth), four honest outcomes:
+// session expired, nothing yet, downloaded N rows, or the server's own refusal sentence.
+function downloadMyCsv(type, btn) {
+  var msg = document.getElementById('your-data-msg');
+  function say(t, c) { if (msg) { msg.textContent = t; msg.style.color = c || '#2563eb'; } }
+  if (btn) btn.disabled = true;
+  say('Preparing your file\u2026');
+  fetch('/api/v1/analytics/export?type=' + encodeURIComponent(type), { headers: ppAuth(), cache: 'no-store' })
+    .then(function (r) {
+      if (r.status === 401) { say('Your session expired \u2014 sign in again and the download will work.', '#dc2626'); if (btn) btn.disabled = false; return null; }
+      if (!r.ok) throw new Error('The export could not be prepared (' + r.status + '). Try again in a moment.');
+      return r.text();
+    })
+    .then(function (csv) {
+      if (csv === null) return;
+      var lines = String(csv || '').replace(/\r/g, '').trim().split('\n').filter(function (l) { return l.length; });
+      if (lines.length < 2) {
+        say('There is nothing to download yet \u2014 this file fills up as you use the app.', '#64748b');
+        if (btn) btn.disabled = false;
+        return;
+      }
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      var a = document.createElement('a');
+      var d = new Date();
+      var stamp = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'incentiveswift-' + type + '-' + stamp + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 1500);
+      say('Downloaded ' + (lines.length - 1) + ' row' + (lines.length === 2 ? '' : 's') + '.', '#059669');
+      if (btn) btn.disabled = false;
+    })
+    .catch(function (e) { say(e.message || 'The export could not be prepared.', '#dc2626'); if (btn) btn.disabled = false; });
+}
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>
 </body>
