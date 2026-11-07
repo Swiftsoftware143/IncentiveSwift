@@ -251,7 +251,7 @@ var user = null;
 // `PB.plan`, so a declaration further down the file would throw and abort the boot.
 // `term` is the billing term the customer is looking at: 'month' (the default, and the only term this
 // app could sell before 2026-10-24) or 'year'.
-var PB = { plans: null, plan: null, busy: false, term: 'month' };
+var PB = { plans: null, plan: null, busy: false, term: 'month', till: null };
 // Declared HERE for the same reason as PB: `paintAccount()` (called at boot) repaints the usage
 // card, so a `var USAGE` further down the file would throw `Cannot read properties of undefined`
 // and abort the boot before the dashboard painted (measured in Chromium, 2026-10-16).
@@ -1198,6 +1198,14 @@ function pbCheckoutReturn() {
   } catch (e) {}
 }
 function pbLoad() {
+  // THE PRE-FLIGHT ANSWER (2026-11-07): ask the till whether this installation can take money
+  // at all BEFORE any plan card offers a purchase. `upgrade_path` decides what the button SAYS
+  // and which path a press takes. A failed probe leaves PB.till null and every card as it was,
+  // so a network blip can never hide the ladder.
+  fetch(window.location.origin + '/api/v1/checkout/status', { headers: pbAuth(), cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (s) { PB.till = s || null; if (PB.plans) pbRender(); })
+    .catch(function () { PB.till = null; });
   fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (d) {
@@ -1258,6 +1266,10 @@ function pbRender() {
   pbTermBar();
   var wrap = document.getElementById('pb-plans');
   if (!wrap) return;
+  // What a press will ACTUALLY do, decided before it is pressed (2026-11-07). 'checkout' keeps
+  // the familiar verb; a plan carrying a hosted page says so; an installation that can take no
+  // money at all offers the plan REQUEST instead of a purchase it would refuse.
+  var tillPath = (PB.till && PB.till.upgrade_path) || 'checkout';
   var plans = PB.plans || [];
   if (!plans.length) { wrap.innerHTML = '<div style="color:#64748b;font-size:13px">No plans are published yet.</div>'; return; }
   var curPrice = null;
@@ -1285,6 +1297,10 @@ function pbRender() {
     var dir = (curPrice === null || price === curPrice) ? 'switch' : (price > curPrice ? 'up' : 'down');
     var verb = (dir === 'up') ? 'Upgrade to ' : (dir === 'down' ? 'Downgrade to ' : 'Switch to ');
     var btnStyle = (dir === 'up') ? '' : 'background:#64748b';
+    var pressVerb = verb;
+    var pressPath = 'checkout';
+    if (tillPath === 'request') { pressVerb = 'Request '; pressPath = 'request'; }
+    else if (tillPath === 'payment_link') { pressVerb = 'Open payment page for '; pressPath = 'payment_link'; }
     var action;
     if (isCur) {
       action = '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>';
@@ -1296,7 +1312,7 @@ function pbRender() {
       // never offered, so nobody can be sold a term this tier does not have.
       action = '<div data-pb-no-yearly="' + esc(p.slug || '') + '" style="margin-top:10px;font-size:12.5px;color:#475569">Yearly price not set for this tier \u2014 choose <strong>Monthly</strong>.</div>';
     } else {
-      action = '<button class="btn btn-sm" style="margin-top:10px;' + btnStyle + '" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + amount + '" data-pb-term="' + (yearlyHere ? 'year' : 'month') + '" data-pb-id="' + esc(p.id || '') + '" data-pb-name="' + esc(p.name || p.slug) + '" data-pb-dir="' + dir + '">' + verb + esc(p.name || p.slug) + '</button>';
+      action = '<button class="btn btn-sm" style="margin-top:10px;' + btnStyle + '" data-pb-upgrade="' + esc(p.slug || '') + '" data-pb-price="' + amount + '" data-pb-term="' + (yearlyHere ? 'year' : 'month') + '" data-pb-id="' + esc(p.id || '') + '" data-pb-name="' + esc(p.name || p.slug) + '" data-pb-dir="' + dir + '" data-pb-path="' + pressPath + '">' + pressVerb + esc(p.name || p.slug) + '</button>';
     }
     // The price block: the yearly figure carries its own per-month equivalent and the saving, both
     // computed from the two numbers in this row so a price change can never leave a stale claim.
@@ -1323,12 +1339,25 @@ function pbRender() {
       + '<ul style="list-style:none;padding:0;margin:0;font-size:13px;color:#475569">' + fh + '</ul>'
       + action + '</div>';
   }
+  if (tillPath === 'request') {
+    h = '<div data-till="request" style="border:1px solid #fde68a;background:#fffbeb;color:#92400e;'
+      + 'border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5;margin:0 0 12px">'
+      + 'Upgrades are not open on this installation yet, so nothing here can charge you. Pressing a '
+      + 'plan records your request, and the team switches your workspace onto it.'
+      + '</div>' + h;
+  }
   wrap.innerHTML = h;
   var btns = wrap.querySelectorAll('[data-pb-upgrade]');
   for (var k = 0; k < btns.length; k++) {
     btns[k].addEventListener('click', function () {
       var dir = this.getAttribute('data-pb-dir');
       var name = this.getAttribute('data-pb-name') || this.getAttribute('data-pb-upgrade');
+      // On an installation that cannot take money a press is the plan REQUEST (2026-11-07):
+      // the ticket route the operator's queue resolves, with no refusal in the customer's way.
+      if (this.getAttribute('data-pb-path') === 'request') {
+        pbRequest(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this, null, this.getAttribute('data-pb-term'));
+        return;
+      }
       if (dir === 'down' && !window.confirm('Move this workspace down to the ' + name + ' plan? You keep access until the change is made, then the lower plan applies.')) return;
       pbUpgrade(this.getAttribute('data-pb-upgrade'), Number(this.getAttribute('data-pb-price')), this.getAttribute('data-pb-id'), name, this.getAttribute('data-pb-term'));
     });
@@ -1552,6 +1581,6 @@ function downloadMyCsv(type, btn) {
     .catch(function (e) { say(e.message || 'The export could not be prepared.', '#dc2626'); if (btn) btn.disabled = false; });
 }
 </script>
-<script src="/inline-guide-widget.js?v=20261021a"></script>
+<script src="/inline-guide-widget.js?v=20261107a"></script>
 </body>
 </html>

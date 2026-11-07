@@ -8,6 +8,8 @@
 //!                                                  (the operator's own read-only key check,
 //!                                                  kanban t_14081cea)
 //!   POST /api/v1/checkout/create                -> checkout::create
+//!   GET  /api/v1/checkout/status                -> checkout::checkout_status
+//!                                                  (can this install sell right now, BEFORE a press)
 //!   GET  /api/v1/checkout/sessions              -> checkout::list
 //!   POST /api/v1/webhooks/stripe                -> webhooks::stripe
 //!   POST /api/v1/webhooks/paypal                -> webhooks::paypal
@@ -52,6 +54,13 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(checkout::test_payment_provider),
         )
         // Checkout Sessions
+        //
+        // kanban-free (2026-11-07) — THE PRE-FLIGHT ANSWER the dashboard acts on BEFORE a press:
+        // "can this installation take money right now?" Parity with FunnelSwift and ADASwift, where
+        // the panel labels the button for the plan request instead of promising a purchase the
+        // install cannot perform. Same resolution order as `/checkout/create`, so it cannot promise
+        // a checkout the till would refuse.
+        .route("/api/v1/checkout/status", get(checkout::checkout_status))
         .route(
             "/api/v1/checkout/create",
             post(checkout::create_checkout_session),

@@ -84,6 +84,109 @@ pub struct CreateCheckoutInput {
 // Handlers
 // ---------------------------------------------------------------------------
 
+/// GET /api/v1/checkout/status — can this installation take money for a plan RIGHT NOW?
+///
+/// THE DEFECT IT CLOSES (measured 2026-11-07): on this install `payment_providers` holds ZERO rows
+/// and no active plan carries a hosted `purchase_url`, so every press of the dashboard's "Upgrade
+/// to …" button could only ever end in a refusal. The console handled that refusal honestly — it
+/// printed the server's own sentence and the refusal files a plan request — but the customer learned
+/// the truth only AFTER clicking a button that promised a purchase. FunnelSwift and ADASwift answer
+/// this question BEFORE the press; this is the same endpoint answering against THIS app's own sale
+/// ladder, so the panel can label the button for the plan request it will actually file.
+///
+/// `upgrade_path` is the ONE field the panel acts on, and the three values mean exactly:
+/// * `checkout` — a resolved Stripe provider with a readable key: a press reaches Stripe.
+/// * `payment_link` — no provider, but at least one active plan carries a hosted payment page, so a
+///   press hands the buyer to it (and still files the ask).
+/// * `request` — nothing can take money: the honest action is the plan request, which the dashboard
+///   files through its own ticket route and `POST /checkout/create` also records on the same press.
+///
+/// It reads the SAME `resolve_plan_provider` the till uses (the buyer's own row first, else a
+/// platform operator's), so it can never say `configured: true` for a press that would then be
+/// refused. A credential that cannot be decrypted is reported as `payment_provider_key_missing` —
+/// never as "configured" and never as a 500, because a status probe that fails is worse than no
+/// probe: the panel would fall back to promising the purchase.
+pub async fn checkout_status(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // ── 1. The provider the till would charge through. ──────────────────────────────────────────
+    let resolved = resolve_plan_provider(&state, account_id).await?;
+    let (configured, reason, provider_type) = match resolved {
+        Some((provider_account, provider_type)) => {
+            // A provider that is not Stripe is answered 501 by the till, so it is not sellable here
+            // either: reporting it as "configured" would promise a checkout that cannot exist.
+            if provider_type != "stripe" {
+                (false, Some("provider_not_supported"), Some(provider_type))
+            } else {
+                let stored: Option<String> = sqlx::query_scalar(
+                    "SELECT api_key FROM payment_providers \
+                     WHERE account_id = $1 AND provider_type = 'stripe' AND is_active = true \
+                     ORDER BY created_at LIMIT 1",
+                )
+                .bind(provider_account)
+                .fetch_optional(&state.db)
+                .await?;
+                let key = decrypt_from_storage(&state.db, stored.as_deref().unwrap_or("").trim())
+                    .await
+                    .ok()
+                    .filter(|k| !k.trim().is_empty());
+                match key {
+                    Some(_) => (true, None, Some(provider_type)),
+                    None => (
+                        false,
+                        Some("payment_provider_key_missing"),
+                        Some(provider_type),
+                    ),
+                }
+            }
+        }
+        None => (false, Some("payment_provider_not_configured"), None),
+    };
+
+    // ── 2. Plans that carry a hosted payment page, COUNTED rather than assumed. ──────────────────
+    // The column can hold a value that is not a usable URL, so the till's own predicate decides.
+    let urls: Vec<String> = sqlx::query_scalar(
+        "SELECT COALESCE(BTRIM(purchase_url), '') FROM plans WHERE is_active = true",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let sellable_plans = urls.iter().filter(|u| is_hosted_payment_url(u)).count();
+
+    let upgrade_path = if configured {
+        "checkout"
+    } else if sellable_plans > 0 {
+        "payment_link"
+    } else {
+        "request"
+    };
+
+    Ok(Json(json!({
+        "configured": configured,
+        "provider": match (&configured, &provider_type) {
+            (true, Some(p)) => json!(p),
+            _ => Value::Null,
+        },
+        "reason": match reason {
+            Some(r) => json!(r),
+            None => Value::Null,
+        },
+        "upgrade_path": upgrade_path,
+        "sellable_plans": sellable_plans,
+        "message": match upgrade_path {
+            "checkout" => "Upgrades are open: pressing a plan takes you to a secure payment page.",
+            "payment_link" => "Pressing a plan opens its own payment page; the workspace is switched \
+                               on once the team confirms it.",
+            _ => "Upgrades are not open on this installation yet, and nothing will be charged. \
+                  Pressing a plan records your request for it so the team can switch your workspace \
+                  onto it.",
+        },
+    })))
+}
+
 /// POST /api/v1/checkout/create
 ///
 /// A REAL Stripe Checkout session for a PLATFORM PLAN, or an explicit refusal (card: the ladder was

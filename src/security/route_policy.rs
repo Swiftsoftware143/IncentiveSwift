@@ -582,6 +582,10 @@ mod tests {
             "/api/v1/internal/portfolio-sync",
             "/api/v1/internal/tag-provision",
             "/api/v1/checkout/create",
+            // The pre-flight answer the dashboard reads before it offers a purchase (2026-11-07):
+            // it names whether a credential is stored, so it is an ACCOUNT surface and stays behind
+            // the caller's own session like the till beside it.
+            "/api/v1/checkout/status",
             // The operator's own payment-key check (kanban t_14081cea): it reads a stored credential
             // and can call Stripe with one supplied in the body, so it stays behind the caller's own
             // session like every other payment-provider route. It is NOT in PUBLIC_METHOD_ROUTES.
