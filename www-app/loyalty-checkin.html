@@ -48,6 +48,14 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .big{font-size:34px;font-weight:700;color:#166534;text-align:center;margin:8px 0}
 .sep{border-top:1px solid #e2e8f0;margin:22px 0 18px}
 .code-hint{font-size:12px;color:#94a3b8;margin:0 0 12px}
+/* The business's own identity, when it has configured one (email branding). A centred logo (max
+   56px high / 240px wide) or the brand name, then a 3px rule in the brand colour — the same header
+   block Branding::header_html paints on this tenant's mail and the campaign player shows. Hidden
+   entirely when the tenant configured nothing, so an unbranded page is unchanged. */
+.brandbar{display:none;text-align:center;padding-bottom:14px;margin-bottom:16px}
+.brandbar img{max-height:56px;max-width:240px;display:inline-block}
+.brandbar .bn{font-weight:700;font-size:20px;letter-spacing:.2px}
+.brandbar .rule{border-top:3px solid #4f46e5;margin-top:12px}
 </style>
 </head>
 <body>
@@ -55,6 +63,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
   <div id="loading" style="text-align:center;color:#64748b;padding:30px 0">Loading your rewards…</div>
 
   <div id="panel" style="display:none">
+    <div class="brandbar" id="brandBar"></div>
     <h1 id="programName">Loyalty rewards</h1>
     <p class="biz" id="businessName"></p>
     <div class="pill" id="pointsPill"></div>
@@ -121,6 +130,33 @@ button:disabled{opacity:.6;cursor:not-allowed}
       var d = res.data;
       el('programName').textContent = d.program_name || 'Loyalty rewards';
       el('businessName').textContent = d.business_name ? ('at ' + d.business_name) : '';
+      // The owner's own identity above the programme name (2026-11-07). `brand` is present only for
+      // a tenant that configured email branding; its `color` is validated hex server-side
+      // (Branding::effective_color) and its `logo_url` is only ever a stored, verified pointer, so a
+      // removed logo cannot arrive here. No brand => the bar stays hidden and the page is unchanged.
+      (function () {
+        var brand = d.brand || null;
+        if (!brand || (!brand.name && !brand.logo_url)) return;
+        var bar = el('brandBar');
+        bar.innerHTML = '';
+        if (brand.logo_url) {
+          var img = document.createElement('img');
+          img.alt = brand.name || d.business_name || 'Business logo';
+          img.src = brand.logo_url;
+          bar.appendChild(img);
+        } else {
+          var nm = document.createElement('div');
+          nm.className = 'bn';
+          nm.textContent = brand.name;
+          nm.style.color = /^#[0-9a-fA-F]{3,8}$/.test(brand.color || '') ? brand.color : '#4f46e5';
+          bar.appendChild(nm);
+        }
+        var rule = document.createElement('div');
+        rule.className = 'rule';
+        rule.style.borderTopColor = /^#[0-9a-fA-F]{3,8}$/.test(brand.color || '') ? brand.color : '#4f46e5';
+        bar.appendChild(rule);
+        bar.style.display = 'block';
+      })();
       el('pointsPill').textContent = '+' + (d.points_per_checkin || 0) + ' ' +
         (d.currency_name || 'points') + ' per check-in';
       el('loading').style.display = 'none';

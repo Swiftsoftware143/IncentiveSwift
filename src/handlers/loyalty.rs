@@ -1580,7 +1580,7 @@ pub async fn public_program(
         None => program.name.clone(),
     };
 
-    Ok(Json(json!({
+    let mut payload = json!({
         // Kept for every existing reader/cached page; `checkin_slug` is the field to use.
         "campaign_slug": checkin_slug,
         "checkin_slug": checkin_slug,
@@ -1597,5 +1597,25 @@ pub async fn public_program(
         "streak_enabled": program.streak_enabled,
         "tiers_enabled": program.tiers_enabled,
         "milestones_enabled": program.milestones_enabled,
-    })))
+    });
+
+    // THE OWNER'S BRAND ON THEIR OWN COUNTER QR (2026-11-07). The check-in page is the surface a
+    // CUSTOMER reaches by scanning the business's QR at the till, and it carried only the programme
+    // name and the account name — no logo, no colour — while the same tenant's campaign player and
+    // transactional email both open with their own identity. Same document, same read, same rules as
+    // the play page's projection (`surface_handler::public_play`): `tenant_settings.email_branding`
+    // through `branding::load`, whose logo pointer is already verified against the stored bytes so a
+    // removed logo can never surface here as a broken image. Both fields are already public by
+    // design (the logo is served by the PUBLIC `GET /api/v1/branding/logo/:tenant_id`), so nothing
+    // new is exposed. Present ONLY for a tenant that configured something: an unbranded tenant's
+    // payload is byte-identical to before this change.
+    if let Some(b) = crate::branding::load(&state.db, target.account_id).await {
+        payload["brand"] = json!({
+            "name": b.brand_name,
+            "color": b.effective_color(),
+            "logo_url": b.logo_url,
+        });
+    }
+
+    Ok(Json(payload))
 }
