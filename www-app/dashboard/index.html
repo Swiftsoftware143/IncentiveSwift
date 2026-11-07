@@ -97,6 +97,20 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Recent activity</h2>
     <div id="dash-activity" style="color:#64748b;font-size:14px">Loading recent activity&hellip;</div>
   </div>
+  <div class="card" id="loyalty-card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Loyalty programme</h2>
+    <!-- GET /api/v1/loyalty/plan/status, /api/v1/loyalty/plans and /api/v1/loyalty/programs shipped
+         with NO screen on any CUSTOMER surface (measured 2026-11-07: the only reader was the admin
+         console). A workspace could buy a loyalty plan through POST /api/v1/loyalty/subscribe and
+         then had nowhere to read what it bought - the plan, this month's remaining points credit, or
+         the check-in link its printed counter QR encodes (/loyalty-checkin/<slug>). Every figure
+         below is the server's own answer at load; nothing is computed or invented here. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">The loyalty programme your customers check in to. All of it is read from your own workspace: the plan you are on, the points credit left this month, and each programme's printable check-in link.</p>
+    <div id="loy-status" style="font-size:14px;color:#64748b">Loading your loyalty plan&hellip;</div>
+    <div id="loy-programs" style="margin-top:14px"></div>
+    <div id="loy-plans" style="margin-top:14px"></div>
+    <div id="loy-msg" role="status" style="font-size:13px;margin-top:10px"></div>
+  </div>
   <div class="card" id="your-data-card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your data</h2>
     <!-- GET /api/v1/analytics/export (types campaigns|contacts|entries, src/handlers/analytics_handler.rs)
@@ -256,6 +270,9 @@ var PB = { plans: null, plan: null, busy: false, term: 'month', till: null };
 // card, so a `var USAGE` further down the file would throw `Cannot read properties of undefined`
 // and abort the boot before the dashboard painted (measured in Chromium, 2026-10-16).
 var USAGE = { data: null, err: false };
+// Loyalty card state — declared above the boot block for the same reason as USAGE/PB:
+// the boot block calls loyLoad(), and paintAccount() fills LOY.email.
+var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
@@ -286,11 +303,14 @@ if (!token) {
   loadStats();
   loadActivity();
   loadUsage();
+  loyLoad();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
 function paintAccount(u) {
   PB.plan = u.plan || null;
+  // The loyalty card's Subscribe button needs the workspace's own address; read it from the row.
+  LOY.email = u.email || LOY.email;
   // `plan_assigned` is the SERVER's own distinction (fleet rule, same pair FunnelSwift / ADASwift /
   // missedcall / WorkflowSwift publish): false means this workspace holds no plan tier at all, so it
   // must never be told it is on a tier called "Free". `plan_effective_name` names the tier the app's
@@ -754,6 +774,130 @@ function renderUsage() {
       + 'The way up is in Plan &amp; billing at the bottom of this page.</p>';
   }
   el.innerHTML = h;
+}
+// ---- Loyalty programme -----------------------------------------------------------------------
+// The three loyalty reads (plan status, the programme list, the plan catalogue) had no caller on any
+// customer page. This card makes them visible to the workspace that owns them: what plan is active,
+// how much points credit is left this month, each programme's points-per-check-in and the
+// /loyalty-checkin/<slug> link a printed counter QR encodes, and the plans this workspace can buy.
+// Nothing here is computed: every number and sentence is the server's own answer.
+// (The LOY state object is declared above the boot block, beside USAGE/PB.)
+function loyMoney(n) { var v = Number(n); return isFinite(v) ? '$' + v.toFixed(0) : ''; }
+function loySay(text, bad) {
+  var el = document.getElementById('loy-msg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = bad ? '#b91c1c' : '#0f766e';
+}
+function loyLoad() {
+  var h = { 'Authorization': 'Bearer ' + token };
+  function get(path, key) {
+    return fetch(window.location.origin + path, { headers: h, cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) { LOY[key] = d; loyRender(); })
+      .catch(function () { LOY.err = true; loyRender(); });
+  }
+  get('/api/v1/loyalty/plan/status', 'status');
+  get('/api/v1/loyalty/programs', 'programs');
+  get('/api/v1/loyalty/plans', 'plans');
+}
+function loyCheckinUrl(slug) { return window.location.origin + '/loyalty-checkin/' + slug; }
+function loyCopy(slug) {
+  var url = loyCheckinUrl(slug);
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { loySay('Check-in link copied.', false); },
+        function () { loySay(url, false); });
+      return;
+    }
+  } catch (e) {}
+  loySay(url, false);
+}
+function loySubscribe(slug) {
+  if (LOY.busy) return;
+  var email = LOY.email || ((user && user.email) || '');
+  if (!email) { loySay('Your account email has not been read yet — reload the page and try again.', true); return; }
+  LOY.busy = true;
+  loySay('Starting checkout\u2026', false);
+  fetch(window.location.origin + '/api/v1/loyalty/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({
+      plan_slug: slug, email: email,
+      success_url: window.location.origin + '/dashboard/',
+      cancel_url: window.location.origin + '/dashboard/'
+    })
+  }).then(function (r) {
+    return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: r.ok, j: {} }; });
+  }).then(function (x) {
+    LOY.busy = false;
+    if (x.ok && x.j && x.j.checkout_url) { window.location.href = x.j.checkout_url; return; }
+    // The server's own sentence (a missing payment provider, a plan that is gone) - never invented.
+    loySay((x.j && (x.j.error || x.j.message)) || 'Checkout could not be started.', true);
+  }).catch(function (e) { LOY.busy = false; loySay('Checkout could not be started: ' + e.message, true); });
+}
+function loyRender() {
+  var st = document.getElementById('loy-status');
+  if (st) {
+    if (!LOY.status && LOY.err) { st.textContent = 'Could not load your loyalty plan right now.'; }
+    else if (!LOY.status) { st.textContent = 'Loading your loyalty plan\u2026'; }
+    else {
+      var s = LOY.status;
+      if (s.enrolled && s.plan) {
+        var total = Number(s.zc_pool_total || 0), left = Number(s.zc_pool_remaining || 0);
+        st.innerHTML = '<div style="font-weight:600;color:#0f172a">' + esc(s.plan) + ' plan \u2014 ' + esc(s.status || 'active') + '</div>'
+          + '<div style="margin-top:4px">' + esc(dashNum(left)) + ' of ' + esc(dashNum(total)) + ' points credits left this month'
+          + (s.pool_reset_date ? (', resets ' + esc(s.pool_reset_date)) : '') + '.</div>';
+      } else {
+        st.innerHTML = '<div style="font-weight:600;color:#0f172a">No loyalty plan is active on this workspace</div>'
+          + '<div style="margin-top:4px">Pick one below and you get a monthly points credit pool to spend on customers\u2019 check-ins.</div>';
+      }
+    }
+  }
+  var pr = document.getElementById('loy-programs');
+  if (pr) {
+    var list = LOY.programs;
+    if (list === null) {
+      pr.innerHTML = LOY.err ? '' : '<div style="color:#64748b;font-size:14px">Loading your programmes\u2026</div>';
+    } else {
+      var items = (list && list.programs) ? list.programs : (Array.isArray(list) ? list : []);
+      var h = '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:8px">Your programmes</div>';
+      if (!items.length) {
+        h += '<div style="color:#64748b;font-size:14px">No programme yet. Create one in the admin console \u2014 <a href="/admin/" style="color:#2563eb">open it here</a> \u2014 and it appears in this card with its check-in link.</div>';
+      } else {
+        for (var i = 0; i < items.length; i++) {
+          var p = items[i];
+          var url = loyCheckinUrl(p.slug || '');
+          h += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px">'
+            + '<div style="font-weight:600;color:#0f172a">' + esc(p.name || 'Programme') + (p.is_active === false ? ' <span class="badge" style="background:#fee2e2;color:#991b1b">paused</span>' : '') + '</div>'
+            + '<div style="color:#64748b;font-size:13px;margin-top:3px">' + esc(dashNum(p.points_per_checkin)) + ' ' + esc(p.currency_name || 'points') + ' per check-in'
+            + (p.max_checkins_per_day ? (' \u00b7 up to ' + esc(dashNum(p.max_checkins_per_day)) + ' a day') : '') + '</div>'
+            + '<div style="margin-top:6px;font-size:12px;color:#475569;word-break:break-all">' + esc(url) + '</div>'
+            + '<div style="margin-top:6px"><button class="btn btn-sm" onclick="loyCopy(\'' + esc(p.slug || '') + '\')">Copy check-in link</button></div>'
+            + '</div>';
+        }
+      }
+      pr.innerHTML = h;
+    }
+  }
+  var pl = document.getElementById('loy-plans');
+  if (pl) {
+    var plans = (LOY.plans && LOY.plans.plans) ? LOY.plans.plans : (Array.isArray(LOY.plans) ? LOY.plans : null);
+    if (plans === null) { if (!LOY.err) pl.innerHTML = ''; }
+    else if (!plans.length) { pl.innerHTML = ''; }
+    else {
+      var h2 = '<div style="font-size:13px;font-weight:600;color:#334155;margin:14px 0 8px">Loyalty plans</div>';
+      for (var j = 0; j < plans.length; j++) {
+        var q = plans[j];
+        h2 += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">'
+          + '<div><div style="font-weight:600;color:#0f172a">' + esc(q.name || q.slug) + '</div>'
+          + '<div style="color:#64748b;font-size:13px">' + esc(loyMoney(q.monthly_price)) + ' a month \u00b7 ' + esc(dashNum(q.monthly_zc_pool || 0)) + ' points credits a month</div></div>'
+          + '<button class="btn btn-sm" onclick="loySubscribe(\'' + esc(q.slug || '') + '\')">Choose ' + esc(q.name || q.slug) + '</button>'
+          + '</div>';
+      }
+      pl.innerHTML = h2;
+    }
+  }
 }
 function loadUsage() {
   fetch(window.location.origin + '/api/v1/me/usage', {
