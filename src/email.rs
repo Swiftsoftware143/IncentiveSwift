@@ -750,6 +750,49 @@ mod tests {
     use super::*;
     use crate::branding::app_default_branding;
 
+    /// The answer to a CONTACT-PAGE visitor names a door they can actually open (2026-11-07).
+    ///
+    /// The visitor who files from `/contact.html` has no account, so the reply must not send them to
+    /// a dashboard. It has to carry the two things that DO work: the page, and the reference they
+    /// were handed at filing time (which is only usable together with the address they wrote from).
+    /// This renders the real arm — the same function the live send runs — instead of asserting on
+    /// source text, so a regression in the wording is a red test.
+    #[tokio::test]
+    async fn the_contact_page_answer_names_the_page_and_the_reference() {
+        let vars = json!({
+            "name": "there",
+            "request": "Locked out of my account",
+            "status_word": "answered",
+            "reply": "Use the reset link on the sign-in page.",
+            "reference": "5443e97b-ac60-4332-821c-2f69585b56d2",
+            "app_name": APP_NAME,
+            "app_url": APP_URL,
+            "login_url": APP_URL,
+        });
+        let (subject, body, _html) = send_inline(
+            "probe@example.invalid",
+            "public_support_reply",
+            &vars,
+            APP_NAME,
+            APP_URL,
+        )
+        .await
+        .expect("the contact-page answer renders");
+        assert_eq!(subject, format!("About your message — {APP_NAME}"));
+        assert!(body.contains("/contact.html"), "{body}");
+        assert!(
+            body.contains("5443e97b-ac60-4332-821c-2f69585b56d2"),
+            "{body}"
+        );
+        assert!(
+            body.contains("Use the reset link on the sign-in page."),
+            "{body}"
+        );
+        // The defect this arm replaces: a dashboard sentence sent to someone with no account.
+        assert!(!body.to_lowercase().contains("dashboard"), "{body}");
+        assert!(!body.contains("/dashboard/"), "{body}");
+    }
+
     /// An account that has configured NOTHING still sends mail that says whose it is (2026-10-24).
     ///
     /// Before this the header block appeared only once an account had uploaded a logo of its own,
