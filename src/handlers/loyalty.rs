@@ -1665,3 +1665,179 @@ pub async fn public_program(
 
     Ok(Json(payload))
 }
+
+// ── THE OWNER'S STATUS LADDER — the missing writer (2026-11-08) ───────────────────────────────────
+// `loyalty_tiers` is what `mechanics::loyalty_checkin::resolve_tier` reads to decide which tier a
+// member holds and what multiplier their award earns, and it is what the public check-in page now
+// prints as the ladder. Until this block, NOTHING in the product could write those rows: the
+// console's "Tiers" switch turned the multiplier on and the tier editor at `/loyalty/tiers` writes a
+// DIFFERENT table (`loyalty_reward_tiers` — the rewards unlocked at N points). So every programme an
+// owner created carried `tiers_enabled = true` with an EMPTY ladder: the switch did nothing, and the
+// member page had nothing to show. Measured live 2026-11-08 on a fresh programme (0 rows).
+//
+// Replace-the-whole-ladder is the surface an editor needs: one PUT, one transaction, no orphan rows
+// from a half-applied edit. Ownership is judged on the PROGRAMME with the same three arms every other
+// loyalty read uses (own column, reverse campaign pointer, forward campaign pointer); a foreign id
+// and an absent id both answer 404, so no caller can enumerate another tenant's programmes.
+const MAX_STATUS_TIERS: usize = 8;
+const DEFAULT_STATUS_TIER_COLOR: &str = "#94a3b8";
+
+#[derive(Clone, Deserialize)]
+pub struct StatusTierInput {
+    pub name: String,
+    pub min_points: i64,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub multiplier: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub struct StatusTiersBody {
+    pub tiers: Vec<StatusTierInput>,
+}
+
+/// A colour reaches the member's page as a CSS value, so only a hex literal is accepted; anything
+/// else falls back to the neutral grey rather than injecting an arbitrary style.
+fn status_tier_color(raw: Option<&str>) -> String {
+    let c = raw.unwrap_or("").trim();
+    // #RGB or #RRGGBB only. The column is varchar(7), so accepting an 8-digit value here would
+    // pass validation and then fail the INSERT — a 500 for input the caller was told was fine.
+    let hex = (c.len() == 4 || c.len() == 7)
+        && c.starts_with('#')
+        && c[1..].chars().all(|ch| ch.is_ascii_hexdigit());
+    if hex {
+        c.to_string()
+    } else {
+        DEFAULT_STATUS_TIER_COLOR.to_string()
+    }
+}
+
+/// GET /api/v1/loyalty/programs/:id/status-tiers — the ladder exactly as the member page sees it.
+pub async fn list_status_tiers(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    if program_for_caller(&state.db, program_id, account_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Loyalty program not found".to_string()));
+    }
+
+    let rows: Vec<(String, String, i64, String, f64)> = sqlx::query_as(
+        "SELECT id::text, name, min_points, color, multiplier::float8 \
+           FROM loyalty_tiers WHERE loyalty_program_id = $1 ORDER BY min_points, name",
+    )
+    .bind(program_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let tiers = rows
+        .into_iter()
+        .map(|(tier_id, name, min_points, color, multiplier)| {
+            json!({
+                "id": tier_id,
+                "name": name,
+                "min_points": min_points,
+                "color": color,
+                "multiplier": multiplier,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(json!({ "tiers": tiers })))
+}
+
+/// PUT /api/v1/loyalty/programs/:id/status-tiers — replace the whole ladder atomically.
+pub async fn put_status_tiers(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: AuthenticatedUser,
+    Json(body): Json<StatusTiersBody>,
+) -> Result<Json<Value>, AppError> {
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    // Validate everything BEFORE the first write, so a refusal never leaves a half-saved ladder.
+    if body.tiers.len() > MAX_STATUS_TIERS {
+        return Err(AppError::UnprocessableEntity(format!(
+            "A ladder can hold at most {MAX_STATUS_TIERS} tiers"
+        )));
+    }
+    let mut thresholds = std::collections::HashSet::new();
+    for tier in &body.tiers {
+        let name = tier.name.trim();
+        if name.is_empty() {
+            return Err(AppError::UnprocessableEntity(
+                "Every tier needs a name".to_string(),
+            ));
+        }
+        if name.chars().count() > 40 {
+            return Err(AppError::UnprocessableEntity(
+                "Tier names are limited to 40 characters".to_string(),
+            ));
+        }
+        if tier.min_points < 0 {
+            return Err(AppError::UnprocessableEntity(
+                "A tier's threshold cannot be negative".to_string(),
+            ));
+        }
+        if !thresholds.insert(tier.min_points) {
+            return Err(AppError::UnprocessableEntity(
+                "Two tiers cannot share the same threshold".to_string(),
+            ));
+        }
+        let m = tier.multiplier.unwrap_or(1.0);
+        if !(m.is_finite() && (1.0..=10.0).contains(&m)) {
+            return Err(AppError::UnprocessableEntity(
+                "A tier multiplier must be between 1.0 and 10.0".to_string(),
+            ));
+        }
+    }
+
+    if program_for_caller(&state.db, program_id, account_id)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::NotFound("Loyalty program not found".to_string()));
+    }
+
+    let mut ordered = body.tiers.clone();
+    ordered.sort_by_key(|t| t.min_points);
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM loyalty_tiers WHERE loyalty_program_id = $1")
+        .bind(program_id)
+        .execute(&mut *tx)
+        .await?;
+    for tier in &ordered {
+        sqlx::query(
+            "INSERT INTO loyalty_tiers \
+                (id, loyalty_program_id, name, min_points, color, perks, multiplier) \
+             VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6::numeric)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(program_id)
+        .bind(tier.name.trim())
+        .bind(tier.min_points)
+        .bind(status_tier_color(tier.color.as_deref()))
+        .bind(tier.multiplier.unwrap_or(1.0))
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    Ok(Json(json!({
+        "status": "saved",
+        "program_id": id,
+        "tier_count": ordered.len(),
+    })))
+}

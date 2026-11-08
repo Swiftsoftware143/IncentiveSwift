@@ -654,6 +654,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/programs/:id",
             put(handlers::loyalty::update_program).delete(handlers::loyalty::delete_program),
         )
+        // The owner's STATUS ladder — name + threshold + colour + multiplier per rung. Read by the
+        // check-in path and printed on the public check-in page; before this route NOTHING in the
+        // product could write those rows (the reward-tier editor next door writes a different
+        // table), so a programme with tiers switched on carried an empty ladder.
+        .route(
+            "/api/v1/loyalty/programs/:id/status-tiers",
+            get(handlers::loyalty::list_status_tiers).put(handlers::loyalty::put_status_tiers),
+        )
         .route(
             "/api/v1/loyalty/rewards/:id/approve",
             post(handlers::loyalty::approve_reward),
