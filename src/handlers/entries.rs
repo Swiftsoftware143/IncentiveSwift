@@ -565,24 +565,25 @@ pub(crate) async fn dispatch_integrations(
                     // (provider_keys + delivery_config.coreswift.list_id + field mapping).
                 }
                 "mailchimp" => {
-                    let _api_key = int_config
+                    let api_key = int_config
                         .get("api_key")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let _server_prefix = int_config
-                        .get("server_prefix")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("us1");
+                    let server_prefix = int_config.get("server_prefix").and_then(|v| v.as_str());
                     let list_id = int_config
                         .get("list_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    // TODO: add Mailchimp direct push module
-                    tracing::info!(
-                        "Mailchimp integration configured for {} — pushing to list {}",
-                        payload.contact.email.as_deref().unwrap_or("unknown"),
-                        list_id
-                    );
+                    crate::delivery::direct_api::mailchimp::push_to_mailchimp(
+                        client,
+                        db,
+                        entry_id,
+                        api_key,
+                        server_prefix,
+                        list_id,
+                        payload,
+                    )
+                    .await?;
                 }
                 "webhook" => {
                     let url = int_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
@@ -664,6 +665,25 @@ pub(crate) async fn dispatch_integrations(
                 "gohighlevel" => {
                     crate::delivery::direct_api::gohighlevel::push_to_gohighlevel(
                         client, api_key, payload,
+                    )
+                    .await?;
+                }
+                "mailchimp" => {
+                    let server_prefix = delivery_config
+                        .get("server_prefix")
+                        .and_then(|v| v.as_str());
+                    let list_id = delivery_config
+                        .get("list_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    crate::delivery::direct_api::mailchimp::push_to_mailchimp(
+                        client,
+                        db,
+                        entry_id,
+                        api_key,
+                        server_prefix,
+                        list_id,
+                        payload,
                     )
                     .await?;
                 }

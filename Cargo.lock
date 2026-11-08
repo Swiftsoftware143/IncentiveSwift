@@ -1047,6 +1047,7 @@ dependencies = [
  "http-body",
  "jsonwebtoken",
  "lettre",
+ "md-5",
  "qrcode",
  "rand 0.8.7",
  "regex-lite",

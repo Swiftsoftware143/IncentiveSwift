@@ -34,6 +34,10 @@ dotenvy = "0.15"
 thiserror = "1"
 hmac = "0.12"
 sha2 = "0.10"
+# Mailchimp addresses a list member by the MD5 of its lower-cased address
+# (`PUT /3.0/lists/{id}/members/{subscriber_hash}`). The crate is already in the box's
+# cargo registry cache at this version (it arrives transitively via the digest family).
+md-5 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 anyhow = "1"
