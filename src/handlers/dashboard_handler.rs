@@ -75,12 +75,92 @@ pub async fn dashboard_stats(
     .await
     .unwrap_or(0);
 
+    // ── OPERATOR REVENUE VIEW (cron 2026-11-08) ────────────────────────────────────────────────
+    // Until now the operator's dashboard could not answer "what are these workspaces on, and what
+    // is that worth?" — it carried the five loyalty counters and nothing about plans. The plan
+    // catalogue and the per-workspace tier were both live (`plan_tiers`, `accounts.plan_tier_id`)
+    // and the console could ASSIGN a plan, so the numbers existed and no screen showed them.
+    //
+    // AGGREGATES ONLY, on purpose. This route is reachable by every signed-in workspace, and the
+    // fleet's tenancy rule is that no tenant may read another's data — but the operator does need
+    // the revenue picture. So the payload carries COUNTS and MONEY, never a workspace name, an
+    // email or an id: the operator sees the shape of the book without this route becoming a
+    // cross-tenant directory (`/admin/checkout-requests` is the separate, admin-guarded reader
+    // for the individual purchase attempts). A non-operator gets an empty list and zeros, so the
+    // console renders no card at all rather than a misleading one.
+    //
+    // The values are LIST PRICE — no money has necessarily been collected, which is why the
+    // refused-purchase counts sit beside them. `price_monthly`/`price_annual` come from
+    // `plan_tiers`; a workspace with no tier row is on the app's base plan, which is `Free` at 0
+    // (the same fallback `features.rs` uses when `plan_tier_id IS NULL`), so those accounts are
+    // coalesced into the Free bucket instead of inventing a "$0 unnamed" tier.
+    let is_operator = user.role == "admin" || user.role == "super_admin";
+    let mut plan_mix: Vec<Value> = Vec::new();
+    let mut workspaces_total: i64 = 0;
+    let mut plan_value_monthly: f64 = 0.0;
+    let mut plan_value_yearly: f64 = 0.0;
+    let mut checkouts_refused: i64 = 0;
+    let mut checkouts_paid: i64 = 0;
+    if is_operator {
+        let rows: Vec<(String, String, f64, f64, i64)> = sqlx::query_as(
+            "SELECT COALESCE(pt.name, 'Free') AS plan_name, \
+                    COALESCE(pt.slug, 'free') AS plan_slug, \
+                    COALESCE(pt.price_monthly, 0)::float8 AS price_monthly, \
+                    COALESCE(pt.price_annual, 0)::float8 AS price_annual, \
+                    COUNT(*)::bigint AS accounts \
+               FROM accounts a \
+               LEFT JOIN plan_tiers pt ON pt.id = a.plan_tier_id \
+              WHERE COALESCE(a.probe_harness, '') = '' \
+              GROUP BY 1, 2, 3, 4 \
+              ORDER BY 3 DESC, 1",
+        )
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        for (plan_name, plan_slug, price_monthly, price_annual, accounts) in rows {
+            workspaces_total += accounts;
+            plan_value_monthly += price_monthly * accounts as f64;
+            plan_value_yearly += price_annual * accounts as f64;
+            plan_mix.push(json!({
+                "plan_name": plan_name,
+                "plan_slug": plan_slug,
+                "price_monthly": price_monthly,
+                "price_annual": price_annual,
+                "accounts": accounts,
+            }));
+        }
+        // The status vocabulary is `billing::checkout`'s own: `provider_missing` is a buyer the
+        // installation could not charge, `failed`/`cancelled` are attempts that died, and
+        // `operator_activated` means the operator already honoured the request — so it is NOT
+        // counted as refused, or the number would never fall as the operator works through it.
+        checkouts_refused = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM checkout_sessions \
+              WHERE status IN ('provider_missing', 'failed', 'cancelled')",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+        checkouts_paid = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM checkout_sessions WHERE status = 'completed'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    }
+
     Ok(Json(json!({
         "total_campaigns": total_campaigns,
         "total_rewards": total_rewards,
         "total_participants": total_participants,
         "total_points": total_points,
         "total_entries": total_entries,
+        "operator": is_operator,
+        "workspaces_total": workspaces_total,
+        "plan_mix": plan_mix,
+        "plan_value_monthly": plan_value_monthly,
+        "plan_value_yearly": plan_value_yearly,
+        "checkouts_refused": checkouts_refused,
+        "checkouts_paid": checkouts_paid,
     })))
 }
 

@@ -424,6 +424,19 @@ const Dashboard = () => {
           ? html`<p class="text-sm text-gray-700">✅ <strong>Upgrades work on ${st.money.linked} paid plan${st.money.linked === 1 ? '' : 's'}.</strong> ${st.money.linkedNames.join(', ')} carr${st.money.linked === 1 ? 'ies' : 'y'} a payment link, so pressing Upgrade there opens that page and you switch the plan on once you confirm the payment. ${Math.max(0, st.money.paid - st.money.linked) === 0 ? 'Every paid plan can be bought.' : 'The other ' + Math.max(0, st.money.paid - st.money.linked) + ' paid plan' + (Math.max(0, st.money.paid - st.money.linked) === 1 ? '' : 's') + ' can only ask the team.'}</p>`
           : html`<p class="text-sm text-gray-700">⚠️ <strong>This installation cannot take money yet.</strong> No payment provider is connected and none of the ${st.money.paid} paid plan${st.money.paid === 1 ? '' : 's'} carries a payment link, so every press on Upgrade can only ask the team. Press <strong>Provider Keys</strong> to connect Stripe, or paste a payment link on a paid plan in <strong>Plans</strong>.</p>`)}
     </div>`}
+    ${Array.isArray(st.plan_mix) && st.plan_mix.length > 0 && html`<div class="card mb-4" data-console="revenue-at-list">
+      <h3 class="text-base font-bold text-gray-800">Revenue at list price</h3>
+      <p class="text-xs text-gray-500 mb-3">What the ${Number(st.workspaces_total) || 0} workspace${(Number(st.workspaces_total) || 0) === 1 ? ' is' : 's are'} held to, priced at each plan\u2019s own rate. This is list price, not money collected \u2014 a purchase only counts once its payment completed.</p>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <div class="stat-card"><div class="stat-value" data-revenue="workspaces">${Number(st.workspaces_total) || 0}</div><div class="stat-label">Workspaces</div></div>
+        <div class="stat-card"><div class="stat-value" data-revenue="monthly">${'$' + (Number(st.plan_value_monthly) || 0).toFixed(2)}</div><div class="stat-label">Plan Value / mo</div></div>
+        <div class="stat-card"><div class="stat-value" data-revenue="yearly">${'$' + (Number(st.plan_value_yearly) || 0).toFixed(2)}</div><div class="stat-label">Plan Value / yr</div></div>
+      </div>
+      <div class="flex flex-wrap gap-2 mt-3">${st.plan_mix.map(m => html`<span class="text-xs px-2 py-1 rounded" style="background:#f3f4f6" data-plan-bucket=${m.plan_slug}>${m.plan_name} \u00b7 ${Number(m.accounts) || 0}</span>`)}</div>
+      ${Number(st.checkouts_refused) > 0
+        ? html`<p class="text-sm mt-3" style="color:#b45309" data-revenue="refused">\u26a0\ufe0f ${Number(st.checkouts_refused)} purchase${Number(st.checkouts_refused) === 1 ? '' : 's'} could not be taken \u2014 the buyer pressed Upgrade and no payment provider was there to charge. They are listed in <strong>Accounts</strong>, where you can switch the plan on by hand.</p>`
+        : html`<p class="text-sm mt-3" style="color:#047857" data-revenue="refused">\u2705 No refused purchases \u2014 nobody has pressed Upgrade and been turned away.</p>`}
+    </div>`}
     ${empty && html`<div class="card mb-4" data-console="get-set-up">
       <div class="flex items-start gap-3">
         <div class="text-2xl">🚀</div>
