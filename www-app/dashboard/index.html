@@ -272,7 +272,8 @@ var PB = { plans: null, plan: null, busy: false, term: 'month', till: null };
 var USAGE = { data: null, err: false };
 // Loyalty card state — declared above the boot block for the same reason as USAGE/PB:
 // the boot block calls loyLoad(), and paintAccount() fills LOY.email.
-var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false };
+var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false,
+            editing: null, saving: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
@@ -833,8 +834,188 @@ function loySubscribe(slug) {
     LOY.busy = false;
     if (x.ok && x.j && x.j.checkout_url) { window.location.href = x.j.checkout_url; return; }
     // The server's own sentence (a missing payment provider, a plan that is gone) - never invented.
-    loySay((x.j && (x.j.error || x.j.message)) || 'Checkout could not be started.', true);
-  }).catch(function (e) { LOY.busy = false; loySay('Checkout could not be started: ' + e.message, true); });
+    // It is ALSO the point where the buying path used to end: no charge was made, nothing was
+    // recorded, and the customer was told to go and contact support somewhere else. The request
+    // button below turns that into a recorded ask the operator can act on.
+    loyAskPlan(slug, (x.j && (x.j.error || x.j.message)) || 'Checkout could not be started.');
+  }).catch(function (e) { LOY.busy = false; loyAskPlan(slug, 'Checkout could not be started: ' + e.message); });
+}
+
+// ---- A refused loyalty checkout becomes a recorded request ------------------------------------
+// Card payment is not switched on for every installation (no payment provider is stored), and on
+// those, "Choose <plan>" could only ever answer with a sentence telling the customer to contact
+// support — so the interest was recorded NOWHERE and the operator never learned a workspace wanted
+// to buy. That is the same dead end the workspace-plan Upgrade button already solved by filing a
+// support ticket; this gives the loyalty catalogue the same path.
+//
+// The plan CATALOGUE is different: loyalty tiers live in `loyalty_plans`, while the ticket
+// handler validates `plan_slug` against the workspace `plans` table and refuses an unknown slug.
+// So the loyalty tier is named in the subject and the description instead of travelling as
+// `plan_slug`, and the ORIGIN is tagged `loyalty_plan_request` so the operator can tell a loyalty
+// purchase from a workspace upgrade in the queue. Nothing here switches a plan on by itself.
+function loyPlanList() {
+  return (LOY.plans && LOY.plans.plans) ? LOY.plans.plans : (Array.isArray(LOY.plans) ? LOY.plans : []);
+}
+function loyPlanName(slug) {
+  var list = loyPlanList();
+  for (var i = 0; i < list.length; i++) { if ((list[i].slug || '') === slug) return list[i].name || slug; }
+  return slug;
+}
+function loyPlanPrice(slug) {
+  var list = loyPlanList();
+  for (var i = 0; i < list.length; i++) { if ((list[i].slug || '') === slug) return Number(list[i].monthly_price || 0); }
+  return 0;
+}
+function loyAskPlan(slug, why) {
+  var el = document.getElementById('loy-msg');
+  if (!el) return;
+  var name = loyPlanName(slug);
+  el.innerHTML = '<span style="color:#b91c1c">' + esc(why || 'Checkout could not be started.') + '</span>'
+    + '<div style="margin-top:8px"><button class="btn btn-sm" id="loy-ask-btn">Request the ' + esc(name) + ' plan</button></div>';
+  var b = document.getElementById('loy-ask-btn');
+  if (b) b.addEventListener('click', function () { loyFileRequest(slug, b); });
+}
+function loyFileRequest(slug, btn) {
+  if (LOY.busy) return;
+  LOY.busy = true;
+  var name = loyPlanName(slug), price = loyPlanPrice(slug);
+  var label = 'Request the ' + name + ' plan';
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending\u2026'; }
+  fetch(window.location.origin + '/api/v1/support-tickets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({
+      subject: 'Loyalty plan request: ' + name,
+      description: 'This workspace asked for the ' + name + ' loyalty plan (' + loyMoney(price)
+        + ' a month) from the dashboard. Card payment is not switched on for this installation, '
+        + 'so the team has to switch this plan on for this workspace by hand. No charge was made.',
+      priority: 'normal',
+      category: 'billing',
+      source: 'loyalty_plan_request'
+    })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      LOY.busy = false;
+      if (r.ok) {
+        loySay('Request sent \u2014 our team will switch the ' + name
+          + ' plan on for this workspace and let you know when it is live.', false);
+        return;
+      }
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+      var why = (d && (d.message || d.error)) ? ': ' + (d.message || d.error) : ' (error ' + r.status + ')';
+      loySay('The request could not be sent' + why + '. Please try again.', true);
+    });
+  }).catch(function (e) {
+    LOY.busy = false;
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    loySay((e && e.message) || 'The request could not be sent.', true);
+  });
+}
+
+// ---- Programme settings — the owner configures their OWN programme ----------------------------
+// PUT /api/v1/loyalty/programs/{id} has always existed and is ownership-gated (src/handlers/
+// loyalty.rs::update_program resolves the row through the caller's account, so a foreign id
+// answers the same 404 an absent one does). Until now NO customer surface called it: the earning
+// rules the owner actually cares about — points per check-in, per recorded visit, per share, when
+// a balance expires, what the points are CALLED, and the tiers/milestones/streak switches — could
+// only be changed from the operator's admin console, while this card merely displayed them. The
+// panel below writes them and then re-reads the server's own row, so what the card shows after a
+// save is what the database holds, not what the form hoped.
+function loyEdit(id) { LOY.editing = (LOY.editing === id) ? null : id; loyRender(); }
+function loyNumField(label, id, v, hint) {
+  return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">' + esc(label)
+    + '<input type="number" min="0" step="1" id="' + id + '" value="' + esc(String(v == null ? 0 : v)) + '"'
+    + ' style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">'
+    + (hint ? '<span style="display:block;color:#94a3b8;margin-top:2px">' + esc(hint) + '</span>' : '') + '</label>';
+}
+function loyCheck(label, id, on) {
+  return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">'
+    + '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + ' style="margin-right:6px">' + esc(label) + '</label>';
+}
+function loyPanel(p) {
+  var sid = esc(String(p.id));
+  return '<div style="margin-top:10px;padding:10px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc">'
+    + '<div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:8px">Programme settings</div>'
+    + '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">Programme name'
+    + '<input type="text" id="loy-p-name" value="' + esc(p.name || '') + '" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px">'
+    + loyNumField('Points per check-in', 'loy-p-ppc', p.points_per_checkin)
+    + loyNumField('Most check-ins a day', 'loy-p-max', p.max_checkins_per_day, '0 means no daily cap')
+    + loyNumField('Points for a recorded visit', 'loy-p-ppv', p.points_per_visit)
+    + loyNumField('Points for a social share', 'loy-p-ssp', p.social_share_points)
+    + loyNumField('Points expire after (days)', 'loy-p-exp', p.points_expire_days, '0 means they never expire')
+    + '</div>'
+    + '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">What you call the points'
+    + '<input type="text" id="loy-p-cur" value="' + esc(p.currency_name || 'points') + '" style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px">'
+    + loyNumField('Streak bonus', 'loy-p-sb', p.streak_bonus)
+    + loyNumField('Streak length (days)', 'loy-p-sd', p.streak_days)
+    + loyNumField('Referral bonus', 'loy-p-rb', p.referral_bonus)
+    + loyNumField('Birthday bonus', 'loy-p-bb', p.birthday_bonus)
+    + '</div>'
+    + loyCheck('Streaks on', 'loy-p-streak', p.streak_enabled)
+    + loyCheck('Status tiers on', 'loy-p-tiers', p.tiers_enabled)
+    + loyCheck('Milestones on', 'loy-p-mile', p.milestones_enabled)
+    + loyCheck('Programme running (un-tick to pause)', 'loy-p-active', p.is_active !== false)
+    + '<div style="margin-top:8px"><button class="btn btn-sm" onclick="loySaveProgramme(\'' + sid + '\')">Save programme</button>'
+    + ' <button class="btn btn-sm" onclick="loyEdit(\'' + sid + '\')">Cancel</button></div>'
+    + '</div>';
+}
+function loyReadNum(id) {
+  var el = document.getElementById(id);
+  var v = el ? parseInt(el.value, 10) : 0;
+  return (isFinite(v) && v >= 0) ? v : 0;
+}
+function loyReadBool(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+function loySayServer(x, fallback) {
+  var j = x && x.j;
+  if (j && typeof j.message === 'string' && j.message) return j.message;
+  if (j && typeof j.error === 'string' && j.error) return j.error;
+  return fallback;
+}
+function loySaveProgramme(id) {
+  if (LOY.saving) return;
+  var nm = document.getElementById('loy-p-name');
+  var name = nm ? String(nm.value || '').trim() : '';
+  if (!name) { loySay('A programme needs a name — put one in the name box.', true); return; }
+  var cur = document.getElementById('loy-p-cur');
+  var body = {
+    name: name,
+    points_per_checkin: loyReadNum('loy-p-ppc'),
+    max_checkins_per_day: loyReadNum('loy-p-max'),
+    points_per_visit: loyReadNum('loy-p-ppv'),
+    social_share_points: loyReadNum('loy-p-ssp'),
+    points_expire_days: loyReadNum('loy-p-exp'),
+    streak_bonus: loyReadNum('loy-p-sb'),
+    streak_days: loyReadNum('loy-p-sd'),
+    referral_bonus: loyReadNum('loy-p-rb'),
+    birthday_bonus: loyReadNum('loy-p-bb'),
+    tiers_enabled: loyReadBool('loy-p-tiers'),
+    milestones_enabled: loyReadBool('loy-p-mile'),
+    streak_enabled: loyReadBool('loy-p-streak'),
+    is_active: loyReadBool('loy-p-active'),
+    currency_name: cur ? String(cur.value || '').trim() : 'points'
+  };
+  LOY.saving = true;
+  loySay('Saving\u2026', false);
+  fetch(window.location.origin + '/api/v1/loyalty/programs/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: r.ok, j: {} }; });
+  }).then(function (x) {
+    LOY.saving = false;
+    if (!x.ok) { loySay(loySayServer(x, 'The server refused that change.'), true); return; }
+    LOY.editing = null;
+    loySay('Saved — the programme runs with these numbers from the next check-in.', false);
+    fetch(window.location.origin + '/api/v1/loyalty/programs',
+          { headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { LOY.programs = d; loyRender(); })
+      .catch(function () { loyRender(); });
+  }).catch(function (e) { LOY.saving = false; loySay('Could not save: ' + e.message, true); });
 }
 function loyRender() {
   var st = document.getElementById('loy-status');
@@ -873,7 +1054,9 @@ function loyRender() {
             + '<div style="color:#64748b;font-size:13px;margin-top:3px">' + esc(dashNum(p.points_per_checkin)) + ' ' + esc(p.currency_name || 'points') + ' per check-in'
             + (p.max_checkins_per_day ? (' \u00b7 up to ' + esc(dashNum(p.max_checkins_per_day)) + ' a day') : '') + '</div>'
             + '<div style="margin-top:6px;font-size:12px;color:#475569;word-break:break-all">' + esc(url) + '</div>'
-            + '<div style="margin-top:6px"><button class="btn btn-sm" onclick="loyCopy(\'' + esc(p.slug || '') + '\')">Copy check-in link</button></div>'
+            + '<div style="margin-top:6px"><button class="btn btn-sm" onclick="loyCopy(\'' + esc(p.slug || '') + '\')">Copy check-in link</button>'
+            + ' <button class="btn btn-sm" onclick="loyEdit(\'' + esc(String(p.id)) + '\')">' + (LOY.editing === p.id ? 'Close settings' : 'Edit programme settings') + '</button></div>'
+            + (LOY.editing === p.id ? loyPanel(p) : '')
             + '</div>';
         }
       }
@@ -887,12 +1070,31 @@ function loyRender() {
     else if (!plans.length) { pl.innerHTML = ''; }
     else {
       var h2 = '<div style="font-size:13px;font-weight:600;color:#334155;margin:14px 0 8px">Loyalty plans</div>';
+      // ASK THE TILL BEFORE INVITING A PURCHASE (2026-11-08). This catalogue shipped its own buy
+      // button that never consulted `GET /api/v1/checkout/status`, while the workspace plan ladder
+      // further down this same page already does. Measured live on this installation: three presses
+      // produced three `loyalty/subscribe REFUSED: no active payment provider` lines, so the customer
+      // learned the till is closed only by pressing a button that could not work. When the status
+      // read says the install cannot charge, each plan offers the request path that already exists
+      // (`loyFileRequest`, tagged loyalty_plan_request) instead of a purchase that must fail. A null
+      // `PB.till` (failed probe) keeps the old button: a slow status call must never hide a working
+      // purchase.
+      var tillClosed = !!(PB.till && PB.till.upgrade_path !== 'checkout');
+      if (tillClosed) {
+        h2 += '<div style="color:#b45309;font-size:13px;margin:0 0 8px">Card payment is not switched '
+          + 'on for this installation yet, so a loyalty plan cannot be bought from here and nothing '
+          + 'will be charged. Press a plan to ask our team to switch it on for your workspace.</div>';
+      }
       for (var j = 0; j < plans.length; j++) {
         var q = plans[j];
+        var qslug = esc(q.slug || '');
+        var act = tillClosed
+          ? '<button class="btn btn-sm" data-loy-ask="' + qslug + '" onclick="loyFileRequest(\'' + qslug + '\', this)">Ask for ' + esc(q.name || q.slug) + '</button>'
+          : '<button class="btn btn-sm" data-loy-buy="' + qslug + '" onclick="loySubscribe(\'' + qslug + '\')">Choose ' + esc(q.name || q.slug) + '</button>';
         h2 += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">'
           + '<div><div style="font-weight:600;color:#0f172a">' + esc(q.name || q.slug) + '</div>'
           + '<div style="color:#64748b;font-size:13px">' + esc(loyMoney(q.monthly_price)) + ' a month \u00b7 ' + esc(dashNum(q.monthly_zc_pool || 0)) + ' points credits a month</div></div>'
-          + '<button class="btn btn-sm" onclick="loySubscribe(\'' + esc(q.slug || '') + '\')">Choose ' + esc(q.name || q.slug) + '</button>'
+          + act
           + '</div>';
       }
       pl.innerHTML = h2;
@@ -1348,7 +1550,7 @@ function pbLoad() {
   // so a network blip can never hide the ladder.
   fetch(window.location.origin + '/api/v1/checkout/status', { headers: pbAuth(), cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (s) { PB.till = s || null; if (PB.plans) pbRender(); })
+    .then(function (s) { PB.till = s || null; if (PB.plans) pbRender(); if (typeof loyRender === 'function' && LOY.plans) loyRender(); })
     .catch(function () { PB.till = null; });
   fetch(window.location.origin + '/api/v1/plans', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
