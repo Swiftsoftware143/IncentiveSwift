@@ -53,7 +53,7 @@ pub async fn process_checkin(
     // the metre the dashboard promises; see `spend_credit_pool`.
     if !spend_credit_pool(state, program_id, award.awarded).await? {
         return Ok(CheckinResult::CreditPoolExhausted {
-            message: "This business has used up its monthly points credit, so no points could be                       added right now. Please ask them to top up."
+            message: "This business has used up its monthly points credit, so no points could be added right now. Please ask them to top up."
                 .to_string(),
         });
     }
@@ -751,7 +751,7 @@ pub async fn process_checkin_from_entry(
     // Same metre as the counter check-in: campaign-entry awards spend the same monthly credit.
     if !spend_credit_pool(state, program_id, award.awarded).await? {
         return Ok(CheckinResult::CreditPoolExhausted {
-            message: "This business has used up its monthly points credit, so no points could be                       added right now. Please ask them to top up."
+            message: "This business has used up its monthly points credit, so no points could be added right now. Please ask them to top up."
                 .to_string(),
         });
     }
