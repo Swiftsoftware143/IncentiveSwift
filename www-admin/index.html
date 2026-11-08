@@ -412,6 +412,13 @@ const Dashboard = () => {
   // (bf4c1c83). Painted ONLY from a payload that actually CARRIES the count this account
   // owns (`total_campaigns` present and zero), so a failed or in-flight load can never
   // render it, and it disappears by itself the moment the first campaign exists.
+  // WHAT THIS WORKSPACE IS USING (2026-11-07): the operator's own console showed aggregate
+  // activity (campaigns / participants / entries) but never the three allowance-bearing counts
+  // GET /api/v1/me/usage already answers for this account (leads, tags, entries this month).
+  // Raw getter so a refusal renders no card instead of the shell's error banner.
+  if (!st._useLoaded) { st._useLoaded = true;
+    _get('/me/usage').then(u => { st.usage = (u && typeof u === 'object' && !Array.isArray(u)) ? u : null; renderApp(); }).catch(() => { st.usage = null; renderApp(); });
+  }
   const hasCount = st.total_campaigns !== undefined && st.total_campaigns !== null && isFinite(Number(st.total_campaigns));
   const empty = hasCount && Number(st.total_campaigns) === 0;
   const go = (id) => { S.view = id; setViewHash(id); renderApp(); };
@@ -458,6 +465,17 @@ const Dashboard = () => {
       <div class="stat-card"><div class="stat-value">${st.total_points ?? '...'}</div><div class="stat-label">Points Awarded</div></div>
       <div class="stat-card"><div class="stat-value">${st.total_rewards ?? '...'}</div><div class="stat-label">Rewards</div></div>
     </div>
+    ${st.usage && html`<div class="card mt-4" data-console="plan-usage">
+      <h3 class="text-base font-bold text-gray-800">What this workspace is using</h3>
+      <p class="text-xs text-gray-500 mb-2">Live counts from the server, beside the allowance your plan carries.</p>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="stat-card" data-usage="leads"><div class="stat-value">${st.usage.leads ?? '...'}</div><div class="stat-label">Leads</div></div>
+        <div class="stat-card" data-usage="tags"><div class="stat-value">${st.usage.tags ?? '...'}</div><div class="stat-label">Tags</div></div>
+        <div class="stat-card" data-usage="entries"><div class="stat-value">${st.usage.entries_this_month ?? '...'}</div><div class="stat-label">Entries this month</div></div>
+        <div class="stat-card" data-usage="campaigns"><div class="stat-value">${st.usage.campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
+      </div>
+      <button type="button" class="btn mt-3" data-step="my-plan" onClick=${() => go('my-plan')}>See your plan and its limits</button>
+    </div>`}
     <p class="text-xs text-gray-500 mt-4">Every figure is this account's own activity.</p>
     <div class="card mt-4" data-console="recent-activity">
       <h3 class="text-base font-bold text-gray-800">Recent activity</h3>
