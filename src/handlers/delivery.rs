@@ -8,7 +8,10 @@ use crate::delivery::{
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -137,5 +140,67 @@ pub async fn resend(
     Ok(Json(json!({
         "status": "resent",
         "entry_id": entry_id.to_string(),
+    })))
+}
+
+/// GET /api/v1/campaigns/{slug}/delivery-attempts — what the app actually did for this campaign's
+/// outcomes, newest first.
+///
+/// The guide tells the operator that "the email and webhooks are recorded in the delivery log", and
+/// until this route existed there was no screen (and no read route) behind that sentence: a failing
+/// Mailchimp / HubSpot / webhook push wrote a `delivery_log` row nobody could see, so the only way to
+/// discover a broken integration was to read the server log. The console's Delivery modal now lists
+/// these rows.
+///
+/// SECURITY: scoped exactly like the console's other campaign reads — the campaign is resolved for
+/// the CALLER's account (`get_campaign_by_slug_for_account`), so a foreign or unknown slug is the
+/// same 404 and no `role == "admin"` bypass exists.
+pub async fn list_delivery_attempts(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(slug): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let campaign =
+        crate::db::campaigns::get_campaign_by_slug_for_account(&state.db, &slug, &account_id)
+            .await?;
+
+    let rows = sqlx::query(
+        r#"SELECT dl.method, dl.target, dl.success, dl.response_code,
+                  left(coalesce(dl.response_body, ''), 400) AS response_body,
+                  dl.attempted_at, dl.entry_id
+           FROM delivery_log dl
+           JOIN entries e ON e.id = dl.entry_id
+           WHERE e.campaign_id = $1
+           ORDER BY dl.attempted_at DESC
+           LIMIT 50"#,
+    )
+    .bind(campaign.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    use sqlx::Row;
+    let attempts: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "method": r.try_get::<String, _>("method").unwrap_or_default(),
+                "target": r.try_get::<String, _>("target").unwrap_or_default(),
+                "success": r.try_get::<bool, _>("success").unwrap_or(false),
+                "response_code": r.try_get::<Option<i32>, _>("response_code").ok().flatten(),
+                "response_body": r.try_get::<Option<String>, _>("response_body").ok().flatten(),
+                "attempted_at": r.try_get::<chrono::DateTime<chrono::Utc>, _>("attempted_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                "entry_id": r.try_get::<Uuid, _>("entry_id").map(|u| u.to_string()).unwrap_or_default(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "campaign_id": campaign.id,
+        "campaign_slug": slug,
+        "attempts": attempts,
     })))
 }

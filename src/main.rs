@@ -769,6 +769,13 @@ async fn main() -> anyhow::Result<()> {
         // from the programme NAME, the same derivation the collision card t_25e9f950 covers; the
         // served landing page (/loyalty-checkin/<slug>) is unchanged.
         .route("/api/v1/delivery/resend", post(handlers::delivery::resend))
+        // What actually happened for this campaign's outcomes (every delivery_log row, newest first).
+        // The console's Delivery modal reads it, so a failed CRM/webhook push is visible to the
+        // operator instead of existing only in the server log.
+        .route(
+            "/api/v1/campaigns/:slug/delivery-attempts",
+            get(handlers::delivery::list_delivery_attempts),
+        )
         // Leads list
         .route(
             "/api/v1/leads",

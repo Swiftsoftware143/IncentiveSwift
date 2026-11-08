@@ -1110,13 +1110,23 @@ const Campaigns = () => {
   const openDelivery = async (item) => {
     st.deliveryItem = item;
     st.deliveryLegs = isdDeliveryDraftFromCampaign(item.delivery_config);
-    st.deliveryErr = ''; st.deliverySaved = ''; st.deliveryTargets = null;
+    st.deliveryErr = ''; st.deliverySaved = ''; st.deliveryTargets = null; st.deliveryAttempts = null;
     renderApp();
     st.deliveryTargets = await loadDeliveryTargets(item.account_id);
     renderApp();
+    st.deliveryAttempts = await loadDeliveryAttempts(item.slug || item.id);
+    renderApp();
+  };
+  // The delivery log is what the app ACTUALLY did with this campaign's outcomes. `null` means the
+  // read failed, so the panel can say so instead of claiming "nothing has happened yet".
+  const loadDeliveryAttempts = async (slug) => {
+    try {
+      const d = await API.get('/campaigns/' + slug + '/delivery-attempts');
+      return (d && Array.isArray(d.attempts)) ? d.attempts : [];
+    } catch (e) { return null; }
   };
   const closeDelivery = () => {
-    st.deliveryItem = null; st.deliveryLegs = null; st.deliveryTargets = null;
+    st.deliveryItem = null; st.deliveryLegs = null; st.deliveryTargets = null; st.deliveryAttempts = null;
     st.deliveryErr = ''; st.deliverySaved = ''; renderApp();
   };
   const toggleDeliveryTarget = (leg, id, on) => {
@@ -1564,6 +1574,19 @@ const Campaigns = () => {
           ${deliveryLegBlock('on_win', 'On win')}
           ${deliveryLegBlock('on_lose', 'On lose')}
           <div class="text-xs text-gray-400">Webhook targets come from the Integration Center. The redirect is returned to the player after the outcome; the email and webhooks are recorded in the delivery log.</div>
+        </div>`}
+        ${st.deliveryAttempts && html`<div class="mt-4" id="deliveryAttempts">
+          <div class="font-semibold text-sm mb-1">What actually happened</div>
+          ${st.deliveryAttempts.length === 0
+            ? html`<div class="text-xs text-gray-400" id="deliveryAttemptsEmpty">No delivery attempt has been recorded for this campaign yet. Every webhook, CRM or Mailchimp push an entry triggers writes one row here.</div>`
+            : html`<table class="w-full text-sm" id="deliveryAttemptsTable">
+                <thead><tr class="text-left text-xs text-gray-500"><th class="py-1">When</th><th>Where</th><th>Result</th><th>What the far end said</th></tr></thead>
+                <tbody>${st.deliveryAttempts.map(a => html`<tr class="border-t" id=${'attempt-' + (a.entry_id || '')}>
+                  <td class="py-1 text-xs">${String(a.attempted_at || '').replace('T', ' ').slice(0, 16)}</td>
+                  <td class="text-xs">${a.method || 'delivery'}${a.target ? html`<div class="text-gray-400" style="word-break:break-all">${a.target}</div>` : ''}</td>
+                  <td class="text-xs" style=${a.success ? 'color:#15803d' : 'color:#b91c1c'}>${a.success ? 'delivered' : 'failed'}${a.response_code ? ' (' + a.response_code + ')' : ''}</td>
+                  <td class="text-xs text-gray-500" style="max-width:320px">${String(a.response_body || '').slice(0, 220)}</td>
+                </tr>`)}</tbody></table>`}
         </div>`}
         <div class="flex gap-2 justify-end mt-4">
           <button class="btn btn-outline" id="deliveryClose" onClick=${closeDelivery}>Close</button>
