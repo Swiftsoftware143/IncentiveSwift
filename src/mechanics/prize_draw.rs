@@ -62,6 +62,21 @@ impl Default for PrizePoolConfig {
     }
 }
 
+/// How many prizes the campaign's pool carries — 0 when there is no pool at all.
+///
+/// The spin handler asks this BEFORE it resolves a contact (2026-11-08), so a campaign that cannot
+/// pay anything never mints a contact row for a player who could not have won. The same emptiness
+/// is what `apply_prize_draw` refuses below and what the play view publishes as `playable: false`,
+/// so all three read one definition.
+pub fn pool_prize_count(config: &JsonValue) -> usize {
+    config
+        .get("prize_pool")
+        .and_then(|p| p.get("prizes"))
+        .and_then(|p| p.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0)
+}
+
 /// The pity timer section of campaign config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PityTimerConfig {

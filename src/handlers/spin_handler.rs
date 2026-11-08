@@ -217,7 +217,22 @@ pub async fn spin(
     )
     .await?;
 
-    let contact_id = resolve_contact(&state, &body, &campaign.account_id).await?;
+    let contact_id = {
+        // REFUSE BEFORE ANY ROW IS MINTED (2026-11-08). The prize-pool check lives in the draw,
+        // which runs after `resolve_contact` — so a spin on a campaign that cannot pay still wrote
+        // a contact, and the operator's audience filled with people who never had a chance to win
+        // anything. Measured on live before this guard: one refused spin, one new contact.
+        if crate::mechanics::prize_draw::pool_prize_count(&campaign.config) == 0 {
+            tracing::error!(
+                campaign = %campaign.id,
+                "spin refused before contact resolution: the prize pool has no prizes"
+            );
+            return Err(AppError::Conflict(
+                "This campaign isn't ready to play yet — please check back soon.".to_string(),
+            ));
+        }
+        resolve_contact(&state, &body, &campaign.account_id).await?
+    };
 
     // Campaign referral loop (kanban t_6723eb30) — placed right after the contact is
     // resolved/created, before the win arm's `tokio::spawn(async move ...)` takes `state` and part
