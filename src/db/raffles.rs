@@ -78,16 +78,37 @@ pub async fn get_entries_for_draw(
 }
 
 /// Record a draw winner and seed.
+///
+/// A REDRAW replaces the winner, and this is the only writer of `entries.outcome` for a raffle. It
+/// used to mark the new row 'winner' and leave the previous one marked the same, so after one
+/// redraw the ledger carried TWO winners for the same raffle — and `redraw`'s own "exclude the
+/// current winner" lookup (`SELECT id FROM entries WHERE campaign_id = $1 AND outcome = 'winner'
+/// LIMIT 1`) could only stand ONE of them aside, leaving the superseded entry in the pool to be
+/// picked again. Demoting the outgoing winner to 'runner_up' in the same transaction fixes the
+/// ledger and keeps the history honest: exactly one 'winner' per campaign, and the entry that was
+/// replaced still reads as having won a draw rather than vanishing.
 pub async fn record_draw(
     pool: &PgPool,
     campaign_id: &Uuid,
     winner_entry_id: &Uuid,
     seed: u64,
 ) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+
+    // Stand the previous winner down FIRST (no-op on a first draw).
+    sqlx::query(
+        "UPDATE entries SET outcome = 'runner_up' WHERE campaign_id = $1 \
+         AND outcome = 'winner' AND id <> $2",
+    )
+    .bind(campaign_id)
+    .bind(winner_entry_id)
+    .execute(&mut *tx)
+    .await?;
+
     // Update the entry outcome to "winner"
     sqlx::query("UPDATE entries SET outcome = 'winner' WHERE id = $1")
         .bind(winner_entry_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     // Store seed in campaign config
@@ -96,9 +117,10 @@ pub async fn record_draw(
     )
     .bind(seed.to_string())
     .bind(campaign_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
