@@ -910,7 +910,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '' });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '', linkItem: null, links: null, linkTargets: null, linkErr: '', linkMsg: '', linkPick: '', linkSaving: false });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -1259,6 +1259,63 @@ const Campaigns = () => {
     </div>`;
   };
 
+  // ── Connected integrations: the Campaign Integration Hub bindings ─────────────
+  // The hub's whole API shipped with no way to reach it from this console:
+  //   GET    /campaigns/:slug/integrations             bindings, target details joined
+  //   POST   /campaigns/:slug/integrations             link (upsert on campaign_id+integration_id)
+  //   DELETE /campaigns/:slug/integrations/:id         unlink
+  // The dispatch side (campaign_integrations::fire_campaign_integrations) reads exactly this table
+  // and fires only "on_win" today, so Connect writes that event instead of offering one that never
+  // fires. A binding is what makes a win post to the account's own webhook target; without a screen
+  // the operator had to know the API to create one.
+  const openLinks = async (item) => {
+    st.linkItem = item; st.links = null; st.linkTargets = null;
+    st.linkErr = ''; st.linkMsg = ''; st.linkPick = '';
+    renderApp();
+    try {
+      const d = await API.get('/campaigns/' + (item.slug || item.id) + '/integrations');
+      st.links = (d && d.integrations) || [];
+    } catch (e) { st.linkErr = 'Could not read this campaign\'s connections: ' + e.message; }
+    try {
+      const t = await API.get('/integration-targets');
+      const all = Array.isArray(t) ? t : ((t && t.targets) || []);
+      const linked = (st.links || []).map(r => String(r.integration_id));
+      st.linkTargets = all.filter(x => String(x.account_id) === String(item.account_id)
+                                    && linked.indexOf(String(x.id)) < 0);
+    } catch (e) { if (!st.linkErr) st.linkErr = 'Could not read your webhook targets: ' + e.message; st.linkTargets = []; }
+    renderApp();
+  };
+  const closeLinks = () => {
+    st.linkItem = null; st.links = null; st.linkTargets = null;
+    st.linkErr = ''; st.linkMsg = ''; st.linkPick = ''; renderApp();
+  };
+  const connectLink = async () => {
+    const pick = String(st.linkPick || '');
+    if (!pick) { st.linkErr = 'Pick a webhook target to connect.'; st.linkMsg = ''; renderApp(); return; }
+    const item = st.linkItem;
+    st.linkErr = ''; st.linkMsg = ''; st.linkSaving = true; renderApp();
+    try {
+      await API.post('/campaigns/' + (item.slug || item.id) + '/integrations',
+                     { integration_id: pick, trigger_events: ['on_win'], enabled: true });
+    } catch (e) {
+      st.linkSaving = false; st.linkErr = 'Connect failed: ' + e.message; renderApp(); return;
+    }
+    st.linkSaving = false;
+    await openLinks(item);
+    st.linkMsg = 'Connected. A player who wins this campaign now posts to that target.';
+    renderApp();
+  };
+  const unlinkLink = async (row) => {
+    if (!confirm('Disconnect "' + (row.name || 'this target') + '" from this campaign? The target itself stays in the Integration Center.')) return;
+    const item = st.linkItem;
+    st.linkErr = ''; st.linkMsg = ''; renderApp();
+    try {
+      await API.del('/campaigns/' + (item.slug || item.id) + '/integrations/' + row.integration_id);
+    } catch (e) { st.linkErr = 'Disconnect failed: ' + e.message; renderApp(); return; }
+    await openLinks(item);
+    st.linkMsg = 'Disconnected.';
+    renderApp();
+  };
   const filtered = st.list.filter(c => !st.search || (c.name||'').toLowerCase().includes(st.search.toLowerCase()));
   // A spin campaign with no prize to win cannot be PLAYED: the draw refuses with
   // "Campaign has no prize_pool configured", so every participant who opens the shared link is
@@ -1279,7 +1336,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}</td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No campaigns yet.'}</td></tr>`}
       </tbody></table>
@@ -1512,6 +1569,39 @@ const Campaigns = () => {
           <button class="btn btn-outline" id="deliveryClose" onClick=${closeDelivery}>Close</button>
           <button class="btn" id="deliverySave" onClick=${saveDelivery}>Save delivery</button>
         </div>
+      </div>
+    </div>`}
+    ${st.linkItem && html`<div class="modal" id="linksModal" onClick=${e => e.target === e.currentTarget && (closeLinks())}>
+      <div class="modal-content" style="max-width:820px">
+        <h3 class="text-lg font-bold mb-1">Connected integrations — ${st.linkItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">When a player wins this campaign, IncentiveSwift posts the win to each connected webhook target. Targets themselves live in the Integration Center; this screen only binds one to this campaign.</p>
+        ${st.linkErr && html`<div class="text-red-500 text-sm mb-3" id="linksErr">${st.linkErr}</div>`}
+        ${st.linkMsg && html`<div class="text-xs text-green-600 mb-3" id="linksMsg">${st.linkMsg}</div>`}
+        ${st.links === null && html`<div class="text-xs text-gray-400" id="linksLoading">Loading…</div>`}
+        ${st.links && st.links.length === 0 && html`<div class="text-sm text-gray-500 mb-4" id="linksEmpty">Nothing connected yet — a win on this campaign posts to nobody.</div>`}
+        ${st.links && st.links.length > 0 && html`<table class="w-full text-sm mb-4">
+          <thead><tr class="text-left text-xs text-gray-500"><th class="py-1">Target</th><th>Provider</th><th>Fires on</th><th>State</th><th></th></tr></thead>
+          <tbody>${st.links.map(r => html`<tr class="border-t" id=${'link-row-' + r.integration_id}>
+            <td class="py-2">${r.name || r.integration_id}<div class="text-xs text-gray-400">${r.webhook_url || ''}</div></td>
+            <td>${r.provider || ''}</td>
+            <td class="text-xs">${(r.trigger_events || []).join(', ') || '—'}</td>
+            <td class="text-xs">${r.enabled === false ? 'switched off' : 'active'}${r.is_active === false ? ' · target itself is off' : ''}</td>
+            <td class="text-right"><button class="btn btn-sm btn-red" data-unlink=${r.integration_id} onClick=${() => unlinkLink(r)}>Disconnect</button></td>
+          </tr>`)}</tbody></table>`}
+        <div class="rounded-lg p-3 mb-3" style="border:1px solid #e2e8f0">
+          <div class="font-semibold text-sm mb-2">Connect a target</div>
+          ${st.linkTargets === null && html`<div class="text-xs text-gray-400">Loading your targets…</div>`}
+          ${st.linkTargets && st.linkTargets.length === 0 && html`<div class="text-xs text-gray-400" id="linksNoTargets">No unconnected webhook targets on this account. Create one in the Integration Center first.</div>`}
+          ${st.linkTargets && st.linkTargets.length > 0 && html`<div class="flex gap-2 items-center" id="linksPicker">
+            <select class="input" id="linkPick" onChange=${e => { st.linkPick = e.target.value; }}>
+              <option value="">Choose a webhook target…</option>
+              ${st.linkTargets.map(t => html`<option value=${t.id} selected=${String(st.linkPick) === String(t.id)}>${(t.name || t.id) + ' · ' + (t.provider || 'webhook')}</option>`)}
+            </select>
+            <button class="btn btn-primary" id="linkConnect" disabled=${!!st.linkSaving} onClick=${connectLink}>Connect</button>
+          </div>`}
+          <div class="text-xs text-gray-400 mt-2">Fires on a win — the only event this app dispatches today. The payload carries the player, the prize and the campaign.</div>
+        </div>
+        <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="linksClose" onClick=${closeLinks}>Close</button></div>
       </div>
     </div>`}
     ${st.boostItem && html`<div class="modal" id="boostModal" onClick=${e => e.target === e.currentTarget && (closeBoost())}>
