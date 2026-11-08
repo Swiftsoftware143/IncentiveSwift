@@ -2300,6 +2300,8 @@ const LoyaltyPrograms = () => {
         let name = p.name||''; let currency = p.currency_name||''; let icon = p.currency_icon||''; 
         let color = p.currency_color||'#10B981'; let cpi = p.points_per_checkin||10; let mx = p.max_checkins_per_day||5;
         let sb = p.streak_bonus||25; let sd=p.streak_days||7; let rb=p.referral_bonus||50; let bb=p.birthday_bonus||100;
+        // The three earning rules the app awards at runtime; `??` keeps a deliberate 0.
+        let ppv = p.points_per_visit??5; let ssp = p.social_share_points??0; let ped = p.points_expire_days??365;
         let se=p.streak_enabled!==false; let te=p.tiers_enabled!==false; let me=p.milestones_enabled!==false;
         let active=p.is_active!==false;
         return html`<div class="space-y-3">
@@ -2319,6 +2321,11 @@ const LoyaltyPrograms = () => {
             <div><label class="text-sm font-medium block mb-1">Referral Bonus</label><input class="input" type="number" value=${rb} onInput=${e => rb=parseInt(e.target.value)||0} /></div>
             <div><label class="text-sm font-medium block mb-1">Birthday Bonus</label><input class="input" type="number" value=${bb} onInput=${e => bb=parseInt(e.target.value)||0} /></div>
           </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div><label class="text-sm font-medium block mb-1">Points/Visit</label><input class="input" type="number" value=${ppv} onInput=${e => ppv=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Points/Social Share</label><input class="input" type="number" value=${ssp} onInput=${e => ssp=parseInt(e.target.value)||0} /></div>
+            <div><label class="text-sm font-medium block mb-1">Points Expire (Days)</label><input class="input" type="number" value=${ped} onInput=${e => ped=parseInt(e.target.value)||0} /></div>
+          </div>
           <div class="grid grid-cols-4 gap-2">
             <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${se} onChange=${e=>se=e.target.checked} />Streaks</label>
             <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked=${te} onChange=${e=>te=e.target.checked} />Tiers</label>
@@ -2327,7 +2334,7 @@ const LoyaltyPrograms = () => {
           </div>
           <div class="flex gap-2 justify-end mt-4">
             <button class="btn btn-outline" onClick=${() => { hide(); }}>Cancel</button>
-            <button class="btn" onClick=${() => save({name,currency_name:currency,currency_icon:icon,currency_color:color,points_per_checkin:cpi,max_checkins_per_day:mx,streak_bonus:sb,streak_days:sd,referral_bonus:rb,birthday_bonus:bb,streak_enabled:se,tiers_enabled:te,milestones_enabled:me,is_active:active})}>${p.id ? 'Save' : 'Create'}</button>
+            <button class="btn" onClick=${() => save({name,currency_name:currency,currency_icon:icon,currency_color:color,points_per_checkin:cpi,max_checkins_per_day:mx,streak_bonus:sb,streak_days:sd,referral_bonus:rb,birthday_bonus:bb,streak_enabled:se,tiers_enabled:te,milestones_enabled:me,points_per_visit:ppv,social_share_points:ssp,points_expire_days:ped,is_active:active})}>${p.id ? 'Save' : 'Create'}</button>
           </div>
         </div>`;
       })()}

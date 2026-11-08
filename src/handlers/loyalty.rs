@@ -1618,6 +1618,33 @@ pub async fn public_program(
         "milestones_enabled": program.milestones_enabled,
     });
 
+    // ── THE OWNER'S TIER LADDER, ON THE MEMBER'S OWN PAGE (2026-11-08) ──────────────────────────
+    // The console lets an owner switch tiers on and define them (name, threshold, colour) and the
+    // check-in path already APPLIES the tier multiplier (mechanics::loyalty_checkin) — but the page a
+    // customer reaches by scanning the counter QR said nothing about tiers at all, so the ladder the
+    // owner built was invisible to the only people who can climb it. Name + threshold + colour are
+    // the shop's own printed poster material, not member data, so nothing private is exposed; the
+    // block is absent entirely when the owner has tiers switched off (payload then unchanged).
+    if program.tiers_enabled {
+        let tiers: Vec<(String, i64, String)> = sqlx::query_as(
+            "SELECT name, min_points, color FROM loyalty_tiers \
+             WHERE loyalty_program_id = $1 ORDER BY min_points, name",
+        )
+        .bind(program.id)
+        .fetch_all(&state.db)
+        .await?;
+        if !tiers.is_empty() {
+            payload["tiers"] = json!(tiers
+                .into_iter()
+                .map(|(name, min_points, color)| json!({
+                    "name": name,
+                    "min_points": min_points,
+                    "color": color,
+                }))
+                .collect::<Vec<_>>());
+        }
+    }
+
     // THE OWNER'S BRAND ON THEIR OWN COUNTER QR (2026-11-07). The check-in page is the surface a
     // CUSTOMER reaches by scanning the business's QR at the till, and it carried only the programme
     // name and the account name — no logo, no colour — while the same tenant's campaign player and

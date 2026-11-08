@@ -55,6 +55,16 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .brandbar{display:none;text-align:center;padding-bottom:14px;margin-bottom:16px}
 .brandbar img{max-height:56px;max-width:240px;display:inline-block}
 .brandbar .bn{font-weight:700;font-size:20px;letter-spacing:.2px}
+/* The owner's tier ladder (2026-11-08). Rendered only when the programme has tiers switched on;
+   each row is the tier's own colour dot, its name and the points needed to reach it — the same
+   ladder the check-in applies a multiplier from. */
+.tiers{margin:0 0 18px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px}
+.tiers-h{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:8px}
+.tier-row{display:flex;align-items:center;gap:8px;font-size:13px;color:#475569;padding:3px 0}
+.tier-dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;background:#94a3b8}
+.tier-name{font-weight:600;color:#0f172a}
+.tier-at{margin-left:auto;color:#64748b;font-variant-numeric:tabular-nums}
+.next-tier{margin-top:8px;font-size:14px;color:#334155}
 .brandbar .rule{border-top:3px solid #4f46e5;margin-top:12px}
 </style>
 </head>
@@ -159,6 +169,37 @@ button:disabled{opacity:.6;cursor:not-allowed}
       })();
       el('pointsPill').textContent = '+' + (d.points_per_checkin || 0) + ' ' +
         (d.currency_name || 'points') + ' per check-in';
+      // The owner's tier ladder (2026-11-08). `tiers` is served only when the owner switched tiers
+      // on (name / threshold / colour, cheapest first), so an untiered programme renders exactly as
+      // before. Shown BEFORE the form: a member who has not checked in yet still learns what is
+      // reachable, which is the whole point of publishing a ladder.
+      var ladder = (d.tiers && d.tiers.length) ? d.tiers : null;
+      if (ladder) {
+        var box = document.createElement('div');
+        box.className = 'tiers';
+        var hd = document.createElement('div');
+        hd.className = 'tiers-h';
+        hd.textContent = 'Tiers';
+        box.appendChild(hd);
+        ladder.forEach(function (t) {
+          var row = document.createElement('div');
+          row.className = 'tier-row';
+          var dot = document.createElement('span');
+          dot.className = 'tier-dot';
+          dot.style.background = /^#[0-9a-fA-F]{3,8}$/.test(t.color || '') ? t.color : '#94a3b8';
+          row.appendChild(dot);
+          var nm = document.createElement('span');
+          nm.className = 'tier-name';
+          nm.textContent = t.name;
+          row.appendChild(nm);
+          var at = document.createElement('span');
+          at.className = 'tier-at';
+          at.textContent = (t.min_points || 0) + '+ ' + (d.currency_name || 'points');
+          row.appendChild(at);
+          box.appendChild(row);
+        });
+        el('panel').insertBefore(box, el('checkinForm'));
+      }
       el('loading').style.display = 'none';
       el('panel').style.display = 'block';
 
@@ -205,6 +246,22 @@ button:disabled{opacity:.6;cursor:not-allowed}
             el('success').innerHTML = '<div class="big">+' + pts + ' ' + cur + '</div>' +
               'You now have ' + (b.new_balance != null ? b.new_balance : '') + ' ' + cur + '.' +
               (b.tier ? '<br>Tier: ' + b.tier : '');
+            // How far the member is from the NEXT rung, from the balance the award just returned
+            // (2026-11-08). Silence about the gap is what makes a ladder feel unreachable; the
+            // number comes from the owner's own thresholds, never from a guess.
+            if (ladder && b.new_balance != null) {
+              var nxt = null;
+              for (var i = 0; i < ladder.length; i++) {
+                if ((ladder[i].min_points || 0) > b.new_balance) { nxt = ladder[i]; break; }
+              }
+              if (nxt) {
+                var gap = document.createElement('div');
+                gap.className = 'next-tier';
+                gap.textContent = ((nxt.min_points || 0) - b.new_balance) + ' ' + cur +
+                  ' to go until ' + nxt.name + '.';
+                el('success').appendChild(gap);
+              }
+            }
             el('success').style.display = 'block';
           })
           .catch(function () { fail('Something went wrong. Please try again.'); btn.disabled = false; btn.textContent = 'Check in & earn points'; });
