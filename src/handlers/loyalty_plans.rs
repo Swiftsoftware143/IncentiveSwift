@@ -350,21 +350,41 @@ pub async fn subscribe(
             }))
         }
         Ok(r) => {
+            // The provider's own refusal body is for the LOG, not for the customer. This arm used to
+            // paint Stripe's raw JSON into the dashboard's status line — masked key fragment
+            // included — on the one screen where a buyer is trying to give us money. The buyer is
+            // told what happened to their money (nothing was charged); the detail goes where an
+            // operator reads it.
+            let provider_status = r.status();
             let err_body = r.text().await.unwrap_or_default();
-            tracing::error!("Stripe checkout creation failed: {}", err_body);
+            tracing::error!(
+                %provider_status,
+                %account_id,
+                "loyalty/subscribe: the payment provider refused the checkout request: {err_body}"
+            );
             Ok(Json(SubscribeResponse {
                 checkout_url: None,
-                error: Some(format!("Stripe error: {}", err_body)),
+                error: Some(
+                    "No charge was made — the payment provider refused the request before any \
+                     money moved, so you have not been billed. Please contact support and the team \
+                     that runs this installation will look into it."
+                        .into(),
+                ),
                 plan: None,
                 monthly_price: None,
                 monthly_zc_pool: None,
             }))
         }
         Err(e) => {
-            tracing::error!("Stripe request failed: {}", e);
+            tracing::error!(%account_id, "loyalty/subscribe: could not reach the payment provider: {e}");
             Ok(Json(SubscribeResponse {
                 checkout_url: None,
-                error: Some(format!("Could not reach Stripe: {}", e)),
+                error: Some(
+                    "No charge was made — the payment provider could not be reached, so you have \
+                     not been billed. Please try again in a moment; if it keeps failing, contact \
+                     support."
+                        .into(),
+                ),
                 plan: None,
                 monthly_price: None,
                 monthly_zc_pool: None,
