@@ -90,6 +90,11 @@ label.opt:hover{border-color:var(--brand)}
   <div id="loading" style="text-align:center;color:#64748b;padding:30px 0">Loading…</div>
 
   <div id="panel" style="display:none">
+    <!-- The OWNER's brand, above the campaign title (2026-11-07). `brand` comes from
+         GET /api/v1/play/<slug> — the same tenant identity their transactional email opens with
+         (name + logo, logo pointer verified server-side against the stored bytes). Hidden when the
+         tenant has configured nothing, so an unbranded campaign page is exactly what it was. -->
+    <div id="brandBar" style="display:none;text-align:center;margin-bottom:14px"></div>
     <h1 id="campaignName">Campaign</h1>
     <p class="biz" id="businessName"></p>
     <div class="pill" id="mechanicPill"></div>
@@ -609,7 +614,47 @@ label.opt:hover{border-color:var(--brand)}
         return;
       }
       campaign = res.data.campaign;
+      // A PRIZE MECHANIC WITH AN EMPTY POOL IS NOT PLAYABLE (2026-11-08). The server now says so
+      // up front (`playable:false` plus `play_blocker`), so a visitor is never asked for their
+      // details for a campaign that cannot give anything away — and the scratch card no longer
+      // answers a silent loss to every player. Campaigns that CAN run are untouched: the flag is
+      // absent for them and this block does nothing.
+      if (res.data.playable === false) {
+        // Name the campaign before refusing: "Campaign" is the page's static placeholder, and a
+        // visitor who followed a share link for one named offer should see that name beside the
+        // reason it cannot be played yet.
+        if (campaign.name) {
+          document.title = campaign.name + ' — Play';
+          el('campaignName').textContent = campaign.name;
+        }
+        show('This campaign is not ready to play yet. Please check back soon.', true);
+        return;
+      }
       applyTheme(res.data.theme);
+      // The owner's own identity above the campaign title (2026-11-07): a business's campaign
+      // should look like the business, not the platform. `brand.color` is validated hex
+      // server-side (`Branding::effective_color`), and the logo URL is only ever the one this
+      // tenant uploaded — a participant sees exactly what the tenant's email header shows. No
+      // brand configured => the bar stays hidden and the page is unchanged.
+      var brand = res.data.brand || null;
+      if (brand && (brand.name || brand.logo_url)) {
+        var bb = el('brandBar');
+        bb.innerHTML = '';
+        if (brand.logo_url) {
+          var bim = document.createElement('img');
+          bim.alt = brand.name || 'Campaign owner';
+          bim.src = brand.logo_url;
+          bim.style.cssText = 'max-height:48px;max-width:220px;display:inline-block';
+          bb.appendChild(bim);
+        } else {
+          var bnm = document.createElement('div');
+          bnm.textContent = brand.name;
+          bnm.style.cssText = 'font-weight:700;font-size:18px;letter-spacing:.2px;color:' +
+            (/^#[0-9a-fA-F]{3,8}$/.test(brand.color || '') ? brand.color : '#4f46e5');
+          bb.appendChild(bnm);
+        }
+        bb.style.display = 'block';
+      }
       config = res.data.config || {};
       customFields = Array.isArray(res.data.custom_fields) ? res.data.custom_fields : [];
       renderCustomFields();

@@ -1887,11 +1887,55 @@ const PrizePools = () => {
 };
 
 const LoyaltyPrograms = () => {
-  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, md: null, mdBusy: false, mdErr: '', scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '' });
+  const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, md: null, mdBusy: false, mdErr: '', scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '', ladder: [], ladderErr: '', ladderMsg: '', ladderDraft: null });
   if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); }
 
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
   async function loadTiers(progId) { if (!progId) { st.tiers = []; st.tierErr = ''; renderApp(); return; } try { const data = await API.get('/loyalty/tiers?program_id='+encodeURIComponent(progId)); st.tiers = data.tiers||[]; st.tierErr=''; renderApp(); } catch(e){ st.tiers=[]; st.tierErr=(e && e.message) || String(e); renderApp(); } }
+  // ── The STATUS ladder ─────────────────────────────────────────────────────────────────────────
+  // A DIFFERENT table from the reward tiers above. `loyalty_tiers` is what the check-in path reads
+  // (mechanics::loyalty_checkin::resolve_tier) to decide the rung a member holds and the multiplier
+  // their points earn, and it is what the public check-in page prints. Until 2026-11-08 nothing in
+  // this console could write those rows, so switching Tiers on gave every programme an EMPTY ladder:
+  // the switch did nothing and the member page had nothing to show. This card is the writer's front.
+  async function loadStatusLadder(progId) {
+    st.ladderErr = ''; st.ladderMsg = '';
+    if (!progId) { st.ladder = []; st.ladderDraft = null; renderApp(); return; }
+    try {
+      const data = await API.get('/loyalty/programs/' + encodeURIComponent(progId) + '/status-tiers');
+      st.ladder = (data.tiers || []).map(t => ({ name: t.name, min_points: t.min_points, color: t.color || '#94a3b8', multiplier: t.multiplier == null ? 1 : t.multiplier }));
+      st.ladderDraft = st.ladder.map(r => Object.assign({}, r));
+      st.ladderErr = '';
+    } catch (e) { st.ladder = []; st.ladderDraft = null; st.ladderErr = (e && e.message) || String(e); }
+    renderApp();
+  }
+  const ladderRows = () => (st.ladderDraft || st.ladder || []);
+  const setLadderField = (i, field, val) => { const rows = ladderRows(); if (!rows[i]) return; rows[i][field] = val; st.ladderMsg = ''; renderApp(); };
+  const addLadderRow = () => {
+    if (!tierProg()) { alert('Create a loyalty program first - every rung belongs to one.'); return; }
+    if (!st.ladderDraft) st.ladderDraft = ladderRows().map(r => Object.assign({}, r));
+    const last = st.ladderDraft[st.ladderDraft.length - 1];
+    st.ladderDraft.push({ name: '', min_points: last ? (parseInt(last.min_points, 10) || 0) + 100 : 0, color: '#94a3b8', multiplier: last ? (Number(last.multiplier) || 1) : 1 });
+    st.ladderMsg = ''; renderApp();
+  };
+  const removeLadderRow = (i) => {
+    if (!st.ladderDraft) st.ladderDraft = ladderRows().map(r => Object.assign({}, r));
+    st.ladderDraft.splice(i, 1); st.ladderMsg = ''; renderApp();
+  };
+  const saveStatusLadder = async () => {
+    const p = tierProg();
+    if (!p) { alert('Create a loyalty program first.'); return; }
+    const rows = ladderRows();
+    for (const r of rows) { if (!String(r.name || '').trim()) { st.ladderMsg = ''; st.ladderErr = 'Every rung needs a name.'; renderApp(); return; } }
+    try {
+      const body = { tiers: rows.map(r => ({ name: String(r.name).trim(), min_points: Math.max(0, parseInt(r.min_points, 10) || 0), color: String(r.color || '#94a3b8').trim(), multiplier: Number(r.multiplier) || 1 })) };
+      const res = await API.put('/loyalty/programs/' + p.id + '/status-tiers', body);
+      await loadStatusLadder(p.id);
+      st.ladderMsg = 'Saved - ' + (res && res.tier_count != null ? res.tier_count : rows.length) + ' rung(s). The public check-in page shows them now.';
+      renderApp();
+    } catch (e) { st.ladderErr = (e && e.message) || String(e); renderApp(); }
+  };
+
   async function loadRewards() { try { const data = await API.get('/loyalty/rewards'); st.rewards = data.rewards||[]; renderApp(); } catch(e){ st.rewards=[]; } }
   // The redemptions themselves — a different reader from the tier catalogue above. A failure here
   // must be VISIBLE (a blank list and a broken route look identical otherwise).
@@ -2008,7 +2052,7 @@ const LoyaltyPrograms = () => {
     const found = (st.list||[]).find(p => p.id === st.tierProgId);
     return found || (st.list && st.list.length ? st.list[0] : null);
   };
-  const refreshTiers = () => { const p = tierProg(); if (p) loadTiers(p.id); else { st.tiers = []; st.tierErr = ''; renderApp(); } };
+  const refreshTiers = () => { const p = tierProg(); if (p) { loadTiers(p.id); loadStatusLadder(p.id); } else { st.tiers = []; st.tierErr = ''; st.ladder = []; st.ladderDraft = null; renderApp(); } };
   const selectTierProg = (id) => { st.tierProgId = id; st.tiers = []; refreshTiers(); };
   const showTier = (t) => {
     const prog = tierProg();
@@ -2114,6 +2158,28 @@ const LoyaltyPrograms = () => {
       </div>
     </div>
     ${tierProg() ? html`<div class="text-xs text-gray-500 mb-2">Tiers of <b>${tierProg().name}</b>. <b>Points required</b> is the balance a member must hold to reach the tier; <b>reward tag</b> is what the member is tagged with when the reward is approved.</div>` : html`<div class="text-xs text-gray-500 mb-2">Create a loyalty program first — every reward tier belongs to one.</div>`}
+    <div class="card mb-6" data-status-ladder>
+      <div class="flex items-center justify-between mb-2">
+        <div>
+          <h3 class="text-lg font-semibold">Status ladder</h3>
+          <p class="text-xs text-gray-500 max-w-3xl">The rungs a member climbs as they earn. Give each rung a name, the points it starts at, a colour and the points multiplier a member on that rung earns. This is what the public check-in page shows. With Tiers switched off in the programme editor the ladder is still listed, but it pays no multiplier.</p>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-sm btn-outline" id="status-ladder-add" onClick=${() => addLadderRow()}>+ Add rung</button>
+          <button class="btn btn-sm btn-green" id="status-ladder-save" onClick=${() => saveStatusLadder()}>Save ladder</button>
+        </div>
+      </div>
+      ${st.ladderErr ? html`<div class="text-sm mb-2" style="border-left:4px solid #dc2626;padding:8px 12px;color:#991b1b" data-ladder-err>Could not load or save the status ladder: ${st.ladderErr}</div>` : null}
+      ${st.ladderMsg ? html`<div class="text-sm mb-2" style="border-left:4px solid #16a34a;padding:8px 12px;color:#166534" data-ladder-msg>${st.ladderMsg}</div>` : null}
+      ${ladderRows().length === 0 ? html`<div class="text-center text-gray-400 py-6" data-ladder-empty>No rungs yet - a programme with an empty ladder keeps every member on the base rate. Press "+ Add rung".</div>` : html`<table class="table"><thead><tr><th style="width:32%">Rung name</th><th style="width:18%">Starts at (points)</th><th style="width:18%">Colour</th><th style="width:18%">Points multiplier</th><th></th></tr></thead>
+        <tbody>${ladderRows().map((r, i) => html`<tr data-ladder-row>
+          <td><input class="input" data-ladder-name value=${r.name || ''} onInput=${e => setLadderField(i, 'name', e.target.value)} placeholder="Gold" /></td>
+          <td><input class="input" type="number" min="0" step="10" data-ladder-points value=${r.min_points == null ? 0 : r.min_points} onInput=${e => setLadderField(i, 'min_points', e.target.value)} /></td>
+          <td><input class="input" data-ladder-color value=${r.color || '#94a3b8'} onInput=${e => setLadderField(i, 'color', e.target.value)} placeholder="#d4af37" /></td>
+          <td><input class="input" type="number" min="1" max="10" step="0.1" data-ladder-mult value=${r.multiplier == null ? 1 : r.multiplier} onInput=${e => setLadderField(i, 'multiplier', e.target.value)} /></td>
+          <td class="text-right"><button class="btn btn-sm btn-red" data-ladder-remove onClick=${() => removeLadderRow(i)}>Remove</button></td>
+        </tr>`)}</tbody></table>`}
+    </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       ${st.tiers.map(t => html`<div class="card" data-tier-id=${t.id} style="border-left:4px solid ${t.color||'#cbd5e1'}">
         <h3 class="font-bold text-lg" data-tier-name>${t.name}</h3>
