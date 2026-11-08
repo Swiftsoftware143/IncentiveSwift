@@ -877,7 +877,7 @@ pub async fn test_payment_provider(
 ///
 /// The role guard on arm 2 is load-bearing: without it ANY workspace could register, save its own
 /// Stripe key and have every customer's plan purchase on the install charged to that workspace.
-async fn resolve_plan_provider(
+pub(crate) async fn resolve_plan_provider(
     state: &AppState,
     account_id: Uuid,
 ) -> Result<Option<(Uuid, String)>, sqlx::Error> {

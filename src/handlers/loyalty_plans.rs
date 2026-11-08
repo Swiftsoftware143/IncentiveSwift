@@ -4,6 +4,7 @@ use axum::{extract::State, Json};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::billing::checkout::resolve_plan_provider;
 use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
@@ -159,44 +160,98 @@ pub async fn subscribe(
         }));
     }
 
-    // Resolve the CALLER's own active `stripe` row on the **Payment Providers** screen (kanban
-    // t_1b8d96f6). That is the one credential table the rest of the payment flow uses: the inbound
-    // receivers authenticate a delivery against the workspace's own signing secret in it, the
-    // console's Payment Providers panel writes it, and the admin guide names it as the home of the
-    // keys "your own checkout and inbound payment webhooks run on".
+    // ── Which merchant account funds this purchase? ──────────────────────────────────────────────
+    // A loyalty plan is sold BY the platform TO a workspace, exactly like a platform plan, so it
+    // resolves the merchant account the SAME way the plan till does (see
+    // [`crate::billing::checkout::resolve_plan_provider`]): the BUYER's own active row first — a
+    // workspace that brought its own Stripe account keeps paying through it — and then a PLATFORM
+    // OPERATOR's row.
     //
-    // The read used to be
-    //     SELECT api_key FROM provider_keys WHERE provider = 'stripe' AND is_active = true LIMIT 1
-    // — no account predicate, no ordering, and impossible to satisfy: `stripe` is not in
-    // `available_providers`, so `upsert_provider_key` refuses it and no such row could be created
-    // through the app at all. It also would have charged whichever account's key the planner
-    // returned first for whoever called this endpoint.
-    let provider: Option<String> = sqlx::query_scalar(
+    // This handler used to read the caller's own row alone, so on an installation with no
+    // per-customer Stripe key every press of the dashboard's "Choose <plan>" button could only ever
+    // answer "add your Stripe secret key on the Payment Providers screen": an instruction addressed
+    // to the buyer, on the one screen where they are trying to give us money, and a dead end even
+    // when the platform itself had a working merchant account. Selling a PLATFORM plan already
+    // worked that way; selling a loyalty plan did not, on the same dashboard.
+    let resolved = resolve_plan_provider(&s, account_id).await?;
+    let Some((provider_account, provider_type)) = resolved else {
+        tracing::error!(
+            %account_id,
+            plan_slug = %plan.slug,
+            "loyalty/subscribe REFUSED: no active payment provider for the account and none owned \
+             by a platform-operator account. OPERATOR: add a provider key on the operator's own \
+             account (Provider Keys / Payment providers); that key then funds every workspace's \
+             loyalty purchase."
+        );
+        // Addressed to the BUYER: what happened to their money comes first. The operator's setup
+        // detail belongs in the log line above, not on the customer's screen.
+        return Ok(Json(SubscribeResponse {
+            checkout_url: None,
+            error: Some(
+                "No charge was made — nothing was sent to a payment provider, so you cannot be \
+                 billed. Loyalty plans are not switched on for this installation yet; please \
+                 contact support and the team that runs it can activate this plan for your \
+                 workspace."
+                    .into(),
+            ),
+            plan: None,
+            monthly_price: None,
+            monthly_zc_pool: None,
+        }));
+    };
+
+    if provider_type != "stripe" {
+        return Ok(Json(SubscribeResponse {
+            checkout_url: None,
+            error: Some(format!(
+                "A {provider_type} provider is configured, but only Stripe checkout is \
+                 implemented. No session was created and no charge can occur."
+            )),
+            plan: None,
+            monthly_price: None,
+            monthly_zc_pool: None,
+        }));
+    }
+
+    if provider_account != account_id {
+        tracing::info!(
+            buyer = %account_id, provider_owner = %provider_account,
+            "loyalty/subscribe: charging through the platform account (buyer has no provider of its own)"
+        );
+    }
+
+    // The key, from the RESOLVED owner's row (never the buyer's alone). `payment_providers.api_key`
+    // is ciphertext at rest, so it is decrypted before use.
+    let stored: Option<String> = sqlx::query_scalar(
         "SELECT api_key FROM payment_providers \
          WHERE account_id = $1 AND provider_type = 'stripe' AND is_active = true \
          ORDER BY created_at, id LIMIT 1",
     )
-    .bind(account_id)
+    .bind(provider_account)
     .fetch_optional(&s.db)
     .await?;
 
-    // payment_providers.api_key is ciphertext at rest: decrypt before the key is used.
-    let stripe_key = crate::security::provider_key_crypto::decrypt_from_storage(
+    let stripe_key = match crate::security::provider_key_crypto::decrypt_from_storage(
         &s.db,
-        provider.as_deref().unwrap_or("").trim(),
+        stored.as_deref().unwrap_or("").trim(),
     )
     .await
     .ok()
-    .filter(|k| !k.trim().is_empty());
-
-    let stripe_key = match stripe_key {
+    .filter(|k| !k.trim().is_empty())
+    {
         Some(k) => k,
-        _ => {
+        None => {
+            tracing::error!(
+                %account_id,
+                provider_owner = %provider_account,
+                "loyalty/subscribe REFUSED: the resolved provider row's key could not be decrypted"
+            );
             return Ok(Json(SubscribeResponse {
                 checkout_url: None,
                 error: Some(
-                    "Stripe not configured. Add your Stripe secret key on the Payment Providers \
-                     screen."
+                    "No charge was made — the payment key on file could not be read, so this \
+                     installation cannot take the payment. Please contact support so the team that \
+                     runs it can activate this plan for your workspace."
                         .into(),
                 ),
                 plan: None,
@@ -245,8 +300,11 @@ pub async fn subscribe(
         ("metadata[loyalty_subscription]", "true"),
     ];
 
+    let api_base =
+        std::env::var("STRIPE_API_BASE").unwrap_or_else(|_| "https://api.stripe.com".to_string());
+
     let resp = client
-        .post("https://api.stripe.com/v1/checkout/sessions")
+        .post(format!("{api_base}/v1/checkout/sessions"))
         .header("Authorization", format!("Bearer {}", stripe_key))
         .form(&params)
         .send()
