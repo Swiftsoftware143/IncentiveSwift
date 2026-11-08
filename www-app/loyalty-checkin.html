@@ -66,6 +66,20 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .tier-at{margin-left:auto;color:#64748b;font-variant-numeric:tabular-nums}
 .next-tier{margin-top:8px;font-size:14px;color:#334155}
 .brandbar .rule{border-top:3px solid #4f46e5;margin-top:12px}
+/* The member's OWN sharing card (2026-11-08). Rendered only after a check-in (that is when the
+   member's referral code exists) and only when the owner has actually offered points for sharing —
+   so an owner who has not configured it gets a byte-identical page. */
+.share{margin:22px 0 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc}
+.share-h{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:8px}
+.share-p{font-size:13px;color:#475569;margin:0 0 10px;line-height:1.45}
+.share-link{display:flex;gap:8px;margin-bottom:12px}
+.share-link input{flex:1;font-size:12px;margin:0;padding:9px 10px;background:#fff}
+.share-link button{width:auto;padding:9px 14px;font-size:13px;flex:0 0 auto}
+.share-btns{display:flex;gap:8px;flex-wrap:wrap}
+.share-btns button{width:auto;flex:1 1 auto;padding:10px 12px;font-size:13px;background:#0f172a}
+.share-btns button:hover{background:#1e293b}
+.share-btns button:disabled{opacity:.6;cursor:not-allowed}
+.share-stats{font-size:12px;color:#64748b;margin-top:12px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -106,6 +120,23 @@ button:disabled{opacity:.6;cursor:not-allowed}
       <input id="secretCode" type="text" autocomplete="off" placeholder="e.g. FBGROUP2026">
       <button type="submit" id="codeBtn">Redeem code</button>
     </form>
+
+    <!-- The member's OWN sharing card (2026-11-08). Every route behind it already existed and
+         worked — `/loyalty/online/share`, `/online/referral-click` and `/online/stats/:code` — but
+         no page anywhere showed a member their referral link, so the whole share/referral half of
+         the programme was unreachable AND the member created by a check-in was never given a code
+         at all. Shown only after a check-in (the moment the code exists) and only when the owner has
+         actually offered points for sharing. -->
+    <div class="share" id="shareBlock" style="display:none">
+      <div class="share-h">Earn more</div>
+      <p class="share-p" id="shareIntro"></p>
+      <div class="share-link">
+        <input id="shareLink" type="text" readonly aria-label="Your personal sharing link">
+        <button type="button" id="copyBtn">Copy</button>
+      </div>
+      <div class="share-btns" id="shareBtns"></div>
+      <div class="share-stats" id="shareStats"></div>
+    </div>
   </div>
 </div>
 
@@ -130,6 +161,25 @@ button:disabled{opacity:.6;cursor:not-allowed}
   }
 
   if (!slug) { fail('This check-in link is incomplete. Please scan the QR code again.', true); return; }
+
+  // A friend arriving from a member's sharing link (`?ref=<code>`). Recorded ONCE per browser per
+  // code, and only after the server confirmed it, so a reload (or a flaky connection that already
+  // landed) cannot inflate the referrer's click count. No points are awarded here — the endpoint
+  // deliberately records the click only, and the referrer's bonus is paid when the visitor converts.
+  (function () {
+    var ref = null;
+    try { ref = new URLSearchParams(window.location.search).get('ref'); } catch (e) {}
+    if (!ref) return;
+    var key = 'loy_ref_' + ref;
+    try { if (localStorage.getItem(key)) return; } catch (e) {}
+    fetch(api + '/loyalty/online/referral-click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ referrer_code: ref, url: window.location.href })
+    })
+      .then(function (r) { if (r.ok) { try { localStorage.setItem(key, '1'); } catch (e) {} } })
+      .catch(function () {});
+  })();
 
   fetch(api + '/loyalty/public/program/' + encodeURIComponent(slug))
     .then(function (r) {
@@ -203,6 +253,104 @@ button:disabled{opacity:.6;cursor:not-allowed}
       el('loading').style.display = 'none';
       el('panel').style.display = 'block';
 
+      // ── THE MEMBER'S OWN SHARING CARD (2026-11-08) ───────────────────────────────────────────
+      // Built from values the server already decides: the member's referral code (returned by the
+      // check-in that just succeeded) and the owner's `social_share_points`. Nothing is invented
+      // here — when the owner has not offered points for sharing, no card appears at all.
+      var shareBase = window.location.origin + '/loyalty-checkin/' + encodeURIComponent(slug);
+
+      function shareStats(code) {
+        fetch(api + '/loyalty/online/stats/' + encodeURIComponent(code))
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (s) {
+            if (!s) return;
+            var cur = d.currency_name || 'points';
+            var bits = [];
+            bits.push(s.total_shares + ' share' + (s.total_shares === 1 ? '' : 's'));
+            bits.push(s.referral_clicks + ' click' + (s.referral_clicks === 1 ? '' : 's') + ' on your link');
+            if (s.online_points_earned > 0) bits.push(s.online_points_earned + ' ' + cur + ' earned from sharing');
+            el('shareStats').textContent = bits.join(' · ');
+          })
+          .catch(function () {});
+      }
+
+      function renderShare(code) {
+        var pts = d.social_share_points || 0;
+        if (!code || pts <= 0) return;
+        var cur = d.currency_name || 'points';
+        var link = shareBase + '?ref=' + encodeURIComponent(code);
+
+        el('shareIntro').textContent = 'Share your link and earn ' + pts + ' ' + cur +
+          ' the first time you share on each platform each day. Friends who join through it count toward your referrals.';
+        el('shareLink').value = link;
+        el('shareStats').textContent = '';
+        el('shareBlock').style.display = 'block';
+
+        el('copyBtn').onclick = function () {
+          var done = function () {
+            el('copyBtn').textContent = 'Copied';
+            setTimeout(function () { el('copyBtn').textContent = 'Copy'; }, 1600);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(link).then(done, function () { el('shareLink').select(); });
+          } else {
+            el('shareLink').select();
+            try { document.execCommand('copy'); } catch (e) {}
+            done();
+          }
+        };
+
+        var PLATFORMS = [
+          { key: 'whatsapp', label: 'WhatsApp', url: 'https://wa.me/?text=' + encodeURIComponent(link) },
+          { key: 'facebook', label: 'Facebook', url: 'https://www.facebook.com/sharer/sharer.php?u=' + encodeURIComponent(link) },
+          { key: 'twitter', label: 'X', url: 'https://twitter.com/intent/tweet?url=' + encodeURIComponent(link) },
+          { key: 'email', label: 'Email', url: 'mailto:?subject=' + encodeURIComponent(d.program_name || 'Our rewards programme') + '&body=' + encodeURIComponent('Join here: ' + link) }
+        ];
+
+        var box = el('shareBtns');
+        box.innerHTML = '';
+        PLATFORMS.forEach(function (p) {
+          var b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = p.label;
+          b.onclick = function () {
+            b.disabled = true;
+            fetch(api + '/loyalty/online/share', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ referral_code: code, platform: p.key, url: link })
+            })
+              .then(function (r) {
+                return r.json()
+                  .then(function (j) { return { ok: r.ok, data: j }; })
+                  .catch(function () { return { ok: false, data: {} }; });
+              })
+              .then(function (out) {
+                b.disabled = false;
+                var o = out.data || {};
+                if (out.ok && o.points_awarded > 0) {
+                  el('error').style.display = 'none';
+                  el('success').innerHTML = '<div class="big">+' + o.points_awarded + ' ' + cur + '</div>' +
+                    'Thanks for sharing. You now have ' + o.total_balance + ' ' + cur + '.';
+                  el('success').style.display = 'block';
+                } else if (out.ok && o.status === 'already_shared_today') {
+                  el('error').textContent = o.message || 'You already earned that platform\u2019s points today.';
+                  el('error').style.display = 'block';
+                }
+                shareStats(code);
+                window.open(p.url, '_blank', 'noopener');
+              })
+              .catch(function () {
+                b.disabled = false;
+                window.open(p.url, '_blank', 'noopener');
+              });
+          };
+          box.appendChild(b);
+        });
+
+        shareStats(code);
+      }
+
       el('checkinForm').addEventListener('submit', function (e) {
         e.preventDefault();
         var btn = el('btn');
@@ -269,6 +417,9 @@ button:disabled{opacity:.6;cursor:not-allowed}
               }
             }
             el('success').style.display = 'block';
+            // The member's code now exists, so their sharing link can be shown. Rendering AFTER
+            // the award means the balance, the rung and the sharing card always agree.
+            renderShare(b.referral_code);
           })
           .catch(function () { fail('Something went wrong. Please try again.'); btn.disabled = false; btn.textContent = 'Check in & earn points'; });
       });

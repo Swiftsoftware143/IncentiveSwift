@@ -334,6 +334,32 @@ pub async fn sync_member_tier(
     Ok(())
 }
 
+/// A short, unambiguous referral handle for a loyalty member.
+///
+/// This is the handle every online-loyalty endpoint resolves a member by —
+/// `POST /loyalty/online/share`, `/online/referral-click` and `GET /online/stats/:code` all do
+/// `WHERE referral_code = $1` — so a member minted without one is invisible to the entire referral
+/// engine. Measured 2026-11-08: `find_or_create_member` inserted rows with no `referral_code` at all,
+/// which is why the whole share/referral surface had no caller that could ever work.
+///
+/// The alphabet drops `I`, `L`, `O`, `0` and `1` so a code read off a phone screen cannot be mistyped
+/// into a different member's handle. 32^8 ≈ 1.1e12 handles: collisions are not a practical concern,
+/// and the partial unique index `loyalty_members_referral_code_uniq` makes them impossible rather
+/// than merely unlikely.
+///
+/// The RNG is created and dropped INSIDE this synchronous helper on purpose: `rand::rngs::ThreadRng`
+/// is `!Send`, and the caller is an axum handler, so holding one across an `.await` would make the
+/// handler's future `!Send` and surface as `Handler<_, _> is not satisfied` on the route instead of
+/// as an error here (the same trap `db/viral.rs` documents).
+fn member_referral_code() -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTVWXYZ23456789";
+    let mut rng = rand::thread_rng();
+    (0..8)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
+}
+
 async fn find_or_create_member(
     state: &AppState,
     program_id: &str,
@@ -352,18 +378,35 @@ async fn find_or_create_member(
         return Ok(id);
     }
 
-    // Create new member
-    let row = sqlx::query(
-        "INSERT INTO loyalty_members (program_id, contact_id, points_balance, lifetime_points, member_since)
-         VALUES ($1::uuid, $2::uuid, 0, 0, now())
-         RETURNING id::text"
-    )
-    .bind(program_id)
-    .bind(contact_id)
-    .fetch_one(&state.db)
-    .await?;
+    // Create new member WITH a referral code (2026-11-08). The code is what the member's own page
+    // builds their sharing link from, so it must exist from the first check-in — not be back-filled
+    // later by some other screen that does not exist.
+    //
+    // Uniqueness is enforced by the partial unique index, not by a SELECT-then-INSERT check: two
+    // concurrent first check-ins can both pass a check, but only one can win the insert. A losing
+    // insert answers 23505 and we mint another handle; any other error is the real answer.
+    for _ in 0..8 {
+        let code = member_referral_code();
+        match sqlx::query(
+            "INSERT INTO loyalty_members (program_id, contact_id, points_balance, lifetime_points, member_since, referral_code)
+             VALUES ($1::uuid, $2::uuid, 0, 0, now(), $3)
+             RETURNING id::text",
+        )
+        .bind(program_id)
+        .bind(contact_id)
+        .bind(&code)
+        .fetch_one(&state.db)
+        .await
+        {
+            Ok(row) => return Ok(row.get("id")),
+            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 
-    Ok(row.get("id"))
+    Err(AppError::Internal(
+        "could not mint a unique loyalty referral code after 8 attempts".to_string(),
+    ))
 }
 
 async fn count_daily_checkins(state: &AppState, member_id: &str) -> Result<i32, AppError> {

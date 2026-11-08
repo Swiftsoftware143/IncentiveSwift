@@ -89,6 +89,22 @@ pub async fn checkin(
             // `sync_member_tier` has already written the post-award rung, so read it back from the
             // row rather than re-deriving it, and keep the earn-time name under its own honest key.
             let current_tier = member_tier_name(&state.db, program.id, contact_id).await?;
+            // THE MEMBER'S OWN REFERRAL HANDLE (2026-11-08). Every online-loyalty endpoint resolves
+            // a member by this code, and the member's page has no other way to learn it — it is what
+            // their sharing link is built from. Read back from the row this check-in just credited
+            // (the same row `sync_member_tier` wrote), never re-derived, and `Option` because the
+            // column is nullable: a member minted before the code existed simply has no link, and
+            // the page renders no sharing block rather than a link that resolves to nobody.
+            let referral_code: Option<String> = sqlx::query_scalar(
+                "SELECT referral_code FROM loyalty_members \
+                  WHERE program_id = $1 AND contact_id = $2 \
+                  ORDER BY member_since DESC LIMIT 1",
+            )
+            .bind(program.id)
+            .bind(contact_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
             Ok(Json(json!({
                 "status": "ok",
                 "base_points": base_points,
@@ -97,6 +113,7 @@ pub async fn checkin(
                 "earned_at_tier": tier_name,
                 "points_awarded": points_awarded,
                 "new_balance": new_balance,
+                "referral_code": referral_code,
                 "rewards_awarded": rewards_awarded.iter().map(|r| json!({
                     "id": r.id,
                     "name": r.name,
@@ -1230,7 +1247,34 @@ pub async fn online_share(
     .await?
     .ok_or_else(|| AppError::NotFound("Loyalty program not found or not active".to_string()))?;
 
-    // 2b. Resolve the member's tier multiplier on the balance they hold now
+    // 2b. ONE award per platform per day (2026-11-08). This endpoint had no cap of any kind: every
+    // POST added `social_share_points` again, so a member (or a script) pressing "share" fifty times
+    // minted fifty awards — an unlimited-points hole sitting behind a surface that had no caller,
+    // which is exactly why nobody had noticed. Building the member's sharing buttons without this
+    // would have published the hole. Same shape as the daily-visit guard above: the day's first
+    // share on a given platform pays, later identical ones answer `already_shared_today` for 0.
+    let shared_today: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM loyalty_online_actions
+           WHERE member_id = $1
+             AND action_type = 'social_share'
+             AND metadata->>'platform' = $2
+             AND created_at::date = CURRENT_DATE"#,
+    )
+    .bind(member.id)
+    .bind(&body.platform)
+    .fetch_one(&state.db)
+    .await?;
+
+    if shared_today > 0 {
+        return Ok(Json(json!({
+            "status": "already_shared_today",
+            "points_awarded": 0,
+            "total_balance": member.points_balance,
+            "message": "You have already earned this platform's share points today."
+        })));
+    }
+
+    // 2c. Resolve the member's tier multiplier on the balance they hold now
     let member_id_str = member.id.to_string();
     let award = loyalty_checkin::resolve_award(
         &state,
@@ -1673,6 +1717,13 @@ pub async fn public_program(
         "program_name": program.name,
         "points_per_checkin": program.points_per_checkin,
         "points_per_visit": program.points_per_visit,
+        // The two rewards the member's page could not previously name (2026-11-08). Both are the
+        // OWNER'S published offer — the same printed-poster material as the tier ladder below — so
+        // nothing private is exposed. The sharing block renders only when `social_share_points` is
+        // set, exactly like the tier ladder renders only when tiers are on: an owner who has not
+        // offered points for sharing gets a page that says nothing about sharing.
+        "social_share_points": program.social_share_points,
+        "referral_bonus": program.referral_bonus,
         "currency_name": program.currency_name,
         "currency_icon": program.currency_icon,
         "currency_color": program.currency_color,
