@@ -49,6 +49,15 @@ pub async fn process_checkin(
     )
     .await?;
 
+    // Fund the award from the workspace's monthly points credit before it is recorded. This is
+    // the metre the dashboard promises; see `spend_credit_pool`.
+    if !spend_credit_pool(state, program_id, award.awarded).await? {
+        return Ok(CheckinResult::CreditPoolExhausted {
+            message: "This business has used up its monthly points credit, so no points could be                       added right now. Please ask them to top up."
+                .to_string(),
+        });
+    }
+
     record_checkin(state, &member_id, &award, method).await?;
 
     // Update points_balance and lifetime_points with the multiplied amount
@@ -192,6 +201,70 @@ pub enum CheckinResult {
     DailyCapReached {
         message: String,
     },
+    /// The workspace's paid loyalty plan has no points credit left this month, so this award
+    /// cannot be funded. Distinct from `DailyCapReached`, which is the MEMBER's daily allowance;
+    /// this is the BUSINESS's monthly budget.
+    CreditPoolExhausted {
+        message: String,
+    },
+}
+
+/// Spend `points` from the workspace's monthly points credit pool — the number the customer
+/// dashboard shows as "the points credit left this month" and sells as "points credits a month
+/// to spend on customers' check-ins".
+///
+/// THE METRE WAS MISSING (measured 2026-11-08). The pool gate lived only in
+/// `handlers::loyalty_v2::purchase_verify`; neither award path in this module ever read it. So a
+/// workspace that bought a plan saw that figure never move while check-ins awarded without limit,
+/// and a workspace whose pool was already at zero kept awarding (measured live: 10 points credited
+/// against a pool of 0, `loyalty_plan_status='inactive'`).
+///
+/// Only an ACTIVE plan is metered: a workspace with no loyalty plan keeps exactly the behaviour it
+/// had before, because whether an unpaid workspace may award at all is a pricing decision and not a
+/// defect to guess at.
+///
+/// Returns `Ok(false)` when the pool cannot fund the award. The decrement is a single conditional
+/// statement, so two concurrent check-ins can never both spend the last credit.
+async fn spend_credit_pool(
+    state: &AppState,
+    program_id: &str,
+    points: i32,
+) -> Result<bool, AppError> {
+    if points <= 0 {
+        return Ok(true);
+    }
+
+    let owner = sqlx::query(
+        "SELECT p.account_id::text AS account_id, a.loyalty_plan_status AS plan_status \
+           FROM loyalty_programs p JOIN accounts a ON a.id = p.account_id \
+          WHERE p.id = $1::uuid",
+    )
+    .bind(program_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let owner = match owner {
+        Some(row) => row,
+        None => return Ok(true),
+    };
+
+    let plan_status: Option<String> = owner.get("plan_status");
+    if plan_status.as_deref() != Some("active") {
+        return Ok(true);
+    }
+
+    let account_id: String = owner.get("account_id");
+    let spent = sqlx::query(
+        "UPDATE accounts SET zc_pool_remaining = zc_pool_remaining - $1 \
+          WHERE id = $2::uuid AND loyalty_plan_status = 'active' \
+            AND zc_pool_remaining >= $1",
+    )
+    .bind(points)
+    .bind(&account_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(spent.rows_affected() == 1)
 }
 
 async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, AppError> {
@@ -674,6 +747,14 @@ pub async fn process_checkin_from_entry(
         program.tiers_enabled,
     )
     .await?;
+
+    // Same metre as the counter check-in: campaign-entry awards spend the same monthly credit.
+    if !spend_credit_pool(state, program_id, award.awarded).await? {
+        return Ok(CheckinResult::CreditPoolExhausted {
+            message: "This business has used up its monthly points credit, so no points could be                       added right now. Please ask them to top up."
+                .to_string(),
+        });
+    }
 
     record_entry_checkin(state, &member_id, &award, "entry", entry_id).await?;
 

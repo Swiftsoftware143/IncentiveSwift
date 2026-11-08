@@ -129,6 +129,10 @@ pub async fn checkin(
             "status": "daily_cap_reached",
             "message": message,
         }))),
+        loyalty_checkin::CheckinResult::CreditPoolExhausted { message } => Ok(Json(json!({
+            "status": "credit_pool_exhausted",
+            "message": message,
+        }))),
     }
 }
 

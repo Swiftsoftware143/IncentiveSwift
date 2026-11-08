@@ -384,6 +384,11 @@ button:disabled{opacity:.6;cursor:not-allowed}
             }
             var b = out.data;
             el('checkinForm').style.display = 'none';
+            if (b.status === 'credit_pool_exhausted') {
+              el('error').textContent = b.message || 'This business has used up its monthly points credit.';
+              el('error').style.display = 'block';
+              return;
+            }
             if (b.status === 'daily_cap_reached') {
               el('error').textContent = b.message || 'You have already checked in here today.';
               el('error').style.display = 'block';
