@@ -376,6 +376,14 @@ pub struct LoyaltyProgramInput {
     pub streak_enabled: Option<bool>,
     pub tiers_enabled: Option<bool>,
     pub milestones_enabled: Option<bool>,
+    // THREE earning rules the app already AWARDS at runtime but no owner could CONFIGURE.
+    // `points_per_visit` is credited when staff record a visit, `social_share_points` when the
+    // member shares, and `points_expire_days` bounds how long a balance lasts. All three columns
+    // carried NOT-NULL defaults (5 / 0 / 365), so a programme LOOKED configured while the
+    // operator had no control over any of them — the same shape as the seven fields above.
+    pub points_per_visit: Option<i32>,
+    pub social_share_points: Option<i32>,
+    pub points_expire_days: Option<i32>,
 }
 
 /// Query for listing tiers.
@@ -497,10 +505,12 @@ pub async fn create_program(
                 points_per_checkin, max_checkins_per_day, point_decay_days, is_active,
                 currency_name, currency_icon, currency_color, account_id,
                 streak_bonus, streak_days, referral_bonus, birthday_bonus,
-                streak_enabled, tiers_enabled, milestones_enabled)
+                streak_enabled, tiers_enabled, milestones_enabled,
+                points_per_visit, social_share_points, points_expire_days)
                VALUES ($1, $2, $3, $4, 'both', $5, $6, $7, $8, $9, $10, $11, $12,
                        COALESCE($13, 0), COALESCE($14, 7), COALESCE($15, 0), COALESCE($16, 0),
-                       COALESCE($17, false), COALESCE($18, false), COALESCE($19, false))"#,
+                       COALESCE($17, false), COALESCE($18, false), COALESCE($19, false),
+                       COALESCE($20, 5), COALESCE($21, 0), COALESCE($22, 365))"#,
         )
         .bind(id)
         .bind(campaign_id)
@@ -521,6 +531,9 @@ pub async fn create_program(
         .bind(body.streak_enabled)
         .bind(body.tiers_enabled)
         .bind(body.milestones_enabled)
+        .bind(body.points_per_visit)
+        .bind(body.social_share_points)
+        .bind(body.points_expire_days)
         .execute(&state.db)
         .await
         {
@@ -613,13 +626,16 @@ pub async fn update_program(
                birthday_bonus = COALESCE($12, lp.birthday_bonus),
                streak_enabled = COALESCE($13, lp.streak_enabled),
                tiers_enabled = COALESCE($14, lp.tiers_enabled),
-               milestones_enabled = COALESCE($15, lp.milestones_enabled)
-           WHERE lp.id = $16
-             AND (lp.account_id = $17
+               milestones_enabled = COALESCE($15, lp.milestones_enabled),
+               points_per_visit = COALESCE($16, lp.points_per_visit),
+               social_share_points = COALESCE($17, lp.social_share_points),
+               points_expire_days = COALESCE($18, lp.points_expire_days)
+           WHERE lp.id = $19
+             AND (lp.account_id = $20
                   OR EXISTS (SELECT 1 FROM campaigns c
-                              WHERE c.id = lp.campaign_id AND c.account_id = $17)
+                              WHERE c.id = lp.campaign_id AND c.account_id = $20)
                   OR EXISTS (SELECT 1 FROM campaigns fwd
-                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $17))"#,
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $20))"#,
     )
     .bind(program_name)
     .bind(body.points_per_checkin)
@@ -636,6 +652,9 @@ pub async fn update_program(
     .bind(body.streak_enabled)
     .bind(body.tiers_enabled)
     .bind(body.milestones_enabled)
+    .bind(body.points_per_visit)
+    .bind(body.social_share_points)
+    .bind(body.points_expire_days)
     .bind(program_id)
     .bind(account_id)
     .execute(&state.db)
