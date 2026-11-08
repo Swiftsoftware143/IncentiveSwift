@@ -664,6 +664,37 @@ pub async fn update_program(
         return Err(AppError::NotFound("Loyalty program not found".to_string()));
     }
 
+    // The Tiers switch must move the members with it (2026-11-08). The ladder writer
+    // (`put_status_tiers`) re-resolves every member when the RUNGS change, but this modal flips
+    // `tiers_enabled` on its own: switching Tiers OFF left each member still carrying the rung the
+    // console prints, and switching it ON resolved nobody until that member checked in again.
+    // Runtime truth is `tiers_enabled` — `resolve_award` returns no tier when it is off — so the
+    // stored rung is brought in line here, by the same rule the check-in award applies.
+    let tiers_enabled: bool = sqlx::query_scalar(
+        "SELECT COALESCE(tiers_enabled, false) FROM loyalty_programs WHERE id = $1",
+    )
+    .bind(program_id)
+    .fetch_one(&state.db)
+    .await?;
+    if tiers_enabled {
+        sqlx::query(
+            "UPDATE loyalty_members lm \
+                SET tier_id = (SELECT t.id FROM loyalty_tiers t \
+                                WHERE t.loyalty_program_id = $1 \
+                                  AND t.min_points <= COALESCE(lm.points_balance, 0) \
+                                ORDER BY t.min_points DESC LIMIT 1) \
+              WHERE lm.program_id = $1",
+        )
+        .bind(program_id)
+        .execute(&state.db)
+        .await?;
+    } else {
+        sqlx::query("UPDATE loyalty_members SET tier_id = NULL WHERE program_id = $1")
+            .bind(program_id)
+            .execute(&state.db)
+            .await?;
+    }
+
     let program = sqlx::query_as::<_, crate::db::loyalty::LoyaltyProgram>(
         r#"SELECT id, campaign_id, name, slug, recognition_method,
                   points_per_checkin, max_checkins_per_day,
