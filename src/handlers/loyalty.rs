@@ -1133,6 +1133,18 @@ pub async fn online_visit(
         json!(award.tier.as_ref().map(|t| t.name.clone())),
     );
 
+    // The monthly points credit pays for ONLINE awards too. Without this the metre was
+    // bypassable: the counter check-in spent the pool but a member — or a script — could earn
+    // without limit by pressing visit/share, which credit the same currency.
+    if !loyalty_checkin::spend_credit_pool(&state, &member.program_id.to_string(), award.awarded)
+        .await?
+    {
+        return Ok(Json(json!({
+            "status": "credit_pool_exhausted",
+            "message": "This business has used up its monthly points credit, so no points could be added right now.",
+        })));
+    }
+
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
            VALUES ($1, 'daily_visit', $2, $3::jsonb)"#,
@@ -1297,6 +1309,18 @@ pub async fn online_share(
         "multiplier": award.multiplier,
         "tier": award.tier.as_ref().map(|t| t.name.clone()),
     });
+
+    // The monthly points credit pays for ONLINE awards too. Without this the metre was
+    // bypassable: the counter check-in spent the pool but a member — or a script — could earn
+    // without limit by pressing visit/share, which credit the same currency.
+    if !loyalty_checkin::spend_credit_pool(&state, &member.program_id.to_string(), award.awarded)
+        .await?
+    {
+        return Ok(Json(json!({
+            "status": "credit_pool_exhausted",
+            "message": "This business has used up its monthly points credit, so no points could be added right now.",
+        })));
+    }
 
     sqlx::query(
         r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)

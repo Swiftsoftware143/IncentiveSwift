@@ -225,7 +225,7 @@ pub enum CheckinResult {
 ///
 /// Returns `Ok(false)` when the pool cannot fund the award. The decrement is a single conditional
 /// statement, so two concurrent check-ins can never both spend the last credit.
-async fn spend_credit_pool(
+pub(crate) async fn spend_credit_pool(
     state: &AppState,
     program_id: &str,
     points: i32,
