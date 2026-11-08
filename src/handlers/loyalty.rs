@@ -1833,6 +1833,33 @@ pub async fn put_status_tiers(
         .execute(&mut *tx)
         .await?;
     }
+
+    // Saving a ladder must not UNASSIGN the members who are already standing on it (2026-11-08).
+    // `loyalty_members.tier_id` is `ON DELETE SET NULL`, and this endpoint replaces the whole row
+    // set atomically, so every member who held a rung was nulled and nothing put it back until
+    // that member's NEXT check-in. Live effect: an owner nudged one threshold and the Members
+    // screen showed every customer as untiered. Re-resolve each member from the balance they
+    // already hold, by the same rule `mechanics::loyalty_checkin::resolve_tier` applies (the
+    // highest rung whose threshold the balance meets), inside the same transaction.
+    let tiers_enabled: bool = sqlx::query_scalar(
+        "SELECT COALESCE(tiers_enabled, false) FROM loyalty_programs WHERE id = $1",
+    )
+    .bind(program_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if tiers_enabled && !ordered.is_empty() {
+        sqlx::query(
+            "UPDATE loyalty_members lm \
+                SET tier_id = (SELECT t.id FROM loyalty_tiers t \
+                                WHERE t.loyalty_program_id = $1 \
+                                  AND t.min_points <= COALESCE(lm.points_balance, 0) \
+                                ORDER BY t.min_points DESC LIMIT 1) \
+              WHERE lm.program_id = $1",
+        )
+        .bind(program_id)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
 
     Ok(Json(json!({
