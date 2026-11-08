@@ -562,6 +562,21 @@ pub async fn get_play_view(
     let created_at: chrono::DateTime<chrono::Utc> = campaign.get("created_at");
     let theme = crate::theme::resolve_theme(&surface_config);
 
+    // CAN THIS CAMPAIGN PAY ANYTHING YET? (2026-11-08) A mechanic that awards from a prize pool is
+    // dead — open to the public, but unable to give anything away — when that pool is empty, and
+    // the play shell could not know that before the visitor typed their details and pressed Play:
+    // it discovered it only from the refusal the spin route returned. Computed BEFORE the payload
+    // because the payload consumes `campaign_type`. `playable` is additive; every campaign that
+    // can run answers exactly the payload it answered before.
+    let needs_prize_pool = matches!(campaign_type.as_str(), "spin_wheel" | "scratch_card");
+    let has_prizes = config
+        .get("prize_pool")
+        .and_then(|p| p.get("prizes"))
+        .and_then(|p| p.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    let prize_pool_empty = needs_prize_pool && !has_prizes;
+
     let mut payload = json!({
         "campaign": {
             "id": cid,
@@ -583,6 +598,14 @@ pub async fn get_play_view(
         "delivery_config": public_delivery_config(&delivery_config),
         "company": company_info,
     });
+
+    // The flag the play shell reads before it shows the Play button (see the computation above).
+    if needs_prize_pool {
+        payload["playable"] = json!(!prize_pool_empty);
+        if prize_pool_empty {
+            payload["play_blocker"] = json!("no_prizes");
+        }
+    }
 
     // The tenant's own entry-form fields (cron 2026-10-18). `campaign_custom_fields` and its CRUD
     // API shipped with NO reader: the table could be written, the player never asked for it, so a

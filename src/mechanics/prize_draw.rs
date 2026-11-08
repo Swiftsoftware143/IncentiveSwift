@@ -48,6 +48,20 @@ fn default_total_weight() -> u32 {
     100
 }
 
+/// The same shape `serde` builds for an ABSENT `prize_pool` (2026-11-08): the spin path needs to
+/// tell "no pool at all" from "a pool with no prizes", and both mean the same thing to a player —
+/// nothing can be won — so both are represented here and refused by one check.
+impl Default for PrizePoolConfig {
+    fn default() -> Self {
+        Self {
+            prizes: Vec::new(),
+            total_weight: default_total_weight(),
+            inventory_tracking: false,
+            allow_when_exhausted: false,
+        }
+    }
+}
+
 /// The pity timer section of campaign config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PityTimerConfig {
@@ -579,14 +593,28 @@ pub async fn apply_prize_draw(
 ) -> Result<PrizeDrawResult, AppError> {
     // --- Parse configs ---
     let prize_pool_config: PrizePoolConfig = match campaign_config.get("prize_pool") {
+        Some(serde_json::Value::Null) | None => PrizePoolConfig::default(),
         Some(pp) => serde_json::from_value(pp.clone())
             .map_err(|e| AppError::BadRequest(format!("Invalid prize_pool config: {}", e)))?,
-        None => {
-            return Err(AppError::BadRequest(
-                "Campaign has no prize_pool configured".to_string(),
-            ))
-        }
     };
+
+    // A POOL WITH NOTHING IN IT IS NOT THE PLAYER'S MISTAKE (2026-11-08). This refusal used to be a
+    // 400 that named a database field — `Campaign has no prize_pool configured` — and the served
+    // play page paints the server's own sentence into the customer's screen, so the person trying
+    // to play read an instruction written for a developer. The operator's half goes to the log,
+    // where the operator looks. 409 says what is true: the request was fine, the campaign is not
+    // open for play yet. The empty check also closes the panic path at `prizes[0]` below, which the
+    // pity-timer arm reached whenever a pool existed with an empty list.
+    if prize_pool_config.prizes.is_empty() {
+        tracing::error!(
+            campaign = %campaign_id,
+            "spin refused: the prize pool has NO prizes — an operator must add at least one prize \
+             under Prizes on the campaign screen before this campaign can pay anything out."
+        );
+        return Err(AppError::Conflict(
+            "This campaign isn't ready to play yet — please check back soon.".to_string(),
+        ));
+    }
 
     let pity_config: PityTimerConfig = match campaign_config.get("pity_timer") {
         Some(pt) => serde_json::from_value(pt.clone()).unwrap_or_default(),

@@ -80,7 +80,24 @@ pub async fn scratch(
         .cloned()
         .unwrap_or_default();
 
-    let won = rng.gen_bool(win_probability.clamp(0.0, 1.0)) && !prizes.is_empty();
+    let won = {
+        // A SCRATCH CARD WITH NO PRIZES ALWAYS LOSES — SILENTLY (2026-11-08). `won` was `false`
+        // for every player whenever the pool was empty, so the operator read it as terrible luck
+        // and the customer read a rigged card, while the console showed the campaign active.
+        // Refuse with the same sentence the spin path answers, and put the operator's half in the
+        // log where the operator looks.
+        if prizes.is_empty() {
+            tracing::error!(
+                campaign = %campaign.id,
+                "scratch refused: the prize pool has NO prizes — an operator must add at least one \
+                 prize under Prizes on the campaign screen before this campaign can pay anything out."
+            );
+            return Err(AppError::Conflict(
+                "This campaign isn't ready to play yet — please check back soon.".to_string(),
+            ));
+        }
+        rng.gen_bool(win_probability.clamp(0.0, 1.0))
+    };
 
     let (prize_id, prize_label, prize_type, outcome) = if won {
         let idx = rng.gen_range(0..prizes.len());
