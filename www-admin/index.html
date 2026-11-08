@@ -743,6 +743,47 @@ const MyPlan = () => {
   // `&amp;` reached the DOM verbatim ("Plan &amp; Pricing") and the Chromium A/B caught it; write the
   // literal character. Only expressions interpolated as text are affected the same way -- the nav
   // label is a string interpolation and was always fine.
+
+  // ── ONE PRESS ASKS FOR A BIGGER PLAN (2026-11-08) ────────────────────────────────────────────
+  // This screen used to answer "ready for a bigger plan?" with a link to a GENERIC support ticket,
+  // while the customer PORTAL's plan cards POST /api/v1/checkout/create — the door that, when this
+  // installation has no payment provider connected, records a PROPER plan request (`source =
+  // plan_request`) in the SAME press (the refusal body carries `request_recorded: true`). So the two
+  // surfaces filed different things: a console customer's ask landed in the general ticket queue,
+  // never in the operator's plan-request queue, where the plan asked for is known. This calls the
+  // portal's own door, so both surfaces write the same row and the operator sees which plan was
+  // pressed. A live provider hands back a checkout URL, which is followed exactly as the portal does.
+  const askFor = async (p) => {
+    if (st.askBusy) return;
+    st.askBusy = true; st.askMsg = ''; st.askErr = ''; renderApp();
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/checkout/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(API.token ? { 'Authorization': 'Bearer ' + API.token } : {}) },
+        body: JSON.stringify({
+          plan_id: p.id,
+          billing_cycle: 'month',
+          description: (p.slug || 'plan') + ' plan (monthly)',
+          success_url: window.location.origin + '/admin/?checkout=success',
+          cancel_url: window.location.origin + '/admin/?checkout=cancelled'
+        })
+      });
+      const d = await r.json().catch(() => ({}));
+      const url = d && (d.url || d.checkout_url || d.session_url);
+      if (r.ok && url) { st.askBusy = false; renderApp(); window.location.href = url; return; }
+      if (d && d.request_recorded) {
+        st.askMsg = 'Request filed for ' + (p.name || 'this plan') + '. Nothing has been charged — the team switches your workspace over and arranges billing with you directly.';
+      } else if (r.ok) {
+        st.askMsg = (d && d.message) || 'The checkout session was created.';
+      } else {
+        st.askErr = (d && (d.message || d.error)) || 'The upgrade could not be started right now.';
+      }
+    } catch (e) {
+      st.askErr = 'The upgrade could not be started: ' + e.message;
+    }
+    st.askBusy = false; renderApp();
+  };
+
   return html`<div>
     <div class="mb-4"><h2 class="text-xl font-bold">Plan & Pricing</h2>
       <p class="text-sm text-gray-500">Your plan, and what the other plans cost.</p></div>
@@ -764,13 +805,18 @@ const MyPlan = () => {
           <td class="font-medium">${p.name}</td>
           <td class="text-gray-500">${isCurrent(p) && ownMonthly !== null ? money(ownMonthly) : money(p.monthly_price)}</td>
           <td class="text-gray-500">${Array.isArray(p.features) ? p.features.map(pretty).join(', ') : '\u2014'}</td>
-          <td>${isCurrent(p) ? html`<span class="badge badge-green">Current</span>` : ''}</td>
+          <td>${isCurrent(p) ? html`<span class="badge badge-green">Current</span>`
+            : (Number(p.monthly_price) > 0
+                ? html`<button class="btn btn-sm" disabled=${!!st.askBusy} onClick=${() => askFor(p)}>Choose ${p.name}</button>`
+                : '')}</td>
         </tr>`)}
         ${catalogue.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">Loading plans\u2026</td></tr>`}
       </tbody></table>
     </div>
     <div class="card text-sm text-gray-600">
-      Ready for a bigger plan? <span class="text-blue-600 cursor-pointer font-medium" onClick=${() => { S.view = 'support-tickets'; renderApp(); }}>Open a Support Ticket</span> and we will switch you over \u2014 billing is arranged with you directly.
+      ${st.askMsg && html`<div class="text-green-700 bg-green-50 p-2 rounded-lg mb-2" data-plan-asked-msg="1">${st.askMsg}</div>`}
+      ${st.askErr && html`<div class="text-red-600 bg-red-50 p-2 rounded-lg mb-2" data-plan-ask-err="1">${st.askErr}</div>`}
+      Ready for a bigger plan? Press <strong>Choose</strong> on a plan above and we start the upgrade: a connected payment provider takes you to a secure checkout, and when none is connected the press files your request so we can switch your workspace over — billing is arranged with you directly. You can also <span class="text-blue-600 cursor-pointer font-medium" onClick=${() => { S.view = 'support-tickets'; renderApp(); }}>open a support ticket</span>.
     </div>
   </div>`;
 };
