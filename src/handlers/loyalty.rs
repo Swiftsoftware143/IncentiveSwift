@@ -78,28 +78,61 @@ pub async fn checkin(
             new_balance,
             rewards_awarded,
             milestones_triggered,
-        } => Ok(Json(json!({
-            "status": "ok",
-            "base_points": base_points,
-            "multiplier": multiplier,
-            "tier": tier_name,
-            "points_awarded": points_awarded,
-            "new_balance": new_balance,
-            "rewards_awarded": rewards_awarded.iter().map(|r| json!({
-                "id": r.id,
-                "name": r.name,
-                "status": r.status,
-            })).collect::<Vec<_>>(),
-            "milestones_triggered": milestones_triggered.iter().map(|(name, action_type)| json!({
-                "name": name,
-                "action_type": action_type,
-            })).collect::<Vec<_>>(),
-        }))),
+        } => {
+            // WHICH RUNG THE MEMBER IS ON *NOW* (2026-11-08). `tier_name` above is the rung the
+            // multiplier was read from — resolved BEFORE this award on purpose, so a member earns
+            // at the tier they held when they earned. That is the right number for the arithmetic
+            // and the WRONG number for the receipt: measured live this morning, a member on 0
+            // points checked in for 60 with a Gold rung at 50, and this body answered
+            // `"tier": "Bronze"` while the owner's roster and `loyalty_members.tier_id` both said
+            // Gold — the same check-in telling the customer one thing and the owner another.
+            // `sync_member_tier` has already written the post-award rung, so read it back from the
+            // row rather than re-deriving it, and keep the earn-time name under its own honest key.
+            let current_tier = member_tier_name(&state.db, program.id, contact_id).await?;
+            Ok(Json(json!({
+                "status": "ok",
+                "base_points": base_points,
+                "multiplier": multiplier,
+                "tier": current_tier,
+                "earned_at_tier": tier_name,
+                "points_awarded": points_awarded,
+                "new_balance": new_balance,
+                "rewards_awarded": rewards_awarded.iter().map(|r| json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "status": r.status,
+                })).collect::<Vec<_>>(),
+                "milestones_triggered": milestones_triggered.iter().map(|(name, action_type)| json!({
+                    "name": name,
+                    "action_type": action_type,
+                })).collect::<Vec<_>>(),
+            })))
+        }
         loyalty_checkin::CheckinResult::DailyCapReached { message } => Ok(Json(json!({
             "status": "daily_cap_reached",
             "message": message,
         }))),
     }
+}
+
+/// The rung a member is standing on RIGHT NOW, read from the row `sync_member_tier` writes so the
+/// answer is the stored truth rather than a second derivation of it. `None` when the programme has
+/// tiers switched off, has no rungs, or the member is below the lowest one — all three are the same
+/// thing to a customer: no rung to name.
+async fn member_tier_name(
+    db: &sqlx::PgPool,
+    program_id: Uuid,
+    contact_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT t.name FROM loyalty_members lm \
+           JOIN loyalty_tiers t ON t.id = lm.tier_id \
+          WHERE lm.program_id = $1 AND lm.contact_id = $2",
+    )
+    .bind(program_id)
+    .bind(contact_id)
+    .fetch_optional(db)
+    .await?)
 }
 
 /// Does this redemption belong to the caller's account?

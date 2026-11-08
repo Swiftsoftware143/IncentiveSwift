@@ -245,7 +245,13 @@ button:disabled{opacity:.6;cursor:not-allowed}
             var cur = d.currency_name || 'points';
             el('success').innerHTML = '<div class="big">+' + pts + ' ' + cur + '</div>' +
               'You now have ' + (b.new_balance != null ? b.new_balance : '') + ' ' + cur + '.' +
-              (b.tier ? '<br>Tier: ' + b.tier : '');
+              (b.tier ? '<br>Tier: ' + b.tier : '') +
+              // A rung crossed by THIS check-in is the moment the ladder pays off, and the
+              // award already returned both names (`tier` is where the member stands now,
+              // `earned_at_tier` is where the multiplier came from). Say the promotion out
+              // loud instead of leaving the member to notice the number changed.
+              (b.tier && b.earned_at_tier && b.tier !== b.earned_at_tier
+                ? '<br><b>You\u2019ve moved up to ' + b.tier + '.</b>' : '');
             // How far the member is from the NEXT rung, from the balance the award just returned
             // (2026-11-08). Silence about the gap is what makes a ladder feel unreachable; the
             // number comes from the owner's own thresholds, never from a guess.
