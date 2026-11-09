@@ -230,6 +230,10 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         "support_request_operator_alert" => {
             format!("A support request needs an answer — {app_name}")
         }
+        // The OPERATOR's copy of a NEW SIGNUP (2026-11-09, parity with FunnelSwift and
+        // WorkflowSwift). Named for the event, because the recipient is the person who runs the
+        // install and a new workspace is the one arrival they most want to notice.
+        "signup_operator_alert" => format!("New workspace signed up — {app_name}"),
         // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
         // Named as a preview so it can never be mistaken for a system notice.
         "branding_preview" => format!("Your email branding — a preview from {app_name}"),
@@ -484,6 +488,55 @@ async fn send_inline(
                 esc(ask),
                 esc(reply_to),
                 esc(message),
+                admin_url,
+                app_name,
+            );
+            Ok((subject, text, html))
+        }
+        // The OPERATOR's copy of a NEW SIGNUP (2026-11-09, parity with FunnelSwift and
+        // WorkflowSwift). Reached when no stored template row exists for the key, which is true of
+        // every install today. Until this arm existed a new customer arrived in complete silence:
+        // the account, its free tier and the credentials mail were all written, and the arrival
+        // only appeared in a console nobody had been told to open.
+        "signup_operator_alert" => {
+            let workspace = vars
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A workspace");
+            let who = vars
+                .get("who")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let plan = vars
+                .get("plan")
+                .and_then(|v| v.as_str())
+                .unwrap_or("no plan attached");
+            let source = vars
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.incentiveswift.com");
+            let subject = format!("New workspace signed up: {workspace}");
+            let text = format!(
+                "A new workspace signed up.\n\nWorkspace: {workspace}\nOwner: {who}\nPlan: {plan}\nSource: {source}\n\nThe account is live. It is in the admin console (Accounts) and on the dashboard: {admin_url}\n\n- {app_name}"
+            );
+            let html = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>A new workspace signed up.</p>\
+                 <p><strong>{}</strong><br>\
+                 Owner: {}<br>\
+                 Plan: {}<br>\
+                 Source: {}</p>\
+                 <p>The account is live. It is in the admin console (Accounts) and on the dashboard.</p>\
+                 <p><a href=\"{}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- {}</p></body></html>",
+                esc(workspace),
+                esc(who),
+                esc(plan),
+                esc(source),
                 admin_url,
                 app_name,
             );
@@ -785,6 +838,102 @@ pub async fn send_support_request_operator_alert(
         Ok(()) => true,
         Err(e) => {
             tracing::warn!("support operator alert to {to} failed: {e}");
+            false
+        }
+    }
+}
+
+/// Tell the OPERATOR that a new workspace just signed up (2026-11-09, parity with FunnelSwift and
+/// WorkflowSwift).
+///
+/// WHY THIS EXISTS (measured 2026-11-09): `POST /api/v1/auth/register` mints the account, its free
+/// tier and the credentials mail, and NOTHING told the person who runs the install. The
+/// plan-request and support-request arms next door already mail `operator_alert_email`; a new
+/// customer is the same kind of news, and it is the one the operator most wants to see. FunnelSwift
+/// and WorkflowSwift closed the identical gap the same day.
+///
+/// Destination = the operator's own address (`admin_settings.email` key `operator_alert_email`, set
+/// from the console's Email Provider card). An unset address sends nothing: this code never invents
+/// a mailbox. Sent through the SYSTEM mail configuration (`None`), never the new workspace's,
+/// because that workspace has no sender identity yet and this is platform mail.
+///
+/// Never called for a harness/probe signup — the caller gates on the same two suppression reasons
+/// the credentials mail uses, so machinery cannot mail the operator. Best effort by design: the
+/// account is already committed, so a mail failure is logged and the caller keeps its 201.
+pub async fn send_signup_operator_alert(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    owner_name: &str,
+    owner_email: &str,
+    source: &str,
+) -> bool {
+    let row: Option<serde_json::Value> =
+        match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("signup operator alert: could not read the mail settings: {e}");
+                return false;
+            }
+        };
+    let Some(to) = row
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return false;
+    };
+    // The workspace name is what the operator recognises; a blank one falls back to the owner's
+    // address, never to an invented label. The tier's DISPLAY name is read too, so the line says
+    // "Free" and not the primary key of a plan row.
+    let found: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(NULLIF(btrim(a.name), ''), ''), \
+                COALESCE(NULLIF(btrim(p.name), ''), 'no plan attached') \
+           FROM accounts a LEFT JOIN plan_tiers p ON p.id = a.plan_tier_id \
+          WHERE a.id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (stored_name, plan_name) = found.unwrap_or_default();
+    let workspace = if stored_name.trim().is_empty() {
+        if owner_email.trim().is_empty() {
+            "A workspace".to_string()
+        } else {
+            owner_email.to_string()
+        }
+    } else {
+        stored_name
+    };
+    let plan_name = if plan_name.trim().is_empty() {
+        "no plan attached".to_string()
+    } else {
+        plan_name
+    };
+    let who = if owner_name.trim().is_empty() {
+        owner_email.to_string()
+    } else {
+        format!("{} ({})", owner_name.trim(), owner_email)
+    };
+    let vars = json!({
+        "workspace": workspace,
+        "who": who,
+        "plan": plan_name,
+        "source": if source.trim().is_empty() { "unknown" } else { source.trim() },
+        "admin_url": "https://admin.incentiveswift.com",
+        "app_name": APP_NAME,
+    });
+    match send_template_email(pool, None, &to, "signup_operator_alert", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(account = %account_id, "signup operator alert to {to} failed: {e}");
             false
         }
     }

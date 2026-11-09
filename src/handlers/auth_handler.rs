@@ -154,6 +154,31 @@ pub async fn register(
     };
     let account_id = minted.account_id;
 
+    // ── TELL THE OPERATOR A CUSTOMER ARRIVED (2026-11-09, parity with FunnelSwift/WorkflowSwift) ──
+    // The account and its free tier are committed by now, and nothing told the person who runs the
+    // install: the arrival only appeared in a console nobody had been told to open. The
+    // plan-request and support-request arms next door already mail `operator_alert_email`, and a
+    // new workspace is the one event the operator most wants to see. Best effort — the account is
+    // real either way, so a mail failure is logged and the signup stands. A harness-attributed or
+    // reserved-address signup is SILENT, exactly like its credentials mail: machinery must never
+    // mail the operator.
+    if probe_harness.is_none()
+        && !crate::email::recipient_is_undeliverable(&email)
+        && !crate::email::send_signup_operator_alert(
+            &state.db,
+            account_id,
+            &name,
+            &email,
+            "the signup page",
+        )
+        .await
+    {
+        tracing::debug!(
+            email = %email,
+            "signup: operator alert not sent (no operator address configured, or the send was refused)"
+        );
+    }
+
     // Generate JWT. The token carries the new account's session version, so a later revoke is a
     // counter bump and not a comparison of whole seconds (2026-11-01). One primary-key read: the
     // column defaults to 1 and is written by this app only. Cast to bigint: the column is integer,
