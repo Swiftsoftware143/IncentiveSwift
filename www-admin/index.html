@@ -196,7 +196,7 @@ const html = htm.bind(h);
 const showUpgradePrompt = (msg) => {
   const div = document.createElement('div');
   div.className = 'upgrade-overlay';
-  div.innerHTML = '<div class="upgrade-box"><h2>🚀 Upgrade Required</h2><p>' + (msg || 'This feature requires a higher plan.') + '</p><button class="btn-upgrade" onclick="this.closest(\'.upgrade-overlay\').remove()">See plans</button><button class="btn-upgrade" style="background:#64748b;margin-left:8px" onclick="window._goMyPlan();this.closest(\'.upgrade-overlay\').remove()">Got it</button></div>';
+  div.innerHTML = '<div class="upgrade-box"><h2>🚀 Upgrade Required</h2><p>' + (msg || 'This feature requires a higher plan.') + '</p><button class="btn-upgrade" onclick="window._goMyPlan();this.closest(\'.upgrade-overlay\').remove()">See plans</button><button class="btn-upgrade" style="background:#64748b;margin-left:8px" onclick="this.closest(\'.upgrade-overlay\').remove()">Got it</button></div>';
   document.body.appendChild(div);
   div.addEventListener('click', (e) => { if (e.target === div) div.remove(); });
 };
