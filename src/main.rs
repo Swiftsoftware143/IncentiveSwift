@@ -37,6 +37,7 @@ pub mod mechanics;
 /// Attribution for a workspace a test harness mints through the public signup
 /// (`X-Swift-Harness`, kanban t_4a744754) — see `probe_harness`.
 pub mod probe_harness;
+mod probe_sweep;
 pub mod security;
 mod smtp;
 mod state;
@@ -147,6 +148,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Start background email ticker (flushes scheduled follow-ups/reminders)
     email_queue::spawn_email_ticker(state.clone());
+
+    // Retire harness-tagged workspaces older than the fleet's 14-day residue window (kanban cron
+    // 2026-11-09). The signup door already stamps `accounts.probe_harness` from the harness header
+    // and the operator lists already hide those rows as "not a customer" — but nothing ever DELETED
+    // them, so they accumulated for ever. First tick is immediate, so the deploy retires the
+    // backlog; never fatal, a janitor must not take the app down.
+    probe_sweep::spawn_probe_sweeper(state.db.clone());
 
     // Request-body read deadline (kanban t_af70c0ca). Printed here so the number an operator sees
     // at boot is the number the middleware enforces — both come from this one config field.
