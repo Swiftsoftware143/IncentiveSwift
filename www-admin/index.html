@@ -987,7 +987,7 @@ const FONT_OPTIONS = [
 ];
 
 const Campaigns = () => {
-  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '', linkItem: null, links: null, linkTargets: null, linkErr: '', linkMsg: '', linkPick: '', linkSaving: false });
+  const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '', linkItem: null, links: null, linkTargets: null, linkErr: '', linkMsg: '', linkPick: '', linkSaving: false, drawItem: null, drawEntries: null, drawErr: '', drawMsg: '' });
   const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
@@ -1146,6 +1146,52 @@ const Campaigns = () => {
       st.cloneErr = e.message;
       renderApp();
     }
+  };
+
+  // -- Raffle draw (cron 2026-11-08) -----------------------------------------------------
+  // POST /api/v1/raffles/<slug>/draw and /redraw have existed with no button anywhere in this
+  // panel: an operator could create a "Raffle & Giveaway" campaign, collect entries, and then
+  // had no way to pick a winner except calling the API by hand. The draw is seeded and recorded
+  // server-side (campaigns.config.draw_seed + the winning entry's outcome), so the result can be
+  // checked afterwards; this screen names WHO won from the entry's own contact record, never an id.
+  const loadRaffleEntries = async (slug) => {
+    try {
+      const d = await API.get('/campaigns/' + slug + '/entries?limit=500');
+      return (d && Array.isArray(d.entries)) ? d.entries : [];
+    } catch (e) {
+      st.drawErr = "Could not read this raffle's entries: " + e.message;
+      return null;
+    }
+  };
+  const currentWinner = () => (st.drawEntries || []).find(e => e.outcome === 'winner') || null;
+  const openDraw = async (item) => {
+    st.drawItem = item; st.drawEntries = null; st.drawErr = ''; st.drawMsg = '';
+    renderApp();
+    st.drawEntries = await loadRaffleEntries(item.slug);
+    renderApp();
+  };
+  const closeDraw = () => {
+    st.drawItem = null; st.drawEntries = null; st.drawErr = ''; st.drawMsg = ''; renderApp();
+  };
+  const drawRaffle = async (redraw) => {
+    if (!st.drawItem) return;
+    st.drawErr = ''; st.drawMsg = ''; renderApp();
+    try {
+      await API.post('/raffles/' + st.drawItem.slug + (redraw ? '/redraw' : '/draw'));
+      st.drawEntries = await loadRaffleEntries(st.drawItem.slug);
+      const w = currentWinner();
+      const who = w ? (w.contact_name || w.contact_email || 'the selected entry') : '';
+      const also = (w && w.contact_name && w.contact_email) ? ' (' + w.contact_email + ')' : '';
+      st.drawMsg = w
+        ? (redraw ? 'Redrawn. The new winner is ' : 'The winner is ') + who + also + '.'
+        : 'The draw was recorded — reopen this panel to read the winner.';
+    } catch (e) {
+      const m = e.message || 'The draw failed.';
+      // The server refuses a second draw in its own words; say what the operator can do about it.
+      st.drawErr = /already been drawn/i.test(m) ? m + ' Use Redraw to pick a different winner.' : m;
+    }
+    await load();
+    renderApp();
   };
 
   const createWidget = async () => {
@@ -1423,7 +1469,7 @@ const Campaigns = () => {
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}</td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button>${c.type === 'raffle' && html`<button class="btn btn-sm btn-outline" data-draw-slug=${c.slug} onClick=${() => openDraw(c)}>Draw winner</button>`}<button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No campaigns yet.'}</td></tr>`}
       </tbody></table>
@@ -1600,6 +1646,28 @@ const Campaigns = () => {
           ${st.embedCopied && html`<div class="text-xs text-green-600" id="embedCopied">✓ Copied the ${st.embedCopied === 'direct' ? 'direct link' : st.embedCopied === 'iframe' ? 'iframe embed' : 'widget script'}</div>`}
         </div>`}
         <div class="flex gap-2 justify-end mt-4"><button class="btn btn-outline" id="embedClose" onClick=${closeEmbed}>Close</button></div>
+      </div>
+    </div>`}
+    ${st.drawItem && html`<div class="modal" id="drawModal" onClick=${e => e.target === e.currentTarget && closeDraw()}>
+      <div class="modal-content" style="max-width:620px">
+        <h3 class="text-lg font-bold mb-1">Draw a winner — ${st.drawItem.name}</h3>
+        <p class="text-xs text-gray-500 mb-4">Runs this raffle's draw on the server. The pick is seeded and recorded, so it can be checked afterwards, and the winning entry is marked as the winner. Everyone who entered is in the draw.</p>
+        ${st.drawErr && html`<div class="text-red-500 text-sm mb-3" id="drawErr">${st.drawErr}</div>`}
+        ${st.drawMsg && html`<div class="text-sm mb-3" style="color:#15803d" id="drawMsg">✓ ${st.drawMsg}</div>`}
+        ${!st.drawEntries && !st.drawErr && html`<div class="text-gray-400 text-sm" id="drawLoading">Reading this raffle's entries…</div>`}
+        ${st.drawEntries && html`<div class="text-sm mb-3" id="drawCount">${st.drawEntries.length} ${st.drawEntries.length === 1 ? 'entry' : 'entries'} in this raffle.</div>`}
+        ${st.drawEntries && st.drawEntries.length === 0 && html`<div class="text-xs text-gray-500 mb-2" id="drawNone">Nobody has entered yet, so there is nothing to draw from. Share this campaign's link first.</div>`}
+        ${currentWinner() ? html`<div class="card p-3 mb-3" id="drawWinner">
+          <div class="text-xs text-gray-500">Current winner</div>
+          <div class="text-base font-semibold" id="drawWinnerName">${currentWinner().contact_name || '(no name on file)'}</div>
+          <div class="text-xs text-gray-600" id="drawWinnerContact">${currentWinner().contact_email || ''}${currentWinner().contact_phone ? ' · ' + currentWinner().contact_phone : ''}</div>
+        </div>` : html``}
+        <div class="flex gap-2 justify-end mt-4">
+          <button class="btn btn-outline" id="drawClose" onClick=${closeDraw}>Close</button>
+          ${currentWinner()
+            ? html`<button class="btn btn-primary" id="drawRedraw" disabled=${!st.drawEntries || st.drawEntries.length < 2} onClick=${() => drawRaffle(true)}>Redraw — pick a different winner</button>`
+            : html`<button class="btn btn-primary" id="drawWin" disabled=${!st.drawEntries || st.drawEntries.length === 0} onClick=${() => drawRaffle(false)}>Draw the winner</button>`}
+        </div>
       </div>
     </div>`}
     ${st.fieldsItem && html`<div class="modal" id="fieldsModal" onClick=${e => e.target === e.currentTarget && closeFields()}>
@@ -4161,12 +4229,12 @@ const SiteConfigView = () => {
 const SupportTickets = () => {
   // `planMsg` is the answer to "did the workspace actually move?" (cron 2026-10-20). A green
   // "resolved" chip over a workspace still on Free is the dead end this screen now closes.
-  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all', planMsg: null });
+  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all', planMsg: null, loyaltyPlans: [], loyaltyMsg: null });
   const load = async () => { try { const d = await API.get('/support-tickets'); st.list = Array.isArray(d.tickets) ? d.tickets : []; renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
   const openNew = () => { st.form = { subject:'', description:'', priority:'normal', category:'' }; st.showModal = true; renderApp(); };
   const create = async () => { if(!st.form.subject) return alert('Subject required'); try { await API.post('/support-tickets', st.form); st.showModal = false; load(); } catch(e){ alert('Error: ' + e.message); } };
-  const openDetail = async (id) => { try { const d = await API.get('/support-tickets/' + id); st.detail = d; st.newMsg=''; renderApp(); } catch(e){ alert(e.message); } };
+  const openDetail = async (id) => { try { const d = await API.get('/support-tickets/' + id); st.detail = d; st.newMsg=''; st.loyaltyMsg = null; renderApp(); if (d && d.ticket && d.ticket.source === 'loyalty_plan_request' && !st.loyaltyPlans.length) loadLoyaltyPlans(); } catch(e){ alert(e.message); } };
   const closeDetail = () => { st.detail = null; load(); renderApp(); };
   // Resolving a plan request MOVES the workspace onto the plan it asked for (cron 2026-10-20).
   // The answer reports whether it moved; when it did not, the reason is shown rather than hidden.
@@ -4181,6 +4249,27 @@ const SupportTickets = () => {
         : null;
       openDetail(id); load();
     } catch(e){ alert(e.message); }
+  };
+  // A LOYALTY plan request needs its own control (cron 2026-11-08). The queue's Resolve moves
+  // WORKSPACE plans only (`plans`); a loyalty plan lives in `loyalty_plans` with its own status on
+  // the account, and the ONLY writer of that status used to be the Stripe webhook — which never
+  // fires when no payment provider is stored, exactly the case that files this request. So the
+  // request was read, resolved green and switched nothing. This is the missing half.
+  const loadLoyaltyPlans = async () => {
+    try { const d = await API.get('/loyalty/plans'); st.loyaltyPlans = Array.isArray(d) ? d : ((d && d.plans) || []); }
+    catch(e) { st.loyaltyPlans = []; }
+    renderApp();
+  };
+  const activateLoyalty = async () => {
+    if (!st.detail) return;
+    const sel = document.getElementById('loyalty-plan-pick');
+    const slug = sel && sel.value;
+    if (!slug) { st.loyaltyMsg = { ok: false, text: 'No loyalty plan is on sale on this installation.' }; renderApp(); return; }
+    try {
+      const d = await API.post('/admin/loyalty/activate', { ticket_id: st.detail.ticket.id, plan_slug: slug });
+      st.loyaltyMsg = { ok: true, text: (d && d.message) || 'The plan is on.' };
+    } catch(e) { st.loyaltyMsg = { ok: false, text: e.message || 'The switch failed.' }; }
+    renderApp();
   };
   // A reply is either CUSTOMER-VISIBLE or an internal note (2026-10-19).
   // Before this, the one Post button hard-coded `is_internal: true`, so EVERY message an operator
@@ -4197,7 +4286,13 @@ const SupportTickets = () => {
   // buying requests appear, and until now nothing on the row told them apart from a question.
   // Two spellings are read: `source` is what the console files today; a legacy row can only be
   // recognised by the shape it was filed with (category 'billing', subject "<Move> request: <Plan> plan").
-  const isPlanRequest = (t) => !!t && (t.source === 'plan_request'
+  // A LOYALTY plan request (`loyalty_plan_request`, filed by the customer dashboard when card
+  // payment is not switched on for the install) is a buying request too and belongs in this same
+  // queue: it is switched on by hand exactly like a workspace upgrade. It carries no `plan_slug`
+  // because loyalty tiers live in `loyalty_plans`, not in `plans`, so resolving it switches no
+  // workspace plan — the subject names the tier ("Loyalty plan request: Starter").
+  const isLoyaltyPlanRequest = (t) => !!t && t.source === 'loyalty_plan_request';
+  const isPlanRequest = (t) => !!t && (t.source === 'plan_request' || isLoyaltyPlanRequest(t)
     || (t.category === 'billing' && / request:.* plan$/i.test(String(t.subject || ''))));
   const planCount = st.list.filter(isPlanRequest).length;
   const filtered = st.list.filter(t => st.filter==='all' ? true
@@ -4258,6 +4353,15 @@ const SupportTickets = () => {
         </div>
         ${(st.detail.ticket.plan_name || st.detail.ticket.plan_slug) ? html`<div class="mb-4 text-sm" data-plan-detail="1"><span class="text-gray-500">Asks for:</span> <strong>${st.detail.ticket.plan_name || st.detail.ticket.plan_slug}</strong>${st.detail.ticket.plan_applied_at ? html` <span class="badge badge-green">switched to this plan</span>` : html` <span class="badge">not switched yet — Resolve does it</span>`}</div>` : null}
         ${st.planMsg ? html`<div class="rounded-lg p-3 text-sm mb-4 ${st.planMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-plan-msg=${st.planMsg.ok ? 'applied' : 'not-applied'}>${st.planMsg.text}</div>` : null}
+        ${st.detail.ticket.source === 'loyalty_plan_request' ? html`<div class="rounded-lg p-3 mb-4" style="background:#f8fafc;border:1px solid #e2e8f0" data-loyalty-activate="1">
+          <div class="text-sm font-semibold mb-1">Switch this loyalty plan on</div>
+          <p class="text-xs text-gray-500 mb-2">A loyalty plan is not a workspace plan, so Resolve above cannot move it. Pick the plan this workspace asked for — the plan and its credit pool go live on their dashboard straight away.</p>
+          <div class="flex gap-2">
+            <select id="loyalty-plan-pick" class="border rounded px-3 py-2 text-sm flex-1">${(st.loyaltyPlans||[]).map(p => html`<option value=${p.slug}>${p.name}${p.monthly_price ? ' — $' + p.monthly_price + '/mo' : ''}</option>`)}</select>
+            <button class="px-3 py-2 text-sm rounded bg-blue-600 text-white" data-loyalty-activate-btn="1" onClick=${activateLoyalty}>Switch it on</button>
+          </div>
+          ${st.loyaltyMsg ? html`<div class="rounded p-2 mt-2 text-sm ${st.loyaltyMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-loyalty-msg=${st.loyaltyMsg.ok ? 'on' : 'refused'}>${st.loyaltyMsg.text}</div>` : null}
+        </div>` : null}
         ${st.detail.ticket.description ? html`<div class="bg-gray-50 rounded-lg p-3 text-sm mb-4">${st.detail.ticket.description}</div>` : null}
         <div class="space-y-2 mb-4">${(st.detail.messages||[]).map(m => html`<div class="rounded-lg p-3 text-sm ${m.is_internal?'bg-blue-50':'bg-gray-50'}"><span class="text-gray-400 text-xs mr-2">${new Date(m.created_at).toLocaleTimeString()}</span>${m.body}${m.is_internal?html` <span class="text-blue-500 text-xs">(internal — the customer never sees this)</span>`:html` <span class="text-green-600 text-xs">(sent to the customer)</span>`}</div>`)}</div>
         <div class="flex gap-2 mb-4 flex-wrap">

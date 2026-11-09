@@ -206,6 +206,12 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
     <pre>GET /api/v1/admin/checkout-requests?limit=50   — operator only; tenant tokens get 403</pre>
   </div>
   <div class="card">
+    <h3>Loyalty plan requests — switching one on</h3>
+    <p>A loyalty plan is a <em>different catalogue</em> from the workspace plans above: it is priced per month on its own and it gives the workspace a monthly credit pool for its loyalty programme. When a customer presses <strong>Choose &lt;plan&gt;</strong> on their dashboard while this installation has no card payment provider, the dashboard files a <strong>Loyalty plan request</strong> in <strong>Support Requests</strong> instead of charging them.</p>
+    <p>Open that request and the panel shows <strong>Switch this loyalty plan on</strong> with the plans that are on sale. Pick the plan the customer asked for and press the button: the workspace's loyalty plan and its credit pool go live immediately, and the customer's own dashboard shows the plan from then on. The button answers in the server's own words — a plan that is no longer on sale is refused by name and nothing is written.</p>
+    <p>Resolve on its own does <em>not</em> switch a loyalty plan: Resolve moves <em>workspace</em> plans only. Use the switch for a loyalty request.</p>
+  </div>
+  <div class="card">
     <h3>Plan Tiers — reading the screen</h3>
     <ul>
       <li><strong>Left column</strong> — one card per tier: name, slug, <code>$&lt;price&gt;/mo</code>, an <code>Active</code>/<code>Off</code> badge, and <strong>Edit tier</strong> (name, slug, monthly/annual price, active, <code>max_campaigns</code>, <code>max_entries_per_month</code>).</li>
@@ -814,6 +820,72 @@ only one is ever live. Route: <code>POST /api/v1/admin/email-log/send-reset</cod
     <strong>cap</strong>, and whether it is <strong>active</strong>. An offer can be edited, then
     <strong>Deactivated</strong> to stop it being handed out and <strong>Reactivated</strong> later
     — deactivating keeps the history instead of deleting it.</p>
+  </div>
+  <div class="card">
+    <h3>🎟 Promo Codes</h3>
+    <p>Codes a customer can type on a campaign to earn that campaign's points. It works one campaign
+    at a time: pick the campaign at the top of the screen, then fill in the code, how many points it
+    is worth, a cap on how many times it can be used (blank means unlimited) and an expiry date
+    (blank means it never expires). <strong>Create code</strong> files the row, and the table below
+    lists every code for that campaign with its points, uses so far, expiry and status — so a
+    promotion that has been scrapped can be read rather than guessed at. A campaign that has no
+    codes yet says so plainly.</p>
+  </div>
+  <div class="card">
+    <h3>⭐ Loyalty Programs</h3>
+    <p>The point programme itself — the thing the QR code at your counter points at.
+    <strong>+ Add Program</strong> creates one, and the table shows each programme's
+    <strong>currency</strong>, <strong>points per check-in</strong>, whether
+    <strong>streaks</strong> are on, whether it is <strong>active</strong>, and its
+    <strong>check-in link</strong>. That link is what the counter QR encodes: scanning it opens the
+    customer check-in page and awards points to that programme, and it works as soon as the
+    programme is active. Linking a programme to a campaign (from the campaign editor) is optional —
+    it adds that campaign's milestones and delivery to the same points. The tabs across the top
+    (Programs, Members, Tiers, Rewards, Pledges, Referrals, Credits, Ledger, Settings) are the rest
+    of the programme's own records: who has joined, what they have earned, and the ledger behind
+    every point.</p>
+  </div>
+  <div class="card">
+    <h3>🔗 Integration Center</h3>
+    <p>Where a workspace connects the outside tools it wants told about its leads and rewards.
+    <strong>+ Add Integration</strong> creates a webhook target and the list under it holds every
+    target on the account. Targets live here, at account level, and a campaign picks one in its own
+    editor — removing a target from a campaign disconnects that campaign only, and the target stays
+    here for the next one. A campaign editor with nothing to pick says there are no webhook targets
+    on the account yet, so this is the screen to visit first.</p>
+  </div>
+  <div class="card">
+    <h3>🌐 Site Config <span class="text-xs text-gray-500">(operators only)</span></h3>
+    <p>The operator's control over the public face of this installation: <strong>SEO and social
+    metadata</strong> (page title, meta description, keywords, canonical URL, the Open Graph
+    title/description/image and the favicon), <strong>analytics</strong> (Google Analytics and Tag
+    Manager ids, plus head and body scripts), the <strong>homepage hero</strong> (logo text,
+    headline, subheadline and both buttons), and the <strong>legal pages</strong> — terms, privacy
+    and refund policy — which render at <code>/terms.html</code>, <code>/privacy.html</code> and
+    <code>/refunds.html</code>. The last box carries the Schema.org JSON for structured data. One
+    <strong>Save Site Configuration</strong> applies all of it.</p>
+  </div>
+  <div class="card">
+    <h3>💳 Plan &amp; Pricing</h3>
+    <p>What the workspace is really on, and what the other plans cost. The top card is
+    <strong>your current plan</strong>: its name, the monthly price, the yearly price where annual
+    billing is offered, the limits it carries and the features it includes. Below it every other
+    plan is listed with its monthly price and what it includes, each with a
+    <strong>Choose</strong> button. Choose does the upgrade in one press — a connected payment
+    provider opens a secure checkout, and when this installation has no provider connected the same
+    press files the upgrade request instead, so the ask is never lost. The
+    <strong>Plan Tiers</strong> link under your current plan is where features are added to or
+    removed from a tier; a change there takes effect at the runtime gate immediately.</p>
+  </div>
+  <div class="card">
+    <h3>📧 Email Templates <span class="text-xs text-gray-500">(operators only)</span></h3>
+    <p>The wording of every email this platform can send: account mail, campaign lifecycle and the
+    per-mechanic winner messages. Each row shows the template, its key (the name the code uses, for
+    example <code>application_received</code>), its subject line and whether it is still the
+    platform default. A platform default is inherited by every account until that account saves its
+    own copy — so editing the default here changes what every workspace that has never customised
+    it will send. <strong>Edit</strong> opens the subject and the body, and the body can be previewed
+    before it is saved.</p>
   </div>
 </section>
 

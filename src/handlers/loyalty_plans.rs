@@ -392,3 +392,110 @@ pub async fn subscribe(
         }
     }
 }
+
+/// Input for the operator's "switch this loyalty plan on" action.
+///
+/// The operator names the REQUEST they are honouring (`ticket_id`) — the request row already knows
+/// which workspace filed it, so the console never has to carry another tenant's account id around.
+/// `account_id` stays for a direct operator call that has no ticket in front of it.
+#[derive(serde::Deserialize)]
+pub struct OperatorActivateInput {
+    #[serde(default)]
+    pub ticket_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    pub plan_slug: String,
+}
+
+/// POST /api/v1/admin/loyalty/activate — the operator switches a workspace's loyalty plan on.
+///
+/// WHY THIS EXISTS (cron 2026-11-08, measured live): a customer on an installation with no card
+/// payment provider presses "Choose <plan>" on the loyalty catalogue; the dashboard files a
+/// `loyalty_plan_request` support ticket (by design nothing switches a plan on by itself), the
+/// operator reads it in the queue — and there was NO control anywhere in the product that turns
+/// that plan on. The only writer of `accounts.loyalty_plan_status = 'active'` was the Stripe
+/// webhook, which by definition never fires when no provider is stored, and the queue's Resolve
+/// action only moves WORKSPACE plans (`plans`), so a loyalty request resolved green and switched
+/// nothing. The buying request was a dead end.
+///
+/// The operator surface (`/api/v1/admin/*`) already refuses every non-platform-admin in
+/// `security::auth::is_admin_surface`, so this handler carries no second role check. It writes
+/// exactly the columns the paid webhook writes, so a hand-switched workspace is
+/// indistinguishable from a paid one to every reader (`plan_status`, `loyalty_v2`'s gates).
+pub async fn operator_activate(
+    State(s): State<AppState>,
+    Json(body): Json<OperatorActivateInput>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let slug = body.plan_slug.trim().to_string();
+    if slug.is_empty() {
+        return Err(AppError::BadRequest("plan_slug is required".to_string()));
+    }
+
+    // The workspace: from the request the operator is honouring, else from an explicit id.
+    let account_id: Uuid = if let Some(tid) = body.ticket_id.as_deref().filter(|t| !t.is_empty()) {
+        let ticket = Uuid::parse_str(tid)
+            .map_err(|_| AppError::BadRequest("Invalid ticket_id".to_string()))?;
+        sqlx::query_scalar::<_, Uuid>("SELECT tenant_id FROM support_tickets WHERE id = $1")
+            .bind(ticket)
+            .fetch_optional(&s.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("No such request.".to_string()))?
+    } else if let Some(aid) = body.account_id.as_deref().filter(|a| !a.is_empty()) {
+        Uuid::parse_str(aid).map_err(|_| AppError::BadRequest("Invalid account_id".to_string()))?
+    } else {
+        return Err(AppError::BadRequest(
+            "Name the request (ticket_id) or the workspace (account_id).".to_string(),
+        ));
+    };
+
+    // The plan must exist AND still be on sale: seating a retired loyalty plan is never intended,
+    // and refusing it by name is more useful than writing a tier the catalogue cannot show.
+    let plan: Option<(String, i32)> = sqlx::query_as(
+        "SELECT name, monthly_zc_pool FROM loyalty_plans WHERE slug = $1 AND is_active = true",
+    )
+    .bind(&slug)
+    .fetch_optional(&s.db)
+    .await?;
+    let (plan_name, pool) = plan.ok_or_else(|| {
+        AppError::BadRequest(format!("No loyalty plan called '{slug}' is on sale."))
+    })?;
+
+    let updated = sqlx::query(
+        "UPDATE accounts SET loyalty_plan = $1, loyalty_plan_status = 'active', \
+         zc_pool_remaining = $2, zc_pool_total = $2, \
+         pool_reset_date = (NOW()::date + INTERVAL '30 days'), updated_at = NOW() \
+         WHERE id = $3",
+    )
+    .bind(&slug)
+    .bind(pool)
+    .bind(account_id)
+    .execute(&s.db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound("No such workspace.".to_string()));
+    }
+
+    // The credit ledger records the allocation, exactly as the paid path does.
+    sqlx::query(
+        "INSERT INTO credit_transactions (account_id, amount, action, description, balance_after, created_at) \
+         VALUES ($1, $2, 'operator_activation', $3, $2, NOW())",
+    )
+    .bind(account_id)
+    .bind(pool)
+    .bind(format!(
+        "{plan_name} loyalty plan switched on by the operator"
+    ))
+    .execute(&s.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "account_id": account_id,
+        "plan": plan_name,
+        "slug": slug,
+        "zc_pool": pool,
+        "status": "active",
+        "message": format!(
+            "{plan_name} is now on for this workspace, with {pool} credits in its pool."
+        )
+    })))
+}

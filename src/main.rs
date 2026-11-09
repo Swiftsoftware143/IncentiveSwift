@@ -1074,6 +1074,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/plans/assign",
             post(crate::handlers::plans_handler::admin_assign_plan),
         )
+        // The operator's "switch this loyalty plan on" action (cron 2026-11-08). A loyalty
+        // purchase request reaches the queue as a `loyalty_plan_request` ticket, and until this
+        // route existed NOTHING but the Stripe webhook could set `loyalty_plan_status = 'active'`
+        // — so on an installation with no payment provider the request could never be granted.
+        .route(
+            "/api/v1/admin/loyalty/activate",
+            post(crate::handlers::loyalty_plans::operator_activate),
+        )
         .route(
             "/api/v1/admin/plans/:id",
             get(crate::handlers::plans_handler::get_plan)
