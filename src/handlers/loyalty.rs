@@ -519,6 +519,18 @@ pub async fn create_program(
     let account_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
 
+    // The plan gate, enforced (cron 2026-11-09). `GET /loyalty/check-plan` has been telling the
+    // console whether the account's tier includes `module_loyalty_program` since it shipped, and
+    // nothing ever refused a write — a tier with the feature switched OFF could still create
+    // programmes, so the console's own upsell sentence described a gate that did not exist.
+    // CREATING is the only gated write on purpose: an existing programme keeps working after a
+    // downgrade, so no customer loses a live QR code or a member's points to a plan change.
+    if !plan_allows_loyalty(&state.db, account_id).await? {
+        return Err(AppError::UpgradeRequired(
+            "Loyalty programmes are not included in your current plan — upgrade to create one."
+                .to_string(),
+        ));
+    }
     let program_name = checked_program_name(&body.name)?;
     let id = Uuid::new_v4();
     let campaign_id = body.campaign_id.and_then(|s| Uuid::parse_str(&s).ok());
@@ -1514,6 +1526,36 @@ pub async fn online_stats(
 
 /* ===== Plan Gating ===== */
 
+/// Does the caller's plan include the loyalty module?
+///
+/// ONE definition, two callers: [`check_plan_loyalty`] tells the console, and [`create_program`]
+/// enforces it. Absent row and `NULL` both mean "not configured", which ALLOWS the feature — the
+/// same convention `features::enforce_feature_limit` uses and the reason the free tier (which has
+/// no `module_loyalty_program` row at all) keeps working. Only an explicit `enabled = false`
+/// turns loyalty off.
+pub async fn plan_allows_loyalty(db: &sqlx::PgPool, account_id: Uuid) -> Result<bool, AppError> {
+    let tier_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(db)
+            .await?
+            .flatten();
+    let Some(tier_id) = tier_id else {
+        return Ok(true);
+    };
+    // COALESCE to the column's own DB DEFAULT (true): 'absent' and 'NULL' both mean
+    // "not configured", which allows the feature (kanban t_310c6e66).
+    let enabled: Option<bool> = sqlx::query_scalar(
+        "SELECT COALESCE(tf.enabled, true) FROM tier_features tf
+           JOIN features f ON f.id = tf.feature_id
+          WHERE tf.tier_id = $1 AND f.key = 'module_loyalty_program'",
+    )
+    .bind(tier_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(enabled.unwrap_or(true))
+}
+
 /// Check if the account's plan has loyalty enabled.
 pub async fn check_plan_loyalty(
     State(state): State<AppState>,
@@ -1534,29 +1576,16 @@ pub async fn check_plan_loyalty(
     .fetch_optional(&state.db)
     .await?;
 
-    let (tier_id, tier) = match &tier_row {
-        Some((id, slug)) => (Some(*id), slug.clone()),
-        None => (None, "free".to_string()),
+    let tier = match &tier_row {
+        Some((_, slug)) => slug.clone(),
+        None => "free".to_string(),
     };
 
     // Entitlements live in `tier_features` — features.rs is the single source of truth and the
-    // `feature_limits` table this used to read does not exist. Same convention as
-    // features::enforce_feature_limit(): a feature with no row for the tier is simply not
-    // configured, which allows it; only an explicit `enabled = false` turns loyalty off.
-    let enabled = match tier_id {
-        None => true,
-        Some(id) => sqlx::query_scalar::<_, bool>(
-            // COALESCE to the column's own DB DEFAULT (true): 'absent' and 'NULL' both mean
-            // "not configured", which allows the feature (kanban t_310c6e66).
-            "SELECT COALESCE(tf.enabled, true) FROM tier_features tf
-               JOIN features f ON f.id = tf.feature_id
-              WHERE tf.tier_id = $1 AND f.key = 'module_loyalty_program'",
-        )
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await?
-        .unwrap_or(true),
-    };
+    // `feature_limits` table this used to read does not exist. The convention (absent row / NULL =
+    // "not configured" = allowed) lives in [`plan_allows_loyalty`], which `create_program` also
+    // enforces, so the answer the console shows and the answer the write path applies cannot drift.
+    let enabled = plan_allows_loyalty(&state.db, account_id).await?;
 
     Ok(Json(json!({
         "plan_tier": tier,

@@ -1999,9 +1999,22 @@ const PrizePools = () => {
 
 const LoyaltyPrograms = () => {
   const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, md: null, mdBusy: false, mdErr: '', scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '', ladder: [], ladderErr: '', ladderMsg: '', ladderDraft: null });
-  if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); }
+  if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); loadPlanGate(); }
 
+  // The plan gate (cron 2026-11-09). `GET /loyalty/check-plan` existed with no screen anywhere, so
+  // a workspace whose plan excludes `module_loyalty_program` met a builder that silently refused
+  // at save time with no explanation. This reads the SAME answer `create_program` now enforces
+  // (handlers/loyalty.rs::plan_allows_loyalty), so the notice and the refusal cannot disagree.
+  // A failed read shows nothing rather than claiming a plan state: an unreachable check is not
+  // "your plan excludes this".
+  async function loadPlanGate() {
+    try { st.planGate = await API.get('/loyalty/check-plan'); }
+    catch (e) { st.planGate = null; }
+    renderApp();
+  }
+  const tierLabel = (s) => s ? String(s).replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'current';
   async function loadPrograms() { try { const data = await API.get('/loyalty/programs'); st.list = Array.isArray(data.programs||data) ? (data.programs||data) : []; renderApp(); } catch(e){ console.error(e); } }
+
   async function loadTiers(progId) { if (!progId) { st.tiers = []; st.tierErr = ''; renderApp(); return; } try { const data = await API.get('/loyalty/tiers?program_id='+encodeURIComponent(progId)); st.tiers = data.tiers||[]; st.tierErr=''; renderApp(); } catch(e){ st.tiers=[]; st.tierErr=(e && e.message) || String(e); renderApp(); } }
   // ── The STATUS ladder ─────────────────────────────────────────────────────────────────────────
   // A DIFFERENT table from the reward tiers above. `loyalty_tiers` is what the check-in path reads
@@ -2242,7 +2255,9 @@ const LoyaltyPrograms = () => {
 
   // ── Programs Tab ──
   const programsTab = html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Programs</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button></div></div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Loyalty Programs</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} />${st.planGate && st.planGate.loyalty_enabled === false
+          ? html`<button class="btn btn-sm btn-outline" data-ops="loyalty-add-blocked" title="Your plan does not include Loyalty — the create route refuses with the same sentence." onClick=${() => go('my-plan')}>Upgrade to add programmes</button>`
+          : html`<button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button>`}</div></div>
     <div class="text-xs text-gray-500 mb-2">The check-in link is what your counter QR encodes — scanning it opens the customer check-in page and awards points to THIS programme. It works as soon as the programme is active. Linking the programme to a campaign (from the campaign editor) is optional: it adds that campaign's milestones and delivery to the same points.</div>
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Currency</th><th>Points/Checkin</th><th>Streaks</th><th>Active</th><th>Check-in link</th><th>Actions</th></tr></thead>
@@ -2888,9 +2903,26 @@ const ledgerTab = html`<div>
     </div>
   </div>`;
 
+  // The plan gate's own screen (cron 2026-11-09). Two states, both read from the live answer the
+  // create route enforces: a quiet confirmation naming the REAL plan, or — when the tier has
+  // `module_loyalty_program` switched off — the sentence plus a door to the plans screen. Nothing
+  // renders until the read answers, so a slow or failed check never claims a plan state.
+  const planGateBanner = !st.planGate ? '' : (st.planGate.loyalty_enabled === false
+    ? html`<div class="card mb-4" data-ops="loyalty-plan-gate" data-plan-gate="disabled" style="border-left:4px solid #f59e0b;background:#fffbeb">
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div class="font-bold" data-ops="loyalty-plan-gate-title">Loyalty is not part of your ${tierLabel(st.planGate.plan_tier)} plan</div>
+            <div class="text-sm text-gray-600">${st.planGate.message || 'Upgrade your plan to unlock Loyalty rewards.'} Your existing programmes keep working; creating a new one needs a plan that includes Loyalty.</div>
+          </div>
+          <button class="btn btn-sm btn-green" data-ops="loyalty-plan-gate-upgrade" onClick=${() => go('my-plan')}>See plans</button>
+        </div>
+      </div>`
+    : html`<div class="text-xs text-gray-500 mb-3" data-ops="loyalty-plan-gate" data-plan-gate="included">Loyalty is included in your ${tierLabel(st.planGate.plan_tier)} plan.</div>`);
+
   const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
+    ${planGateBanner}
     <div class="flex gap-2 mb-4 flex-wrap">${tabs.map(t => html`<button class="btn btn-sm ${st.tab===t.toLowerCase()?'':'btn-outline'}" onClick=${()=>setTab(t)}>${t}</button>`)}</div>
     ${editModal}
     ${tabContent}
