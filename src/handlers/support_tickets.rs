@@ -422,6 +422,7 @@ pub async fn create_ticket(
             .fetch_optional(&state.db)
             .await
             .unwrap_or(None);
+    let (filer_email, filer_name) = filer.clone().unwrap_or_default();
     if let Some((email, name)) = filer {
         if let Err(e) = crate::email::send_support_request_receipt_email(
             &state.db,
@@ -448,6 +449,19 @@ pub async fn create_ticket(
         let notified =
             crate::email::send_plan_request_operator_alert(&state.db, account, &plan_name).await;
         tracing::info!(ticket = %id, operator_notified = notified, "plan request filed");
+    } else {
+        // An ORDINARY help request (2026-11-09) — the plan arm above only ever covered a request to
+        // buy. "I cannot sign in", "my reports are blank": both wrote a row and told nobody. One
+        // alert per filed ticket; the plan arm is exclusive so this can never double-mail.
+        let notified = crate::email::send_support_request_operator_alert(
+            &state.db,
+            &filer_name,
+            &filer_email,
+            &body.subject,
+            body.description.as_deref().unwrap_or(""),
+        )
+        .await;
+        tracing::info!(ticket = %id, operator_notified = notified, "support request filed");
     }
     Ok(Json(json!({
         "acknowledged": acknowledged,
@@ -590,6 +604,19 @@ pub async fn create_public_ticket(
     .bind(&email)
     .execute(&state.db)
     .await?;
+
+    // TELL THE OPERATOR (2026-11-09). The row above is the record; this is the notification. Until
+    // it existed a locked-out customer's only way back in was a console nobody had been told to
+    // open. Best effort: the row is already written, so a mail failure is logged and the 201 kept.
+    let notified = crate::email::send_support_request_operator_alert(
+        &state.db,
+        body.name.trim(),
+        &email,
+        &subject,
+        &description,
+    )
+    .await;
+    tracing::info!(ticket = %id, operator_notified = notified, "public support request filed");
 
     Ok((
         axum::http::StatusCode::CREATED,

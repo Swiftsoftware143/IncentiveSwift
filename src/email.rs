@@ -223,11 +223,28 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The OPERATOR's copy of a plan request (2026-11-09). Named for the decision it asks for,
         // because the recipient is the person who can switch the workspace, not the customer.
         "plan_request_operator_alert" => format!("A customer asked to buy a plan — {app_name}"),
+        // The OPERATOR's copy of an ORDINARY help request (2026-11-09). Measured live: the
+        // contact-page door answered 201 "Your message is with our team" and queued ZERO mail, and
+        // the signed-in door only ever alerted for a PLAN request — so a locked-out customer wrote
+        // for help and the person who answers it was told nothing. Named for the action it needs.
+        "support_request_operator_alert" => {
+            format!("A support request needs an answer — {app_name}")
+        }
         // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
         // Named as a preview so it can never be mistaken for a system notice.
         "branding_preview" => format!("Your email branding — a preview from {app_name}"),
         _ => format!("{} Notification", app_name),
     }
+}
+
+/// HTML-escape a value that a CUSTOMER typed before it goes into an operator's mail body.
+/// The operator's copy of a help request carries the asker's own subject and message, so without
+/// this a visitor could put markup (or a fake link) into the operator's inbox.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 async fn send_inline(
@@ -426,6 +443,49 @@ async fn send_inline(
                  <p>The request is waiting in the admin console (Plans &rarr; Plan requests). Moving it to <em>done</em> puts that workspace on the plan.</p>\
                  <p><a href=\"{admin_url}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
                  <p style=\"font-size:13px;color:#9ca3af\">Nothing has been charged. This message is sent once per request.<br>- {app_name}</p></body></html>"
+            );
+            Ok((subject, text, html))
+        }
+        // The OPERATOR's copy of an ordinary help request (2026-11-09) — reached when no stored
+        // template row exists for it, which is true of every install today. Carries the words the
+        // asker typed and the address a reply must go to, because the operator answers by email.
+        "support_request_operator_alert" => {
+            let who = vars
+                .get("who")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A customer");
+            let reply_to = vars
+                .get("reply_to")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let ask = vars
+                .get("subject_line")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a support request");
+            let message = vars.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.incentiveswift.com");
+            let subject = format!("A support request needs an answer: {ask}");
+            let text = format!(
+                "{who} wrote to support.\n\nSubject: {ask}\nReply to: {reply_to}\n\n{message}\n\n                 Answer it in the admin console (Support -> Support requests) and the asker is mailed                  your reply: {admin_url}\n\n- {app_name}"
+            );
+            let html = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p><strong>{}</strong> wrote to support.</p>\
+                 <p>Subject: <strong>{}</strong></p>\
+                 <p>Reply to: <strong>{}</strong></p>\
+                 <pre style=\"white-space:pre-wrap;font-family:inherit\">{}</pre>\
+                 <p>Answer it in the admin console (Support &rarr; Support requests) and the asker is                  mailed your reply.</p>\
+                 <p><a href=\"{}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- {}</p></body></html>",
+                esc(who),
+                esc(ask),
+                esc(reply_to),
+                esc(message),
+                admin_url,
+                app_name,
             );
             Ok((subject, text, html))
         }
@@ -663,6 +723,68 @@ pub async fn send_plan_request_operator_alert(
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(account = %account_id, "plan-request operator alert to {to} failed: {e}");
+            false
+        }
+    }
+}
+
+/// Tell the OPERATOR that somebody wrote to support (2026-11-09).
+///
+/// WHY THIS EXISTS (measured live today on this app): `POST /api/v1/public/support-request` — the
+/// contact page's form, the door a LOCKED-OUT customer has — answered 201 with "Your message is
+/// with our team" and queued **zero** mail. The signed-in door was nearly as silent: it mailed the
+/// operator only when the request was a PLAN request ([`send_plan_request_operator_alert`]), so any
+/// ordinary "I cannot sign in" ticket waited in a console nobody was told to open. FunnelSwift
+/// closed the identical gap at 10:59 today.
+///
+/// Destination = the operator's own `operator_alert_email` (`admin_settings.email`, set from the
+/// console's Email Provider card). An unset address sends nothing: this code never invents a
+/// mailbox. Sent through the SYSTEM mail configuration (`None`), never the asking workspace's, so
+/// it still arrives when that workspace's own mail server is the broken thing.
+///
+/// Best effort by design: the row is already written and the console's queue reads it, so a mail
+/// failure must never turn a filed request into a 500. Returns whether a send was attempted.
+pub async fn send_support_request_operator_alert(
+    pool: &sqlx::PgPool,
+    who: &str,
+    reply_to: &str,
+    subject_line: &str,
+    message: &str,
+) -> bool {
+    let row: Option<serde_json::Value> =
+        match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("support operator alert: could not read the mail settings: {e}");
+                return false;
+            }
+        };
+    let Some(to) = row
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return false;
+    };
+    let vars = json!({
+        "who": if who.trim().is_empty() { "A customer" } else { who.trim() },
+        "reply_to": reply_to,
+        "subject_line": subject_line,
+        "message": message,
+        "admin_url": "https://admin.incentiveswift.com",
+        "app_name": APP_NAME,
+    });
+    match send_template_email(pool, None, &to, "support_request_operator_alert", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("support operator alert to {to} failed: {e}");
             false
         }
     }
