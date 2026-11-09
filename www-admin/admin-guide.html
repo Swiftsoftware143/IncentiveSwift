@@ -674,6 +674,14 @@ in a sentence &mdash; no account on that address, reserved test address so nothi
 link is on its way, or the provider's refusal &mdash; and pressing it twice retires the earlier link so
 only one is ever live. Route: <code>POST /api/v1/admin/email-log/send-reset</code> with
 <code>{"email":"&lt;address&gt;"}</code>.</p>
+<p><strong>Operator alert inbox</strong> is where the app emails you the moment a customer asks for a
+paid plan &mdash; whether they pressed <strong>Upgrade</strong> on their dashboard or picked a tier on
+the pricing page before signing up. One message per new request, carrying the workspace, the tier, who
+asked, and a link to the console, so a request does not wait for somebody to happen to open the Plan
+requests list. It leaves through the system provider above, never through the customer's own mail
+server. Leave the box empty and no alert is sent &mdash; the request still appears in
+<strong>Plans &rarr; Plan requests</strong>. An address that is not an address is refused with a
+sentence instead of being saved, so a typo cannot silently swallow every alert.</p>
 </section>
 
 <section id="profile-picture">

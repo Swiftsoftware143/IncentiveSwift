@@ -220,6 +220,9 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The moment the customer FILES the request (cron 2026-10-20). Named so it is obvious in an
         // inbox that it is the acknowledgement of the thing they just did, not the answer to it.
         "support_request_receipt" => format!("We have your request — {app_name}"),
+        // The OPERATOR's copy of a plan request (2026-11-09). Named for the decision it asks for,
+        // because the recipient is the person who can switch the workspace, not the customer.
+        "plan_request_operator_alert" => format!("A customer asked to buy a plan — {app_name}"),
         // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
         // Named as a preview so it can never be mistaken for a system notice.
         "branding_preview" => format!("Your email branding — a preview from {app_name}"),
@@ -392,6 +395,40 @@ async fn send_inline(
                 String::new(),
             ))
         }
+        // The OPERATOR's copy of a plan request (2026-11-09). The customer gets the receipt above;
+        // this arm is the other half of the same event, and without it an ask nobody is told about
+        // is a sale nobody makes (FunnelSwift, WorkflowSwift and ADASwift closed this in 2026-11-09).
+        "plan_request_operator_alert" => {
+            let workspace = vars
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A workspace");
+            let plan = vars
+                .get("plan")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a plan");
+            let requester = vars
+                .get("requester")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.incentiveswift.com");
+            let subject = format!("A customer asked to buy {plan}");
+            let text = format!(
+                "{workspace} asked to be moved onto {plan}.\n\nRequested by: {requester}\nPlan: {plan}\n\nThe request is waiting in the admin console (Plans -> Plan requests). Moving it to done puts that workspace on the plan: {admin_url}\n\nNothing has been charged. This message is sent once per request.\n\n- {app_name}"
+            );
+            let html = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p><strong>{workspace}</strong> asked to be moved onto <strong>{plan}</strong>.</p>\
+                 <p>Requested by: <strong>{requester}</strong></p>\
+                 <p>The request is waiting in the admin console (Plans &rarr; Plan requests). Moving it to <em>done</em> puts that workspace on the plan.</p>\
+                 <p><a href=\"{admin_url}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">Nothing has been charged. This message is sent once per request.<br>- {app_name}</p></body></html>"
+            );
+            Ok((subject, text, html))
+        }
         // The customer's own branding sample (cron 2026-10-23): the header above this body shows
         // what every mail from this workspace carries. Reached when the account has no
         // `branding_preview` template row — true of every account today.
@@ -548,6 +585,87 @@ pub async fn send_support_request_receipt_email(
         "app_url": APP_URL,
     });
     send_template_email(pool, Some(account_id), to, "support_request_receipt", &vars).await
+}
+
+/// Tell the OPERATOR that a workspace asked to buy a plan (2026-11-09).
+///
+/// The customer already gets a receipt ([`send_support_request_receipt_email`]); this is the other
+/// half of the same event. Until it existed, `POST /api/v1/support-tickets` with
+/// `source='plan_request'` (and the signup door's plan pick) wrote the row and told the customer,
+/// while the person who can actually move the row was told nothing. On this install no payment
+/// provider is stored, so the request IS the buying path: an ask nobody is told about is a sale
+/// nobody makes. FunnelSwift, WorkflowSwift and ADASwift closed the same gap on 2026-11-09.
+///
+/// The destination is the operator's own address, stored beside the system mail settings
+/// (`admin_settings.email` key `operator_alert_email`, set from the console's Email Provider card).
+/// An unset address sends nothing — this code never invents a mailbox. Sent through the SYSTEM mail
+/// configuration (`None`), not the asking workspace's, so it arrives even when that workspace's own
+/// mail server is the thing that is broken.
+///
+/// Best effort by design: the request row is already written and the operator's queue reads it, so
+/// a mail failure must never turn a recorded request into an error. Returns whether a send was
+/// attempted and accepted by the send funnel, which is what the caller logs.
+pub async fn send_plan_request_operator_alert(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    plan_name: &str,
+) -> bool {
+    let row: Option<serde_json::Value> =
+        match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
+            .fetch_optional(pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "plan-request operator alert: could not read the mail settings: {e}"
+                );
+                return false;
+            }
+        };
+    let Some(to) = row
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return false;
+    };
+    let who: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(NULLIF(btrim(name), ''), ''), COALESCE(email, '') \
+           FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+    let (name, email) = who.unwrap_or_default();
+    let workspace = if name.trim().is_empty() {
+        if email.trim().is_empty() {
+            "A workspace".to_string()
+        } else {
+            email.clone()
+        }
+    } else {
+        name
+    };
+    let vars = json!({
+        "workspace": workspace,
+        "plan": plan_name,
+        "requester": email,
+        "admin_url": "https://admin.incentiveswift.com",
+        "app_name": APP_NAME,
+    });
+    match send_template_email(pool, None, &to, "plan_request_operator_alert", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(account = %account_id, "plan-request operator alert to {to} failed: {e}");
+            false
+        }
+    }
 }
 
 /// Tell the VISITOR who used the contact page that their message moved (2026-11-06).
@@ -791,6 +909,38 @@ mod tests {
         // The defect this arm replaces: a dashboard sentence sent to someone with no account.
         assert!(!body.to_lowercase().contains("dashboard"), "{body}");
         assert!(!body.contains("/dashboard/"), "{body}");
+    }
+
+    /// The OPERATOR's plan-request alert names the workspace, the plan and who asked (2026-11-09).
+    ///
+    /// The customer's receipt existed; nothing told the person who can move the request row, so a
+    /// buying ask waited in the console unnoticed. This renders the real inline arm — the same one
+    /// the live send uses when the installation has no DB template for the type — so a regression in
+    /// the wording or the merge fields is a red test.
+    #[tokio::test]
+    async fn the_operator_alert_names_the_workspace_the_plan_and_the_requester() {
+        let vars = json!({
+            "workspace": "Acme Rewards",
+            "plan": "Pro",
+            "requester": "buyer@example.invalid",
+            "admin_url": "https://admin.incentiveswift.com",
+            "app_name": APP_NAME,
+        });
+        let (subject, body, html) = send_inline(
+            "ops@example.invalid",
+            "plan_request_operator_alert",
+            &vars,
+            APP_NAME,
+            APP_URL,
+        )
+        .await
+        .expect("the operator alert renders");
+        assert_eq!(subject, "A customer asked to buy Pro");
+        assert!(body.contains("Acme Rewards"), "{body}");
+        assert!(body.contains("Pro"), "{body}");
+        assert!(body.contains("buyer@example.invalid"), "{body}");
+        assert!(body.contains("admin.incentiveswift.com"), "{body}");
+        assert!(html.contains("admin.incentiveswift.com"), "{html}");
     }
 
     /// An account that has configured NOTHING still sends mail that says whose it is (2026-10-24).

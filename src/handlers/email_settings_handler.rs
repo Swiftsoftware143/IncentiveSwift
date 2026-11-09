@@ -141,6 +141,27 @@ pub async fn update_email_settings(
     obj.remove("api_key_set");
     obj.remove("smtp_password_set");
 
+    // The operator's plan-request alert inbox (2026-11-09). Trimmed, and refused when it is not an
+    // address, so a typo cannot silently swallow every buying alert; an empty value clears it — and
+    // a cleared value means nothing is sent, which is the honest "not configured" state.
+    if let Some(raw) = obj
+        .get("operator_alert_email")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    {
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            obj.insert("operator_alert_email".into(), json!(""));
+        } else if !trimmed.contains('@') || trimmed.split_whitespace().count() != 1 {
+            return Err(AppError::BadRequest(
+                "operator_alert_email: that is not an email address, so nothing was saved."
+                    .to_string(),
+            ));
+        } else {
+            obj.insert("operator_alert_email".into(), json!(trimmed));
+        }
+    }
+
     if let Some(p) = body.get("provider").and_then(|v| v.as_str()) {
         let valid = email_provider::available()
             .iter()

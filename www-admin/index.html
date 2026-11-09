@@ -3131,6 +3131,9 @@ const EmailProvider = () => {
           <div class="text-xs text-gray-400 mt-1">The address every transactional mail is sent from (must be a verified sender at the provider).</div></div>
         ${TEXT_FIELDS.filter(f => f[0] !== 'from_address' && f[0] !== 'from_name').map(f => html`<div><label class="block text-xs font-medium mb-1">${f[1]}</label>
           <input class=${inp} value=${cfg[f[0]] || ''} onInput=${e => { st.cfg[f[0]] = e.target.value; }} /></div>`)}
+        <div class="col-span-2"><label class="block text-xs font-medium mb-1">Operator alert inbox</label>
+          <input class=${inp} data-operator-alert="email" placeholder="you@yourcompany.com" value=${cfg.operator_alert_email || ''} onInput=${e => { st.cfg.operator_alert_email = e.target.value; }} />
+          <div class="text-xs text-gray-400 mt-1">Where a customer's plan request is emailed the moment they ask for a paid plan — from the dashboard's Upgrade button or a pick on the pricing page. Leave it empty and nothing is sent; the request still appears in Plan requests. This message always leaves through the provider above, never the customer's own mail server.</div></div>
         <div><label class="block text-xs font-medium mb-1">API key ${cfg.api_key ? '(stored — leave as it is to keep it)' : ''}</label>
           <input class=${inp} type="password" autocomplete="new-password" value=${cfg.api_key || ''} onInput=${e => { st.cfg.api_key = e.target.value; }} /></div>
         <div><label class="block text-xs font-medium mb-1">SMTP password ${cfg.smtp_password ? '(stored — leave as it is to keep it)' : ''}</label>

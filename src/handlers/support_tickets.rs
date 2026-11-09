@@ -441,6 +441,14 @@ pub async fn create_ticket(
             acknowledged = true;
         }
     }
+    // The OPERATOR's half of the same event (2026-11-09). The receipt above tells the FILER; this
+    // tells the person who can actually move the row. Best effort: a mail problem must never turn a
+    // recorded request into an error, and an unset operator address sends nothing at all.
+    if !plan_name.is_empty() {
+        let notified =
+            crate::email::send_plan_request_operator_alert(&state.db, account, &plan_name).await;
+        tracing::info!(ticket = %id, operator_notified = notified, "plan request filed");
+    }
     Ok(Json(json!({
         "acknowledged": acknowledged,
         "ticket": row,
@@ -1156,5 +1164,14 @@ pub async fn record_signup_plan_request(
     .bind(&slug)
     .execute(db)
     .await?;
+    // The OPERATOR is told too (2026-11-09): a pick made on the pricing page is the same buying
+    // intent as the dashboard's Upgrade button, and the row alone waits for someone to open the
+    // console. Best effort — the account already exists and nothing here may fail the signup.
+    let notified = crate::email::send_plan_request_operator_alert(db, account_id, &name).await;
+    tracing::info!(
+        account = %account_id,
+        operator_notified = notified,
+        "signup plan request filed"
+    );
     Ok(Some((slug, name)))
 }
