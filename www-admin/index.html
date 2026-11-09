@@ -953,7 +953,20 @@ const MECHANIC_DEFAULT_CONFIG = {
   score_reveal: { tiers: [{ min: 0, max: 100, label: 'Bronze', message: 'Keep going!' }] },
   spin_wheel: { prize_pool: { prizes: [] } },
   scratch_card: { win_probability: 0.5, prize_pool: { prizes: [] } },
-  personality: { outcomes: [] },
+  personality: {
+    // Two options per question, in the order the player sees them: the FIRST counts as A and the
+    // SECOND as B. Add one entry per question, e.g.
+    //   { "question": "…", "options": ["…", "…"] }
+    questions: [],
+    // The four result labels, IN THIS ORDER: 0 Balanced, 1 Driver, 2 Analyzer, 3 Neutral. Leave the
+    // labels empty to keep the engine's own. A quiz with no questions cannot be played.
+    outcomes: [
+      { label: 'Balanced', description: '' },
+      { label: 'Driver', description: '' },
+      { label: 'Analyzer', description: '' },
+      { label: 'Neutral', description: '' }
+    ]
+  },
   calculator: { formula: '' },
   mystery: { reward: { label: 'Mystery Reward' } },
   countdown: { target_at: '2026-12-31T23:59:59Z' },
@@ -1458,6 +1471,12 @@ const Campaigns = () => {
   const needsPrizePool = (c) => c.type === 'spin_wheel'
     && !(c.config && c.config.prize_pool
          && Array.isArray(c.config.prize_pool.prizes) && c.config.prize_pool.prizes.length);
+  // The same shape for the Personality Quiz: the console offered the type, published the campaign,
+  // and the player had nothing to answer — so the result was "Better luck next time" for a quiz
+  // with no losing outcome. A quiz with no questions now answers `playable:false`, and the row says
+  // it here, before the operator hands out the link.
+  const needsPersonalityQuestions = (c) => c.type === 'personality'
+    && !(c.config && Array.isArray(c.config.questions) && c.config.questions.length);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
@@ -1467,7 +1486,7 @@ const Campaigns = () => {
       <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td>
-          <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}</td>
+          <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}${needsPersonalityQuestions(c) && html` <span class="badge badge-yellow" data-needs-personality-questions=${c.slug} title="Nobody can play this quiz yet: it has no questions. Edit the campaign, add questions to Config (each with two options), then share the link.">Needs questions</span>`}</td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button>${c.type === 'raffle' && html`<button class="btn btn-sm btn-outline" data-draw-slug=${c.slug} onClick=${() => openDraw(c)}>Draw winner</button>`}<button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
@@ -1558,6 +1577,9 @@ const Campaigns = () => {
               <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${cf.tag_namespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { cf.tag_namespace = e.target.value; }} /></div>
             </div>
             <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${cf.config} onInput=${e => { cf.config = e.target.value; }}></textarea></div>
+            ${cf.type === 'personality' && html`<div class="text-xs text-gray-500" id="personalityConfigHint">
+              <b>Personality Quiz:</b> <code>questions</code> is a list of <code>{ "question": "…", "options": ["first", "second"] }</code> — the <b>first</b> option counts as A and the <b>second</b> as B. <code>outcomes</code> renames the four results in this order: <b>Balanced, Driver, Analyzer, Neutral</b>, each <code>{ "label": "…", "description": "…" }</code>. Leave a label empty to keep the engine's own; a quiz with no questions cannot be played.
+            </div>`}
             ${lfOn && html`<div class="border-t border-gray-100 pt-3 mt-3">
               <div class="flex items-center justify-between mb-2">
                 <div class="text-sm font-semibold">🧩 Sections <span class="text-xs text-gray-400">(presentation order only — scoring, outcomes, tags, redirects and the webhook are unchanged)</span></div>

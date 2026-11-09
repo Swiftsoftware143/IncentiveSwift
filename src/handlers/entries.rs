@@ -89,14 +89,15 @@ pub async fn create_entry(
     )
     .await?;
 
-    // Play-time gate for the calculator mechanic. Calculator has no dedicated
-    // handler — it plays through this generic entry-capture endpoint, which derives its score
-    // from the campaign's own formula (step 4) — so gate on the campaign owner's tier here.
-    if campaign.r#type == "calculator" {
+    // Play-time gate for the mechanics that have no handler of their own. Calculator derives its
+    // score from the campaign's own formula (step 4); personality derives its result from the
+    // answers the visitor gives (step 4b). Both play through this generic entry-capture endpoint,
+    // so both gate on the campaign owner's tier here.
+    if campaign.r#type == "calculator" || campaign.r#type == "personality" {
         crate::access::feature_gate::enforce_mechanic_feature(
             &state,
             &campaign.account_id.to_string(),
-            "calculator",
+            &campaign.r#type,
         )
         .await?;
     }
@@ -141,6 +142,35 @@ pub async fn create_entry(
             );
         }
     }
+    // 4b. A `personality` campaign's result is the TYPE its answers sort the visitor into. This is
+    // the arm the mechanic never had (kanban t_3292150a): the console offered "Personality Quiz",
+    // the campaign published, and every visitor fell through to this door where `score` stayed NULL
+    // and the outcome was "entrant" — so the page told them "Better luck next time" for a quiz that
+    // has no losing outcome. `mechanics::scoring::calculate_personality` existed and nothing called
+    // it; this is that caller.
+    //
+    // The result LABELS are the owner's own (`config.outcomes`, index-ordered — see
+    // `scoring::personality_outcome`), and a campaign that names none keeps the engine's four, so
+    // the mechanic works out of the box. Answers are required: a quiz with no answers has no type,
+    // and inventing one ("Balanced") would be a result the visitor never gave.
+    let mut personality: Option<(String, String)> = None;
+    if campaign.r#type == "personality" && score.is_none() {
+        let answered = body
+            .answers
+            .as_ref()
+            .filter(|a| a.as_object().map(|o| !o.is_empty()).unwrap_or(false));
+        let Some(answers) = answered else {
+            return Err(AppError::BadRequest(
+                "Answer at least one question so we can work out your result.".to_string(),
+            ));
+        };
+        let index = crate::mechanics::scoring::calculate_personality(answers);
+        let (label, description) =
+            crate::mechanics::scoring::personality_outcome(index, &campaign.config);
+        score = Some(index);
+        personality = Some((label, description));
+    }
+
     let (mut outcome, mut tags) = determine_outcome(&campaign, score);
 
     // 5. Apply pity timer — may override outcome to force a win
@@ -159,6 +189,15 @@ pub async fn create_entry(
         tags = pity_tags;
     }
 
+    // A personality result IS the entry's outcome (and its tag): the visitor is not a winner or a
+    // loser, they are one of four types. Applied after the pity timer on purpose — a personality
+    // campaign can never be turned into "winner" by a stray pity config, because the label shown to
+    // the visitor must be the label stored on the row and carried by the webhook.
+    if let Some((label, _)) = personality.as_ref() {
+        outcome = label.clone();
+        tags = vec![format!("{}_{}", campaign.tag_namespace, label)];
+    }
+
     // 5.5. Loyalty campaigns: tags are driven by campaign config (tag_namespace),
     // NOT hardcoded business-specific assumptions (no forced "Newsletter" tag).
 
@@ -167,7 +206,17 @@ pub async fn create_entry(
     // 6. Create entry
     let (user_agent, ip_address) = extract_source_headers(&headers);
 
-    let answers_json = body.answers.clone().unwrap_or_else(|| json!({}));
+    let answers_json = match (&personality, body.answers.clone()) {
+        // The row (and therefore every webhook / CRM push built from it) carries the result the
+        // visitor was shown, beside the answers it was derived from.
+        (Some((label, description)), Some(raw)) => json!({
+            "personality": label,
+            "description": description,
+            "type_index": score,
+            "answers": raw,
+        }),
+        _ => body.answers.clone().unwrap_or_else(|| json!({})),
+    };
     let entry_input = entries::CreateEntryInput {
         contact_id,
         campaign_id: campaign.id,
@@ -524,6 +573,11 @@ pub async fn create_entry(
         "outcome": payload.outcome,
         "tags_applied": payload.tags_applied,
         "score": score,
+        // The personality result, additively: the type the visitor was sorted into and the owner's
+        // description of it. Both are null for every other campaign type, so no existing response
+        // shape moves (kanban t_3292150a).
+        "personality": personality.as_ref().map(|(label, _)| label.clone()),
+        "personality_description": personality.as_ref().map(|(_, description)| description.clone()),
         "referral_code": referral_code,
         "referral_link": referral_link,
     })))

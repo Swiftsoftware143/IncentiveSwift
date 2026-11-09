@@ -115,6 +115,7 @@ label.opt:hover{border-color:var(--brand)}
            GET /api/v1/play/<slug>, sit under name + email on purpose, and their values travel with
            the submission (`answers._custom`) to the entry the visitor creates. -->
       <div id="customFields"></div>
+      <div id="pollOptions"></div>
       <div class="consent" id="consentRow" style="display:none">
         <input id="consent" type="checkbox">
         <label for="consent" style="margin:0;font-weight:400">I agree to be contacted about this promotion.</label>
@@ -211,7 +212,7 @@ label.opt:hover{border-color:var(--brand)}
 
   function labelFor(type) {
     return ({ spin_wheel: 'Spin the wheel', raffle: 'Enter the raffle', quiz: 'Start the quiz',
-      calculator: 'Get my result', scratch_card: 'Scratch & win', score_reveal: 'Reveal my score',
+      calculator: 'Get my result', personality: 'Reveal my type', scratch_card: 'Scratch & win', score_reveal: 'Reveal my score',
       mystery: 'Reveal the mystery prize', countdown: 'Claim my reward', poll: 'Cast my vote',
       chat: 'Start', long_form_qualifier: 'Start' })[type] || 'Enter';
   }
@@ -244,6 +245,38 @@ label.opt:hover{border-color:var(--brand)}
   // operator's own `field_key`. Nothing is rendered when the campaign defines none, so a campaign
   // without fields looks exactly as it did before this existed.
   var customFields = [];
+
+  // A POLL NEEDS ITS CHOICES ON SCREEN. The visitor was shown a "Cast my vote" button with
+  // nothing to vote on and the submit fell through to the generic entry POST, so a poll campaign
+  // collected no votes at all (measured 2026-11-08). The choices are the operator's, in
+  // `config.options` -- exactly the list the handler validates `option` against.
+  function renderPollOptions() {
+    var host = el('pollOptions');
+    host.innerHTML = '';
+    if (!campaign || campaign.type !== 'poll') { return; }
+    var options = (config && Array.isArray(config.options)) ? config.options : [];
+    if (!options.length) { return; }
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'margin:0 0 14px';
+    options.forEach(function (opt, i) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 12px;margin:0 0 8px;' +
+        'border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;font-weight:500';
+      var inp = document.createElement('input');
+      inp.type = 'radio'; inp.name = 'pollOption'; inp.value = String(opt);
+      inp.id = 'pollOpt' + i;
+      var span = document.createElement('span');
+      span.textContent = String(opt);
+      row.appendChild(inp); row.appendChild(span);
+      wrap.appendChild(row);
+    });
+    host.appendChild(wrap);
+  }
+
+  function selectedPollOption() {
+    var picked = document.querySelector('input[name="pollOption"]:checked');
+    return picked ? picked.value : '';
+  }
 
   function renderCustomFields() {
     var host = el('customFields');
@@ -329,6 +362,87 @@ label.opt:hover{border-color:var(--brand)}
       btn.parentNode.insertBefore(lab, btn);
       btn.parentNode.insertBefore(inp, btn);
     });
+  }
+
+  // ---- Personality quiz ----------------------------------------------------------------
+  // A `personality` campaign sorts the visitor into one of four types from their answers. The
+  // questions are the campaign's OWN (`config.questions` on GET /api/v1/play/<slug>): each item is
+  // a question with two options, and the FIRST option counts as "a" while the SECOND counts as
+  // "b" — the two buckets `mechanics::scoring::calculate_personality` tallies. The answers travel
+  // to POST /api/v1/entries, which computes the type server-side and returns it with the owner's
+  // own label + description; this page never derives a result of its own.
+  //
+  // A campaign with no questions is refused before the form is shown (`playable:false` with
+  // `play_blocker:"no_questions"` on the play payload), so a visitor is never asked for their
+  // details for a quiz that cannot sort anybody.
+  var personalityQuestions = 0;
+
+  function personalityOptionText(o) {
+    if (o && typeof o === 'object') { return String(o.label || o.text || o.value || ''); }
+    return (o === null || o === undefined) ? '' : String(o);
+  }
+
+  function personalityQuestionText(q, i) {
+    if (typeof q === 'string') { return q; }
+    return String(q.question || q.text || q.label || ('Question ' + (i + 1)));
+  }
+
+  function personalityOptions(q) {
+    var opts = (q && typeof q === 'object' && Array.isArray(q.options)) ? q.options : [];
+    // Shorthand form: { question, a, b }.
+    if (!opts.length && q && typeof q === 'object') {
+      if (q.a) { opts.push(q.a); }
+      if (q.b) { opts.push(q.b); }
+    }
+    return opts.filter(function (o) { return personalityOptionText(o) !== ''; }).slice(0, 2);
+  }
+
+  function renderPersonalityQuestions() {
+    if (!campaign || campaign.type !== 'personality') { return; }
+    var qs = Array.isArray(config.questions) ? config.questions : [];
+    var btn = el('btn');
+    var rendered = 0;
+    qs.forEach(function (q, i) {
+      var opts = personalityOptions(q);
+      // Nothing to choose between is not a question: the engine scores "a" vs "b", so a question
+      // with no usable options would be a field the visitor filled for no result.
+      if (!opts.length) { return; }
+      var block = document.createElement('div');
+      block.className = 'qblock';
+      block.setAttribute('data-personality-question', 'q' + (rendered + 1));
+      var text = document.createElement('label');
+      text.className = 'qtext';
+      text.textContent = personalityQuestionText(q, i);
+      block.appendChild(text);
+      opts.forEach(function (o, j) {
+        var row = document.createElement('label');
+        row.className = 'opt';
+        var radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'personalityQ' + rendered;
+        // The engine's two buckets: the first option is "a", the second is "b". What the visitor
+        // reads is the owner's own option text, never the bucket letter.
+        radio.value = j === 0 ? 'a' : 'b';
+        row.appendChild(radio);
+        row.appendChild(document.createTextNode(personalityOptionText(o)));
+        block.appendChild(row);
+      });
+      btn.parentNode.insertBefore(block, btn);
+      rendered++;
+    });
+    personalityQuestions = rendered;
+  }
+
+  // {"q1":"a","q2":"b",...} — or null when the visitor skipped a question.
+  function collectPersonalityAnswers() {
+    var out = {};
+    var blocks = document.querySelectorAll('.qblock[data-personality-question]');
+    for (var i = 0; i < blocks.length; i++) {
+      var chosen = blocks[i].querySelector('input[type=radio]:checked');
+      if (!chosen) { return null; }
+      out[blocks[i].getAttribute('data-personality-question')] = chosen.value;
+    }
+    return out;
   }
 
   // ---- Quiz player ----------------------------------------------------------------------
@@ -475,15 +589,48 @@ label.opt:hover{border-color:var(--brand)}
 
   function render(result, data) {
     el('playForm').style.display = 'none';
-    var won = result && result.won === true;
-    var prize = result && (result.prize_label || result.label);
+    // A WIN can arrive NESTED (`{result:{won:true,…}}`, what the spin answers) or FLAT
+    // (`{won:true, prize_label:…}`, what the scratch / mystery / countdown / score handlers
+    // answer). Reading only the nested shape made a winner read "Better luck next time" while
+    // the redemption code was printed under it (measured 2026-11-08, probe-scratch-1108).
+    var won = (result && result.won === true) || (data && data.won === true);
+    var prize = (result && (result.prize_label || result.label)) ||
+                (data && (data.prize_label || data.label));
     var html = '';
-    if (data && data.result && data.result.won === true) {
+    if (data && data.personality) {
+      // The personality result: the TYPE the server sorted this visitor into, plus the owner's own
+      // description of it. Never a score and never a win/loss sentence — a personality quiz has no
+      // losing outcome, which is exactly why "Better luck next time" was the wrong answer.
+      html = '<div class="big">You are ' + escapeHtml(String(data.personality)) + '</div>' +
+        (data.personality_description
+          ? '<p style="text-align:center;color:#64748b;font-size:14px;margin:0 0 12px">' +
+            escapeHtml(String(data.personality_description)) + '</p>'
+          : '') +
+        '<p style="text-align:center;color:#64748b;font-size:14px;margin:0">Thanks for playing — we saved your result.</p>';
+    } else if (data && data.result && data.result.won === true) {
       html = '<div class="big" style="color:#166534">🎉 You won' + (prize ? ': ' + escapeHtml(prize) : '!') + '</div>';
     } else if (data && data.status === 'entered') {
       html = '<div class="big">You\'re in!</div>';
     } else if (won) {
       html = '<div class="big" style="color:#166534">🎉 You won' + (prize ? ': ' + escapeHtml(prize) : '!') + '</div>';
+    } else if (data && data.option) {
+      html = '<div class="big">Your vote is counted.</div>' +
+        '<p style="text-align:center;color:#334155;font-size:15px;margin:0">You chose ' +
+        escapeHtml(String(data.option)) + '.</p>';
+    } else if (data && typeof data.qualified === 'boolean') {
+      // A QUALIFIER answers {score, outcome, qualified} -- `qualified` is the field only this
+      // handler returns, so branching on it cannot hijack the spin or /entries shapes.
+      html = '<div class="big">' + (data.qualified ? 'You qualify.' : 'Thanks for your answers.') + '</div>' +
+        '<p style="text-align:center;color:#334155;font-size:15px;margin:0">' +
+        escapeHtml(String(data.outcome || '').replace(/_/g, ' ')) + '</p>';
+    } else if (data && data.tier) {
+      // A SCORE REVEAL ANSWERS A TIER, NOT A WIN. Its response is {score, tier, message}, so the
+      // shared lose branch told a visitor "Better luck next time" under their own score and threw
+      // the tier message away (measured 2026-11-08, probe-score-1108: score 70, tier Gold,
+      // message "Strong result." -> the page printed the loss line instead).
+      html = '<div class="big">' + escapeHtml(String(data.tier)) + '</div>' +
+        (data.message ? '<p style="text-align:center;color:#334155;font-size:15px;margin:0">' +
+          escapeHtml(String(data.message)) + '</p>' : '');
     } else {
       html = '<div class="big">Thanks for playing!</div><p style="text-align:center;color:#64748b;font-size:14px;margin:0">' +
         (prize ? 'You got: ' + escapeHtml(prize) : 'Better luck next time — come back soon.') + '</p>';
@@ -491,7 +638,7 @@ label.opt:hover{border-color:var(--brand)}
     // A formula-driven mechanic's RESULT is the score the server computed from this campaign's
     // own formula — the same number the lifecycle mail carries, shown first so it reads as the
     // answer the visitor came for.
-    if (data && typeof data.score === 'number') {
+    if (data && typeof data.score === 'number' && !data.personality) {
       html = '<div class="big">Your result: ' + escapeHtml(String(data.score)) + '</div>' + html;
     }
     if (data && data.redemption_code) {
@@ -658,7 +805,9 @@ label.opt:hover{border-color:var(--brand)}
       config = res.data.config || {};
       customFields = Array.isArray(res.data.custom_fields) ? res.data.custom_fields : [];
       renderCustomFields();
+      renderPollOptions();
       renderCalculatorInputs();
+      renderPersonalityQuestions();
       if (res.data.company && res.data.company.name) { el('businessName').textContent = 'by ' + res.data.company.name; }
       document.title = campaign.name + ' — Play';
       el('campaignName').textContent = campaign.name;
@@ -669,6 +818,13 @@ label.opt:hover{border-color:var(--brand)}
       el('panel').style.display = 'block';
       // The quiz player renders its questions into the same form (the identity fields stay).
       if (campaign.type === 'quiz') { loadQuizQuestions(); }
+      // A personality quiz with no USABLE question would collect details for no result. The server
+      // already refuses an empty `questions` list (playable:false); this covers a list whose
+      // entries carry no two options to choose between.
+      if (campaign.type === 'personality' && personalityQuestions === 0) {
+        show('This campaign is not ready to play yet. Please check back soon.', true);
+        return;
+      }
       // The points board, once the campaign is known (no campaign, no slug to ask about).
       loadLeaderboard();
       // What this device's player already won, if anything.
@@ -687,6 +843,16 @@ label.opt:hover{border-color:var(--brand)}
       el('error').textContent = 'Please tick the consent box to enter the raffle.';
       el('error').style.display = 'block';
       return;
+    }
+
+    var pollPick = '';
+    if (campaign.type === 'poll') {
+      pollPick = selectedPollOption();
+      if (!pollPick) {
+        el('error').textContent = 'Please choose an option before voting.';
+        el('error').style.display = 'block';
+        return;
+      }
     }
 
     var url, body;
@@ -759,6 +925,40 @@ label.opt:hover{border-color:var(--brand)}
       body = payload();
       delete body.campaign_slug;
       body.consent_gathered = true;
+    } else if (campaign.type === 'long_form_qualifier') {
+      // POST /api/v1/campaigns/<slug>/long-form-qualifier takes {contact, answers} and scores the
+      // answers against the operator's own rules (config.questions[]), answering
+      // {score, outcome, qualified, redirect_url}. It used to fall through to /entries, which
+      // scored NOTHING, so a qualifier recorded every visitor as a plain entrant (2026-11-08).
+      url = api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/long-form-qualifier';
+      body = payload();
+      delete body.campaign_slug;
+      body.answers = Object.assign({}, cfVals);
+    } else if (campaign.type === 'poll') {
+      // POST /api/v1/campaigns/<slug>/poll takes {contact:{...}, option} and answers
+      // {entry_id, contact_id, option}; a contact may vote once (a repeat answers 409).
+      url = api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/poll';
+      body = payload();
+      delete body.campaign_slug;
+      body.option = pollPick;
+    } else if (campaign.type === 'scratch_card' || campaign.type === 'mystery' ||
+               campaign.type === 'score_reveal' || campaign.type === 'countdown') {
+      // THE PRIZE MECHANICS HAVE THEIR OWN DOORS (2026-11-08). Every one of these used to fall
+      // through to POST /entries below, which records an entry and NEVER runs the mechanic -- so
+      // "Scratch & win", "Reveal the mystery prize", "Reveal my score" and "Claim my reward" all
+      // promised something the button never did. Each handler takes {contact:{...}} exactly like
+      // the raffle above (mechanic_common::MechanicContact) and answers the fields render()
+      // already reads (won / prize_label / redemption_code / score), so no new renderer is needed.
+      var door = { scratch_card: 'scratch-card', mystery: 'mystery',
+                   score_reveal: 'score-reveal', countdown: 'countdown' }[campaign.type];
+      url = api + '/campaigns/' + encodeURIComponent(campaign.slug) + '/' + door;
+      body = payload();
+      delete body.campaign_slug;
+      // score_reveal derives the number by SUMMING the numeric values of `answers`
+      // (mechanics::scoring::calculate_score_reveal), so the campaign's own questions must arrive
+      // FLAT. The shared `_custom` nesting below would hide them inside an object and every
+      // reveal would read 0.
+      if (Object.keys(cfVals).length) { body.answers = Object.assign({}, cfVals); }
     } else {
       // POST /api/v1/entries takes {contact:{...}, campaign_slug}. A calculator campaign also
       // carries the visitor's inputs: the SERVER evaluates the campaign's own formula over them
@@ -766,7 +966,18 @@ label.opt:hover{border-color:var(--brand)}
       // score of its own.
       url = api + '/entries';
       body = payload();
-      if (calcInputs.length) {
+      if (campaign.type === 'personality') {
+        // The visitor's answers, keyed by this page's own question keys. The SERVER sorts them
+        // into a type (`mechanics::scoring::calculate_personality`) and answers the type + the
+        // owner's description; the page never computes a result itself.
+        var personalityAnswers = collectPersonalityAnswers();
+        if (!personalityAnswers) {
+          el('error').textContent = 'Please answer every question before submitting.';
+          el('error').style.display = 'block';
+          return;
+        }
+        body.answers = personalityAnswers;
+      } else if (calcInputs.length) {
         var answers = {}, missing = false;
         calcInputs.forEach(function (name, i) {
           var raw = el('calcVar' + i).value;

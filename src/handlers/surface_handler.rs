@@ -577,6 +577,19 @@ pub async fn get_play_view(
         .unwrap_or(false);
     let prize_pool_empty = needs_prize_pool && !has_prizes;
 
+    // A PERSONALITY QUIZ WITH NO QUESTIONS IS NOT PLAYABLE (kanban t_3292150a). The console offers
+    // "Personality Quiz" for creation, but nothing told the operator that the campaign needs
+    // questions before it can sort anybody: the visitor answered only name + email and the result
+    // was "Better luck next time". Same up-front refusal shape as the empty prize pool above — the
+    // page never invites a play it cannot finish. `playable` stays absent for every campaign that
+    // can run, so no existing payload moves.
+    let personality_without_questions = campaign_type == "personality"
+        && !config
+            .get("questions")
+            .and_then(|q| q.as_array())
+            .map(|qs| qs.iter().any(|q| q.is_object() || q.is_string()))
+            .unwrap_or(false);
+
     let mut payload = json!({
         "campaign": {
             "id": cid,
@@ -605,6 +618,10 @@ pub async fn get_play_view(
         if prize_pool_empty {
             payload["play_blocker"] = json!("no_prizes");
         }
+    }
+    if personality_without_questions {
+        payload["playable"] = json!(false);
+        payload["play_blocker"] = json!("no_questions");
     }
 
     // The tenant's own entry-form fields (cron 2026-10-18). `campaign_custom_fields` and its CRUD
