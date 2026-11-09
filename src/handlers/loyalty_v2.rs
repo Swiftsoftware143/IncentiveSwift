@@ -207,10 +207,21 @@ async fn caller_may_read_contact_rewards(
         return Ok(true);
     }
     let owns: bool = sqlx::query_scalar(
+        // The SAME three-arm ownership predicate the rest of this app uses (see
+        // `loyalty_badges::ensure_member_in_caller_programme`): `lp.account_id` is the explicit
+        // owner, `lp.campaign_id` is the reverse pointer the console's enrol path may leave NULL,
+        // and `campaigns.loyalty_program_id` is the canonical FORWARD link `POST /loyalty/checkin`
+        // resolves FIRST. Joining only the reverse pointer answered this read empty-handed for a
+        // member of a forward-linked programme (fixed 2026-11-09; the same defect the member card
+        // carried until 2026-10-19).
         "SELECT EXISTS (SELECT 1 FROM loyalty_members lm \
            JOIN loyalty_programs lp ON lp.id = lm.program_id \
-           JOIN campaigns c ON c.id = lp.campaign_id \
-          WHERE lm.contact_id = $1 AND c.account_id = $2)",
+          WHERE lm.contact_id = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c \
+                             WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns fwd \
+                             WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2)))",
     )
     .bind(contact_id)
     .bind(account_id)
@@ -743,6 +754,8 @@ pub async fn list_account_rewards_earned(
             WHERE lp.account_id = $1
                OR EXISTS (SELECT 1 FROM campaigns camp
                            WHERE camp.id = lp.campaign_id AND camp.account_id = $1)
+               OR EXISTS (SELECT 1 FROM campaigns fwd
+                           WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $1)
             ORDER BY (COALESCE(lre.status, 'pending') = 'pending') DESC,
                      lre.earned_at DESC NULLS LAST
             LIMIT 200"#,

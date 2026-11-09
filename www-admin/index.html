@@ -2773,12 +2773,25 @@ const ledgerTab = html`<div>
   // had no way to ask WHY — the scan log that answers it was unreachable. `Details` opens it by the
   // roster's own member id, so the ownership gate in the handler is the caller's own account.
   const openDetails = async (m) => {
-    st.md = { member: m, data: null, err: '', busy: true }; renderApp();
+    st.md = { member: m, data: null, err: '', busy: true, rewards: [], rewardsErr: '' }; renderApp();
     try {
       const d = await API.get('/loyalty/dashboard/member/' + encodeURIComponent(m.id));
-      st.md = { member: m, data: d, err: '', busy: false };
+      // Rewards EARNED (2026-11-09). `loyalty_rewards_earned` is the tier ledger — a member earns a
+      // row when check-in credits push them past a reward tier — and until now the only reader was a
+      // per-account list, so the roster could show a balance and never WHICH rewards this customer had
+      // unlocked. GET /loyalty/rewards-earned/:contact_id has existed with no caller; the roster now
+      // returns the member's contact id, so this card is its caller. Scoped by the handler, keyed on
+      // the contact the roster row already names.
+      let rewards = [], rewardsErr = '';
+      if (m.contact_id) {
+        try {
+          const rw = await API.get('/loyalty/rewards-earned/' + encodeURIComponent(m.contact_id));
+          rewards = Array.isArray(rw.rewards) ? rw.rewards : [];
+        } catch (e) { rewardsErr = (e && e.message) || 'Could not load rewards earned'; }
+      }
+      st.md = { member: m, data: d, err: '', busy: false, rewards, rewardsErr };
     } catch (e) {
-      st.md = { member: m, data: null, err: (e && e.message) || 'Could not load this member', busy: false };
+      st.md = { member: m, data: null, err: (e && e.message) || 'Could not load this member', busy: false, rewards: [], rewardsErr: '' };
     }
     renderApp();
   };
@@ -2823,6 +2836,19 @@ const ledgerTab = html`<div>
                   <td>${plural(s.points_balance || 0, 'point', 'points')}</td>
                 </tr>`)}
               </tbody></table>`}
+          <h4 class="font-semibold mb-2 mt-4">Rewards earned</h4>
+          ${st.md.rewardsErr
+            ? html`<p class="text-sm" style="color:#b91c1c">${st.md.rewardsErr}</p>`
+            : (st.md.rewards || []).length === 0
+              ? html`<p class="text-sm text-gray-400" data-member-rewards-empty>No reward tier earned yet. A member earns one when their points reach a tier's level, and it is listed here the moment it is awarded.</p>`
+              : html`<table class="table" data-member-rewards><thead><tr><th>Reward</th><th>Points</th><th>Status</th><th>Earned</th></tr></thead><tbody>
+                  ${(st.md.rewards || []).map(r => html`<tr data-reward-id=${r.id}>
+                    <td>${r.reward || 'Reward'}</td>
+                    <td>${plural(r.points || 0, 'point', 'points')}</td>
+                    <td>${r.status === 'pending' ? 'awaiting approval' : (r.status || 'earned')}</td>
+                    <td>${fmtDay(r.earned_at)}</td>
+                  </tr>`)}
+                </tbody></table>`}
         </div>`}
     </div>` : ''}
     ${st.card ? html`<div class="card mb-4" data-member-card=${st.card.member.id}>

@@ -114,6 +114,12 @@ pub async fn program_members(
     #[derive(sqlx::FromRow)]
     struct MemberRow {
         id: Uuid,
+        /// The contact this member IS. The reward ledger (`GET /loyalty/rewards-earned/:contact_id`,
+        /// `loyalty_rewards_earned`) is keyed by contact, not by member id, so without this field the
+        /// console could see a member's points and scans but had no way to ask which reward tiers that
+        /// member had earned — the read existed with no caller (2026-11-09). Same contact the roster
+        /// row already names, so no new visibility is granted.
+        contact_id: Uuid,
         first_name: Option<String>,
         last_name: Option<String>,
         email: Option<String>,
@@ -129,6 +135,7 @@ pub async fn program_members(
 
     let rows: Vec<MemberRow> = sqlx::query_as(
         r#"SELECT lm.id,
+                  lm.contact_id,
                   c.first_name, c.last_name, c.email, c.phone,
                   COALESCE(lm.points_balance, 0)   AS points_balance,
                   COALESCE(lm.lifetime_points, 0)  AS lifetime_points,
@@ -160,6 +167,7 @@ pub async fn program_members(
                 .join(" ");
             json!({
                 "id": m.id.to_string(),
+                "contact_id": m.contact_id.to_string(),
                 "name": if name.is_empty() { m.email.clone().unwrap_or_else(|| "Member".into()) } else { name },
                 "email": m.email,
                 "phone": m.phone,
