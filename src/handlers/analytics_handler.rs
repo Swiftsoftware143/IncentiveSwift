@@ -687,11 +687,11 @@ pub async fn export_csv(
     // 2026-10-24: `?type=bogus` answered 200 with the campaigns CSV. The import twin
     // (`import_csv`, below) has always refused this shape with a 400 that names the valid set, so
     // the two halves of the same screen disagreed. The default stays `campaigns`; anything else
-    // that is not one of the three real reports is now a 400 that says which three exist.
+    // that is not one of the real reports is now a 400 that says which ones exist.
     let export_type = query.r#type.as_deref().unwrap_or("campaigns");
-    if !matches!(export_type, "campaigns" | "contacts" | "entries") {
+    if !matches!(export_type, "campaigns" | "contacts" | "entries" | "wins") {
         return Err(AppError::BadRequest(format!(
-            "export type '{}' is not supported — use 'campaigns', 'contacts' or 'entries'",
+            "export type '{}' is not supported — use 'campaigns', 'contacts', 'entries' or 'wins'",
             export_type
         )));
     }
@@ -793,6 +793,54 @@ pub async fn export_csv(
                     us.unwrap_or_default(),
                     ru.unwrap_or_default(),
                     pu.unwrap_or_default(),
+                    ca.format("%Y-%m-%d %H:%M")
+                ));
+            }
+        }
+        "wins" => {
+            // Prizes this workspace actually awarded — the same rows the dashboard's "Rewards
+            // given" number counts (`dashboard_handler`), so the file and the tile can never
+            // disagree. Added 2026-11-09: the card offered contacts, campaigns and entries
+            // only, so a business that has to hand prizes out had no list of what it owes,
+            // to whom, with which redemption code and whether it was collected.
+            csv.push_str(
+                "Win ID,Campaign,Winner Email,Prize,Type,Redemption Code,Redeemed,Redeemed At,Won At\n",
+            );
+            let rows = sqlx::query(
+                "SELECT w.id, c.name AS campaign_name, ct.email AS contact_email,
+                        w.prize_label, w.prize_type, w.redemption_code,
+                        w.redeemed, w.redeemed_at, w.created_at
+                 FROM campaign_wins w
+                 JOIN campaigns c ON c.id = w.campaign_id
+                 LEFT JOIN contacts ct ON ct.id = w.contact_id
+                 WHERE c.account_id = $1
+                 ORDER BY w.created_at DESC",
+            )
+            .bind(uuid)
+            .fetch_all(&state.db)
+            .await?;
+
+            for r in &rows {
+                let id: Uuid = r.get("id");
+                let cn: String = r.get("campaign_name");
+                let ce: Option<String> = r.get("contact_email");
+                let pl: String = r.get("prize_label");
+                let pt: String = r.get("prize_type");
+                let code: Option<String> = r.get("redemption_code");
+                let redeemed: bool = r.get("redeemed");
+                let ra: Option<chrono::DateTime<chrono::Utc>> = r.get("redeemed_at");
+                let ca: chrono::DateTime<chrono::Utc> = r.get("created_at");
+                csv.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{}\n",
+                    id,
+                    esc_csv(&cn),
+                    esc_csv(&ce.unwrap_or_default()),
+                    esc_csv(&pl),
+                    esc_csv(&pt),
+                    esc_csv(&code.unwrap_or_default()),
+                    if redeemed { "yes" } else { "no" },
+                    ra.map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_default(),
                     ca.format("%Y-%m-%d %H:%M")
                 ));
             }
