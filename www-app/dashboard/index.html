@@ -113,7 +113,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
   </div>
   <div class="card" id="your-data-card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your data</h2>
-    <!-- GET /api/v1/analytics/export (types campaigns|contacts|entries, src/handlers/analytics_handler.rs)
+    <!-- GET /api/v1/analytics/export (types campaigns|contacts|entries|wins, src/handlers/analytics_handler.rs)
          shipped with NO screen in the customer console: the only reader was the operator's. A customer
          asked for their own records had to ask us. Buttons below drive that same route with the
          tenant's own session, so there is one export path, not two. -->
@@ -122,6 +122,10 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <button class="btn" id="dl-contacts" onclick="downloadMyCsv('contacts', this)">Contacts (CSV)</button>
       <button class="btn" id="dl-campaigns" onclick="downloadMyCsv('campaigns', this)">Campaigns (CSV)</button>
       <button class="btn" id="dl-entries" onclick="downloadMyCsv('entries', this)">Loyalty entries (CSV)</button>
+      <!-- The tile above counts "Rewards given"; until 2026-11-09 there was no file behind it.
+           Prizes won lists each award with its redemption code and whether it was collected, so a
+           business can hand prizes out without reading the console screen by screen. -->
+      <button class="btn" id="dl-wins" onclick="downloadMyCsv('wins', this)">Prizes won (CSV)</button>
     </div>
     <div id="your-data-msg" role="status" style="font-size:13px;margin-top:8px"></div>
   </div>

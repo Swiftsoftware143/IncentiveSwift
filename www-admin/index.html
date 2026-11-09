@@ -951,8 +951,23 @@ const MECHANICS = [
 
 const MECHANIC_DEFAULT_CONFIG = {
   score_reveal: { tiers: [{ min: 0, max: 100, label: 'Bronze', message: 'Keep going!' }] },
-  spin_wheel: { prize_pool: { prizes: [] } },
-  scratch_card: { win_probability: 0.5, prize_pool: { prizes: [] } },
+  // A NEW Spin Wheel / Scratch Card campaign must be PLAYABLE the moment it is created. These two
+  // used to seed `{ prize_pool: { prizes: [] } }` — an empty pool, which the draw refuses with
+  // "This campaign isn't ready to play yet", so a first-time operator created a dead campaign and
+  // had no way to learn the prize shape (measured 2026-11-09: a spin on a default-created campaign
+  // answered 409, and a pool whose prize entries used `type` instead of `prize_type` answered
+  // "Invalid prize_pool config: missing field `prize_type`"). The seed is now one real win prize
+  // and one real no-win slice in the engine's OWN vocabulary (`PrizeConfig` in
+  // src/mechanics/prize_draw.rs: id, label, weight and prize_type are required; `lose` is the
+  // no-win type).
+  spin_wheel: { prize_pool: { prizes: [
+    { id: 'p1', label: '10% off', color: '#0ea5e9', weight: 1, prize_type: 'discount' },
+    { id: 'p2', label: 'Try again', color: '#cbd5e1', weight: 3, prize_type: 'lose' }
+  ] } },
+  scratch_card: { win_probability: 0.5, prize_pool: { prizes: [
+    { id: 'p1', label: '10% off', color: '#0ea5e9', weight: 1, prize_type: 'discount' },
+    { id: 'p2', label: 'Try again', color: '#cbd5e1', weight: 3, prize_type: 'lose' }
+  ] } },
   personality: {
     // Two options per question, in the order the player sees them: the FIRST counts as A and the
     // SECOND as B. Add one entry per question, e.g.
@@ -1579,6 +1594,12 @@ const Campaigns = () => {
             <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${cf.config} onInput=${e => { cf.config = e.target.value; }}></textarea></div>
             ${cf.type === 'personality' && html`<div class="text-xs text-gray-500" id="personalityConfigHint">
               <b>Personality Quiz:</b> <code>questions</code> is a list of <code>{ "question": "…", "options": ["first", "second"] }</code> — the <b>first</b> option counts as A and the <b>second</b> as B. <code>outcomes</code> renames the four results in this order: <b>Balanced, Driver, Analyzer, Neutral</b>, each <code>{ "label": "…", "description": "…" }</code>. Leave a label empty to keep the engine's own; a quiz with no questions cannot be played.
+            </div>`}
+            ${cf.type === 'spin_wheel' && html`<div class="text-xs text-gray-500" id="spinConfigHint">
+              <b>Spin Wheel:</b> <code>prize_pool.prizes</code> is a list of <code>{ "id": "p1", "label": "10% off", "weight": 1, "prize_type": "discount", "color": "#0ea5e9" }</code>. <code>id</code>, <code>label</code>, <code>weight</code> and <code>prize_type</code> are required; <code>color</code>, <code>inventory</code> (how many of that prize can be won) and <code>marketing_boost</code> are optional. A <code>prize_type</code> of <b>lose</b> is the no-win slice. Weights are relative — one win at weight 1 against a no-win at weight 3 wins one spin in four. The example saved above is already playable as it stands.
+            </div>`}
+            ${cf.type === 'scratch_card' && html`<div class="text-xs text-gray-500" id="scratchConfigHint">
+              <b>Scratch Card:</b> <code>win_probability</code> (0 to 1) is the share of cards that win, and <code>prize_pool.prizes</code> takes the same entry shape as the Spin Wheel (<code>id</code>, <code>label</code>, <code>weight</code>, <code>prize_type</code>, plus optional <code>color</code> and <code>inventory</code>). A winning card is awarded one of the prizes at random. The example saved above is already playable as it stands.
             </div>`}
             ${lfOn && html`<div class="border-t border-gray-100 pt-3 mt-3">
               <div class="flex items-center justify-between mb-2">
