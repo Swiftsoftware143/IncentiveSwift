@@ -736,6 +736,12 @@ pub async fn me(
     let plan_assigned: bool = row.get("plan_assigned");
     let plan_effective_name: Option<String> = row.get("plan_effective_name");
     let plan_slug: Option<String> = row.get("plan_slug");
+    // The FLAT twin of `user.plan.slug` (cron `default`, 2026-11-09): the fleet contract names a
+    // tier by `plan_slug` on THIS response's top level (ADASwift, MissedCall, FunnelSwift and
+    // WorkflowSwift all answer it), and a client must not have to know this app nests the plan
+    // under `user`. Same computed value, cloned before the nested map consumes it, so the two
+    // placements cannot disagree.
+    let plan_slug_flat = plan_slug.clone();
     let features: serde_json::Value = row.get("features");
     let plan_tier_id: Option<uuid::Uuid> = row.get("plan_tier_id");
     let max_campaigns: Option<i32> = row.get("max_campaigns");
@@ -810,7 +816,11 @@ pub async fn me(
         // Both placements are the SAME computed string (`plan_label`), so they cannot disagree.
         "plan_name": plan_label,
         "plan_assigned": plan_assigned,
-        "plan_effective_name": plan_effective_name
+        "plan_effective_name": plan_effective_name,
+        // The FLAT plan identifier (cron `default`, 2026-11-09) — the fleet's provisioning
+        // contract names a tier by `source_app` + `plan_slug`, and every sibling app answers this
+        // key flat on /auth/me. Same value as `user.plan.slug`, cloned, so they cannot disagree.
+        "plan_slug": plan_slug_flat
     })))
 }
 
