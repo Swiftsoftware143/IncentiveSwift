@@ -66,6 +66,9 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .tier-at{margin-left:auto;color:#64748b;font-variant-numeric:tabular-nums}
 .next-tier{margin-top:8px;font-size:14px;color:#334155}
 .brandbar .rule{border-top:3px solid #4f46e5;margin-top:12px}
+/* The owner's streak offer (2026-11-10). Shown only when the programme actually PAYS a streak
+   bonus, so an owner with streaks off gets a byte-identical page. */
+.streak{margin:0 0 18px;padding:11px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;font-size:13.5px;color:#78350f}
 /* The member's OWN sharing card (2026-11-08). Rendered only after a check-in (that is when the
    member's referral code exists) and only when the owner has actually offered points for sharing —
    so an owner who has not configured it gets a byte-identical page. */
@@ -91,6 +94,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
     <h1 id="programName">Loyalty rewards</h1>
     <p class="biz" id="businessName"></p>
     <div class="pill" id="pointsPill"></div>
+    <div class="streak" id="streakOffer" style="display:none"></div>
 
     <div class="msg err" id="error"></div>
     <div class="msg ok" id="success"></div>
@@ -102,6 +106,11 @@ button:disabled{opacity:.6;cursor:not-allowed}
       <input id="lastName" type="text" autocomplete="family-name">
       <label for="email">Email</label>
       <input id="email" type="email" autocomplete="email" required>
+      <!-- Optional date of birth. This is the ONLY place the date is captured: it is what the
+           owner's "Birthday bonus" (console > Loyalty > programme form) is paid on, once a year,
+           on the check-in that falls on the member's birthday. Blank is fine — no bonus, no ask. -->
+      <label for="birthday">Birthday <span style="font-weight:400;color:#6b7280">(optional)</span></label>
+      <input id="birthday" type="date" autocomplete="bday">
       <button type="submit" id="btn">Check in &amp; earn points</button>
     </form>
 
@@ -253,6 +262,17 @@ button:disabled{opacity:.6;cursor:not-allowed}
       })();
       el('pointsPill').textContent = '+' + (d.points_per_checkin || 0) + ' ' +
         (d.currency_name || 'points') + ' per check-in';
+      // The owner's streak offer, BEFORE the member checks in (2026-11-10). The bonus is paid
+      // (mechanics::loyalty_checkin) but the page only ever named it on the receipt — after it
+      // had already paid — so no member could know to come back tomorrow. Both fields are served
+      // only when the owner switched streaks on AND the terms are usable, so an owner with
+      // streaks off renders exactly the page they rendered before.
+      if (d.streak_enabled && d.streak_bonus > 0 && d.streak_days > 1) {
+        var so = el('streakOffer');
+        so.style.display = 'block';
+        so.textContent = 'Come back ' + d.streak_days + ' days in a row and earn an extra +' +
+          d.streak_bonus + ' ' + (d.currency_name || 'points') + ' when the run completes.';
+      }
       // The owner's tier ladder (2026-11-08). `tiers` is served only when the owner switched tiers
       // on (name / threshold / colour, cheapest first), so an untiered programme renders exactly as
       // before. Shown BEFORE the form: a member who has not checked in yet still learns what is
@@ -402,6 +422,9 @@ button:disabled{opacity:.6;cursor:not-allowed}
             // resolver, so the QR works for a programme the console created with no campaign.
             program_slug: d.checkin_slug || d.campaign_slug,
             method: 'qr',
+            // The optional date typed above. The server stores it on the member row, and pays the
+            // owner's "Birthday bonus" when the check-in falls on that day — once per calendar year.
+            birthday: el('birthday').value || null,
             contact: {
               first_name: el('firstName').value,
               last_name: el('lastName').value || null,
@@ -432,6 +455,19 @@ button:disabled{opacity:.6;cursor:not-allowed}
             var cur = d.currency_name || 'points';
             el('success').innerHTML = '<div class="big">+' + pts + ' ' + cur + '</div>' +
               'You now have ' + (b.new_balance != null ? b.new_balance : '') + ' ' + cur + '.' +
+              // The owner's consecutive-day bonus, paid from 2026-11-10. Shown only when this
+              // very check-in completed a block (the server returns the run length), so the card
+              // never claims a streak the programme did not pay for.
+              (b.streak_bonus > 0
+                ? '<br><b>Streak bonus: +' + b.streak_bonus + ' ' + cur + ' \u2014 ' +
+                  b.streak_days_run + ' days running.</b>'
+                : '') +
+              // The owner's birthday bonus. Paid once a calendar year, on the check-in that
+              // falls on the member's own birthday, and shown only when THIS check-in paid it.
+              (b.birthday_bonus > 0
+                ? '<br><b>\ud83c\udf82 Happy birthday! +' + b.birthday_bonus + ' ' + cur +
+                  ' birthday bonus.</b>'
+                : '') +
               (b.tier ? '<br>Tier: ' + b.tier : '') +
               // A rung crossed by THIS check-in is the moment the ladder pays off, and the
               // award already returned both names (`tier` is where the member stands now,

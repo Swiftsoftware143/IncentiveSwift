@@ -1962,6 +1962,18 @@ pub async fn public_program(
         "milestones_enabled": program.milestones_enabled,
     });
 
+    // THE OWNER'S STREAK OFFER, ON THE MEMBER'S OWN PAGE (2026-11-10). `streak_enabled` alone told a
+    // member nothing: the consecutive-day bonus the console advertises ("25 bonus / 7d") was paid by
+    // `mechanics::loyalty_checkin`, but the only place this page ever named it was the receipt AFTER
+    // it had already paid — so no member could know to come back tomorrow, which is the whole point
+    // of a streak. The terms are the shop's own printed-poster material, so they ship only when the
+    // owner switched streaks on AND the pair is usable; a programme with streaks off answers exactly
+    // the payload it answered before.
+    if program.streak_enabled && program.streak_bonus > 0 && program.streak_days > 1 {
+        payload["streak_bonus"] = json!(program.streak_bonus);
+        payload["streak_days"] = json!(program.streak_days);
+    }
+
     // ── THE OWNER'S TIER LADDER, ON THE MEMBER'S OWN PAGE (2026-11-08) ──────────────────────────
     // The console lets an owner switch tiers on and define them (name, threshold, colour) and the
     // check-in path already APPLIES the tier multiplier (mechanics::loyalty_checkin) — but the page a

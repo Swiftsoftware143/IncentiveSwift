@@ -1018,6 +1018,10 @@ function loyPanel(p) {
     + loyNumField('Referral bonus', 'loy-p-rb', p.referral_bonus)
     + loyNumField('Birthday bonus', 'loy-p-bb', p.birthday_bonus)
     + '</div>'
+    // What each bonus is actually paid ON (2026-11-10). The birthday bonus had NO explanation and no
+    // award path at all before this date: an owner could type a number here and no member could ever
+    // earn it. The date it pays on is captured on the public check-in page.
+    + '<p style="font-size:12px;color:#64748b;margin:-2px 0 8px">The streak bonus pays once when a member checks in on consecutive days for the streak length above. The referral bonus pays when someone joins on a member referral link. The birthday bonus pays once a year, on the check-in a member makes on their own birthday - the date is asked for on the public check-in page, and a member who never gives it never gets this bonus.</p>'
     + loyCheck('Streaks on', 'loy-p-streak', p.streak_enabled)
     + loyCheck('Status tiers on', 'loy-p-tiers', p.tiers_enabled)
     + loyCheck('Milestones on', 'loy-p-mile', p.milestones_enabled)
