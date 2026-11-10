@@ -20,6 +20,10 @@ pub struct CheckinBody {
     pub contact: super::entries::ContactBody,
     pub method: Option<String>,
     pub answers: Option<Value>,
+    /// The member's date of birth, `YYYY-MM-DD`, optional. This is the ONLY way the date is
+    /// CAPTURED into `loyalty_members.birthday` — nothing in this app ever wrote that column —
+    /// and the date is what the owner's `birthday_bonus` is paid on. Ignored when unparseable.
+    pub birthday: Option<String>,
 }
 
 /// POST /api/v1/loyalty/checkin — public-but-scoped.
@@ -90,6 +94,18 @@ pub async fn checkin(
             // Gold — the same check-in telling the customer one thing and the owner another.
             // `sync_member_tier` has already written the post-award rung, so read it back from the
             // row rather than re-deriving it, and keep the earn-time name under its own honest key.
+            // THE OWNER'S BIRTHDAY BONUS (2026-11-10). Paid here, AFTER the check-in award, because
+            // the member row this reads is created by `process_checkin`. It also CAPTURES the date
+            // the member typed on the check-in page — the first writer `loyalty_members.birthday`
+            // has ever had. The balance it returns is read from the row so the receipt's
+            // "you now have N" stays true when a birthday bonus lands on top of the check-in.
+            let (birthday_bonus, balance_after_birthday) =
+                pay_birthday_bonus(&state, &program, contact_id, body.birthday.as_deref()).await?;
+            let new_balance = if birthday_bonus > 0 {
+                balance_after_birthday
+            } else {
+                new_balance
+            };
             let current_tier = member_tier_name(&state.db, program.id, contact_id).await?;
             // THE MEMBER'S OWN REFERRAL HANDLE (2026-11-08). Every online-loyalty endpoint resolves
             // a member by this code, and the member's page has no other way to learn it — it is what
@@ -117,6 +133,10 @@ pub async fn checkin(
                 "new_balance": new_balance,
                 "streak_bonus": streak_bonus,
                 "streak_days_run": streak_run,
+                // The owner's birthday bonus, when THIS check-in fell on the member's birthday and
+                // the year's award had not been paid yet. 0 the rest of the year, so the page shows
+                // the line only when it actually paid.
+                "birthday_bonus": birthday_bonus,
                 "referral_code": referral_code,
                 "rewards_awarded": rewards_awarded.iter().map(|r| json!({
                     "id": r.id,
@@ -158,6 +178,149 @@ async fn member_tier_name(
     .bind(contact_id)
     .fetch_optional(db)
     .await?)
+}
+
+/// The owner's BIRTHDAY BONUS — paid once a member a year, on the member's own birthday.
+///
+/// `loyalty_programs.birthday_bonus` and `loyalty_members.birthday` both shipped in migration
+/// 00015 and the console has offered a "Birthday bonus" field ever since, but NOTHING ever read
+/// the two together: measured 2026-11-10, `src` held zero award sites and `loyalty_online_actions`
+/// held zero birthday rows, so an owner could configure the bonus and no member could ever earn
+/// it. It was the same shape as the dead streak bonus fixed hours earlier. Worse, nothing wrote
+/// `loyalty_members.birthday` at all, so even a correct award had no date to fire on — the date is
+/// captured here from the check-in body.
+///
+/// Returns `(points awarded, the member's balance AFTER)`; `(0, balance)` whenever the programme
+/// has no bonus, the member has no birthday, today is not it, or this year's bonus is already
+/// paid (ONE award per calendar year, recorded in `loyalty_online_actions` under
+/// `action_type = 'birthday_bonus'` with the year in `metadata` — the same ledger the online
+/// visit/share awards use, so a second check-in on the same day cannot pay twice).
+async fn pay_birthday_bonus(
+    state: &AppState,
+    program: &crate::db::loyalty::LoyaltyProgram,
+    contact_id: Uuid,
+    birthday_input: Option<&str>,
+) -> Result<(i32, i32), AppError> {
+    use chrono::Datelike;
+
+    let member: Option<(Uuid, i32, Option<chrono::NaiveDate>)> = sqlx::query_as(
+        r#"SELECT id, COALESCE(points_balance, 0), birthday
+             FROM loyalty_members
+            WHERE program_id = $1 AND contact_id = $2
+            ORDER BY member_since DESC
+            LIMIT 1"#,
+    )
+    .bind(program.id)
+    .bind(contact_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((member_id, balance, stored_birthday)) = member else {
+        return Ok((0, 0));
+    };
+
+    let mut birthday = stored_birthday;
+    if let Some(raw) = birthday_input.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(parsed) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+            let today = chrono::Utc::now().date_naive();
+            if parsed <= today && parsed.year() > 1900 {
+                sqlx::query("UPDATE loyalty_members SET birthday = $1 WHERE id = $2")
+                    .bind(parsed)
+                    .bind(member_id)
+                    .execute(&state.db)
+                    .await?;
+                birthday = Some(parsed);
+            }
+        }
+    }
+
+    if program.birthday_bonus <= 0 {
+        return Ok((0, balance));
+    }
+    let Some(bday) = birthday else {
+        return Ok((0, balance));
+    };
+    let today = chrono::Utc::now().date_naive();
+    if (bday.month(), bday.day()) != (today.month(), today.day()) {
+        return Ok((0, balance));
+    }
+
+    let year = today.format("%Y").to_string();
+    let paid: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM loyalty_online_actions
+            WHERE member_id = $1
+              AND action_type = 'birthday_bonus'
+              AND metadata->>'year' = $2"#,
+    )
+    .bind(member_id)
+    .bind(&year)
+    .fetch_one(&state.db)
+    .await?;
+    if paid > 0 {
+        return Ok((0, balance));
+    }
+
+    let member_id_str = member_id.to_string();
+    let award = loyalty_checkin::resolve_award(
+        state,
+        &program.id.to_string(),
+        balance as i64,
+        program.birthday_bonus,
+        program.tiers_enabled,
+    )
+    .await?;
+
+    // Same monthly points credit the check-in and the online awards spend: a birthday bonus is
+    // the same currency, so it cannot be a way around the business's credit pool.
+    if !loyalty_checkin::spend_credit_pool(state, &program.id.to_string(), award.awarded).await? {
+        return Ok((0, balance));
+    }
+
+    let metadata = json!({
+        "year": year,
+        "base_points": award.base_points,
+        "multiplier": award.multiplier,
+        "tier": award.tier.as_ref().map(|t| t.name.clone()),
+    });
+    sqlx::query(
+        r#"INSERT INTO loyalty_online_actions (member_id, action_type, points_earned, metadata)
+           VALUES ($1, 'birthday_bonus', $2, $3::jsonb)"#,
+    )
+    .bind(member_id)
+    .bind(award.awarded as i64)
+    .bind(metadata.to_string())
+    .execute(&state.db)
+    .await?;
+
+    let new_balance: i32 = sqlx::query_scalar(
+        r#"UPDATE loyalty_members
+              SET points_balance = COALESCE(points_balance, 0) + $1,
+                  lifetime_points = COALESCE(lifetime_points, 0) + $1
+            WHERE id = $2
+        RETURNING COALESCE(points_balance, 0)"#,
+    )
+    .bind(award.awarded)
+    .bind(member_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let _ = loyalty_checkin::record_activity(
+        state,
+        &member_id_str,
+        "birthday_bonus",
+        &award.audit_note("birthday_bonus"),
+        award.awarded,
+    )
+    .await;
+    let _ = loyalty_checkin::sync_member_tier(
+        state,
+        &program.id.to_string(),
+        &member_id_str,
+        new_balance as i64,
+        program.tiers_enabled,
+    )
+    .await;
+
+    Ok((award.awarded, new_balance))
 }
 
 /// Does this redemption belong to the caller's account?
