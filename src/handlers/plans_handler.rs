@@ -165,14 +165,20 @@ pub async fn list_plans(
            -- and still filters `is_active = true`; the panel's assign picker excludes retired rows
            -- client-side, so nothing on sale changes. Active rows stay first, so the ladder an
            -- operator reads is the one customers see.
-           SELECT id, name, slug, description,
-                  COALESCE(NULLIF(price_monthly, 0), price) AS price_monthly,
-                  price_yearly,
-                  features, is_active, sort_order, payment_provider, purchase_url, created_at, updated_at
-           FROM plans
-           ORDER BY is_active DESC,
-                    sort_order ASC NULLS LAST,
-                    COALESCE(NULLIF(price_monthly, 0), price) ASC NULLS LAST, name ASC"#,
+           SELECT p.id, p.name, p.slug, p.description,
+                  COALESCE(NULLIF(p.price_monthly, 0), p.price) AS price_monthly,
+                  -- The OPERATOR must read the SAME yearly figure the customer is charged. Measured
+                  -- live 2026-11-10: this list answered yearly 0 for Pro and Enterprise while the
+                  -- customer read (dashboard_handler::list_public_plans, which falls back to the
+                  -- Tier editor's `plan_tiers.price_annual`) quoted $399 and $1,699 — so the panel
+                  -- that exists to check a price showed no yearly price on tiers that sell one.
+                  COALESCE(NULLIF(p.price_yearly, 0), NULLIF(pt.price_annual, 0), 0)::float8 AS price_yearly,
+                  p.features, p.is_active, p.sort_order, p.payment_provider, p.purchase_url,
+                  p.created_at, p.updated_at
+           FROM plans p LEFT JOIN plan_tiers pt ON lower(pt.slug) = lower(p.slug)
+           ORDER BY p.is_active DESC,
+                    p.sort_order ASC NULLS LAST,
+                    COALESCE(NULLIF(p.price_monthly, 0), p.price) ASC NULLS LAST, p.name ASC"#,
     )
     .fetch_all(&state.db)
     .await?;
