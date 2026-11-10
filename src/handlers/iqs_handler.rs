@@ -1283,7 +1283,52 @@ pub async fn list_submissions(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(json!({ "data": submissions })))
+    // The operator's Submissions table has an Email column, but `IqsSubmission` carries only a
+    // `contact_id` — so the screen painted every lead with a BLANK address (measured live
+    // 2026-11-10: a real lead listed as `0 qualified — 2026-11-10`, no email anywhere in the row).
+    // The row keeps its shape and gains a `contact` object, which the served builder already reads
+    // (`www-app/iqs.html` -> `s.contact && s.contact.email`), so no page change is needed.
+    let contact_ids: Vec<Uuid> = submissions.iter().map(|s| s.contact_id).collect();
+    let contacts: Vec<(Uuid, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, email, first_name, last_name FROM contacts WHERE id = ANY($1)"#,
+    )
+    .bind(&contact_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let by_id: std::collections::HashMap<Uuid, (Option<String>, Option<String>, Option<String>)> =
+        contacts
+            .into_iter()
+            .map(|(id, email, first, last)| (id, (email, first, last)))
+            .collect();
+
+    let rows: Vec<Value> = submissions
+        .iter()
+        .map(|s| {
+            let (email, first_name, last_name) = by_id
+                .get(&s.contact_id)
+                .cloned()
+                .unwrap_or((None, None, None));
+            json!({
+                "id": s.id,
+                "funnel_id": s.funnel_id,
+                "contact_id": s.contact_id,
+                "answers": s.answers,
+                "total_score": s.total_score,
+                "outcome": s.outcome,
+                "tags_applied": s.tags_applied,
+                "source": s.source,
+                "classification": s.classification,
+                "created_at": s.created_at,
+                "contact": {
+                    "email": email,
+                    "first_name": first_name,
+                    "last_name": last_name,
+                },
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "data": rows })))
 }
 
 // ---------------------------------------------------------------------------
