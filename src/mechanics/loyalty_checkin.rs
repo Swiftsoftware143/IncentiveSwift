@@ -63,6 +63,18 @@ pub async fn process_checkin(
     // Update points_balance and lifetime_points with the multiplied amount
     let new_balance = update_points_balance(state, &member_id, award.awarded).await?;
 
+    // ── CONSECUTIVE-DAY STREAK BONUS (2026-11-10) ───────────────────────────────────────────────
+    // The console has offered `streak_enabled` + `streak_bonus` + `streak_days` since the programme
+    // form was written, and nothing ever PAID them: a seven-day streak credited the same points as
+    // any other check-in while the programme list advertised "25 bonus / 7d". This is the credit.
+    // The bonus lands once for every COMPLETE run of `streak_days` consecutive days (day 7, 14, 21…
+    // when `streak_days = 7`), which is what that badge promises the operator who set the numbers.
+    // It sits BEFORE the tier sync and the threshold check so both read the post-bonus balance, and
+    // it obeys the SAME monthly credit metre as the base award, so a bonus can never outspend the
+    // workspace's credit. A bonus that cannot be funded never fails the check-in.
+    let (streak_bonus, streak_run, new_balance) =
+        apply_streak_bonus(state, &program, &member_id, new_balance).await?;
+
     // Keep the member's denormalised tier_id in sync with their points.
     let _ = sync_member_tier(
         state,
@@ -110,6 +122,8 @@ pub async fn process_checkin(
         tier_name: award.tier.as_ref().map(|t| t.name.clone()),
         new_balance,
         rewards_awarded,
+        streak_bonus,
+        streak_run,
         milestones_triggered: fire_milestones(
             state,
             program_id,
@@ -129,6 +143,13 @@ pub struct ProgramInfo {
     pub tiers_enabled: bool,
     /// loyalty_programs.milestones_enabled — gates the campaign-milestone hook.
     pub milestones_enabled: bool,
+    /// loyalty_programs.streak_enabled / streak_bonus / streak_days — the owner's consecutive-day
+    /// bonus. The console's programme form has saved these since migration 00015 and NOTHING ever
+    /// awarded them: the programme list showed a "25 bonus / 7d" badge while a seven-day streak
+    /// paid exactly zero (measured 2026-11-10). Off when any of the three is disabled/zero.
+    pub streak_enabled: bool,
+    pub streak_bonus: i32,
+    pub streak_days: i32,
 }
 
 /// The tier a member currently holds, and the multiplier it earns at.
@@ -197,6 +218,13 @@ pub enum CheckinResult {
         rewards_awarded: Vec<RewardInfo>,
         /// Campaign milestones fired by this award, as (name, action_type).
         milestones_triggered: Vec<(String, String)>,
+        /// Points this check-in added for completing another consecutive-day streak block (0 when
+        /// streaks are off, the member is not on a block boundary, or the pool could not fund it).
+        /// Already included in `new_balance`.
+        streak_bonus: i32,
+        /// How many consecutive days (including today) the member has now checked in on. Reported
+        /// so the member's page can say "7 days running" instead of a bare number of points.
+        streak_run: i32,
     },
     DailyCapReached {
         message: String,
@@ -269,7 +297,7 @@ pub(crate) async fn spend_credit_pool(
 
 async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, AppError> {
     let row = sqlx::query(
-        "SELECT id::text AS id, points_per_checkin, max_checkins_per_day, tiers_enabled, milestones_enabled FROM loyalty_programs WHERE id = $1::uuid AND is_active = true"
+        "SELECT id::text AS id, points_per_checkin, max_checkins_per_day, tiers_enabled, milestones_enabled, streak_enabled, streak_bonus, streak_days FROM loyalty_programs WHERE id = $1::uuid AND is_active = true"
     )
     .bind(program_id)
     .fetch_optional(&state.db)
@@ -282,6 +310,9 @@ async fn get_program(state: &AppState, program_id: &str) -> Result<ProgramInfo, 
         max_checkins_per_day: row.get("max_checkins_per_day"),
         tiers_enabled: row.get("tiers_enabled"),
         milestones_enabled: row.get("milestones_enabled"),
+        streak_enabled: row.get("streak_enabled"),
+        streak_bonus: row.get("streak_bonus"),
+        streak_days: row.get("streak_days"),
     })
 }
 
@@ -492,6 +523,117 @@ async fn count_daily_checkins(state: &AppState, member_id: &str) -> Result<i32, 
     .await?;
 
     Ok(count.0 as i32)
+}
+
+/// How many consecutive UTC days — ending TODAY — this member has checked in on.
+///
+/// Read from the rows the member already has rather than a stored counter: `loyalty_checkins`
+/// carries one row per check-in, and its daily-cap index is keyed on `(member_id, UTC date)`, so a
+/// streak is a property of those rows and a separate column would only be one more thing that can
+/// drift away from them. Today must already be recorded (the caller writes it first), so 0 means
+/// "no check-in at all". The scan is bounded: a run longer than 400 days is not a product case.
+pub(crate) async fn consecutive_checkin_days(
+    state: &AppState,
+    member_id: &str,
+) -> Result<i32, AppError> {
+    let days: Vec<chrono::NaiveDate> = sqlx::query_scalar(
+        "SELECT DISTINCT (timezone('UTC', checked_in_at))::date AS d \
+           FROM loyalty_checkins WHERE member_id = $1::uuid ORDER BY d DESC LIMIT 400",
+    )
+    .bind(member_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut expect = chrono::Utc::now().date_naive();
+    let mut run = 0i32;
+    for d in days {
+        if d == expect {
+            run += 1;
+            match expect.pred_opt() {
+                Some(prev) => expect = prev,
+                None => break,
+            }
+        } else if d < expect {
+            // The first gap: the run ends yesterday (or earlier).
+            break;
+        }
+        // d > expect is a future-dated row (clock skew) — it neither extends nor breaks the run.
+    }
+    Ok(run)
+}
+
+/// Write the member's TRUE consecutive-day run into the denormalised columns the owner's roster
+/// shows. `current_streak`/`longest_streak` used to be moved only by the online-visit arm, which
+/// added one per action and never reset — a number labelled "current streak" that could only grow
+/// (measured 2026-11-10). Both are now this run: current = today's unbroken run, longest = the high
+/// water mark kept on the row.
+pub(crate) async fn sync_member_streak(
+    state: &AppState,
+    member_id: &str,
+    run: i32,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE loyalty_members \
+            SET current_streak = $2, \
+                longest_streak = GREATEST(COALESCE(longest_streak, 0), $2) \
+          WHERE id = $1::uuid",
+    )
+    .bind(member_id)
+    .bind(run)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// Credit the consecutive-day streak bonus for THIS check-in when the member has just completed
+/// another full block of `program.streak_days` days. Returns `(bonus_credited, streak_run,
+/// balance_after)`; the balance comes back untouched when no bonus was due, streaks are off, or the
+/// workspace's monthly points credit could not fund it.
+async fn apply_streak_bonus(
+    state: &AppState,
+    program: &ProgramInfo,
+    member_id: &str,
+    balance: i32,
+) -> Result<(i32, i32, i32), AppError> {
+    let streak = consecutive_checkin_days(state, member_id).await?;
+    // Every check-in refreshes the denormalised streak the roster reads, even when no bonus is due
+    // (and even when the owner has streaks switched off) — otherwise the column keeps whatever the
+    // old online-visit increment left there.
+    sync_member_streak(state, member_id, streak).await?;
+    if !program.streak_enabled
+        || program.streak_bonus <= 0
+        || program.streak_days <= 0
+        || streak <= 0
+        || streak % program.streak_days != 0
+    {
+        return Ok((0, streak, balance));
+    }
+
+    let bonus = program.streak_bonus;
+    if !spend_credit_pool(state, &program.id, bonus).await? {
+        tracing::warn!(
+            member_id = %member_id,
+            streak,
+            bonus,
+            "streak bonus could not be funded from the workspace's monthly points credit"
+        );
+        return Ok((0, streak, balance));
+    }
+
+    let new_balance = update_points_balance(state, member_id, bonus).await?;
+    record_activity(
+        state,
+        member_id,
+        "streak_bonus",
+        &format!(
+            "{} consecutive days — {} point streak bonus (every {} days)",
+            streak, bonus, program.streak_days
+        ),
+        bonus,
+    )
+    .await?;
+
+    Ok((bonus, streak, new_balance))
 }
 
 async fn record_checkin(
@@ -810,6 +952,9 @@ pub async fn process_checkin_from_entry(
             // Use the program's default points_per_checkin
             vec![]
         },
+        // An entry-sourced award is not a check-in, so it cannot complete a streak.
+        streak_bonus: 0,
+        streak_run: 0,
         milestones_triggered: fire_milestones(
             state,
             program_id,

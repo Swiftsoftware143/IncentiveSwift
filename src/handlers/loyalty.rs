@@ -78,6 +78,8 @@ pub async fn checkin(
             new_balance,
             rewards_awarded,
             milestones_triggered,
+            streak_bonus,
+            streak_run,
         } => {
             // WHICH RUNG THE MEMBER IS ON *NOW* (2026-11-08). `tier_name` above is the rung the
             // multiplier was read from — resolved BEFORE this award on purpose, so a member earns
@@ -113,6 +115,8 @@ pub async fn checkin(
                 "earned_at_tier": tier_name,
                 "points_awarded": points_awarded,
                 "new_balance": new_balance,
+                "streak_bonus": streak_bonus,
+                "streak_days_run": streak_run,
                 "referral_code": referral_code,
                 "rewards_awarded": rewards_awarded.iter().map(|r| json!({
                     "id": r.id,
@@ -1172,8 +1176,6 @@ pub async fn online_visit(
         r#"UPDATE loyalty_members
            SET points_balance = COALESCE(points_balance, 0) + $1,
                lifetime_points = COALESCE(lifetime_points, 0) + $1,
-               current_streak = COALESCE(current_streak, 0) + 1,
-               -- reset streak if last activity was more than 1 day ago
                last_activity_date = now()
            WHERE id = $2"#,
     )
@@ -1182,7 +1184,14 @@ pub async fn online_visit(
     .execute(&state.db)
     .await?;
 
-    // 5b. Member-facing audit trail + denormalised tier sync
+    // 5b. `current_streak` is CONSECUTIVE CHECK-IN DAYS (2026-11-10). This arm used to add one per
+    // online action and never reset, so the roster's "Current streak" could only ever grow; it is
+    // now recomputed from the member's own check-in rows (the same number the streak bonus pays on).
+    if let Ok(run) = loyalty_checkin::consecutive_checkin_days(&state, &member_id_str).await {
+        let _ = loyalty_checkin::sync_member_streak(&state, &member_id_str, run).await;
+    }
+
+    // 5c. Member-facing audit trail + denormalised tier sync
     let _ = loyalty_checkin::record_activity(
         &state,
         &member_id_str,
