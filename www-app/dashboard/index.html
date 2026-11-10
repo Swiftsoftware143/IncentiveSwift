@@ -152,11 +152,11 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
         <span id="pp-ph" class="uav-ph" style="width:56px;height:56px;font-size:22px">?</span>
         <!-- The visible "Current picture" text above is a heading, not a label, so the file control
              had no accessible name (measured 2026-10-22 in this page's accessibility census). -->
-        <input id="pp-file" type="file" aria-label="Profile picture file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:12px">
+        <input id="pp-file" type="file" aria-label="Profile picture file" accept="image/png,image/jpeg,image/gif,image/webp" onchange="ppUpload()" style="font-size:13px;display:block;margin-top:12px">
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-      <button class="btn" onclick="ppUpload()">Upload picture</button>
+      <button class="btn" id="pp-up" onclick="ppUpload()">Upload picture</button>
       <button class="btn" id="pp-rm" style="background:#64748b;display:none" onclick="ppRemove()">Remove picture</button>
     </div>
   </div>
@@ -184,13 +184,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
              screen-reader user heard "button, choose file" with nothing saying which file. -->
         <label for="eb-logo" style="display:block;font-size:12px;color:#64748b;margin-bottom:4px">Logo</label>
         <img id="eb-logo-prev" alt="" style="max-height:56px;max-width:200px;display:none;border:1px solid #e2e8f0;border-radius:8px;padding:4px;background:#fff">
-        <input id="eb-logo" type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="font-size:13px;display:block;margin-top:8px">
+        <input id="eb-logo" type="file" accept="image/png,image/jpeg,image/gif,image/webp" onchange="ebUpload()" style="font-size:13px;display:block;margin-top:8px">
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn" onclick="ebSave()">Save branding</button>
       <button class="btn" style="background:#0f766e" onclick="ebPreview()">Send me a preview</button>
-      <button class="btn" style="background:#059669" onclick="ebUpload()">Upload logo</button>
+      <button class="btn" style="background:#059669" id="eb-up" onclick="ebUpload()">Upload logo</button>
       <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
     </div>
     <!-- How a RECIPIENT sees it — the REAL mail, not a drawing of one.
@@ -1177,12 +1177,19 @@ function ppSet(u, initial) {
     else { av.style.display = 'none'; hp.style.display = 'flex'; if (initial) hp.textContent = initial; }
   }
 }
+var ppBusy = false;
 function ppUpload() {
+  // ONE pick = ONE upload, like the other five apps' dashboards (ADASwift / MissedCall upload on the
+  // file input's change). The button below stays as an explicit fallback; the guard stops the two
+  // entry points from firing two POSTs for the same file.
+  if (ppBusy) return;
   var f = document.getElementById('pp-file');
   var file = (f && f.files) ? f.files[0] : null;
-  if (!file) { ppMsg('Choose an image first', 'e'); return; }
+  if (!file) { ppMsg('Choose an image first', 'i'); return; }
   if (file.size > 2031616) { ppMsg('That image is too large - 2 MB maximum', 'e'); return; }
   var fd = new FormData(); fd.append('file', file, file.name || 'picture');
+  ppBusy = true;
+  var upBtn = document.getElementById('pp-up'); if (upBtn) upBtn.disabled = true;
   ppMsg('Uploading\u2026', 'i');
   fetch(window.location.origin + '/api/v1/auth/avatar', { method: 'POST', headers: ppAuth(), body: fd })
     .then(function (r) {
@@ -1193,7 +1200,8 @@ function ppUpload() {
       });
     })
     .then(function (d) { ppSet(d.avatar_url || '', initialOf()); if (f) f.value = ''; ppMsg('Picture updated', 's'); })
-    .catch(function (e) { ppMsg((e && e.message) || 'Upload failed', 'e'); });
+    .catch(function (e) { ppMsg((e && e.message) || 'Upload failed', 'e'); })
+    .then(function () { ppBusy = false; if (upBtn) upBtn.disabled = false; });
 }
 function ppRemove() {
   if (!confirm('Remove your profile picture?')) return;
@@ -1322,12 +1330,17 @@ function ebPreview() {
     })
     .catch(function (e) { ebMsg((e && e.message) || 'Could not send the preview', 'e'); });
 }
+var ebBusy = false;
 function ebUpload() {
+  // Same one-pick-one-upload rule as the profile picture above, and as the other five apps.
+  if (ebBusy) return;
   var f = document.getElementById('eb-logo');
   var file = (f && f.files) ? f.files[0] : null;
-  if (!file) { ebMsg('Choose an image first', 'e'); return; }
+  if (!file) { ebMsg('Choose an image first', 'i'); return; }
   if (file.size > 2031616) { ebMsg('That image is too large — 2 MB maximum', 'e'); return; }
   var fd = new FormData(); fd.append('file', file, file.name || 'logo');
+  ebBusy = true;
+  var upBtn = document.getElementById('eb-up'); if (upBtn) upBtn.disabled = true;
   ebMsg('Uploading…', 'i');
   fetch(window.location.origin + '/api/v1/settings/branding/logo', { method: 'POST', headers: ebAuth(), body: fd })
     .then(function (r) {
@@ -1338,7 +1351,8 @@ function ebUpload() {
       });
     })
     .then(function (d) { ebSetLogo(d.logo_url || ''); if (f) f.value = ''; ebMsg('Logo uploaded', 's'); ebRender(); })
-    .catch(function (e) { ebMsg((e && e.message) || 'Upload failed', 'e'); });
+    .catch(function (e) { ebMsg((e && e.message) || 'Upload failed', 'e'); })
+    .then(function () { ebBusy = false; if (upBtn) upBtn.disabled = false; });
 }
 function ebRemove() {
   ebMsg('Removing…', 'i');
