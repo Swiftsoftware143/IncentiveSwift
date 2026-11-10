@@ -277,7 +277,7 @@ var USAGE = { data: null, err: false };
 // Loyalty card state — declared above the boot block for the same reason as USAGE/PB:
 // the boot block calls loyLoad(), and paintAccount() fills LOY.email.
 var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false,
-            editing: null, saving: false };
+            editing: null, saving: false, newOpen: false, newName: '', newPpc: '' };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
@@ -818,6 +818,66 @@ function loyCopy(slug) {
   } catch (e) {}
   loySay(url, false);
 }
+// ---- Creating a programme from the console the owner actually has -------------------------------
+// MEASURED 2026-11-10: a brand-new workspace's Loyalty card said "No programme yet. Create one in the
+// admin console" and linked /admin/ -- the FLEET OPERATOR console, served on this host only through an
+// nginx alias. `POST /api/v1/loyalty/programs` has always been the caller's OWN account's route (it
+// takes no id: the workspace comes from the session), so a customer could create a programme with a
+// request the dashboard never sent. The only way into the product's core loop was a console built for
+// somebody else. This is the missing control: name it, and the server's own answer -- a programme row
+// with its check-in link -- appears below. The plan gate stays the SERVER's (`plan_allows_loyalty`
+// answers UpgradeRequired with its own sentence, shown verbatim); nothing here decides what a tier
+// includes. The slug is the server's too (`slugify_program_name`), never invented here.
+function loyCreateForm() {
+  return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-top:8px">'
+    + '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:6px">New programme</div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+    + '<input id="loy-new-name" placeholder="Programme name (what customers see)" value="' + esc(LOY.newName || '') + '"'
+    + ' oninput="LOY.newName=this.value" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px">'
+    + '<input id="loy-new-ppc" type="number" min="1" step="1" placeholder="Points per check-in" value="' + esc(LOY.newPpc || '') + '"'
+    + ' oninput="LOY.newPpc=this.value" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:170px">'
+    + '<button class="btn btn-sm" onclick="loyCreate(this)">Create programme</button>'
+    + '</div>'
+    + '<div style="color:#64748b;font-size:12px;margin-top:6px">Leave points empty and the programme starts at the server default. The check-in link appears here the moment it exists, and every rule can be changed afterwards under \u201cEdit programme settings\u201d.</div>'
+    + '</div>';
+}
+function loyNewToggle() { LOY.newOpen = !LOY.newOpen; loyRender(); }
+function loyCreate(btn) {
+  if (LOY.busy) return;
+  var nameEl = document.getElementById('loy-new-name');
+  var ppcEl = document.getElementById('loy-new-ppc');
+  var name = ((nameEl && nameEl.value) || LOY.newName || '').trim();
+  if (!name) { loySay('Give the programme a name first \u2014 it is what your customers see on their card.', true); return; }
+  var body = { name: name };
+  var ppc = parseInt((ppcEl && ppcEl.value) || LOY.newPpc || '', 10);
+  if (isFinite(ppc) && ppc > 0) body.points_per_checkin = ppc;
+  LOY.busy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating\u2026'; }
+  fetch(window.location.origin + '/api/v1/loyalty/programs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify(body)
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = null; try { d = JSON.parse(t); } catch (e) {}
+      return { ok: r.ok, status: r.status, d: d || {} };
+    });
+  }).then(function (x) {
+    LOY.busy = false;
+    if (x.ok) {
+      LOY.newName = ''; LOY.newPpc = ''; LOY.newOpen = false;
+      loySay('Programme created \u2014 its check-in link is below.', false);
+      loyLoad();
+      return;
+    }
+    if (btn) { btn.disabled = false; btn.textContent = 'Create programme'; }
+    loySay((x.d && (x.d.message || x.d.error)) || ('Could not create the programme (HTTP ' + x.status + ').'), true);
+  }).catch(function (e) {
+    LOY.busy = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Create programme'; }
+    loySay('Could not create the programme: ' + e.message, true);
+  });
+}
 function loySubscribe(slug) {
   if (LOY.busy) return;
   var email = LOY.email || ((user && user.email) || '');
@@ -1140,7 +1200,8 @@ function loyRender() {
       var items = (list && list.programs) ? list.programs : (Array.isArray(list) ? list : []);
       var h = '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:8px">Your programmes</div>';
       if (!items.length) {
-        h += '<div style="color:#64748b;font-size:14px">No programme yet. Create one in the admin console \u2014 <a href="/admin/" style="color:#2563eb">open it here</a> \u2014 and it appears in this card with its check-in link.</div>';
+        h += '<div style="color:#64748b;font-size:14px;margin-bottom:8px">No programme yet. Name one below and it appears here with its check-in link \u2014 no other console needed.</div>'
+          + loyCreateForm();
       } else {
         for (var i = 0; i < items.length; i++) {
           var p = items[i];
@@ -1157,6 +1218,9 @@ function loyRender() {
             + (LOY.memberProgram === p.id ? loyMembersPanel() : '')
             + '</div>';
         }
+        h += '<div style="margin-top:10px"><button class="btn btn-sm" onclick="loyNewToggle()">'
+          + (LOY.newOpen ? 'Cancel' : 'New programme') + '</button>'
+          + (LOY.newOpen ? loyCreateForm() : '') + '</div>';
       }
       pr.innerHTML = h;
     }
