@@ -1021,6 +1021,98 @@ function loySaveProgramme(id) {
       .catch(function () { loyRender(); });
   }).catch(function (e) { LOY.saving = false; loySay('Could not save: ' + e.message, true); });
 }
+// MEMBERS — GET /api/v1/loyalty/members?program_id=… and GET /api/v1/loyalty/member/:id/qr.
+// Both reads shipped with NO screen on any customer surface (measured 2026-11-10: the only reader
+// was the operator's console), so a workspace running a loyalty programme could print a check-in QR
+// and then had no way to see who joined, what they hold, or hand a member their scannable card.
+// Every figure below is the server's own answer for the caller's own programme; nothing is computed
+// or invented here. Ownership is enforced server-side: another account's programme is a 404.
+function loyWhen(iso) {
+  if (!iso) return 'never';
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch (e) { return String(iso); }
+}
+function loyMembers(pid) {
+  LOY.memberProgram = (LOY.memberProgram === pid) ? null : pid;
+  LOY.members = LOY.members || {};
+  if (!LOY.memberProgram) { loyRender(); return; }
+  LOY.members[pid] = null; loyRender();
+  fetch(window.location.origin + '/api/v1/loyalty/members?program_id=' + encodeURIComponent(pid), {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    if (!r.ok) throw new Error('http ' + r.status);
+    return r.json();
+  }).then(function (d) { LOY.members[pid] = d; loyRender(); })
+    .catch(function () { LOY.members[pid] = { failed: true, members: [], total: 0 }; loyRender(); });
+}
+function loyMembersPanel() {
+  var pid = LOY.memberProgram;
+  var box = (LOY.members || {})[pid];
+  if (box === null || box === undefined) {
+    return '<div style="margin-top:10px;color:#64748b;font-size:13px">Loading members\u2026</div>';
+  }
+  if (box.failed) {
+    return '<div style="margin-top:10px;color:#b91c1c;font-size:13px">Could not load your members right now.</div>';
+  }
+  var rows = box.members || [];
+  if (!rows.length) {
+    return '<div style="margin-top:10px;color:#64748b;font-size:13px">No members yet \u2014 anyone who checks in on this programme\'s link lands here automatically.</div>';
+  }
+  var h = '<div style="margin-top:10px"><div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:6px">Members (' + esc(dashNum(box.total || rows.length)) + ')</div>'
+    + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+    + '<thead><tr style="text-align:left;color:#64748b">'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Member</th>'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Points</th>'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Lifetime</th>'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Tier</th>'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Last check-in</th>'
+    + '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Card</th>'
+    + '</tr></thead><tbody>';
+  for (var i = 0; i < rows.length; i++) {
+    var m = rows[i];
+    var sub = m.email || m.phone || '';
+    h += '<tr>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9"><div style="color:#0f172a;font-weight:600">' + esc(m.name || 'Member') + '</div>'
+      + (sub ? '<div style="color:#64748b;font-size:12px">' + esc(sub) + '</div>' : '') + '</td>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(dashNum(m.points_balance)) + '</td>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(dashNum(m.lifetime_points)) + '</td>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(m.tier_name || '\u2014') + '</td>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(loyWhen(m.last_checkin_at)) + '</td>'
+      + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9"><button class="btn btn-sm" onclick="loyCard(\'' + esc(String(m.id)) + '\')">' + (LOY.cardMember === m.id ? 'Hide QR' : 'Show QR') + '</button></td>'
+      + '</tr>';
+    if (LOY.cardMember === m.id) {
+      h += '<tr><td colspan="6" style="padding:10px;background:#f8fafc">' + loyCardBody(m.id) + '</td></tr>';
+    }
+  }
+  h += '</tbody></table></div></div>';
+  return h;
+}
+function loyCard(mid) {
+  LOY.cardMember = (LOY.cardMember === mid) ? null : mid;
+  LOY.cards = LOY.cards || {};
+  if (!LOY.cardMember || LOY.cards[mid]) { loyRender(); return; }
+  LOY.cards[mid] = null; loyRender();
+  fetch(window.location.origin + '/api/v1/loyalty/member/' + encodeURIComponent(mid) + '/qr', {
+    headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store'
+  }).then(function (r) {
+    if (!r.ok) throw new Error('http ' + r.status);
+    return r.json();
+  }).then(function (d) { LOY.cards[mid] = d; loyRender(); })
+    .catch(function () { LOY.cards[mid] = { failed: true }; loyRender(); });
+}
+function loyCardBody(mid) {
+  var c = (LOY.cards || {})[mid];
+  if (c === null || c === undefined) return '<span style="color:#64748b;font-size:13px">Loading the member card\u2026</span>';
+  if (c.failed) return '<span style="color:#b91c1c;font-size:13px">Could not load this member\'s card.</span>';
+  if (!c.qr_svg) return '<span style="color:#64748b;font-size:13px">This member has no scannable card yet.</span>';
+  return '<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">'
+    + '<div style="width:180px;height:180px;background:#fff;padding:6px;border:1px solid #e2e8f0;border-radius:8px">' + c.qr_svg + '</div>'
+    + '<div style="font-size:13px;color:#475569">Show this to the member at the counter so they can be scanned.'
+    + '<div style="margin-top:6px;color:#64748b;word-break:break-all">' + esc(c.qr_data || '') + '</div></div></div>';
+}
 function loyRender() {
   var st = document.getElementById('loy-status');
   if (st) {
@@ -1059,8 +1151,10 @@ function loyRender() {
             + (p.max_checkins_per_day ? (' \u00b7 up to ' + esc(dashNum(p.max_checkins_per_day)) + ' a day') : '') + '</div>'
             + '<div style="margin-top:6px;font-size:12px;color:#475569;word-break:break-all">' + esc(url) + '</div>'
             + '<div style="margin-top:6px"><button class="btn btn-sm" onclick="loyCopy(\'' + esc(p.slug || '') + '\')">Copy check-in link</button>'
+            + ' <button class="btn btn-sm" onclick="loyMembers(\'' + esc(String(p.id)) + '\')">' + (LOY.memberProgram === p.id ? 'Hide members' : 'Members') + '</button>'
             + ' <button class="btn btn-sm" onclick="loyEdit(\'' + esc(String(p.id)) + '\')">' + (LOY.editing === p.id ? 'Close settings' : 'Edit programme settings') + '</button></div>'
             + (LOY.editing === p.id ? loyPanel(p) : '')
+            + (LOY.memberProgram === p.id ? loyMembersPanel() : '')
             + '</div>';
         }
       }
