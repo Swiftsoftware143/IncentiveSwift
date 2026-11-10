@@ -137,6 +137,7 @@ button:disabled{opacity:.6;cursor:not-allowed}
       <div class="share-btns" id="shareBtns"></div>
       <div class="share-stats" id="shareStats"></div>
     </div>
+    <div class="share-stats" id="visitNote" style="display:none"></div>
   </div>
 </div>
 
@@ -178,6 +179,39 @@ button:disabled{opacity:.6;cursor:not-allowed}
       body: JSON.stringify({ referrer_code: ref, url: window.location.href })
     })
       .then(function (r) { if (r.ok) { try { localStorage.setItem(key, '1'); } catch (e) {} } })
+      .catch(function () {});
+  })();
+
+  // The owner's "Points per visit" rule (2026-11-10). `POST /loyalty/online/visit` is the ONLY
+  // route that credits `points_per_visit`, and until now no page anywhere called it — so an
+  // operator could set the number in the admin console while no visit was ever rewarded. A member
+  // opening their own card link (`?ref=<code>`, the link this page hands them) IS that visit: it is
+  // recorded once per browser per day, which is the handler's own cap (one `daily_visit` row per
+  // member per day), and the reply's own sentence is shown rather than an invented one.
+  (function () {
+    var ref = null;
+    try { ref = new URLSearchParams(window.location.search).get('ref'); } catch (e) {}
+    if (!ref) return;
+    var today = new Date().toISOString().slice(0, 10);
+    var key = 'loy_visit_' + ref + '_' + today;
+    try { if (localStorage.getItem(key)) return; } catch (e) {}
+    fetch(api + '/loyalty/online/visit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ referral_code: ref, url: window.location.href, user_agent: navigator.userAgent })
+    })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (res) {
+        if (!res.ok) return;
+        try { localStorage.setItem(key, '1'); } catch (e) {}
+        var d = res.data || {};
+        var n = Number(d.points_awarded || 0);
+        if (!n) return;
+        var note = el('visitNote');
+        if (!note) return;
+        note.textContent = 'Visit recorded \u2014 ' + n + ' ' + (d.currency_name || 'points') + ' added to this card today.';
+        note.style.display = 'block';
+      })
       .catch(function () {});
   })();
 
