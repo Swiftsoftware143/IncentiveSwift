@@ -756,6 +756,20 @@ pub async fn send_plan_request_operator_alert(
     .await
     .unwrap_or(None);
     let (name, email) = who.unwrap_or_default();
+    // A FLEET PROBE MUST NEVER RING THE OPERATOR (measured 2026-11-11). One night of harness runs
+    // against the contact door arrived as 19 "A support request needs an answer: Loyalty plan
+    // request: ..." messages in the operator's inbox, every one of them filed with a reserved
+    // `@example.invalid` address. The ticket row is the record and still lands in the console
+    // queue; only the alert to a person is withheld, exactly as the signup and reset paths withhold
+    // mail that can only bounce. A real customer's address is untouched.
+    if let Some(domain) = crate::security::probe_addr::harness_domain(&email) {
+        tracing::info!(
+            domain = %domain,
+            "support operator alert WITHHELD — the filer's address is a reserved/harness \
+             destination; the ticket row is still in the operator's queue"
+        );
+        return false;
+    }
     let workspace = if name.trim().is_empty() {
         if email.trim().is_empty() {
             "A workspace".to_string()
@@ -804,6 +818,20 @@ pub async fn send_support_request_operator_alert(
     subject_line: &str,
     message: &str,
 ) -> bool {
+    // A FLEET PROBE MUST NEVER RING THE OPERATOR (measured 2026-11-11). One night of harness runs
+    // against the contact door arrived as 19 "A support request needs an answer: Loyalty plan
+    // request: ..." messages in the operator's inbox, every one of them filed with a reserved
+    // `@example.invalid` address. The ticket row is the record and still lands in the console
+    // queue; only the alert to a person is withheld, exactly as the signup and reset paths withhold
+    // mail that can only bounce. A real customer's address is untouched.
+    if let Some(domain) = crate::security::probe_addr::harness_domain(reply_to) {
+        tracing::info!(
+            domain = %domain,
+            "support operator alert WITHHELD — the filer's address is a reserved/harness \
+             destination; the ticket row is still in the operator's queue"
+        );
+        return false;
+    }
     let row: Option<serde_json::Value> =
         match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
             .fetch_optional(pool)
