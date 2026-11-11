@@ -943,6 +943,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/logout-all",
             post(crate::handlers::auth_handler::logout_all),
         )
+        // Closing one's OWN account (2026-11-11). Private like its neighbours: the account comes
+        // from the caller's own token and the password is re-verified, so there is no id in the
+        // path to spoof and a stolen session alone cannot close the account.
+        .route(
+            "/api/v1/auth/close-account",
+            post(crate::handlers::auth_handler::close_account),
+        )
         // The way back in when signup MINTED a password and the mail carrying it did not go out
         // (2026-10-28 cron). Authenticated like every other act on the caller's own account: the
         // token the signup response already carried IS the credential, and the one-shot

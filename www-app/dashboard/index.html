@@ -412,6 +412,31 @@ function paintAccount(u) {
      + ' <button class="btn btn-sm" id="loCancelBtn" onclick="loCancel()" style="background:#fff;color:#334155;border:1px solid #cbd5e1">Cancel</button>'
      + '</div>'
      + '</div>';
+     // ── CLOSING THE ACCOUNT (2026-11-11) ────────────────────────────────────────────────────────
+     // Every other card here changes something; this one ends the relationship, so it is a THREE
+     // step control: arm, then type CLOSE and the password, then the server decides. The wording is
+     // deliberately exact about what does NOT disappear: the workspace, its campaigns and its
+     // loyalty ledger stay put (that is a business's records and its invoices), only the way IN to
+     // them closes.
+     + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0" id="caCard">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Close this account</div>'
+     + '<div style="font-size:12.5px;color:#64748b;margin:0 0 8px;line-height:1.5">'
+     + 'Closing stops you signing in and signs out every device. Your workspace, campaigns and loyalty '
+     + 'records stay where they are, so your history and invoices are kept \u2014 ask support if you want '
+     + 'the account reopened.</div>'
+     + '<div id="caMsg" role="status" aria-live="polite" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<div id="caArmRow"><button class="btn btn-sm" id="caArmBtn" onclick="caArm()" style="background:#fff;color:#b91c1c;border:1px solid #fca5a5">Close my account</button></div>'
+     + '<div id="caConfirmRow" style="display:none;padding:10px;border:1px solid #fca5a5;border-radius:8px;background:#fef2f2;max-width:420px">'
+     + '<div style="font-size:12.5px;color:#991b1b;margin:0 0 8px;line-height:1.5">This cannot be undone from this screen. '
+     + 'Type <strong>CLOSE</strong> and your password to confirm.</div>'
+     + '<label for="caWord" style="display:block;font-size:12px;color:#64748b;margin:0 0 3px">Type CLOSE</label>'
+     + '<input id="caWord" autocomplete="off" style="width:100%;max-width:360px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<label for="caPw" style="display:block;font-size:12px;color:#64748b;margin:10px 0 3px">Your password</label>'
+     + '<input id="caPw" type="password" autocomplete="current-password" style="width:100%;max-width:360px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box">'
+     + '<div style="margin-top:12px"><button class="btn btn-sm" id="caDoBtn" onclick="caDo()" style="background:#b91c1c;color:#fff">Close my account permanently</button>'
+     + ' <button class="btn btn-sm" id="caCancelBtn" onclick="caCancel()" style="background:#fff;color:#334155;border:1px solid #cbd5e1">Cancel</button></div>'
+     + '</div>'
+     + '</div>';
   document.getElementById('account').innerHTML = h;
   acctFill(u);
   // The sign-in-email block quotes the address the SERVER holds (this row), so the customer always
@@ -424,6 +449,65 @@ function paintAccount(u) {
 // The dashboard used to hand the customer a LINK into the admin console to change their own name,
 // company or password. These two forms drive the same two routes that console drives
 // (PUT /auth/profile, PUT /auth/password) from the page the customer is already on.
+// ── CLOSING THE ACCOUNT (2026-11-11) ──────────────────────────────────────────────────────────────
+// POST /api/v1/auth/close-account. The server re-verifies the password and bumps the account's
+// session counter, so the token in this tab dies with every other one — there is deliberately no
+// "you are still signed in" path here: the page sends the person to the sign-in screen and says
+// what happened first, so the redirect cannot look like a random logout.
+var CA_BUSY = false;
+function caArm() {
+  var a = document.getElementById('caArmRow'), c = document.getElementById('caConfirmRow');
+  acctNote('caMsg', '', 'i');
+  if (a) a.style.display = 'none';
+  if (c) c.style.display = 'block';
+}
+function caCancel() {
+  var a = document.getElementById('caArmRow'), c = document.getElementById('caConfirmRow');
+  if (c) c.style.display = 'none';
+  if (a) a.style.display = 'block';
+  acctNote('caMsg', '', 'i');
+}
+function caDo() {
+  if (CA_BUSY) return;
+  var btn = document.getElementById('caDoBtn');
+  var word = (document.getElementById('caWord') || {}).value || '';
+  var pw = (document.getElementById('caPw') || {}).value || '';
+  if (word.trim().toUpperCase() !== 'CLOSE') {
+    acctNote('caMsg', 'Type CLOSE in the box to confirm.', 'e');
+    return;
+  }
+  if (!pw) {
+    acctNote('caMsg', 'Enter your password.', 'e');
+    return;
+  }
+  CA_BUSY = true;
+  if (btn) btn.disabled = true;
+  acctNote('caMsg', 'Closing the account…', 'i');
+  __rawFetch(window.location.origin + '/api/v1/auth/close-account', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, ebAuth()),
+    body: JSON.stringify({ password: pw, confirm: word.trim().toUpperCase() })
+  }).then(function (r) {
+    return r.text().then(function (t) {
+      var d = {}; try { d = JSON.parse(t); } catch (e) {}
+      if (!r.ok) throw new Error(d.message || d.error || ('HTTP ' + r.status));
+      return d;
+    });
+  }).then(function (d) {
+    if (!d || d.status !== 'account_closed') {
+      throw new Error('The server did not confirm the closure.');
+    }
+    acctNote('caMsg', 'Your account is closed. Taking you to the sign-in page…', 's');
+    try { sessionStorage.removeItem(TOKEN_KEY); } catch (e) {}
+    try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+    setTimeout(function () { window.location.replace('/login.html'); }, 1200);
+  }).catch(function (e) {
+    CA_BUSY = false;
+    if (btn) btn.disabled = false;
+    acctNote('caMsg', e && e.message ? e.message : 'Could not close the account.', 'e');
+  });
+}
+
 var ACCT_FILLED = false;
 function acctSet(id, v) { var el = document.getElementById(id); if (el) el.value = (v == null ? '' : String(v)); }
 function acctNote(id, t, kind) {

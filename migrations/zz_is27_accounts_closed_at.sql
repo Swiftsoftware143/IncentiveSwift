@@ -1,0 +1,16 @@
+-- zz_is27 — an account can be closed by its own owner (2026-11-11).
+--
+-- WHY: every screen in this app lets a customer change their name, company and password, and
+-- move their sign-in address, but there was no way for the person who owns the account to close
+-- it. The only lever was asking support to delete the row — and deleting an `accounts` row
+-- CASCADEs through campaigns, contact_tenants, the loyalty journal and the ledger, which would
+-- destroy a business's history as a side effect of a privacy request.
+--
+-- A closed account is therefore KEPT, not deleted: `closed_at` records the decision, the password
+-- hash is cleared (no password can match it), the session counter is bumped so every token minted
+-- before the closure is refused, and `login` / `forgot_password` both refuse a closed account by
+-- name. The workspace and its data stay exactly where they are, so the operator can still read the
+-- ledger and invoices, and reactivation is a support action rather than a restore.
+--
+-- Idempotent on purpose: this app re-reads its migrations directory on every boot.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS closed_at timestamptz;

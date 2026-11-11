@@ -534,7 +534,7 @@ pub async fn login(
     }
     // Look up account by email
     let row = sqlx::query(
-        r#"SELECT id, email, password_hash, role,
+        r#"SELECT id, email, password_hash, role, closed_at,
                   COALESCE(session_epoch, 1)::bigint AS session_epoch
            FROM accounts WHERE lower(email) = $1"#,
     )
@@ -548,6 +548,18 @@ pub async fn login(
         state.login_throttle.record_failure(&throttle_key);
         AppError::Unauthorized(why.to_string())
     };
+
+    // A CLOSED account answers by NAME, before any credential is judged (2026-11-11): its hash
+    // column is cleared, so "Invalid email or password" would be technically true and completely
+    // useless to the person — they need to be told the account was closed, not that they mistyped.
+    if let Some(row) = row.as_ref() {
+        let closed: Option<chrono::DateTime<chrono::Utc>> = row.get("closed_at");
+        if closed.is_some() {
+            return Err(AppError::Forbidden(
+                "This account has been closed. Contact support to reopen it.".to_string(),
+            ));
+        }
+    }
 
     // ONE Argon2 verify either way: against the stored hash when it is a usable PHC string,
     // otherwise against the dummy (see `dummy_password_hash`). A stored hash that is missing
@@ -1484,6 +1496,134 @@ pub async fn get_avatar(
     crate::image_store::image_response(content_type, bytes)
 }
 
+/// `POST /api/v1/auth/close-account` body — the owner's own decision to close the account.
+#[derive(Deserialize)]
+pub struct CloseAccountInput {
+    pub password: String,
+    /// The word the console asks them to type. Judged HERE as well as in the browser, so a bare
+    /// API call cannot close an account with one careless request.
+    pub confirm: String,
+}
+
+/// `POST /api/v1/auth/close-account` — the account's own owner closes it (2026-11-11).
+///
+/// Before this there was no way for a customer to close their own account: the only lever was
+/// asking support to DELETE the row, and every foreign key to `accounts` CASCADEs — campaigns,
+/// contact_tenants, the loyalty journal, the ledger — so a privacy request would have destroyed a
+/// business's history as a side effect. A closure is therefore a STATE, not a deletion:
+///
+///   * `closed_at` records the decision (migration zz_is27), so the operator can still see the
+///     workspace, its ledger and its invoices;
+///   * `password_hash` is cleared, so no password can ever match again;
+///   * `session_epoch` is bumped in the SAME statement, so every token minted before the closure
+///     is refused at its next request (the boundary read judges the counter, not the clock);
+///   * issued API keys are retired and legacy credentials deleted, because those are DURABLE by
+///     design and are never measured against the session counter — leaving them would let a closed
+///     account keep calling the API;
+///   * `login` and `forgot_password` both refuse a closed account by name, so a reset link cannot
+///     quietly reopen it.
+///
+/// The password is re-verified here exactly as a password change does: the bearer token proves who
+/// is asking, but only the password proves the person holding the session is the owner.
+///
+/// Idempotent: closing an already-closed account answers the same `account_closed`.
+pub async fn close_account(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<CloseAccountInput>,
+) -> Result<Json<Value>, AppError> {
+    if !body.confirm.trim().eq_ignore_ascii_case("CLOSE") {
+        return Err(AppError::BadRequest(
+            "Type CLOSE to confirm closing the account".to_string(),
+        ));
+    }
+
+    let account_uuid = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
+
+    let row = sqlx::query("SELECT password_hash, role, closed_at FROM accounts WHERE id = $1")
+        .bind(account_uuid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+
+    let already_closed: Option<chrono::DateTime<chrono::Utc>> = row.get("closed_at");
+    if already_closed.is_some() {
+        return Ok(Json(json!({
+            "status": "account_closed",
+            "closed_at": already_closed,
+        })));
+    }
+
+    // A platform operator account closes workspaces; it is not a customer, and losing it from a
+    // dashboard button would take the console away from the person who runs the install.
+    let role: String = row.get("role");
+    if role == "admin" || role == "super_admin" {
+        return Err(AppError::Forbidden(
+            "A platform operator account cannot be closed from this screen.".to_string(),
+        ));
+    }
+
+    let password_hash: Option<String> = row.get("password_hash");
+    match password_hash {
+        Some(ref hash) => {
+            if !verify_password(&body.password, hash) {
+                // 401, matching the password-change refusal: the caller is authenticated, so the
+                // only secret in question is the one they just typed.
+                return Err(AppError::Unauthorized(
+                    "Your password is incorrect".to_string(),
+                ));
+            }
+        }
+        None => {
+            return Err(AppError::BadRequest(
+                "This account has no password set, so it cannot be closed from this screen."
+                    .to_string(),
+            ));
+        }
+    }
+
+    let closed_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+        "UPDATE accounts
+            SET closed_at = NOW(),
+                password_hash = NULL,
+                sessions_valid_from = NOW(),
+                session_epoch = COALESCE(session_epoch, 1) + 1,
+                password_undelivered = false
+          WHERE id = $1
+      RETURNING closed_at",
+    )
+    .bind(account_uuid)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Durable credentials are NOT covered by the session counter, so they are retired explicitly.
+    // Best effort on purpose: the closure above has already succeeded and must not be reported as
+    // failed because a bookkeeping statement lost a race.
+    if let Err(e) = sqlx::query("UPDATE api_keys SET is_active = false WHERE user_id = $1")
+        .bind(account_uuid)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not retire api_keys for closed account {account_uuid}: {e}");
+    }
+    if let Err(e) = sqlx::query("DELETE FROM api_credentials WHERE account_id = $1")
+        .bind(account_uuid)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!(
+            "could not retire legacy credentials for closed account {account_uuid}: {e}"
+        );
+    }
+
+    tracing::info!("account {account_uuid} closed by its owner");
+    Ok(Json(json!({
+        "status": "account_closed",
+        "closed_at": closed_at,
+    })))
+}
+
 /// POST /api/v1/auth/forgot-password
 pub async fn forgot_password(
     State(state): State<AppState>,
@@ -1498,11 +1638,12 @@ pub async fn forgot_password(
     // Check if account exists. The NAME travels with the id so the reset mail can greet the
     // customer by name instead of the hard-coded "Hi there," it used to send (fixed 2026-10-13,
     // cron `default`) — the app already knows who they are.
-    let account: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT id, coalesce(name, '') FROM accounts WHERE lower(email) = $1")
-            .bind(&email)
-            .fetch_optional(&state.db)
-            .await?;
+    let account: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, coalesce(name, '') FROM accounts WHERE lower(email) = $1 AND closed_at IS NULL",
+    )
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
 
     // Always return success to prevent email enumeration
     if account.is_none() {
