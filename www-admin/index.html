@@ -713,7 +713,11 @@ const Plans = () => {
 // dead /signup.html?plan=pro anchor for the same reason). Carded separately, kanban t_59a1b420.
 // The upgrade path named below is the Support Ticket view, which is real and reachable.
 const MyPlan = () => {
-  const st = viewState('my_plan', { me: null, plans: [], _loaded: false, err: null });
+  // `term` is the billing term the visitor is shopping on (2026-11-11). The catalogue carries a
+  // yearly price per plan and POST /checkout/create has accepted `billing_cycle: "year"` since
+  // 2026-10-24 — but this screen could only ever ASK for a month, so the yearly figure was a number
+  // nobody could buy.
+  const st = viewState('my_plan', { me: null, plans: [], _loaded: false, err: null, term: 'month' });
   if (!st._loaded) { st._loaded = true;
     API.get('/auth/me').then(d => { st.me = (d && d.user) || null; renderApp(); }).catch(e => { st.err = e.message; renderApp(); });
     API.get('/plans').then(d => { st.plans = (d && d.plans) ? d.plans : (Array.isArray(d) ? d : []); renderApp(); }).catch(e => { st.err = e.message; renderApp(); });
@@ -770,8 +774,8 @@ const MyPlan = () => {
         headers: { 'Content-Type': 'application/json', ...(API.token ? { 'Authorization': 'Bearer ' + API.token } : {}) },
         body: JSON.stringify({
           plan_id: p.id,
-          billing_cycle: 'month',
-          description: (p.slug || 'plan') + ' plan (monthly)',
+          billing_cycle: (st.term === 'year' ? 'year' : 'month'),
+          description: (p.slug || 'plan') + ' plan (' + (st.term === 'year' ? 'yearly' : 'monthly') + ')',
           success_url: window.location.origin + '/admin/?checkout=success',
           cancel_url: window.location.origin + '/admin/?checkout=cancelled'
         })
@@ -808,17 +812,28 @@ const MyPlan = () => {
       html`<div class="text-sm text-gray-500">Loading your plan\u2026</div>`}
     </div>
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Plan</th><th>Monthly</th><th>Included</th><th></th></tr></thead>
-        <tbody>${catalogue.map(p => html`<tr>
+      <div class="px-4 pt-3 pb-1 flex items-center gap-2 flex-wrap" data-term-switch="1">
+        <span class="text-xs uppercase text-gray-400 font-semibold">Billing term</span>
+        <button class=${'btn btn-sm' + (st.term === 'year' ? ' btn-outline' : '')} data-term="month" onClick=${() => { if (st.term !== 'month') { st.term = 'month'; st.askMsg = ''; st.askErr = ''; renderApp(); } }}>Monthly</button>
+        <button class=${'btn btn-sm' + (st.term === 'year' ? '' : ' btn-outline')} data-term="year" onClick=${() => { if (st.term !== 'year') { st.term = 'year'; st.askMsg = ''; st.askErr = ''; renderApp(); } }}>Yearly — 2 months free</button>
+        <span class="text-xs text-gray-500" data-term-note="1">${st.term === 'year' ? 'Prices are for a full year. A plan with no yearly price set cannot be chosen on this term.' : 'Prices are per month. Switch to yearly to see what a year costs.'}</span>
+      </div>
+      <table class="table"><thead><tr><th>Plan</th><th>Monthly</th><th>Yearly</th><th>Included</th><th></th></tr></thead>
+        <tbody>${catalogue.map(p => html`<tr data-plan-row=${String(p.slug || '')}>
           <td class="font-medium">${p.name}</td>
           <td class="text-gray-500">${isCurrent(p) && ownMonthly !== null ? money(ownMonthly) : money(p.monthly_price)}</td>
+          <td class="text-gray-500">${Number(p.annual_price) > 0
+            ? html`<span data-plan-yearly=${String(p.annual_price)}>${money(p.annual_price)}</span><span class="text-xs text-gray-400"> a year${Number(p.monthly_price) > 0 && (Number(p.monthly_price) * 12 - Number(p.annual_price)) > 0 ? html` · save ${money((Number(p.monthly_price) * 12 - Number(p.annual_price)).toFixed(2))}` : ''}</span>`
+            : '\u2014'}</td>
           <td class="text-gray-500">${Array.isArray(p.features) ? p.features.map(pretty).join(', ') : '\u2014'}</td>
           <td>${isCurrent(p) ? html`<span class="badge badge-green">Current</span>`
             : (Number(p.monthly_price) > 0
-                ? html`<button class="btn btn-sm" disabled=${!!st.askBusy} onClick=${() => askFor(p)}>Choose ${p.name}</button>`
+                ? (st.term === 'year' && !(Number(p.annual_price) > 0)
+                    ? html`<button class="btn btn-sm" disabled title="This plan has no yearly price set, so it can only be bought monthly.">No yearly price</button>`
+                    : html`<button class="btn btn-sm" data-choose-plan=${String(p.slug || '')} disabled=${!!st.askBusy} onClick=${() => askFor(p)}>Choose ${p.name}${st.term === 'year' ? ' \u2014 yearly' : ''}</button>`)
                 : '')}</td>
         </tr>`)}
-        ${catalogue.length === 0 && html`<tr><td colspan="4" class="text-center text-gray-400 py-8">Loading plans\u2026</td></tr>`}
+        ${catalogue.length === 0 && html`<tr><td colspan="5" class="text-center text-gray-400 py-8">Loading plans\u2026</td></tr>`}
       </tbody></table>
     </div>
     <div class="card text-sm text-gray-600">
