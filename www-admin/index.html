@@ -2233,6 +2233,42 @@ const LoyaltyPrograms = () => {
     return window.location.protocol + '//' + (h.startsWith('admin.') ? 'app.' + h.slice(6) : h);
   };
   const checkinUrl = (p) => checkinOrigin() + '/loyalty-checkin/' + encodeURIComponent(p.slug);
+  // The PRINTABLE COUNTER POSTER (cron 2026-11-11). `GET /api/v1/loyalty/programs/:id/qr` answers
+  // the check-in URL and the QR as inline SVG — the same renderer the member card uses — so the
+  // owner can print the sign a customer scans instead of being told to generate one on another
+  // site. The poster is opened in its own window and the customer only ever sees our own host.
+  const printPoster = async (p) => {
+    try {
+      const d = await API.get('/loyalty/programs/' + encodeURIComponent(p.id) + '/qr');
+      if (!d || !d.qr_svg) {
+        alert('Could not draw the code for this programme. Reload the page and try again.');
+        return;
+      }
+      const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const w = window.open('', '_blank');
+      if (!w) {
+        alert('Your browser blocked the poster window. Allow pop-ups for this site, then press Poster again.');
+        return;
+      }
+      w.document.write(
+        '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(d.name) + ' - check in</title>' +
+        '<style>body{font-family:system-ui,Arial,sans-serif;margin:0;padding:40px;text-align:center;color:#111}' +
+        'h1{font-size:34px;margin:0 0 6px}p{color:#555;margin:6px 0}.qr{width:320px;height:320px;margin:24px auto}' +
+        '.qr svg{width:100%;height:100%}.u{font-size:13px;word-break:break-all;color:#666}' +
+        '@media print{@page{margin:18mm}}</style></head><body>' +
+        '<h1>' + esc(d.name) + '</h1><p>Scan to join and check in</p>' +
+        '<div class="qr">' + d.qr_svg + '</div>' +
+        '<p class="u">' + esc(d.checkin_url) + '</p>' +
+        (d.is_active === false ? '<p><b>This programme is paused - scanning shows a paused message until you make it active again.</b></p>' : '') +
+        '<p style="margin-top:28px;font-size:12px;color:#999">Press Ctrl+P (or Command+P) to print this page.</p>' +
+        '</body></html>'
+      );
+      w.document.close();
+      w.focus();
+    } catch (e) {
+      alert('Could not build the poster: ' + ((e && e.message) || 'the request failed'));
+    }
+  };
   const copyCheckin = (p) => {
     const u = checkinUrl(p);
     const done = () => alert('Check-in link copied — this is the link your counter QR must encode for ' + (p.name||'this programme') + ':\n\n' + u);
@@ -2275,7 +2311,7 @@ const LoyaltyPrograms = () => {
           <td>${p.points_per_checkin||0}</td>
           <td>${p.streak_enabled ? html`<span class="badge badge-green">${p.streak_bonus||0} bonus / ${p.streak_days||0}d</span>` : html`<span class="badge badge-yellow">Off</span>`}</td>
           <td><span class="badge ${p.is_active ? 'badge-green' : 'badge-red'}">${p.is_active?'Active':'Inactive'}</span></td>
-          <td>${p.slug ? html`<a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(p)} target="_blank" rel="noopener">${checkinUrl(p)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(p)}>Copy</button><div class="text-xs mt-1">${p.is_active === false ? html`<span class="badge badge-yellow" title="A paused programme refuses check-ins, so this link shows the customer a paused message until the programme is active again.">Paused — scanning refuses</span>` : html`<span class="badge badge-green" title="Scanning this link opens the customer check-in page and awards this programme's points.">Live — scanning checks in</span>`}${p.campaign_slug ? html` <span class="badge badge-blue" title="This programme is linked to a campaign — its check-ins also fire that campaign's milestones and delivery.">Linked to ${p.campaign_slug}</span>` : html` <span class="badge badge-blue" title="No campaign is linked to this programme. The check-in link still works; linking a campaign (from the campaign editor) adds its milestones and delivery to the same points.">Standalone</span>`}</div>` : html`<span class="text-gray-400" title="This programme has no slug, so it has no check-in link.">—</span>`}</td>
+          <td>${p.slug ? html`<a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(p)} target="_blank" rel="noopener">${checkinUrl(p)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(p)}>Copy</button><button class="btn btn-sm btn-outline" title="A printable sign with the check-in QR - put it on the counter so customers can scan it." onClick=${() => printPoster(p)}>Poster</button><div class="text-xs mt-1">${p.is_active === false ? html`<span class="badge badge-yellow" title="A paused programme refuses check-ins, so this link shows the customer a paused message until the programme is active again.">Paused — scanning refuses</span>` : html`<span class="badge badge-green" title="Scanning this link opens the customer check-in page and awards this programme's points.">Live — scanning checks in</span>`}${p.campaign_slug ? html` <span class="badge badge-blue" title="This programme is linked to a campaign — its check-ins also fire that campaign's milestones and delivery.">Linked to ${p.campaign_slug}</span>` : html` <span class="badge badge-blue" title="No campaign is linked to this programme. The check-in link still works; linking a campaign (from the campaign editor) adds its milestones and delivery to the same points.">Standalone</span>`}</div>` : html`<span class="text-gray-400" title="This programme has no slug, so it has no check-in link.">—</span>`}</td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(p); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(p.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="7" class="text-center text-gray-400 py-8">No loyalty programs yet. Create one to start.</td></tr>`}
@@ -2462,7 +2498,7 @@ const LoyaltyPrograms = () => {
   // ── Program Edit Modal ──
   const editModal = st.showModal ? html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
     <div class="modal-content" style="max-width:560px"><h3 class="text-lg font-bold mb-4">${st.editItem&&st.editItem.id ? 'Edit' : 'Add'} ${st.editItem&&st.editItem._type==='tier' ? 'Reward Tier' : 'Loyalty Program'}</h3>
-      ${st.editItem && st.editItem.slug ? html`<div class="text-xs text-gray-500 mb-3">Counter check-in link: <a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(st.editItem)} target="_blank" rel="noopener">${checkinUrl(st.editItem)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(st.editItem)}>Copy</button></div>` : ''}
+      ${st.editItem && st.editItem.slug ? html`<div class="text-xs text-gray-500 mb-3">Counter check-in link: <a class="text-blue-600 underline" style="word-break:break-all" href=${checkinUrl(st.editItem)} target="_blank" rel="noopener">${checkinUrl(st.editItem)}</a> <button class="btn btn-sm btn-outline" onClick=${() => copyCheckin(st.editItem)}>Copy</button><button class="btn btn-sm btn-outline" onClick=${() => printPoster(st.editItem)}>Poster</button></div>` : ''}
       ${st.editItem && st.editItem._type === 'tier' ? (() => {
         const t0 = st.editItem || {};
         const prog = (st.list||[]).find(p => p.id === (st.editItem && st.editItem.program_id)) || tierProg();

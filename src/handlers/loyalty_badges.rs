@@ -62,7 +62,11 @@ async fn ensure_member_in_caller_programme(
 /// The member card's scannable image, as an inline `<svg>` the console can drop straight into a
 /// card and a browser can print. `None` only if the payload cannot be encoded, and the JSON arm
 /// then omits the key rather than shipping a broken `<img>`.
-fn qr_svg(data: &str) -> Option<String> {
+///
+/// `pub(crate)` since 2026-11-11 so the COUNTER POSTER (`GET /api/v1/loyalty/programs/:id/qr`,
+/// `super::loyalty::program_qr`) encodes the check-in URL with this same renderer instead of a
+/// second QR implementation that could drift from the card's size and colours.
+pub(crate) fn qr_svg(data: &str) -> Option<String> {
     let code = qrcode::QrCode::new(data.as_bytes()).ok()?;
     Some(
         code.render::<qrcode::render::svg::Color>()

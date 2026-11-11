@@ -2224,3 +2224,72 @@ pub async fn put_status_tiers(
         "tier_count": ordered.len(),
     })))
 }
+
+/// `GET /api/v1/loyalty/programs/:id/qr` — the COUNTER POSTER for one programme.
+///
+/// WHY (cron 2026-11-11): the console tells an owner that the check-in link "is the link your
+/// counter QR must encode", and then leaves them to generate that QR somewhere else. The printed
+/// sign is how a customer actually finds the programme — a loyalty programme nobody can scan earns
+/// nothing — so the app now draws it: this endpoint answers the check-in URL plus the SAME inline
+/// SVG the member card uses ([`super::loyalty_badges::qr_svg`]).
+///
+/// Scoped with the identical ownership predicate `update_program` reads (`account_id` column, the
+/// campaign this programme points at, or a campaign pointing forward at it), so a programme
+/// belonging to another account is the same 404 an absent id gets — never a 403, which would
+/// confirm the row exists.
+///
+/// The URL is built on the app's own `APP_URL` (the host the check-in page is served from), not on
+/// the caller's `Host` header: a poster printed from the admin host must still point customers at
+/// the app host, and a spoofed header must not be able to put another origin on a printed sign.
+pub async fn program_qr(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let program_id =
+        Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid program ID".to_string()))?;
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+
+    let row: Option<(String, String, bool)> = sqlx::query_as(
+        r#"SELECT lp.name, lp.slug, lp.is_active FROM loyalty_programs lp
+           WHERE lp.id = $1
+             AND (lp.account_id = $2
+                  OR EXISTS (SELECT 1 FROM campaigns c
+                              WHERE c.id = lp.campaign_id AND c.account_id = $2)
+                  OR EXISTS (SELECT 1 FROM campaigns fwd
+                              WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))"#,
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (name, slug, is_active) =
+        row.ok_or_else(|| AppError::NotFound("Loyalty program not found".to_string()))?;
+
+    let checkin_url = format!("{}/loyalty-checkin/{}", crate::email::APP_URL, slug);
+    // `None` when the encoder refuses the payload; the console then says so instead of printing a
+    // blank square. A short URL on our own host cannot realistically fail, so this is a guard,
+    // not a branch anyone should see.
+    //
+    // The renderer emits an `<?xml …?>` prolog before the `<svg>` (right for a standalone file,
+    // and the member card hands the string to `dangerouslySetInnerHTML` where the parser drops it).
+    // The poster is written into a page with `document.write`, so the declaration is cut here and
+    // the answer is a pure `<svg>` FRAGMENT that is valid inside HTML — one shape for both callers.
+    let mut qr_svg = super::loyalty_badges::qr_svg(&checkin_url);
+    if let Some(s) = qr_svg.as_mut() {
+        if let Some(i) = s.find("<svg") {
+            s.drain(..i);
+        }
+    }
+
+    Ok(Json(json!({
+        "program_id": program_id,
+        "name": name,
+        "slug": slug,
+        "is_active": is_active,
+        "checkin_url": checkin_url,
+        "qr_svg": qr_svg,
+    })))
+}

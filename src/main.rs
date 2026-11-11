@@ -678,6 +678,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/programs/:id/status-tiers",
             get(handlers::loyalty::list_status_tiers).put(handlers::loyalty::put_status_tiers),
         )
+        // The printable COUNTER POSTER (cron 2026-11-11): the check-in URL plus its QR as inline
+        // SVG, so an owner can print the sign a customer scans instead of being told to generate
+        // one on another site. Owner-scoped exactly like the programme writer next door.
+        .route(
+            "/api/v1/loyalty/programs/:id/qr",
+            get(handlers::loyalty::program_qr),
+        )
         .route(
             "/api/v1/loyalty/rewards/:id/approve",
             post(handlers::loyalty::approve_reward),
