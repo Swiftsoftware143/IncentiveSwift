@@ -2150,7 +2150,7 @@ function pbUpgrade(slug, price, planId, name, term) {
 /* Inline guide content (fleet standard; the in-app counterpart of /guide.html). This hub is a single
    screen, so one entry keyed by the served path tells the widget what this page is for. */
 window.appGuidePages = {
-  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited in the Your account card, below your numbers on this page; your picture is uploaded from the Profile picture card on this page.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available; when a payment page hands you back to this screen it says so at the top of that card, and because this installation switches a paid plan on by hand, the plan will not change by itself \u2014 you are emailed when it is on", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
+  "/dashboard": { title: "Your Dashboard", desc: "Your account (name, email, company, the plan you are on and the way up) and the way in to everything else: the admin console for campaigns, loyalty programs, leads, tags, API keys and settings, your qualifying surveys, and your integrations. Your name, company, username and password are edited in the Your account card, below your numbers on this page; your picture is uploaded from the Profile picture card on this page. A Feedback button sits at the bottom-right of every screen: choose Idea, Problem or Complaint, write your note and press Send - it reaches our team with the screen you were on, and their answer arrives by email.", actions: ["Your numbers (campaigns, entries, participants, points issued, rewards given) and your latest entries are on this screen", "Plan & billing shows what your plan includes, a Billing term switch (Monthly, or Yearly at the annual price your plan records carry), and lets you ask to move to another plan (an upgrade or a downgrade) when one is available; when a payment page hands you back to this screen it says so at the top of that card, and because this installation switches a paid plan on by hand, the plan will not change by itself \u2014 you are emailed when it is on", "Under Your account, save your name, company and username, and change the password you sign in with", "Open the Admin Console to manage campaigns, loyalty and leads", "Open the User Guide for step-by-step help"] }
 };
 
 // ── Your data: the customer-facing face of GET /api/v1/analytics/export ─────────────────────────
@@ -2196,6 +2196,117 @@ function downloadMyCsv(type, btn) {
   &middot; <a href="https://incentiveswift.com/terms" style="color:#64748b;text-decoration:none">Terms of Service</a>
   &middot; <a href="/guide.html" target="_blank" rel="noopener" style="color:#64748b;text-decoration:none">User Guide</a>
 </div>
+<!-- ── FEEDBACK IN THE PRODUCT (David 2026-11-11, backlog B209) ─────────────────────────────────────
+     A customer can tell us an idea, a problem or a complaint without leaving the screen they are on.
+     It files the SAME support ticket the Support screen files (POST /api/v1/support-tickets) with
+     category "feedback" and source "in_app_feedback", so there is no second store and the note lands
+     in the queue the team already reads; the app replies to it on the Support screen the customer
+     already has. Every note carries the screen it was sent from and the app it came from, so nothing
+     arrives anonymous. The button is hidden until a session exists, and nothing is sent until Send
+     is pressed. -->
+<button id="fb-open" type="button" aria-haspopup="dialog"
+        style="position:fixed;left:18px;bottom:18px;z-index:60;border:none;border-radius:999px;padding:10px 16px;background:#4f46e5;color:#fff;font-size:13.5px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(79,70,229,.35)">Feedback</button>
+<div id="fb-modal" role="dialog" aria-modal="true" aria-labelledby="fb-title"
+     style="position:fixed;inset:0;z-index:61;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;padding:18px">
+  <div style="background:#fff;border-radius:14px;max-width:460px;width:100%;padding:20px;box-shadow:0 18px 50px rgba(15,23,42,.3)">
+    <h2 id="fb-title" style="margin:0 0 4px;font-size:18px;color:#0f172a">Tell us what you think</h2>
+    <p style="margin:0 0 12px;font-size:13.5px;color:#475569;line-height:1.5">An idea, a problem, a complaint — the team reads every note, and if they need to reply it reaches you by email.</p>
+    <div id="fb-kinds" style="display:flex;gap:8px;margin:0 0 12px">
+      <button type="button" class="fb-kind" data-kind="idea">Idea</button>
+      <button type="button" class="fb-kind" data-kind="problem">Problem</button>
+      <button type="button" class="fb-kind" data-kind="complaint">Complaint</button>
+    </div>
+    <textarea id="fb-text" rows="5" maxlength="4000" placeholder="What happened, or what would make this better?"
+      style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-size:14px;resize:vertical"></textarea>
+    <div id="fb-where" style="font-size:12px;color:#64748b;margin:8px 0 0"></div>
+    <div id="fb-msg" style="font-size:13px;margin:8px 0 0;color:#64748b"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button type="button" id="fb-cancel" style="border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:8px 14px;font-size:13.5px;cursor:pointer">Cancel</button>
+      <button type="button" id="fb-send" style="border:none;background:#4f46e5;color:#fff;border-radius:8px;padding:8px 16px;font-size:13.5px;font-weight:600;cursor:pointer">Send</button>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  if (!token) return;
+  var KIND_LABEL = { idea: 'Idea', problem: 'Problem', complaint: 'Complaint' };
+  var kind = 'idea', busy = false;
+  var modal = document.getElementById('fb-modal');
+  var text = document.getElementById('fb-text');
+  var msg = document.getElementById('fb-msg');
+  var where = document.getElementById('fb-where');
+  var sendBtn = document.getElementById('fb-send');
+  var kindBtns = [].slice.call(document.querySelectorAll('.fb-kind'));
+
+  // The screen the note came from: the last card heading above the fold, so the operator reads
+  // "Plan & billing", not an anonymous "somewhere in the app". Falls back to the page itself.
+  function screenLabel() {
+    var hs = document.querySelectorAll('h2'), best = '', y = window.scrollY + 140;
+    for (var i = 0; i < hs.length; i++) {
+      if (modal && modal.contains(hs[i])) continue;
+      if (hs[i].getBoundingClientRect().top + window.scrollY <= y) best = (hs[i].textContent || '').trim();
+    }
+    if (!best && hs.length) best = (hs[0].textContent || '').trim();
+    best = best.replace(/\s+/g, ' ');
+    if (best.length > 70) best = best.slice(0, 70);
+    return best || 'Dashboard';
+  }
+  function paintKinds() {
+    kindBtns.forEach(function (b) {
+      var on = b.getAttribute('data-kind') === kind;
+      b.style.cssText = 'border-radius:999px;padding:6px 14px;font-size:13px;cursor:pointer;' +
+        (on ? 'border:1px solid #4f46e5;background:#eef2ff;color:#3730a3;font-weight:600'
+            : 'border:1px solid #cbd5e1;background:#fff;color:#334155');
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  function show() {
+    kind = 'idea'; paintKinds();
+    text.value = ''; msg.textContent = '';
+    msg.style.color = '#64748b';
+    sendBtn.disabled = false; busy = false;
+    where.textContent = 'We will attach this screen: ' + screenLabel();
+    modal.style.display = 'flex';
+    text.focus();
+  }
+  function hide() { modal.style.display = 'none'; }
+  kindBtns.forEach(function (b) { b.addEventListener('click', function () { kind = b.getAttribute('data-kind'); paintKinds(); }); });
+  document.getElementById('fb-open').addEventListener('click', show);
+  document.getElementById('fb-cancel').addEventListener('click', hide);
+  modal.addEventListener('click', function (e) { if (e.target === modal) hide(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && modal.style.display === 'flex') hide(); });
+
+  sendBtn.addEventListener('click', function () {
+    if (busy) return;
+    var body = (text.value || '').trim();
+    if (body.length < 3) { msg.style.color = '#dc2626'; msg.textContent = 'Please write a sentence or two first.'; return; }
+    var screen = screenLabel();
+    busy = true; sendBtn.disabled = true;
+    msg.style.color = '#64748b'; msg.textContent = 'Sending…';
+    fetch('/api/v1/support-tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({
+        subject: '[Feedback] ' + KIND_LABEL[kind] + ' — ' + screen,
+        description: body + '\n\n— Sent from the "' + screen + '" screen (' + window.location.pathname + ') in IncentiveSwift',
+        category: 'feedback',
+        source: 'in_app_feedback',
+        priority: 'normal'
+      })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) throw new Error(d.message || d.error || ('The note could not be sent (' + r.status + ').'));
+        msg.style.color = '#059669';
+        msg.textContent = 'Thank you — your note is with the team. If they need to reply, their answer reaches you by email.';
+        setTimeout(hide, 2200);
+      });
+    }).catch(function (e) {
+      msg.style.color = '#dc2626';
+      msg.textContent = e.message || 'The note could not be sent. Please try again.';
+    }).then(function () { busy = false; sendBtn.disabled = false; });
+  });
+})();
+</script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
 </body>
 </html>

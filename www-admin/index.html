@@ -162,7 +162,7 @@ window.appGuidePages = {
   "api-keys":     { title: "API Keys", desc: "Keys that let other tools call IncentiveSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
   settings:       { title: "Settings", desc: "This workspace's own settings: the mail server its outgoing mail goes through \u2014 host, port, credentials and from-address, with a Test button that sends one message \u2014 and the Email Branding card that puts your own logo, brand name and colour on the transactional email this account sends. Saving branding writes the name and colour; the logo is uploaded on its own and a new upload replaces the old one. The preview button, Send me a preview email, mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives, and a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Review the saved mail server", "Send one test message", "Upload a logo and set a brand name and colour", "Send yourself a preview, or press Show the exact email to render the real message body on the page straight from the server \u2014 nothing is mailed"] },
   "my-plan":      { title: "Plan & Pricing", desc: "Your plan decides what is available to you. This is where you see it and upgrade.", actions: ["Compare plans", "Upgrade"] },
-  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace. The Plan requests button filters the queue down to customers who asked to buy a plan (a switch your team makes by hand, since no card is taken here), and each of those rows carries a Plan request badge.", actions: ["Open a ticket", "Check a reply"] },
+  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace. The Plan requests button filters the queue down to customers who asked to buy a plan (a switch your team makes by hand, since no card is taken here), and each of those rows carries a Plan request badge. The Feedback chip beside it shows the notes a customer sent from the Feedback button in their own dashboard - an idea, a problem or a complaint, stamped with the screen it came from - and you answer them like any other ticket.", actions: ["Open a ticket", "Check a reply", "Filter the queue to the notes customers sent from the Feedback button"] },
   reviews:        { title: "Reviews & Ratings", desc: "Feedback customers have left, collected so you can see how you are doing.", actions: ["Read a review", "Respond"] },
   calendar:       { title: "Calendar", desc: "Scheduled dates for your campaigns and events, in one view.", actions: ["See what is coming up", "Add a date"] },
   "knowledge-base": { title: "Knowledge Base", desc: "Help articles you can read and, for operators, publish.", actions: ["Read an article", "Search the base"] },
@@ -606,8 +606,16 @@ const Plans = () => {
   };
   // The plan CRUD lives on /api/v1/admin/plans (+ /:id). The old `/plans` path answered live 404
   // on PUT and 405 on POST, so this editor's Save could never succeed (kanban t_8e0ae96e).
+  //
+  // A payment link the server could not VERIFY still SAVES (a Stripe/PayPal page refuses an automated
+  // check, so refusing it would block a working link) and comes back as `link_warning`: the operator
+  // is told to open it once himself instead of being shown a silent green tick.
   const save = async (data) => {
-    try { if(st.editItem) await API.put('/admin/plans/' + st.editItem.id, data); else await API.post('/admin/plans', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
+    try {
+      const r = st.editItem ? await API.put('/admin/plans/' + st.editItem.id, data) : await API.post('/admin/plans', data);
+      st.showModal = false; load();
+      if (r && r.link_warning) alert(r.link_warning);
+    } catch(e){ alert(e.message); }
   };
 
   return html`<div>
@@ -2959,6 +2967,21 @@ const PaymentProviders = () => {
     renderApp();
   };
   if (!st._loaded) { st._loaded = true; load(); }
+  // WHETHER A BUYER CAN PAY — asked of the server, never assumed (kanban cron 2026-11-11).
+  // `GET /checkout/status` is the ONE read that answers "would a press of Upgrade reach a payment
+  // provider?", and it resolves the SAME provider row a purchase resolves (buyer's own first, else a
+  // platform operator's), so it cannot promise a checkout the till would refuse. The customer
+  // dashboard already labels its own button from this answer, and this console's Dashboard pane
+  // INFERS the answer from `api_key_set` plus a non-empty purchase_url; this read is the server's own
+  // verdict, printed on the pane where the keys are entered, and it reports an undecryptable key as
+  // `payment_provider_key_missing` instead of counting it as usable. A failed check says so and is
+  // never painted as broken — three arms, never two.
+  if (!st._status) {
+    st._status = { loading: true };
+    API.get('/checkout/status')
+      .then((d) => { st._status = { loading: false, data: d || null }; renderApp(); })
+      .catch((e) => { st._status = { loading: false, err: (e && e.message) || 'the check did not answer' }; renderApp(); });
+  }
   // The DELETE route removes THIS account's own row (kanban t_27514bae): it was platform-wide
   // ("DELETE ... WHERE provider_type = $1" behind a super-admin gate) and is now
   // "WHERE provider_type = $1 AND account_id = <caller>" with no role gate, so the control is
@@ -3033,6 +3056,17 @@ const PaymentProviders = () => {
     ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
     ${st.err ? html`<div class="text-sm mb-3 text-red-700">${st.err}</div>` : null}
     ${st.test ? html`<div class=${'text-sm mb-3 ' + (st.test.ok === false ? 'text-red-700' : (st.test.ok ? 'text-green-700' : 'text-gray-600'))}>${st.test.msg}</div>` : null}
+    ${(() => {
+        // Three arms, not two: loading paints nothing, a FAILED check says the check failed (never
+        // "payments are broken"), and only a real answer states whether a buyer can pay. A banner
+        // that paints when the read failed would tell the operator to fix a problem nobody measured.
+        const s = st._status || {};
+        if (s.loading || !s.data && !s.err) return null;
+        if (!s.data) return html`<div class="card mb-3" data-pay-status="unknown" style="border-left:4px solid #94a3b8"><strong>Could not check whether buyers can pay.</strong> The check itself did not answer (${s.err || 'no reason given'}), so this is not a report that payments are broken.</div>`;
+        const d = s.data;
+        if (d.upgrade_path && d.upgrade_path !== 'request') return html`<div class="card mb-3" data-pay-status="ok" style="border-left:4px solid #16a34a"><strong>Buyers can pay.</strong> A customer who presses Upgrade reaches a real payment page (${d.upgrade_path === 'checkout' ? 'your connected provider' : 'a hosted payment page on one of your plans'}).</div>`;
+        return html`<div class="card mb-3" data-pay-status="blocked" style="border-left:4px solid #f59e0b"><strong>Buyers cannot pay yet.</strong> ${d.message || 'No payment provider is connected on this installation, so nothing can be charged.'} Connect a provider below and press <strong>Test key</strong> to prove the key works; until then every Upgrade press is recorded as a plan request you can act on.</div>`;
+      })()}
     ${st.list === null ? html`<div class="card text-center text-gray-400 py-8">Loading...</div>`
       : rows.length === 0 ? html`<div class="card text-center text-gray-400 py-8">No payment provider is connected yet. Add your Stripe or PayPal keys so checkout and the inbound payment webhooks can work.</div>`
       : html`<div class="card p-0 overflow-hidden"><table class="table">
@@ -4432,8 +4466,16 @@ const SupportTickets = () => {
   const isPlanRequest = (t) => !!t && (t.source === 'plan_request' || isLoyaltyPlanRequest(t)
     || (t.category === 'billing' && / request:.* plan$/i.test(String(t.subject || ''))));
   const planCount = st.list.filter(isPlanRequest).length;
+  // FEEDBACK FROM INSIDE THE PRODUCT (David 2026-11-11, B209). The customer console now carries a
+  // Feedback button that files an ordinary ticket with category "feedback" and source
+  // "in_app_feedback"; it already names the screen it came from. This filter is how the team READS
+  // those notes: without it they sit interleaved with plan requests and ordinary questions, which is
+  // the same as not being read. `isFeedback` is one predicate, read by both the chip and the list.
+  const isFeedback = (t) => !!t && (t.category === 'feedback' || t.source === 'in_app_feedback');
+  const feedbackCount = st.list.filter(isFeedback).length;
   const filtered = st.list.filter(t => st.filter==='all' ? true
-    : st.filter==='plan' ? isPlanRequest(t) : t.status===st.filter);
+    : st.filter==='plan' ? isPlanRequest(t)
+    : st.filter==='feedback' ? isFeedback(t) : t.status===st.filter);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4">
@@ -4443,6 +4485,7 @@ const SupportTickets = () => {
     <div class="flex gap-2 mb-4">
       ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
       <button data-plan-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='plan'?'bg-blue-600 text-white':'text-blue-700 border-blue-300'}" onClick=${() => { st.filter = st.filter==='plan' ? 'all' : 'plan'; renderApp(); }}>Plan requests (${planCount})</button>
+      <button data-feedback-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='feedback'?'bg-blue-600 text-white':'text-indigo-700 border-indigo-300'}" title="Notes a customer sent from the Feedback button inside their dashboard — an idea, a problem or a complaint, with the screen it came from" onClick=${() => { st.filter = st.filter==='feedback' ? 'all' : 'feedback'; renderApp(); }}>Feedback (${feedbackCount})</button>
     </div>
     <div class="card overflow-hidden">
       <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
@@ -4455,7 +4498,7 @@ const SupportTickets = () => {
           <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
           <td><button class="text-red-600 text-sm mr-2" onClick=${e => { e.stopPropagation(); remove(t.id); }}>Delete</button></td>
         </tr>`)}
-        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.filter==='plan' ? 'No plan requests right now. A customer who presses "Request the plan" on their Plan & billing screen files one here.' : 'No tickets in this view'}</td></tr>` : null}
+        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.filter==='plan' ? 'No plan requests right now. A customer who presses "Request the plan" on their Plan & billing screen files one here.' : st.filter==='feedback' ? 'No feedback right now. A customer who presses Feedback in their dashboard files a note here, with the screen it came from.' : 'No tickets in this view'}</td></tr>` : null}
         </tbody></table>
     </div>
 
