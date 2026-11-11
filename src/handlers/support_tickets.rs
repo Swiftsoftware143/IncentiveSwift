@@ -316,15 +316,34 @@ pub async fn create_ticket(
         // queued) and the resolve arm below then seated the workspace on it — the same defect the
         // fleet fixed for the operator's assign action (missedcallrespondr 2edd595), still open on
         // this customer path. Refused by name, before the row, like an unknown or free plan.
-        let plan: Option<(String, f64, bool)> = sqlx::query_as(
-            "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8, is_active \
+        // THE SLUG BELONGS TO ONE OF TWO CATALOGUES (2026-11-11). A workspace plan
+        // (Pro / Enterprise) lives in `plans`; the loyalty ladder the dashboard sells
+        // (Starter / Standard / Premium) lives in `loyalty_plans`, and a loyalty request
+        // names the LATTER. Validating it against `plans` would refuse every loyalty
+        // request by name, so the catalogue is chosen by the request's own SOURCE. Both
+        // arms refuse an unknown slug and a retired row BEFORE the ticket is written.
+        let loyalty_request = source.as_deref() == Some("loyalty_plan_request");
+        let (name, price, on_sale) = if loyalty_request {
+            let lp: Option<(String, f64, bool)> = sqlx::query_as(
+                "SELECT name, COALESCE(monthly_price, 0)::float8, is_active \
+               FROM loyalty_plans WHERE slug = $1",
+            )
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+            lp.ok_or_else(|| {
+                AppError::BadRequest(format!("No loyalty plan called '{slug}' is on sale."))
+            })?
+        } else {
+            let plan: Option<(String, f64, bool)> = sqlx::query_as(
+                "SELECT name, COALESCE(NULLIF(price_monthly, 0), price)::float8, is_active \
                FROM plans WHERE slug = $1",
-        )
-        .bind(slug)
-        .fetch_optional(&state.db)
-        .await?;
-        let (name, price, on_sale) =
-            plan.ok_or_else(|| AppError::BadRequest(format!("No plan is called '{slug}'")))?;
+            )
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+            plan.ok_or_else(|| AppError::BadRequest(format!("No plan is called '{slug}'")))?
+        };
         if !on_sale {
             return Err(AppError::BadRequest(format!(
                 "{name} is retired, so it cannot be requested - the billing screen lists only the \
@@ -853,6 +872,72 @@ pub async fn update_ticket(
             {
                 if row.plan_applied_at.is_some() {
                     plan_note = Some(format!("already switched to {ticket_plan}"));
+                } else if row.source.as_deref() == Some("loyalty_plan_request") {
+                    // A LOYALTY request names a row in `loyalty_plans` (Starter / Standard /
+                    // Premium), not a workspace tier in `plans`. Resolving it must switch THAT plan
+                    // on — the same columns the paid webhook and the operator's activate control
+                    // write — because that switch is the whole thing the customer asked for.
+                    // MEASURED 2026-11-11: these requests were stored with no plan slug at all, so
+                    // the resolve arm had nothing to move and the customer read a green "Resolved"
+                    // while their dashboard still said "No loyalty plan is active".
+                    if let Some(move_account) = row.tenant_id {
+                        let lp: Option<(String, i32)> = sqlx::query_as(
+                            "SELECT name, monthly_zc_pool FROM loyalty_plans \
+                              WHERE slug = $1 AND is_active = true",
+                        )
+                        .bind(&ticket_plan)
+                        .fetch_optional(&state.db)
+                        .await?;
+                        match lp {
+                            None => {
+                                tracing::warn!(
+                                    ticket = %id, plan = %ticket_plan,
+                                    "loyalty request resolved, but no loyalty plan carries that slug - it did NOT move"
+                                );
+                                plan_note = Some(format!(
+                                    "no loyalty plan called '{ticket_plan}' is on sale, so it was not switched on"
+                                ));
+                            }
+                            Some((loyalty_name, pool)) => {
+                                sqlx::query(
+                                    "UPDATE accounts SET loyalty_plan = $1, loyalty_plan_status = 'active', \
+                                     zc_pool_remaining = $2, zc_pool_total = $2, \
+                                     pool_reset_date = (NOW()::date + INTERVAL '30 days'), updated_at = NOW() \
+                                     WHERE id = $3",
+                                )
+                                .bind(&ticket_plan)
+                                .bind(pool)
+                                .bind(move_account)
+                                .execute(&state.db)
+                                .await?;
+                                // The credit ledger records the allocation, exactly as the paid
+                                // path and the operator's activate control do.
+                                sqlx::query(
+                                    "INSERT INTO credit_transactions (account_id, amount, action, description, balance_after, created_at) \
+                                     VALUES ($1, $2, 'operator_activation', $3, $2, NOW())",
+                                )
+                                .bind(move_account)
+                                .bind(pool)
+                                .bind(format!(
+                                    "{loyalty_name} loyalty plan switched on from the customer's request"
+                                ))
+                                .execute(&state.db)
+                                .await?;
+                                sqlx::query(
+                                    "UPDATE support_tickets SET plan_applied_at = NOW() WHERE id = $1",
+                                )
+                                .bind(id)
+                                .execute(&state.db)
+                                .await?;
+                                plan_applied = true;
+                                plan_note = Some(loyalty_name);
+                                tracing::info!(
+                                    ticket = %id, account = %move_account, plan = %ticket_plan,
+                                    "loyalty request resolved: the workspace's loyalty plan was switched on"
+                                );
+                            }
+                        }
+                    }
                 } else if let Some(move_account) = row.tenant_id {
                     let target: Option<(Uuid, String, bool)> =
                         sqlx::query_as("SELECT id, name, is_active FROM plans WHERE slug = $1")
