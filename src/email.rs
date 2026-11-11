@@ -762,11 +762,13 @@ pub async fn send_plan_request_operator_alert(
     // `@example.invalid` address. The ticket row is the record and still lands in the console
     // queue; only the alert to a person is withheld, exactly as the signup and reset paths withhold
     // mail that can only bounce. A real customer's address is untouched.
-    if let Some(domain) = crate::security::probe_addr::harness_domain(&email) {
+    // The predicate is on the REQUESTER, not the route (kanban t_f17b5802): a reserved domain, a
+    // `probe-`/`canary-`/`bounce+`/`verify` local part, or a harness-shaped workspace name.
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(&email, &name) {
         tracing::info!(
-            domain = %domain,
-            "support operator alert WITHHELD — the filer's address is a reserved/harness \
-             destination; the ticket row is still in the operator's queue"
+            reason = %reason,
+            "plan-request operator alert WITHHELD — the requester is a synthetic identity; \
+             the request row is still in the operator's queue"
         );
         return false;
     }
@@ -824,11 +826,11 @@ pub async fn send_support_request_operator_alert(
     // `@example.invalid` address. The ticket row is the record and still lands in the console
     // queue; only the alert to a person is withheld, exactly as the signup and reset paths withhold
     // mail that can only bounce. A real customer's address is untouched.
-    if let Some(domain) = crate::security::probe_addr::harness_domain(reply_to) {
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(reply_to, who) {
         tracing::info!(
-            domain = %domain,
-            "support operator alert WITHHELD — the filer's address is a reserved/harness \
-             destination; the ticket row is still in the operator's queue"
+            reason = %reason,
+            "support operator alert WITHHELD —the filer is a synthetic identity; \
+             the ticket row is still in the operator's queue"
         );
         return false;
     }
