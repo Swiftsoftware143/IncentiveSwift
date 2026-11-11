@@ -277,7 +277,10 @@ var USAGE = { data: null, err: false };
 // Loyalty card state — declared above the boot block for the same reason as USAGE/PB:
 // the boot block calls loyLoad(), and paintAccount() fills LOY.email.
 var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false,
-            editing: null, saving: false, newOpen: false, newName: '', newPpc: '' };
+            editing: null, saving: false, newOpen: false, newName: '', newPpc: '',
+            // The owner's STATUS LADDER, per programme id (cron 2026-11-11). `null` means "not read
+            // yet", so the panel can say so instead of claiming an empty ladder.
+            ladder: {}, ladderErr: {}, ladderSaving: false, ladderNotice: {} };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
@@ -1034,6 +1037,13 @@ function loyFileRequest(slug, btn) {
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
     body: JSON.stringify({
       subject: 'Loyalty plan request: ' + name,
+      // THE PLAN THIS REQUEST IS ABOUT (2026-11-11). Without the slug the row stored
+      // `plan_slug = NULL`: the operator's Plan requests view showed a blank plan, resolving the
+      // ticket could NOT move the workspace (that arm skips an empty slug), and a second press was
+      // never recognised as the same request. Measured live: five loyalty requests in one day, every
+      // one with a NULL slug. The API validates the slug (unknown / retired / free are 400s) and
+      // stores the plan the team has to switch on.
+      plan_slug: slug,
       description: 'This workspace asked for the ' + name + ' loyalty plan (' + loyMoney(price)
         + ' a month) from the dashboard. Card payment is not switched on for this installation, '
         + 'so the team has to switch this plan on for this workspace by hand. No charge was made.',
@@ -1046,8 +1056,17 @@ function loyFileRequest(slug, btn) {
       var d = null; try { d = JSON.parse(t); } catch (e) {}
       LOY.busy = false;
       if (r.ok) {
-        loySay('Request sent \u2014 our team will switch the ' + name
-          + ' plan on for this workspace and let you know when it is live.', false);
+        // A request already with the team answers `already_open` (the API returns the EXISTING
+        // row instead of minting a twin). Say so plainly and settle the button, so a customer who
+        // presses twice is never left wondering whether the first press registered.
+        if (d && d.already_open) {
+          loySay('Your ' + name + ' request is already with our team \u2014 nothing more to send. '
+            + 'We will let you know when it is live on this workspace.', false);
+        } else {
+          loySay('Request sent \u2014 our team will switch the ' + name
+            + ' plan on for this workspace and let you know when it is live.', false);
+        }
+        if (btn) { btn.disabled = true; btn.textContent = 'Requested'; }
         return;
       }
       if (btn) { btn.disabled = false; btn.textContent = label; }
@@ -1070,7 +1089,13 @@ function loyFileRequest(slug, btn) {
 // only be changed from the operator's admin console, while this card merely displayed them. The
 // panel below writes them and then re-reads the server's own row, so what the card shows after a
 // save is what the database holds, not what the form hoped.
-function loyEdit(id) { LOY.editing = (LOY.editing === id) ? null : id; loyRender(); }
+function loyEdit(id) {
+  LOY.editing = (LOY.editing === id) ? null : id;
+  loyRender();
+  // Read the ladder when the panel opens, so the editor never shows an assumed state (cron
+  // 2026-11-11). A failed read leaves LOY.ladder[id] null and the block says it could not read.
+  if (LOY.editing === id) loyLadderLoad(id);
+}
 function loyNumField(label, id, v, hint) {
   return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">' + esc(label)
     + '<input type="number" min="0" step="1" id="' + id + '" value="' + esc(String(v == null ? 0 : v)) + '"'
@@ -1110,6 +1135,12 @@ function loyPanel(p) {
     + loyCheck('Status tiers on', 'loy-p-tiers', p.tiers_enabled)
     + loyCheck('Milestones on', 'loy-p-mile', p.milestones_enabled)
     + loyCheck('Programme running (un-tick to pause)', 'loy-p-active', p.is_active !== false)
+    // THE STATUS LADDER (cron 2026-11-11). "Status tiers on" above switches the tier multiplier on,
+    // and until now nothing on this console could say WHAT the tiers are: the ladder writer existed
+    // (PUT /loyalty/programs/:id/status-tiers, owner-scoped) but only the operator's admin console
+    // called it, so an owner who ticked the box got tiers enabled with an empty ladder — a switch
+    // that did nothing and a member page with nothing to show.
+    + loyLadderBlock(p)
     + '<div style="margin-top:8px"><button class="btn btn-sm" onclick="loySaveProgramme(\'' + sid + '\')">Save programme</button>'
     + ' <button class="btn btn-sm" onclick="loyEdit(\'' + sid + '\')">Cancel</button></div>'
     + '</div>';
@@ -1120,6 +1151,150 @@ function loyReadNum(id) {
   return (isFinite(v) && v >= 0) ? v : 0;
 }
 function loyReadBool(id) { var el = document.getElementById(id); return !!(el && el.checked); }
+
+// ── THE OWNER'S STATUS LADDER (cron 2026-11-11) ───────────────────────────────────────────────────
+// Rungs a member climbs by balance: name + threshold + colour + award multiplier. The server is the
+// single writer (PUT /api/v1/loyalty/programs/:id/status-tiers replaces the whole ladder in one
+// transaction and re-resolves every member's rung afterwards), so this editor never patches rows
+// one at a time — it sends the ladder it shows and then re-reads the server's answer, exactly like
+// the programme form above. Ownership is the server's job: a foreign programme id answers 404.
+function loyLadderOf(id) {
+  var v = LOY.ladder[id];
+  // undefined = never read; an ARRAY (even empty) = the server's answer. Keeping the difference is
+  // what stops an empty ladder from rendering as "still loading" for ever.
+  return (v === undefined) ? null : v;
+}
+function loyLadderBlock(p) {
+  var id = String(p.id);
+  var rows = loyLadderOf(id);
+  var err = LOY.ladderErr[id] || '';
+  var head = '<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #cbd5e1">'
+    + '<div style="font-size:13px;font-weight:600;color:#0f172a;margin-bottom:4px">Status ladder</div>'
+    + '<p style="font-size:12px;color:#64748b;margin:0 0 8px">The rungs a member climbs by balance. '
+    + 'A rung pays its multiplier on every award while the member holds it. Leave the ladder empty and '
+    + 'the &ldquo;Status tiers on&rdquo; switch above has nothing to switch on.</p>';
+  if (rows === null) {
+    return head
+      + '<p id="loy-ladder-status" style="font-size:12px;color:' + (err ? '#b91c1c' : '#64748b') + ';margin:0 0 8px">'
+      + esc(err || 'Reading the ladder\u2026') + '</p>'
+      + '<div id="loy-ladder-rows"></div>'
+      + '<div style="margin-top:8px"><button class="btn btn-sm" onclick="loyLadderAdd(\'' + esc(id) + '\')">Add a rung</button>'
+      + ' <button class="btn btn-sm" onclick="loyLadderSave(\'' + esc(id) + '\')">Save ladder</button>'
+      + ' <button class="btn btn-sm" onclick="loyLadderLoad(\'' + esc(id) + '\')">Reload</button></div></div>';
+  }
+  var h = head;
+  if (!rows.length) {
+    h += '<p style="font-size:12px;color:#b45309;margin:0 0 8px">No rungs yet — add one (for example Bronze at 0 points, Silver at 250, Gold at 1000).</p>';
+  }
+  h += '<div id="loy-ladder-rows">';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i] || {};
+    var col = /^#[0-9a-fA-F]{6}$/.test(r.color || '') ? r.color : '#94a3b8';
+    h += '<div class="loy-ladder-row" data-idx="' + i + '" style="display:grid;grid-template-columns:1.2fr 0.8fr 0.6fr 0.7fr auto;gap:6px;align-items:end;margin:0 0 6px">'
+      + '<label style="font-size:11px;color:#64748b">Rung name<input class="loy-lr-name" value="' + esc(r.name || '') + '" maxlength="40" placeholder="Bronze" style="display:block;width:100%;margin-top:2px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"></label>'
+      + '<label style="font-size:11px;color:#64748b">From points<input class="loy-lr-min" type="number" min="0" step="1" value="' + esc(String(r.min_points == null ? 0 : r.min_points)) + '" style="display:block;width:100%;margin-top:2px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"></label>'
+      + '<label style="font-size:11px;color:#64748b">Colour<input class="loy-lr-color" type="color" value="' + esc(col) + '" style="display:block;width:100%;height:30px;margin-top:2px;padding:1px;border:1px solid #cbd5e1;border-radius:6px;background:#fff"></label>'
+      + '<label style="font-size:11px;color:#64748b">Multiplier<input class="loy-lr-mult" type="number" min="1" max="10" step="0.1" value="' + esc(String(r.multiplier == null ? 1 : r.multiplier)) + '" style="display:block;width:100%;margin-top:2px;padding:5px 7px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"></label>'
+      + '<button class="btn btn-sm" onclick="loyLadderDel(\'' + esc(id) + '\',' + i + ')" title="Remove this rung">Remove</button>'
+      + '</div>';
+  }
+  h += '</div>';
+  h += '<p id="loy-ladder-status" style="font-size:12px;color:#64748b;margin:4px 0 8px">' + esc(err) + '</p>';
+  // A notice that must SURVIVE the re-read: the save handler reloads the ladder from the server,
+  // which re-renders this block, so a toast written into a status node would be wiped a moment later
+  // (measured: the "switch is off" sentence vanished before it could be read).
+  var notice = LOY.ladderNotice[id] || '';
+  if (notice) h += '<p style="font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 8px;margin:0 0 8px">' + esc(notice) + '</p>';
+  h += '<div><button class="btn btn-sm" onclick="loyLadderAdd(\'' + esc(id) + '\')">Add a rung</button>'
+    + ' <button class="btn btn-sm" onclick="loyLadderSave(\'' + esc(id) + '\')">Save ladder</button>'
+    + ' <button class="btn btn-sm" onclick="loyLadderLoad(\'' + esc(id) + '\')">Reload</button></div></div>';
+  return h;
+}
+function loyLadderReadDom(id) {
+  var host = document.getElementById('loy-ladder-rows');
+  if (!host) return LOY.ladderOf(id) || [];
+  var out = [];
+  var nodes = host.querySelectorAll('.loy-ladder-row');
+  for (var i = 0; i < nodes.length; i++) {
+    var n = nodes[i];
+    var name = n.querySelector('.loy-lr-name');
+    var min = n.querySelector('.loy-lr-min');
+    var color = n.querySelector('.loy-lr-color');
+    var mult = n.querySelector('.loy-lr-mult');
+    out.push({
+      name: name ? String(name.value || '').trim() : '',
+      min_points: min ? (parseInt(min.value, 10) || 0) : 0,
+      color: color ? String(color.value || '') : '',
+      multiplier: mult ? (parseFloat(mult.value) || 1) : 1
+    });
+  }
+  return out;
+}
+function loyLadderLoad(id) {
+  LOY.ladder[id] = null;
+  LOY.ladderErr[id] = '';
+  fetch(window.location.origin + '/api/v1/loyalty/programs/' + encodeURIComponent(id) + '/status-tiers',
+        { headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store' })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }, function () { return { ok: r.ok, j: {} }; }); })
+    .then(function (x) {
+      if (!x.ok) { LOY.ladderErr[id] = loySayServer(x, 'The ladder could not be read.'); }
+      else { LOY.ladder[id] = (x.j && Array.isArray(x.j.tiers)) ? x.j.tiers : []; }
+      loyRender();
+    })
+    .catch(function () { LOY.ladderErr[id] = 'The ladder could not be read — check your connection.'; loyRender(); });
+}
+function loyLadderAdd(id) {
+  var rows = loyLadderReadDom(id);
+  if (rows.length >= 8) { LOY.ladderErr[id] = 'A ladder can hold at most 8 rungs.'; LOY.ladder[id] = rows; loyRender(); return; }
+  var last = rows.length ? rows[rows.length - 1] : null;
+  rows.push({ name: '', min_points: last ? (Number(last.min_points || 0) + 250) : 0, color: '#94a3b8', multiplier: 1 });
+  LOY.ladder[id] = rows;
+  LOY.ladderErr[id] = '';
+  loyRender();
+}
+function loyLadderDel(id, idx) {
+  var rows = loyLadderReadDom(id);
+  rows.splice(idx, 1);
+  LOY.ladder[id] = rows;
+  LOY.ladderErr[id] = '';
+  loyRender();
+}
+function loyLadderSave(id) {
+  if (LOY.ladderSaving) return;
+  var rows = loyLadderReadDom(id);
+  for (var i = 0; i < rows.length; i++) {
+    if (!rows[i].name) { LOY.ladderErr[id] = 'Every rung needs a name — name rung ' + (i + 1) + ' or remove it.'; LOY.ladder[id] = rows; loyRender(); return; }
+  }
+  LOY.ladderSaving = true;
+  LOY.ladderErr[id] = '';
+  fetch(window.location.origin + '/api/v1/loyalty/programs/' + encodeURIComponent(id) + '/status-tiers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ tiers: rows })
+  }).then(function (r) {
+    return r.json().then(function (j) { return { ok: r.ok, status: r.status, j: j }; }, function () { return { ok: r.ok, status: r.status, j: {} }; });
+  }).then(function (x) {
+    LOY.ladderSaving = false;
+    if (!x.ok) {
+      LOY.ladderErr[id] = loySayServer(x, 'The server refused that ladder.');
+      LOY.ladder[id] = rows;
+      loyRender();
+      return;
+    }
+    LOY.ladderErr[id] = '';
+    var switchedOn = loyReadBool('loy-p-tiers');
+    if (rows.length && !switchedOn) {
+      LOY.ladderNotice[id] = 'Ladder saved. The “Status tiers on” box above is unticked, so no member is on the ladder yet — tick it and press “Save programme”.';
+    } else {
+      LOY.ladderNotice[id] = rows.length ? '' : 'Ladder cleared — no member holds a status tier now.';
+    }
+    loyLadderLoad(id);
+  }).catch(function (e) {
+    LOY.ladderSaving = false;
+    LOY.ladderErr[id] = 'Could not save the ladder: ' + ((e && e.message) || 'connection failed');
+    loyRender();
+  });
+}
 function loySayServer(x, fallback) {
   var j = x && x.j;
   if (j && typeof j.message === 'string' && j.message) return j.message;
