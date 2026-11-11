@@ -350,11 +350,18 @@ pub async fn create_ticket(
     // The key is the TIER ASKED FOR (`plan_slug`), so a workspace with a Pro request open can still
     // ask for Enterprise. Only plan/billing requests are deduped: an ordinary support question may
     // legitimately repeat.
-    if matches!(source.as_deref(), Some("plan_request") | Some("billing")) {
+    // `loyalty_plan_request` is the DASHBOARD's own purchase-intent door (the loyalty plan
+    // ladder when the till is closed). Measured 2026-11-11: five identical requests landed in
+    // one day because this arm did not cover that source and the dashboard sent no plan slug,
+    // so every press minted a new row the operator had to answer by hand.
+    if matches!(
+        source.as_deref(),
+        Some("plan_request") | Some("billing") | Some("loyalty_plan_request")
+    ) {
         let existing_id: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM support_tickets \
              WHERE tenant_id = $1 \
-               AND source IN ('plan_request','billing') \
+               AND source IN ('plan_request','billing','loyalty_plan_request') \
                AND status IN ('open','in_progress') \
                AND plan_slug IS NOT DISTINCT FROM $2 \
              ORDER BY created_at DESC LIMIT 1",
