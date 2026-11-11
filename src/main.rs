@@ -21,7 +21,7 @@ mod login_throttle;
 
 pub mod access;
 /// The ONE mint of a self-serve signup unit (kanban t_3724204f) — see `account_mint`.
-mod account_mint;
+pub mod account_mint;
 pub mod billing;
 mod body_deadline;
 pub mod branding;
@@ -106,6 +106,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Build shared state (this also applies the migrations)
     let state = state::AppState::new(&config).await?;
+
+    // Kanban t_7863696b: every account that exists today holds a key it can view. One-time (a
+    // `fleet_data_backfills` marker gates it) so an account whose keys were deliberately revoked is
+    // never re-minted behind its back.
+    match handlers::api_keys::backfill_missing_keys(&state.db).await {
+        Ok(n) => tracing::info!(minted = n, "account API keys: backfill complete"),
+        Err(e) => tracing::warn!(error = ?e, "account API keys: backfill skipped"),
+    }
 
     // At-rest guard, boot halves, for the payment_providers secret columns. The migration file
     // arms both CHECK constraints NOT VALID and is ledger-tracked, so it runs exactly once — this
@@ -1147,6 +1155,15 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/v1/api-keys/:id",
             put(handlers::api_keys::update_api_key).delete(handlers::api_keys::delete_api_key),
+        )
+        // View the SAME key again (re-auth + audit) and rotate it atomically (kanban t_7863696b).
+        .route(
+            "/api/v1/api-keys/:id/reveal",
+            post(handlers::api_keys::reveal_api_key),
+        )
+        .route(
+            "/api/v1/api-keys/:id/regenerate",
+            post(handlers::api_keys::regenerate_api_key),
         )
         // Surface routes (public ??? no auth required)
         .route(

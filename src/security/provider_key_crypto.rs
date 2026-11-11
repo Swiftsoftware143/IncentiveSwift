@@ -216,6 +216,52 @@ pub async fn decrypt_optional(
     }
 }
 
+// ── Executor-generic halves (kanban t_7863696b) ──────────────────────────────────────────────
+//
+// The signup path mints an account's API key INSIDE the transaction that creates the account, so
+// the seal has to run on the transaction, not on the pool. Same envelope, same master key, same
+// fail-closed rule as `encrypt_for_storage`; only the executor differs.
+
+/// Seal a secret on ANY executor (pool or transaction).
+pub async fn seal_in<'e, E>(exec: E, plaintext: &str) -> Result<String, CryptoError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let key = master_key().ok_or(CryptoError::NotConfigured)?;
+    if plaintext.is_empty() {
+        return Ok(String::new());
+    }
+    let b64: String = sqlx::query_scalar(
+        "SELECT replace(encode(pgp_sym_encrypt($1::text, $2::text, $3), 'base64'), chr(10), '')",
+    )
+    .bind(plaintext)
+    .bind(key)
+    .bind(PGP_OPTIONS)
+    .fetch_one(exec)
+    .await?;
+
+    Ok(format!("{}{}", ENC_PREFIX, b64))
+}
+
+/// Open a sealed value on ANY executor. A value without [`ENC_PREFIX`] is returned unchanged.
+pub async fn open_in<'e, E>(exec: E, stored: &str) -> Result<String, CryptoError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    if !is_encrypted(stored) {
+        return Ok(stored.to_string());
+    }
+    let key = master_key().ok_or(CryptoError::NotConfigured)?;
+    let b64 = &stored[ENC_PREFIX.len()..];
+    let plaintext: String =
+        sqlx::query_scalar("SELECT pgp_sym_decrypt(decode($1, 'base64'), $2::text)")
+            .bind(b64)
+            .bind(key)
+            .fetch_one(exec)
+            .await?;
+    Ok(plaintext)
+}
+
 #[cfg(test)]
 mod masked_round_trip_tests {
     use super::*;

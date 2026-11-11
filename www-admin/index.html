@@ -3749,9 +3749,27 @@ const AnalyticsView = () => {
 
 // ---- API KEYS ----
 const ApiKeysView = () => {
-  const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '' });
+  const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '', revealed: null, revealedPrefix: '' });
   const load = async () => { try { const data = await API.get('/api-keys'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
+  // View = re-authenticate, then show the SAME stored key again (repeatable, audited).
+  const view = async (id) => {
+    const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
+    if (!pw) return;
+    try { const r = await API.post('/api-keys/' + id + '/reveal', { password: pw }); st.revealed = r.api_key; st.revealedPrefix = r.prefix; renderApp(); }
+    catch(e) { alert('Could not show the key: ' + e.message); }
+  };
+  // Regenerate = revoke the old key and issue a new one in ONE atomic action.
+  const regen = async (id) => {
+    if (!confirm('Regenerate this key? The current key stops working immediately, so anything already wired up with it stops until you paste the new one in.')) return;
+    try { const r = await API.post('/api-keys/' + id + '/regenerate', {}); st.revealed = r.api_key; st.revealedPrefix = r.prefix; load(); }
+    catch(e) { alert('Could not regenerate the key: ' + e.message); }
+  };
+  const copyRevealed = () => {
+    if (!st.revealed) return;
+    try { if (navigator.clipboard) navigator.clipboard.writeText(st.revealed); } catch(e) {}
+    alert('Key copied to the clipboard.');
+  };
   const create = async () => {
     if (!st.newKeyName) return;
     try { await API.post('/api-keys', { name: st.newKeyName }); st.newKeyName = ''; st.showModal = false; load(); } catch(e) { alert('Error: ' + e.message); }
@@ -3769,10 +3787,25 @@ const ApiKeysView = () => {
           <div class="text-xs text-gray-400 font-mono">${key.key_prefix||''}****${key.key_suffix||''}</div>
           <div class="text-xs text-gray-400">Created: ${key.created_at ? new Date(key.created_at).toLocaleDateString() : '—'}</div>
         </div>
-        <button class="text-red-600 text-sm" onClick=${() => remove(key.id)}>Revoke</button>
+        <div class="flex gap-3">
+          <button class="text-blue-600 text-sm" onClick=${() => view(key.id)}>View</button>
+          <button class="text-blue-600 text-sm" onClick=${() => regen(key.id)}>Regenerate</button>
+          <button class="text-red-600 text-sm" onClick=${() => remove(key.id)}>Revoke</button>
+        </div>
       </div>`)}
       ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No API keys yet</div>` : null}
     </div>
+    ${st.revealed ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.revealed = null; renderApp(); }}>
+      <div class="bg-white rounded-xl p-6 w-[34rem] shadow-xl" onClick=${e => e.stopPropagation()}>
+        <h3 class="font-bold mb-2">Your API key</h3>
+        <p class="text-xs text-gray-500 mb-3">Prefix ${st.revealedPrefix}. You can view and copy this key again at any time — every view is recorded.</p>
+        <input class="border rounded px-3 py-2 w-full text-xs font-mono" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
+        <div class="flex justify-end gap-2 mt-4">
+          <button class="px-4 py-1.5 text-sm rounded border" onClick=${() => { st.revealed = null; renderApp(); }}>Close</button>
+          <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${copyRevealed}>Copy key</button>
+        </div>
+      </div>
+    </div>` : null}
     ${st.showModal ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.showModal = false; renderApp(); }}>
       <div class="bg-white rounded-xl p-6 w-96 shadow-xl" onClick=${e => e.stopPropagation()}>
         <h3 class="font-bold mb-4">Generate API Key</h3>

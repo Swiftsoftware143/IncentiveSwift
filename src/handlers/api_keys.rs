@@ -342,3 +342,250 @@ pub async fn delete_api_key(
 
     Ok(Json(json!({ "status": "deleted", "id": id })))
 }
+
+// ── Auto-provisioned, retrievable keys (kanban t_7863696b) ─────────────────────────────────────
+//
+// David, 2026-11-11 (withdrawing "shown once, never again"): every account is created with a key,
+// and the key stays viewable. `key_hash` (bcrypt) is the only thing `validate_api_key` reads;
+// `key_sealed` (fleet provider-key envelope) exists ONLY so the owner can see and copy the key.
+
+/// A key that was just minted. `full_key` is the plaintext: sealed before the row is written,
+/// handed to the caller's UI, never logged.
+pub struct MintedKey {
+    pub id: Uuid,
+    pub name: String,
+    pub full_key: String,
+    pub prefix: String,
+}
+
+/// Mint one key and INSERT it on the caller's connection. The ONE writer for every mint in this
+/// app: the signup transaction, `create_api_key`, regenerate and the one-time backfill.
+pub async fn mint_on(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: Uuid,
+    user_id: Uuid,
+    name: &str,
+) -> Result<MintedKey, AppError> {
+    let (full_key, prefix, key_hash) = generate_api_key()?;
+    // Fail closed: without PROVIDER_KEY_ENC_SECRET this errors rather than storing a key nobody can
+    // ever read back.
+    let sealed = crate::security::provider_key_crypto::seal_in(&mut *conn, &full_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("could not seal the API key: {e}")))?;
+    let id = Uuid::new_v4();
+
+    sqlx::query(
+        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, key_sealed)
+           VALUES ($1, $2, $3, $4, $5, $6, '[]'::jsonb, $7)"#,
+    )
+    .bind(id)
+    .bind(tenant_id)
+    .bind(user_id)
+    .bind(name)
+    .bind(&key_hash)
+    .bind(&prefix)
+    .bind(&sealed)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(MintedKey {
+        id,
+        name: name.to_string(),
+        full_key,
+        prefix,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevealApiKeyInput {
+    /// The caller's CURRENT password — a stolen session token must not be enough to read a live
+    /// credential.
+    pub password: String,
+}
+
+/// POST /api/v1/api-keys/:id/reveal — show the key again (repeatable).
+pub async fn reveal_api_key(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RevealApiKeyInput>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
+
+    let row = sqlx::query(
+        "SELECT prefix, key_sealed FROM api_keys \
+         WHERE id = $1 AND user_id = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+
+    // IncentiveSwift's column is `prefix` (unlike the sibling apps' `key_prefix`) — verified with
+    // \d api_keys before this query was written.
+    let prefix: String = row.get("prefix");
+    let sealed: Option<String> = row.get("key_sealed");
+
+    // ── re-authenticate ───────────────────────────────────────────────────────────────────────
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM accounts WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let stored = stored.ok_or_else(|| AppError::Unauthorized("Account not found".to_string()))?;
+    if !crate::handlers::auth_handler::verify_password(&body.password, &stored) {
+        return Err(AppError::Unauthorized(
+            "Current password is incorrect".to_string(),
+        ));
+    }
+
+    let sealed = sealed.ok_or_else(|| {
+        AppError::Conflict(
+            "This key was created before keys were stored recoverably, so it cannot be displayed. \
+             Regenerate it to get a key you can view and copy."
+                .to_string(),
+        )
+    })?;
+    let full_key = crate::security::provider_key_crypto::open_in(&state.db, &sealed)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, key = %id, "API key reveal: sealed copy could not be opened");
+            AppError::Internal(
+                "This key could not be opened by the server's encryption key. Regenerate it."
+                    .to_string(),
+            )
+        })?;
+    if full_key.is_empty() {
+        return Err(AppError::Internal(
+            "This key could not be opened by the server's encryption key. Regenerate it."
+                .to_string(),
+        ));
+    }
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO api_key_reveals (id, key_id, tenant_id, user_id, key_prefix) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .bind(resolve_owner_account_id(&state.db, user_id).await?)
+    .bind(user_id)
+    .bind(&prefix)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!(error = %e, key = %id, "API key reveal: audit row could not be written");
+    }
+    tracing::info!(key = %id, key_prefix = %prefix, user = %user_id, "API key REVEALED");
+
+    Ok(Json(
+        json!({ "id": id, "prefix": prefix, "api_key": full_key }),
+    ))
+}
+
+/// POST /api/v1/api-keys/:id/regenerate — one atomic revoke-and-issue.
+pub async fn regenerate_api_key(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Value>, AppError> {
+    let user_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
+
+    let name: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM api_keys WHERE id = $1 AND user_id = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let name = name.ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+    let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
+
+    // Insert the replacement and remove the old row in ONE transaction: a failure at either step
+    // leaves the customer with the key they already had; after it commits the old key is gone and
+    // the very next bcrypt lookup for it misses.
+    let mut tx = state.db.begin().await?;
+    let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
+    sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        new_key = %minted.id,
+        old_key = %id,
+        key_prefix = %minted.prefix,
+        "API key REGENERATED — the previous key no longer authenticates"
+    );
+
+    Ok(Json(json!({
+        "id": minted.id,
+        "rotated_from": id,
+        "name": minted.name,
+        "prefix": minted.prefix,
+        "api_key": minted.full_key,
+        "note": "The previous key no longer works. This one can be viewed and copied again at any time."
+    })))
+}
+
+/// One-time backfill: every account that exists today gets a key it can view.
+/// Gated on the `fleet_data_backfills` marker so it runs ONCE — an account whose keys were
+/// deliberately revoked is never re-minted behind its back.
+pub async fn backfill_missing_keys(db: &PgPool) -> Result<usize, AppError> {
+    const MARKER: &str = "api_keys_auto_v1";
+    let done: Option<String> =
+        sqlx::query_scalar("SELECT name FROM fleet_data_backfills WHERE name = $1")
+            .bind(MARKER)
+            .fetch_optional(db)
+            .await?;
+    if done.is_some() {
+        return Ok(0);
+    }
+
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(7263114004)")
+        .execute(&mut *tx)
+        .await?;
+
+    let accounts: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT a.id, a.id FROM accounts a
+         WHERE NOT EXISTS (
+            SELECT 1 FROM api_keys k WHERE k.user_id = a.id AND k.is_active = true
+         )
+         ORDER BY a.created_at",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut minted = 0usize;
+    for (account_id, tenant_id) in accounts {
+        mint_on(&mut tx, tenant_id, account_id, "auto-provisioned").await?;
+        minted += 1;
+    }
+
+    let unrecoverable: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM api_keys WHERE is_active = true AND key_sealed IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO fleet_data_backfills (name, detail) VALUES ($1, $2)
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .bind(MARKER)
+    .bind(format!(
+        "minted {minted} key(s) for accounts with none; {unrecoverable} pre-existing key(s) have no \
+         sealed copy (plaintext unrecoverable — regenerate to hand off)"
+    ))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(minted)
+}

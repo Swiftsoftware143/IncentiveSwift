@@ -476,7 +476,7 @@ fn create_jwt(
 }
 
 /// Verify a password against a stored hash (argon2 or bcrypt).
-fn verify_password(password: &str, hash: &str) -> bool {
+pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     // Try argon2 first
     if let Ok(parsed) = PasswordHash::new(hash) {
         if Argon2::default()

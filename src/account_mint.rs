@@ -52,6 +52,9 @@ pub struct MintedAccount {
     pub slug: String,
     /// The generated purchase PIN (`Z…`), already written to the row.
     pub purchase_pin: Option<String>,
+    /// The API key minted INSIDE this transaction (kanban t_7863696b). Every account is provisioned
+    /// with one; the plaintext is also sealed at rest, so it stays viewable in Settings.
+    pub api_key: crate::handlers::api_keys::MintedKey,
 }
 
 /// Everything [`mint_account`] needs. `email` must ALREADY be normalised
@@ -226,9 +229,18 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
         .await?;
     }
 
-    // The account row, its purchase PIN and its default industry are now ONE unit of work: the
-    // commit lands only when all three are complete. The credentials mail stays after the commit
-    // (a published outcome, not an account row).
+    // The account row, its purchase PIN, its default industry and its API key are now ONE unit of
+    // work (kanban t_7863696b): the commit lands only when all four are complete, so a rolled-back
+    // signup leaves no key row and a committed signup never ends without a key.
+    let api_key = crate::handlers::api_keys::mint_on(
+        &mut tx,
+        account_id, // tenant_id = self (standalone workspace), exactly as the accounts row
+        account_id,
+        "auto-provisioned",
+    )
+    .await?;
+
+    // The credentials mail stays after the commit (a published outcome, not an account row).
     tx.commit().await?;
 
     Ok(MintedAccount {
@@ -236,6 +248,7 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
         plan_tier_id,
         slug,
         purchase_pin,
+        api_key,
     })
 }
 
