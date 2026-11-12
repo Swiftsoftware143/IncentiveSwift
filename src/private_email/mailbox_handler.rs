@@ -265,14 +265,13 @@ pub async fn update_mailbox(
     // is the same object as the conversation assignment (`private_email_messages.assigned_user_id`),
     // one teammate, two things they are responsible for.
     if let Some(Some(user_id)) = req.user_id {
-        let member: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = true",
-        )
-        .bind(user_id)
-        .bind(account_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::error::db_error)?;
+        let member: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM accounts WHERE id = $1 AND id = $2")
+                .bind(user_id)
+                .bind(account_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(crate::error::db_error)?;
         if member.is_none() {
             return Err(AppError::Validation(
                 "That person is not an active member of this account.".into(),

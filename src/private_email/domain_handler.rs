@@ -276,7 +276,7 @@ async fn load_credential_maps(
     .into_iter()
     .collect();
     let provider_keys = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, COALESCE(api_key, '') FROM provider_keys WHERE tenant_id = $1 AND is_active",
+        "SELECT id, COALESCE(api_key, '') FROM provider_keys WHERE account_id = $1 AND is_active",
     )
     .bind(tenant_id)
     .fetch_all(db)

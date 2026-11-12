@@ -163,8 +163,7 @@ pub async fn usage(db: &PgPool, tenant_id: Uuid) -> Usage {
         SELECT COALESCE((SELECT SUM(octet_length(bytes)) FROM tenant_logos WHERE tenant_id = $1), 0)::int8
              + COALESCE((SELECT SUM(octet_length(a.bytes))
                            FROM user_avatars a
-                           JOIN users u ON u.id = a.user_id
-                          WHERE u.tenant_id = $1), 0)::int8
+                          WHERE a.user_id = $1), 0)::int8
         "#,
     )
     .bind(tenant_id)
@@ -347,10 +346,9 @@ fn current_period(now: DateTime<Utc>) -> String {
 async fn owner_recipient(db: &PgPool, tenant_id: Uuid) -> Option<(String, String)> {
     sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
         r#"
-        SELECT email, first_name, name
-          FROM users
-         WHERE tenant_id = $1 AND is_active = true
-         ORDER BY (role::text = 'owner') DESC, created_at ASC
+        SELECT email, NULL::text, name
+          FROM accounts
+         WHERE id = $1
          LIMIT 1
         "#,
     )

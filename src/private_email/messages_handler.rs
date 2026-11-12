@@ -463,14 +463,13 @@ pub async fn update_message(
     // of this account. A former teammate's row is refused, so a removal cannot be undone by
     // assigning work to somebody who can no longer sign in.
     if let Some(Some(user_id)) = req.assigned_user_id {
-        let member: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE id = $1 AND tenant_id = $2 AND is_active = true",
-        )
-        .bind(user_id)
-        .bind(tenant_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(crate::error::db_error)?;
+        let member: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM accounts WHERE id = $1 AND id = $2")
+                .bind(user_id)
+                .bind(tenant_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(crate::error::db_error)?;
         if member.is_none() {
             return Err(AppError::Validation(
                 "That person is not a member of this account.".into(),
@@ -1010,12 +1009,10 @@ pub async fn list_members(
     let tenant_id = account_id(&claims)?;
     let rows = sqlx::query(
         r#"SELECT id,
-                  COALESCE(NULLIF(btrim(name), ''),
-                           NULLIF(btrim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), ''),
-                           email) AS display_name,
+                  COALESCE(NULLIF(btrim(name), ''), email) AS display_name,
                   email, role
-             FROM users
-            WHERE tenant_id = $1 AND is_active = true
+             FROM accounts
+            WHERE id = $1
             ORDER BY display_name"#,
     )
     .bind(tenant_id)
