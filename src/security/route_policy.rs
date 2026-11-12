@@ -194,6 +194,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // beyond the receiver itself; the sibling `/api/v1/checkout/create` stays private below.
     "/api/v1/webhooks/stripe",
     "/api/v1/webhooks/paypal",
+    // The mail provider's delivery receiver (kanban t_101cd6ca). Mailgun posts a delivery here
+    // with no session; the credential is the per-domain signing key the handler verifies against
+    // the raw body (`timestamp`+`token`+`signature`). A domain with no key configured accepts
+    // nothing, so an unconfigured address is refused rather than trusted.
+    "/api/v1/webhooks/mailgun/inbound",
     "/api/v1/channels/inbound",
     // Read by the businesses themselves (the served admin guide documents it).
     "/api/v1/treasury/rules",

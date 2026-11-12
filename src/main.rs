@@ -34,16 +34,24 @@ pub mod handlers;
 pub mod image_store;
 pub mod iqs_validation;
 pub mod mechanics;
+/// Plan resolution for the ported private-inbox module — IncentiveSwift sells through
+/// `plan_tiers`/`tier_features`, not CoreSwift's module registry.
+mod module_registry;
+/// The private inbox (multi-address mail on the customer's own domain) and the workspace model,
+/// ported from CoreSwift/ADASwift (kanban t_101cd6ca).
+pub mod private_email;
 /// Attribution for a workspace a test harness mints through the public signup
 /// (`X-Swift-Harness`, kanban t_4a744754) — see `probe_harness`.
 pub mod probe_harness;
 mod probe_sweep;
+mod secret_box;
 pub mod security;
 mod smtp;
 mod state;
 mod template_render;
 pub mod template_types;
 mod theme;
+pub mod workspaces;
 
 use axum::{
     http::HeaderValue,
@@ -182,6 +190,27 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router
     let app = Router::new()
+        // ── Workspaces and the private inbox (kanban t_101cd6ca, ported from ADASwift) ──────
+        // Two sub-routers, each carrying this app's own credential boundary as a middleware
+        // (`access::claims`) so every handler reads the SESSION's account and nothing else.
+        .nest(
+            "/api/v1/workspaces",
+            crate::workspaces::router(state.clone()),
+        )
+        .nest(
+            "/api/v1/private-email",
+            crate::private_email::router(state.clone()),
+        )
+        // Mailgun / SMTP inbound delivery. ANONYMOUS BY NECESSITY: the provider posts here with no
+        // session; the credential is the per-domain signing key the handler verifies over the raw
+        // body. The 25 MB limit is scoped to this ONE path because an attached message is posted
+        // as multipart with the file's bytes, and axum's 2 MB default would refuse it before the
+        // handler ran. Listed in `security::route_policy::PUBLIC_ROUTES`.
+        .route(
+            "/api/v1/webhooks/mailgun/inbound",
+            post(crate::private_email::webhook_handler::inbound_webhook)
+                .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
         // Account email-branding logo, PUBLIC by design (kanban t_feab8aff): a mail client renders

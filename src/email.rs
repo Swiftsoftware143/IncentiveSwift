@@ -8,6 +8,11 @@ pub(crate) const APP_NAME: &str = "IncentiveSwift";
 /// public campaign link the lifecycle sender binds as `{{share_link}}`/`{{referral_link}}`.
 pub(crate) const APP_URL: &str = "https://app.incentiveswift.com";
 
+/// The mail client's own front door (the private-inbox host, ported from CoreSwift).
+/// Every message a customer sends about an inbox, and every link a notification points at,
+/// resolves to this ONE host so a second copy of the address can never appear in a mail.
+pub(crate) const APP_URL_MAIL: &str = "https://inbox.incentiveswift.com";
+
 // The app's own wordmark and the identity every message falls back to when its account has
 // configured none live in `crate::branding` (2026-10-24, kanban t_bf8a2c58): the QUEUED/lifecycle
 // funnel paints the same header through the same helpers, so the two cannot drift.

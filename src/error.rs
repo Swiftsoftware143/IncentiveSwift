@@ -19,6 +19,24 @@ pub enum AppError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
 
+    /// A 401 that carries the server's own sentence. Same status as [`AppError::Unauthorized`],
+    /// different audience: the message is safe to show because it names a missing/expired
+    /// credential the caller already holds. Ported with the private-inbox module.
+    #[error("Unauthorized: {0}")]
+    UnauthorizedReason(String),
+
+    /// 409 — the write is well-formed but the name it wants is already taken. Its own variant so
+    /// the ported inbox/workspace handlers answer the same conflict the console words as
+    /// "already exists" instead of a 500.
+    #[error("Duplicate: {0}")]
+    Duplicate(String),
+
+    /// 422 — the body parsed and the caller is allowed to write, but a field cannot be stored as
+    /// sent. The ported modules' own name for the status this app already answers through
+    /// [`AppError::UnprocessableEntity`].
+    #[error("Validation: {0}")]
+    Validation(String),
+
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
@@ -137,6 +155,9 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::UnauthorizedReason(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
@@ -210,4 +231,15 @@ impl From<anyhow::Error> for AppError {
     fn from(err: anyhow::Error) -> Self {
         AppError::Internal(err.to_string())
     }
+}
+
+/// Every handler in this crate answers `Result<T, AppError>` — the alias the ported private-inbox
+/// and workspace modules were written against.
+pub type ApiResult<T> = Result<T, AppError>;
+
+/// The one adapter between a `sqlx::Error` and this app's [`AppError::Database`], which carries the
+/// message as a `String`. The ported modules were written against an enum whose `Database` variant
+/// held the error itself, so they call this by name at every SQL site.
+pub fn db_error(e: sqlx::Error) -> AppError {
+    AppError::Database(e.to_string())
 }
