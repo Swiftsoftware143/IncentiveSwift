@@ -487,6 +487,16 @@ pub async fn admin_assign_plan(
     // tier silently never changed. Same direction as `tier_handler::post_plan_features`.
     // `plans` keeps its checkout/marketing role: `attribute_plan_upgrade` below legitimately
     // still receives a `plans.id` (it reads `plans.name` / `price_monthly`).
+    // DID THIS CALL ACTUALLY MOVE THE WORKSPACE? (2026-11-12) Read the tier BEFORE the writer
+    // runs, so the confirmation mail below goes out for a real change only. The operator's picker
+    // re-sends the plan the account is already on every time it is opened and saved, and a "you are
+    // now on Pro" mail for someone who was already on Pro is noise that reads as a system fault.
+    let previous_tier: Option<Uuid> =
+        sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
     let tier_id = assign_plan(&state, account_id, plan_id).await?;
 
     // ── Close the request this call just satisfied (cron 2026-10-23) ────────────────────────────
@@ -513,13 +523,76 @@ pub async fn admin_assign_plan(
     .map(|r| r.rows_affected())
     .unwrap_or(0);
 
+    // ── TELL THE CUSTOMER THEY WERE MOVED (2026-11-12) ──────────────────────────────────────────
+    // While no install has a payment provider, the ONLY way a customer reaches a paid plan is this
+    // button. The tier changed and the open request was settled, but the customer was told nothing:
+    // their screen showed new allowances and no explanation, and an inbox that never mentioned the
+    // switch. Best effort by design — the tier is already written, so a mail failure is logged and
+    // the answer below stays 200 with `notified: false`.
+    let notified = if previous_tier != Some(tier_id) {
+        notify_plan_change(&state, account_id, &plan_name).await
+    } else {
+        false
+    };
+
     Ok(Json(json!({
         "status": "assigned",
         "plan_id": plan_id.to_string(),
         "account_id": account_id.to_string(),
         "plan_tier_id": tier_id.to_string(),
         "requests_closed": requests_closed,
+        "notified": notified,
     })))
+}
+
+/// Tell the customer their workspace now sits on a different plan (2026-11-12).
+///
+/// WHY THIS EXISTS. Self-serve checkout needs a payment provider, and no install in this fleet has
+/// one yet (measured 2026-11-12: `payment_providers` holds 0 rows in every app), so every paid seat
+/// today is given BY HAND from the operator's console. That switch was silent: the tier changed,
+/// the open request was marked `operator_activated`, and the customer's only clue was a screen whose
+/// allowances had moved. A customer who asked to buy deserves the same confirmation a card payment
+/// sends — the plan they are on, that nothing was charged, and where to see the allowances.
+///
+/// The mail goes through `email::send_template_email`, the app's one transactional funnel, so it
+/// inherits the account's own branding and the fleet's reserved-address gate (a probe/harness
+/// recipient is recorded `withheld` and never handed to a relay — no extra check needed here).
+/// Returns whether the mail was queued; a failure is logged and never fails the plan write.
+pub async fn notify_plan_change(state: &AppState, account_id: Uuid, plan_name: &str) -> bool {
+    let who = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT COALESCE(email, ''), name FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+    let Some((email, name)) = who else {
+        return false;
+    };
+    let to = email.trim();
+    if to.is_empty() {
+        return false;
+    }
+    let vars = json!({
+        "plan": plan_name,
+        "workspace": name.as_deref().unwrap_or(""),
+        "requester": to,
+    });
+    match crate::email::send_template_email(&state.db, Some(account_id), to, "plan_changed", &vars)
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(account = %account_id, plan = %plan_name, "plan change: the customer was told");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                account = %account_id, plan = %plan_name, error = %e,
+                "plan change: the customer could not be told"
+            );
+            false
+        }
+    }
 }
 
 /// The ONE writer of an account's plan tier (cron 2026-10-20).

@@ -212,6 +212,10 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The customer's own plan request / billing ticket was answered (2026-10-19). Named for
         // the thing the customer asked about, so it reads as an answer and not as a system notice.
         "plan_request_update" => format!("About your request — {app_name}"),
+        // The customer's workspace was MOVED onto a plan by a person, not by a card payment
+        // (2026-11-12). This is the only upgrade path that works while an install has no payment
+        // provider, and until now it was silent: the tier changed and nobody told the customer.
+        "plan_changed" => format!("Your plan has changed — {app_name}"),
         // The answer to a message filed from /contact.html by someone with NO account (2026-11-07).
         // Named as an answer, not a system notice, because the recipient asked a question and this
         // is the reply. Kept separate from `plan_request_update` above: that arm tells the reader to
@@ -322,6 +326,25 @@ async fn send_inline(
             );
             Ok((
                 "Confirm your new sign-in email".to_string(),
+                body,
+                String::new(),
+            ))
+        }
+        // The inline safety net for the operator's manual switch (2026-11-12) — reached when the
+        // account has no `plan_changed` template row, which is every install today. It says the
+        // three things a customer needs: WHICH plan they are on now, that NOTHING WAS CHARGED here
+        // (a person made the switch), and where to see what the plan allows.
+        "plan_changed" => {
+            let plan = vars
+                .get("plan")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a new plan");
+            let body = format!(
+                "Hi {},\n\nYour workspace is now on the {} plan.\n\nNothing was charged here: a person on our team made the switch for you. Everything the plan allows is on your dashboard, and the Plan section shows the allowances you are on: {}/dashboard\n\nIf this is not what you asked for, reply to this email and we will put it back.\n\n- The {} Team",
+                name, plan, app_url, app_name
+            );
+            Ok((
+                format!("You're now on {} — {}", plan, app_name),
                 body,
                 String::new(),
             ))
