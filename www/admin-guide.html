@@ -922,7 +922,19 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
 </section>
 
 <section id="plan-requests">
-  <h2 class="sec-title"><span class="sec-num">17</span> Plan requests (the operator queue)</h2>
+  <h2 class="sec-title"><span class="sec-num">18</span> Workspaces and the private inbox</h2>
+
+<p>Every account is born with exactly one workspace named <strong>My Workspace</strong> and marked default. The rule lives in the database (an insert trigger on the account row), not in a handler, so a signup through any door - the public form or the cross-app tag provision - gets the same unit. Accounts that existed before the feature were backfilled, and a check finds no account with a default-workspace count other than one.</p>
+
+<p><strong>Limits.</strong> The inbox reads its allowances from the tier the account is seated on: the account row carries the tier, the tier carries a feature row per allowance. A tier that states no number is UNLIMITED; a stated number is enforced, with the refusal naming what it blocks. An operator row for the account (the per-account email limits table) wins over the tier for domains and mailboxes, and it also accepts a negative number for "no ceiling".</p>
+
+<p><strong>Credentials.</strong> A customer's provider key is sealed at rest (AES-256-GCM, keyed per account). The master is derived from the app's own signing secret, so there is no second environment variable to set and a key copied to another account's row cannot be opened.</p>
+
+<p><strong>The mail host.</strong> The client is served at <code>inbox.incentiveswift.com</code> and <code>pmail.incentiveswift.com</code> from the nginx mail root, proxying the API to the same container as the app, so there is one backend. No <code>inbox.&lt;customer-domain&gt;</code> record is printed: that wildcard belongs to another product, and the API answers <code>branded: unavailable</code> rather than sending a customer somewhere wrong.</p>
+
+<p><strong>What is deliberately absent.</strong> Mail-to-ticket creation and AI thread summaries are not part of this app's inbox: there is no matching queue and no summariser on this install. The client hides both controls instead of drawing dead buttons.</p>
+
+<h2 class="sec-title"><span class="sec-num">17</span> Plan requests (the operator queue)</h2>
   <div class="card">
     <p>No card is taken on this install until a payment provider is connected, so the customer's own
     buying path is a <strong>request</strong>. Their <strong>Plan &amp; billing</strong> screen files the
@@ -964,6 +976,11 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
 
 
 
-<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring IncentiveSwift</h2><ul><li><a href="/guide.html">Guide</a></li><li><a href="/kb.html">Knowledge base</a></li><li><a href="/iqs-play.html">IQS game</a></li><li><a href="/long-form-qualifier.html">Long-form qualifier</a></li></ul></section>
+<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="mailbox-storage-reminders">Mailbox storage reminders &mdash; what goes out in your name</h2>
+<p>The mailbox has a storage allowance that comes from the workspace&rsquo;s plan (0.1 GB on the free tier, more as the plan rises). The app watches that number on every inbound delivery and on every counts read, and emails the <strong>workspace owner</strong> when usage first crosses <strong>50%</strong>, <strong>75%</strong> and <strong>99%</strong> of it. Each of the three levels is sent <strong>at most once per calendar month</strong> &mdash; the app keeps a ledger row per workspace, level and month, so a busy inbox cannot turn the reminder into a stream of mail.</p>
+<p><strong>What the reminder never does:</strong> it deletes nothing to make room, and <em>inbound mail is never refused because the quota is full</em>. At 100% only new <strong>attachments and uploaded files</strong> are refused, with a message carrying the real numbers; the messages themselves keep arriving. This is deliberate: an inbox that bounces loses the owner business, so the quota is a number the customer is shown and a limit on files, never a gate on incoming mail.</p>
+<p><strong>Where the wording is edited:</strong> <strong>Email Templates</strong> in this console, type <code>storage_warning</code>. The reminder carries the real figures as placeholders &mdash; <code>{{percent}}</code>, <code>{{used}}</code>, <code>{{quota}}</code>, <code>{{mail_used}}</code>, <code>{{files_used}}</code>, <code>{{threshold}}</code>, <code>{{inbox_url}}</code>, <code>{{plans_url}}</code>, plus <code>{{retention}}</code> and <code>{{retention_days}}</code> when the workspace&rsquo;s retention rule is set. A template row for that type is optional: with none saved, the app sends its own plain-text wording, and a customer never sees an empty email.</p>
+<p><strong>What the operator should tell a customer who asks:</strong> the reminder is a warning, not a bill and not a deletion notice. If they want more room, the plan is the lever &mdash; the reminder&rsquo;s <code>{{plans_url}}</code> placeholder points at the workspace&rsquo;s own Billing &amp; Plans tab for exactly that reason.</p>
+<h2 id="navx-rel-h">Keep exploring IncentiveSwift</h2><ul><li><a href="/guide.html">Guide</a></li><li><a href="/kb.html">Knowledge base</a></li><li><a href="/iqs-play.html">IQS game</a></li><li><a href="/long-form-qualifier.html">Long-form qualifier</a></li></ul></section>
 </body>
 </html>
