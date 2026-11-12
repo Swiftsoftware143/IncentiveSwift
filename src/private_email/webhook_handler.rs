@@ -189,7 +189,7 @@ pub async fn inbound_webhook(
     }
 
     // Validate webhook — pass raw body to provider for signature check
-    let provider = providers::provider_for(&provider_config);
+    let provider = providers::inbound_provider_for(&provider_config);
     let signing_key_configured = provider_config
         .encrypted_webhook_key
         .as_deref()

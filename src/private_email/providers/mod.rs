@@ -140,3 +140,18 @@ pub fn provider_for(config: &ProviderConfig) -> Box<dyn EmailProvider> {
         _ => Box::new(mailgun::MailgunProvider),
     }
 }
+
+/// The parser that answers a delivery on the MAILGUN receiver route.
+///
+/// Receiving is its OWN choice (kanban t_04db9228), so this must never be [`provider_for`]: that
+/// picks by `provider_type`, which is how the domain SENDS. A customer who keeps Amazon SES (or any
+/// SMTP service) for outbound and lets Mailgun deliver inbound — the combination the receiving
+/// selector exists for — was handed the SMTP provider here, whose `accept_inbound` always answers
+/// `None`; every delivery was refused and the log blamed the signing key for a key that was fine.
+/// Measured live on ADASwift 2026-11-12 and ported fleet-wide (kanban t_5f71b8ff).
+pub fn inbound_provider_for(_config: &ProviderConfig) -> Box<dyn EmailProvider> {
+    // This route IS Mailgun's receiver: every domain that reaches it was checked by the handler
+    // (`receiver()` must answer "mailgun"), and a SendGrid domain is refused with a sentence that
+    // names its own door. So the parser is Mailgun's, whatever the domain uses to SEND.
+    Box::new(mailgun::MailgunProvider)
+}
