@@ -5791,6 +5791,43 @@ const ImpersonateAccounts = () => {
   </div>`;
 };
 
+// ---- FEEDBACK (kanban B209, t_2b4e36f9) ----
+// The operator's read of what customers told us: idea / bug / complaint, with the account, person,
+// app and screen it came from. Admin-only in the nav AND gated server-side (403 for a non-operator),
+// so a customer never sees the queue. Reads through the RAW getter so a transient failure does not
+// paint the shell's "this screen could not load" banner (the same rule as the other operator reads).
+const Feedback = () => {
+  const st = viewState('feedback', { list: [], err: '' });
+  const load = async () => {
+    try {
+      const data = await _get('/feedback');
+      st.list = (data && data.feedback) || [];
+      st.err = '';
+      renderApp();
+    } catch (e) {
+      st.err = (e && e.message) || 'request failed';
+      renderApp();
+    }
+  };
+  if (!st._loaded) { st._loaded = true; load(); }
+  return html`<div>
+    <div class="mb-4">
+      <h1 class="text-2xl font-bold text-gray-800">Feedback</h1>
+      <p class="text-sm text-gray-500">What customers told us — idea, bug or complaint, with the account, person, app and screen it came from.</p>
+    </div>
+    ${st.err ? html`<div style="margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:10px;font-size:13px">Failed to load feedback: ${st.err}</div>` : ''}
+    ${!st.err && !st.list.length ? html`<div class="card" style="text-align:center;padding:40px;color:#64748b">No feedback yet.</div>` : ''}
+    ${st.list.map(f => html`<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">
+        <strong style="text-transform:capitalize">${f.kind}</strong>
+        <span style="color:#64748b;font-size:.75rem">${f.app} · ${f.screen} · ${f.created_at}</span>
+      </div>
+      <p style="margin:0 0 6px;white-space:pre-wrap">${f.message}</p>
+      <div style="color:#64748b;font-size:.78rem">${[f.name, f.email].filter(Boolean).join(' · ') || 'unknown'}</div>
+    </div>`)}
+  </div>`;
+};
+
 const App = () => {
   if(!API.token) return html`<${LoginView} />`;
 
@@ -6902,6 +6939,7 @@ const PromoCodes = () => {
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
+    { id: 'feedback', label: 'Feedback', icon: '💬', adminOnly: true },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'analytics', label: 'Analytics', icon: '📈' },
     { id: 'profile', label: 'Profile', icon: '👤' },
@@ -6934,7 +6972,7 @@ const PromoCodes = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView};
+  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
@@ -6985,6 +7023,12 @@ const PromoCodes = () => {
             NOTE htm/preact: this MUST be an html`` child, not a bare string - a string child renders
             as TEXT and the anchor would show up as markup. */
         isAdmin ? html`<a class="nav-item" id="admin-guide-link" href="/admin-guide.html" target="_blank" rel="noopener" style="text-decoration:none" title="IncentiveSwift Admin Guide - running the software: accounts, campaigns, loyalty programs, tags, leads, API keys and settings">📖 <span class="nav-text">Admin Guide</span></a>` : ''}
+      ${/* Updates + Roadmap footer links (kanban B209, t_2b4e36f9): the ONE canonical URL fleet-wide.
+            Shown to every signed-in user, not only operators — a customer sees where the product is going. */
+        html`<div style="margin-top:8px;border-top:1px solid #f1f5f9;padding-top:6px;display:flex;flex-direction:column;gap:2px">
+        <a class="nav-item" href="https://swiftsoftware.net/updates" target="_blank" rel="noopener" style="text-decoration:none" title="SwiftSoftware Updates">🆕 <span class="nav-text">Updates</span></a>
+        <a class="nav-item" href="https://swiftsoftware.net/roadmap" target="_blank" rel="noopener" style="text-decoration:none" title="SwiftSoftware Roadmap">🗺 <span class="nav-text">Roadmap</span></a>
+      </div>`}
       <button type="button" class="nav-item text-red-500 mt-auto" onClick=${() => { API.logout(); S.view = 'dashboard'; renderApp(); }} aria-label="Logout">
         <span>🚪</span><span class="nav-text">Logout</span>
       </button>
@@ -7096,6 +7140,112 @@ if (wsAdopting) (async () => {
     show();
   }
 })();
+
+// ── Submit Feedback (kanban B209, t_2b4e36f9) ─────────────────────────────────────────────
+// A "Submit Feedback" button visible on every screen. It captures WHO (the signed-in session),
+// WHICH ACCOUNT (the session's account), WHICH APP (IncentiveSwift, recorded server-side) and WHICH
+// SCREEN (S.view) — so nothing arrives anonymous or untraceable. The team reads it on the
+// operator-only Feedback screen. Linked Updates + Roadmap open the one canonical URL fleet-wide.
+(function () {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'feedbackFab';
+  btn.setAttribute('aria-label', 'Submit feedback');
+  btn.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:9000;display:flex;align-items:center;gap:8px;background:#2563eb;color:#fff;border:none;border-radius:28px;padding:12px 18px;font-size:.9rem;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25);font-family:inherit';
+  btn.innerHTML = '💬 Feedback';
+  btn.onclick = openFeedbackModal;
+  document.body.appendChild(btn);
+})();
+
+function feedbackEscape(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function feedbackToast(msg, isError) {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;bottom:84px;right:20px;z-index:10001;background:' + (isError ? '#dc2626' : '#059669') + ';color:#fff;padding:10px 16px;border-radius:10px;font-size:.85rem;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,.25);font-family:inherit;max-width:320px';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 3500);
+}
+
+function openFeedbackModal() {
+  if (!API.token) { feedbackToast('Sign in to send feedback', true); return; }
+  const old = document.getElementById('feedbackModal');
+  if (old) old.remove();
+  const screen = String(S.view || '');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'feedbackModal';
+  overlay.className = 'modal';
+  overlay.style.zIndex = '10000';
+
+  const content = document.createElement('div');
+  content.className = 'modal-content';
+  content.style.maxWidth = '520px';
+  content.innerHTML = '<h3 style="margin:0 0 4px;font-size:1.05rem;font-weight:700">Submit Feedback</h3>'
+    + '<p style="color:#64748b;font-size:.85rem;margin:0 0 12px">Tell us what is on your mind — an idea, a bug, or a complaint. It is sent with your account and the screen you are on, so we can follow up.</p>'
+    + '<div id="feedbackKinds" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>'
+    + '<div style="font-size:.75rem;color:#94a3b8;margin-bottom:6px">Screen: ' + feedbackEscape(screen) + '</div>'
+    + '<textarea id="feedbackMsg" rows="5" placeholder="What happened, or what should we build?" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#0f172a;font-family:inherit;font-size:14px"></textarea>'
+    + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">'
+    + '<button type="button" class="btn btn-outline" id="feedbackCancelBtn">Cancel</button>'
+    + '<button type="button" class="btn" id="feedbackSendBtn">Send feedback</button>'
+    + '</div>';
+  overlay.appendChild(content);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) feedbackCloseModal(); });
+
+  // Kind buttons are wired programmatically: an inline onclick would evaluate in GLOBAL scope and
+  // cannot see this module's functions (the same rule as the 402 overlay's window._goMyPlan).
+  const kinds = content.querySelector('#feedbackKinds');
+  [['idea', '💡 Idea'], ['bug', '🐞 Bug'], ['complaint', '⚠️ Complaint']].forEach(function (pair) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-sm';
+    b.textContent = pair[1];
+    b.setAttribute('data-kind', pair[0]);
+    b.onclick = function () { feedbackSelectKind(pair[0], b); };
+    kinds.appendChild(b);
+  });
+  content.querySelector('#feedbackCancelBtn').onclick = feedbackCloseModal;
+  content.querySelector('#feedbackSendBtn').onclick = submitFeedback;
+
+  document.body.appendChild(overlay);
+  window.__feedbackKind = 'idea';
+}
+
+function feedbackCloseModal() {
+  const m = document.getElementById('feedbackModal');
+  if (m) m.remove();
+}
+
+function feedbackSelectKind(kind, el) {
+  window.__feedbackKind = kind;
+  const modal = document.getElementById('feedbackModal');
+  if (!modal) return;
+  modal.querySelectorAll('[data-kind]').forEach(function (b) {
+    b.style.background = (b === el) ? '#1d4ed8' : '';
+    b.style.color = (b === el) ? '#fff' : '';
+  });
+}
+
+async function submitFeedback() {
+  const msg = document.getElementById('feedbackMsg');
+  const btn = document.getElementById('feedbackSendBtn');
+  if (!msg || !msg.value.trim()) { feedbackToast('Please write a message', true); return; }
+  const kind = window.__feedbackKind || 'idea';
+  if (btn) btn.disabled = true;
+  try {
+    await API.post('/feedback', { kind: kind, screen: String(S.view || ''), message: msg.value.trim() });
+    feedbackCloseModal();
+    feedbackToast('Thanks — your feedback was sent', false);
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    feedbackToast('Could not send: ' + (e.message || 'please try again'), true);
+  }
+}
 </script>
 </body>
 </html>

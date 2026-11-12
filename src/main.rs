@@ -30,6 +30,10 @@ mod db;
 pub mod delivery;
 mod error;
 mod features;
+/// The "Submit Feedback" queue (kanban B209, t_2b4e36f9) — a signed-in user files an
+/// idea / bug / complaint that records the account, person, app and screen; the platform
+/// operator reads it on `GET /api/v1/feedback`.
+pub mod feedback;
 pub mod handlers;
 pub mod image_store;
 pub mod iqs_validation;
@@ -197,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/workspaces",
             crate::workspaces::router(state.clone()),
         )
+        .nest("/api/v1/feedback", crate::feedback::router(state.clone()))
         .nest(
             "/api/v1/private-email",
             crate::private_email::router(state.clone()),
