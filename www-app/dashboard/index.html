@@ -148,7 +148,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
         <input type="text" id="wsName" maxlength="120" placeholder="e.g. Miami office"
                style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
       </div>
-      <button class="btn" id="wsCreate" onclick="wsCreate()">Create workspace</button>
+      <button class="btn" id="wsCreate" onclick="wsCreateSubmit()">Create workspace</button>
     </div>
     <div id="wsMsg" role="status" style="font-size:13px;margin-top:10px"></div>
   </div>
@@ -768,7 +768,7 @@ function apiCall(path, opts) {
   });
 }
 
-function wsMsg(text, ok) {
+function wsNote(text, ok) {
   var el = document.getElementById('wsMsg');
   if (!el) return;
   el.textContent = text || '';
@@ -806,10 +806,10 @@ function wsRender() {
   }).join('');
 }
 
-function wsCreate() {
+function wsCreateSubmit() {
   var input = document.getElementById('wsName');
   var name = ((input || {}).value || '').trim();
-  if (!name) { wsMsg('Give the workspace a name first.', false); return; }
+  if (!name) { wsNote('Give the workspace a name first.', false); return; }
   var btn = document.getElementById('wsCreate');
   if (btn) btn.disabled = true;
   apiCall('/api/v1/workspaces', {
@@ -818,9 +818,9 @@ function wsCreate() {
     body: JSON.stringify({ name: name })
   }).then(function () {
     if (input) input.value = '';
-    wsMsg('Workspace created.', true);
+    wsNote('Workspace created.', true);
     wsLoad();
-  }).catch(function (e) { wsMsg(e.message, false); })
+  }).catch(function (e) { wsNote(e.message, false); })
     .then(function () { if (btn) btn.disabled = false; });
 }
 
@@ -832,27 +832,27 @@ function wsRename(id) {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: name })
-  }).then(function () { wsMsg('Workspace renamed.', true); wsLoad(); })
-    .catch(function (e) { wsMsg(e.message, false); });
+  }).then(function () { wsNote('Workspace renamed.', true); wsLoad(); })
+    .catch(function (e) { wsNote(e.message, false); });
 }
 
 function wsDefault(id) {
   apiCall('/api/v1/workspaces/' + id + '/default', { method: 'POST' })
-    .then(function () { wsMsg('This workspace now opens on sign-in.', true); wsLoad(); })
-    .catch(function (e) { wsMsg(e.message, false); });
+    .then(function () { wsNote('This workspace now opens on sign-in.', true); wsLoad(); })
+    .catch(function (e) { wsNote(e.message, false); });
 }
 
 function wsDelete(id) {
   if (!window.confirm('Delete this workspace? Your account must keep at least one.')) return;
   apiCall('/api/v1/workspaces/' + id, { method: 'DELETE' })
-    .then(function () { wsMsg('Workspace deleted.', true); wsLoad(); })
-    .catch(function (e) { wsMsg(e.message, false); });
+    .then(function () { wsNote('Workspace deleted.', true); wsLoad(); })
+    .catch(function (e) { wsNote(e.message, false); });
 }
 
 /* ── Inbox (kanban t_101cd6ca) ───────────────────────────────────────────────────────────────── */
 var INBOX = { domains: [], boxes: [], messages: [] };
 
-function inboxMsg(text, ok) {
+function inboxNote(text, ok) {
   var el = document.getElementById('inboxMsg');
   if (!el) return;
   el.textContent = text || '';
@@ -944,7 +944,7 @@ function inboxRenderRecent() {
 function inboxAddDomain() {
   var name = ((document.getElementById('domName') || {}).value || '').trim();
   var key = ((document.getElementById('domKey') || {}).value || '').trim();
-  if (!name) { inboxMsg('Type the domain you own first.', false); return; }
+  if (!name) { inboxNote('Type the domain you own first.', false); return; }
   var btn = document.getElementById('domAdd');
   if (btn) btn.disabled = true;
   apiCall('/api/v1/private-email/domains', {
@@ -954,17 +954,17 @@ function inboxAddDomain() {
   }).then(function () {
     document.getElementById('domName').value = '';
     document.getElementById('domKey').value = '';
-    inboxMsg('Domain added. Paste the records it prints, then press Check again.', true);
+    inboxNote('Domain added. Paste the records it prints, then press Check again.', true);
     inboxLoad();
-  }).catch(function (e) { inboxMsg(e.message, false); })
+  }).catch(function (e) { inboxNote(e.message, false); })
     .then(function () { if (btn) btn.disabled = false; });
 }
 
 function inboxAddBox() {
   var domainId = (document.getElementById('boxDomain') || {}).value;
   var local = ((document.getElementById('boxLocal') || {}).value || '').trim();
-  if (!domainId) { inboxMsg('Add a domain first.', false); return; }
-  if (!local) { inboxMsg('Type the address you want, e.g. info.', false); return; }
+  if (!domainId) { inboxNote('Add a domain first.', false); return; }
+  if (!local) { inboxNote('Type the address you want, e.g. info.', false); return; }
   var btn = document.getElementById('boxAdd');
   if (btn) btn.disabled = true;
   apiCall('/api/v1/private-email/boxes', {
@@ -973,9 +973,9 @@ function inboxAddBox() {
     body: JSON.stringify({ domain_id: domainId, local_part: local })
   }).then(function () {
     document.getElementById('boxLocal').value = '';
-    inboxMsg('Address created. Mail to it now lands in the inbox.', true);
+    inboxNote('Address created. Mail to it now lands in the inbox.', true);
     inboxLoad();
-  }).catch(function (e) { inboxMsg(e.message, false); })
+  }).catch(function (e) { inboxNote(e.message, false); })
     .then(function () { if (btn) btn.disabled = false; });
 }
 
@@ -983,20 +983,20 @@ function inboxVerify(id) {
   apiCall('/api/v1/private-email/domains/' + id + '/verify', { method: 'POST' })
     .then(function (d) {
       var ok = !!(d && d.verified);
-      inboxMsg(ok ? 'Your records are live — this domain receives mail now.' : 'Not verified yet: the records are not visible in DNS.', ok);
+      inboxNote(ok ? 'Your records are live — this domain receives mail now.' : 'Not verified yet: the records are not visible in DNS.', ok);
       inboxLoad();
-    }).catch(function (e) { inboxMsg(e.message, false); });
+    }).catch(function (e) { inboxNote(e.message, false); });
 }
 
 function inboxRecords(id) {
   apiCall('/api/v1/private-email/domains/' + id + '/records').then(function (d) {
     var rows = (d && d.records) || [];
-    if (!rows.length) { inboxMsg('No records to show yet.', true); return; }
+    if (!rows.length) { inboxNote('No records to show yet.', true); return; }
     window.alert('Paste these at your DNS provider:\n\n' + rows.map(function (r) {
       return [r.type, r.name, r.value].filter(Boolean).join('  ');
     }).join('\n'));
-    inboxMsg('Records shown — ' + rows.length + ' line(s).', true);
-  }).catch(function (e) { inboxMsg(e.message, false); });
+    inboxNote('Records shown — ' + rows.length + ' line(s).', true);
+  }).catch(function (e) { inboxNote(e.message, false); });
 }
 
 function esc(s) {
