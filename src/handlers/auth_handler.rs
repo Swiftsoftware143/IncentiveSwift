@@ -196,6 +196,7 @@ pub async fn register(
         "company_admin",
         &state.config.jwt_secret,
         Some(session_epoch),
+        None,
     )?;
 
     // Award referral bonus if referral_code provided
@@ -424,12 +425,13 @@ pub async fn register(
 }
 
 /// Create a signed JWT token for an authenticated user.
-fn create_jwt(
+pub(crate) fn create_jwt(
     account_id: &str,
     email: &str,
     role: &str,
     secret: &str,
     session_epoch: Option<i64>,
+    wsid: Option<&str>,
 ) -> Result<String, AppError> {
     use base64::Engine;
     use hmac::{Hmac, Mac};
@@ -456,6 +458,9 @@ fn create_jwt(
     // impersonation token, which keeps the older `iat` rule.
     if let Some(sv) = session_epoch {
         payload["sv"] = json!(sv);
+    }
+    if let Some(ws) = wsid {
+        payload["wsid"] = json!(ws);
     }
 
     let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -626,6 +631,7 @@ pub async fn login(
         &role,
         &state.config.jwt_secret,
         Some(session_epoch),
+        None,
     )?;
 
     Ok(Json(json!({
@@ -1221,6 +1227,7 @@ pub async fn change_password(
         &role,
         &state.config.jwt_secret,
         Some(session_epoch),
+        None,
     )?;
 
     Ok(Json(
@@ -1285,6 +1292,7 @@ pub async fn logout_all(
         &role,
         &state.config.jwt_secret,
         Some(session_epoch),
+        None,
     )?;
 
     Ok(Json(json!({
@@ -1360,6 +1368,7 @@ pub async fn set_initial_password(
                 &role,
                 &state.config.jwt_secret,
                 Some(session_epoch),
+                None,
             )?;
             Ok(Json(json!({ "status": "password_set", "token": token })))
         }

@@ -30,6 +30,10 @@ pub struct AppClaims {
     /// When present, this JWT is an impersonation token.
     /// Value is the admin account_id who initiated the impersonation.
     pub impersonating: Option<String>,
+    /// The workspace this session is working in (`workspaces.id`). `None` on a token minted
+    /// before the switcher shipped, or on an API-key/impersonation session.
+    #[serde(default)]
+    pub wsid: Option<String>,
 }
 
 /// Decode and verify a App JWT.

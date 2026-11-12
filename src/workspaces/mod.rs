@@ -17,6 +17,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/:id/default",
             routing::post(handlers::set_default_workspace),
         )
+        .route("/:id/switch", routing::post(handlers::switch_workspace))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::access::claims::claims_middleware,

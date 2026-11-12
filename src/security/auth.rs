@@ -31,6 +31,7 @@ pub struct AuthenticatedUser {
     pub email: String,
     pub role: String,
     pub impersonating: Option<String>,
+    pub wsid: Option<String>,
 }
 
 /// Extracts and validates Bearer token from Authorization header.
@@ -77,6 +78,7 @@ where
                 .clone()
                 .unwrap_or_else(|| "authenticated".to_string()),
             impersonating: claims.impersonating.clone(),
+            wsid: claims.wsid.clone(),
         };
         // `claims.iat` is what lets a password change or reset end the sessions that predate it
         // (see [`IssuedAt`] and the module doc: SESSION REVOCATION). A token minted by this app
@@ -378,6 +380,7 @@ async fn verify_issued_api_key(
                 email: r.get("email"),
                 role: "api_key".to_string(),
                 impersonating: None,
+                wsid: None,
             }));
         }
     }
@@ -426,6 +429,7 @@ async fn verify_legacy_api_credential(
                     email,
                     role: "api_key".to_string(),
                     impersonating: None,
+                    wsid: None,
                 })),
                 _ => Err(AppError::Unauthorized("Invalid API key".to_string())),
             }

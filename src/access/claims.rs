@@ -30,6 +30,9 @@ pub struct Claims {
     pub sub: String,
     pub email: String,
     pub role: String,
+    /// The workspace this session is working in (`workspaces.id`). `None` on an API-key or
+    /// impersonation session, or a token minted before the switcher shipped.
+    pub wsid: Option<String>,
 }
 
 /// Authenticate the request with the app's own extractor and expose it as [`Claims`].
@@ -45,6 +48,7 @@ pub async fn claims_middleware(
         sub: user.account_id,
         email: user.email,
         role: user.role,
+        wsid: user.wsid,
     };
     let mut req = Request::from_parts(parts, body);
     req.extensions_mut().insert(claims);
