@@ -2219,7 +2219,7 @@ const LoyaltyPrograms = () => {
     try { await API.del('/loyalty/tiers/' + id); refreshTiers(); } catch(e){ alert(e.message); }
   };
 
-  const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
+  const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','MCP','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Plans') loadLoyaltyPlans();
     if (t==='Members') loadMembers();
@@ -2666,6 +2666,33 @@ function loadSiteConfig() {
 }
 
 
+// MCP — the fleet slot directly above Settings (docs/fleet-mcp-nav-convention.md). Every tool this
+// app exposes is a SELECT: there is no write door and no free-form SQL tool.
+const mcpTab = html`<div>
+    <h2 class="text-xl font-bold mb-2">MCP — connect your AI tools</h2>
+    <p class="text-sm text-gray-600 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace's IncentiveSwift data. Read-only.</p>
+
+    <h3 class="text-lg font-bold mb-2">Endpoint</h3>
+    <div class="flex gap-2 items-center mb-6 flex-wrap">
+      <code class="px-3 py-2 bg-gray-100 rounded text-sm">https://hooks.swiftsoftware.net/mcp</code>
+      <button class="btn btn-sm btn-outline" id="mcpCopyEndpoint" onClick=${() => copyText('mcp', 'https://hooks.swiftsoftware.net/mcp')}>Copy</button>
+    </div>
+
+    <h3 class="text-lg font-bold mb-2">Your token</h3>
+    <p class="text-sm text-gray-600 mb-3">The server accepts your workspace API key. Treat it like a password: anyone holding it can read this workspace. Keys are issued and rotated on the <strong>API Keys</strong> screen.</p>
+
+    <h3 class="text-lg font-bold mb-2">What it can read</h3>
+    <ul class="text-sm text-gray-700 list-disc pl-5 space-y-1">
+      <li><code>incentiveswift_summary</code> / <code>incentiveswift_search</code> — entries (leads): contact, campaign, score, outcome</li>
+      <li><code>incentiveswift_contacts_summary</code> / <code>_search</code> — contacts</li>
+      <li><code>incentiveswift_campaigns_summary</code> / <code>_search</code> — campaigns</li>
+      <li><code>incentiveswift_referrals_summary</code> / <code>_search</code> — referral codes and conversions</li>
+      <li><code>incentiveswift_tags_summary</code> / <code>_search</code> — tags</li>
+      <li><code>incentiveswift_tickets_summary</code> / <code>_search</code> — support tickets</li>
+    </ul>
+    <p class="text-xs text-gray-500 mt-4">Every tool is read-only and tenant-scoped: a workspace token can only ever return this workspace's rows. There is no write tool and no free-form SQL door, and operator-wide tools are refused for a workspace credential.</p>
+</div>`;
+
 const settingsTab = html`<div>
     <h2 class="text-xl font-bold mb-4">Clearinghouse Settings</h2>
 
@@ -2978,7 +3005,7 @@ const ledgerTab = html`<div>
       </div>`
     : html`<div class="text-xs text-gray-500 mb-3" data-ops="loyalty-plan-gate" data-plan-gate="included">Loyalty is included in your ${tierLabel(st.planGate.plan_tier)} plan.</div>`);
 
-  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  const tabContent = st.tab==='mcp' ? mcpTab : st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     ${planGateBanner}
