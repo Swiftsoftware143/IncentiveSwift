@@ -246,6 +246,10 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
         // Named as a preview so it can never be mistaken for a system notice.
         "branding_preview" => format!("Your email branding — a preview from {app_name}"),
+        // The 50/75/99 storage reminder (kanban t_82551415). The INLINE arm states the real figures
+        // in this subject; this default is only reached when a stored row exists with no subject of
+        // its own, so it says the one thing that is always true.
+        "storage_warning" => format!("Your mailbox is getting full — {app_name}"),
         _ => format!("{} Notification", app_name),
     }
 }
@@ -596,6 +600,65 @@ async fn send_inline(
                 body,
                 String::new(),
             ))
+        }
+        // THE STORAGE RUNG REMINDER (kanban t_82551415; the arm proved on WorkflowSwift 8d009c9).
+        // This app carries NO `storage_warning` row in `email_templates`, so without this branch the
+        // 50/75/99 mail that `evaluate_and_notify` claims each month reached the customer as the
+        // generic "{app} Notification:" body — for the one message whose entire value is its
+        // numbers. Plain sentences on purpose: the subject names the real percentage because a
+        // customer reads that first, and the body NEVER says mail will be deleted to make room,
+        // because keeping that promise is what the whole storage rule exists for.
+        "storage_warning" => {
+            let used = vars.get("used").and_then(|v| v.as_str()).unwrap_or("some");
+            let quota = vars
+                .get("quota")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your plan allowance");
+            let percent = vars.get("percent").and_then(|v| v.as_i64()).unwrap_or(0);
+            let threshold = vars.get("threshold").and_then(|v| v.as_i64()).unwrap_or(50);
+            let inbox_url = vars
+                .get("inbox_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(APP_URL_MAIL);
+            let plans_url = vars
+                .get("plans_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(app_url);
+            let retention = vars.get("retention").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = format!("Your mailbox is {percent}% full — {used} of {quota} used");
+            let action = if percent >= 100 {
+                "Your mailbox is full. Mail is still arriving and nothing has been deleted, but new \
+                 attachments and files are paused until you clear space or upgrade."
+            } else if threshold >= 99 {
+                "Your mailbox is almost full. Plain mail still arrives and nothing is deleted, but \
+                 once the allowance is reached new attachments and files are paused."
+            } else {
+                "You have room for now. Clearing out mail you no longer need (Trash and Spam count \
+                 too) keeps the meter down, and a bigger plan raises the allowance."
+            };
+            let text_body = format!(
+                "Hi {name},\n\nThis is a storage update for your mailbox: you are using {used} of \
+                 {quota} ({percent}%).\n\n{action}\n\nTwo things that are ALWAYS true here: mail sent \
+                 to you keeps arriving, and nothing is deleted to make room for new mail. The only \
+                 thing a full mailbox pauses is adding new attachments or files.\n\nOpen your mail and \
+                 clear some space:\n    {inbox_url}\n\nSee the plans with more storage:\n    \
+                 {plans_url}\n\n{retention}\n\nYou will get at most one of these messages per storage \
+                 level per month.\n\n- The {app_name} Team"
+            );
+            let safe_name = esc(name);
+            let safe_action = esc(action);
+            let safe_retention = esc(retention);
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {safe_name},</p>\
+                 <p>This is a storage update for your mailbox: you are using <strong>{used} of {quota} ({percent}%)</strong>.</p>\
+                 <p>{safe_action}</p>\
+                 <p>Two things that are <strong>always</strong> true here: mail sent to you keeps arriving, and <strong>nothing is deleted</strong> to make room for new mail. The only thing a full mailbox pauses is adding new attachments or files.</p>\
+                 <p><a href=\"{inbox_url}\" style=\"color:#4f46e5\">Open your mail and clear some space</a></p>\
+                 <p><a href=\"{plans_url}\" style=\"color:#4f46e5\">See the plans with more storage</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">{safe_retention}<br>You will get at most one of these messages per storage level per month.<br>- The {app_name} Team</p></body></html>"
+            );
+            Ok((subject, text_body, html_body))
         }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);

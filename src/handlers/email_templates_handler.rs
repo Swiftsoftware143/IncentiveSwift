@@ -78,6 +78,50 @@ fn merge_field_list() -> Vec<(&'static str, &'static str)> {
         ("plan_name", "Plan name (purchase mails)"),
         ("password", "Minted password (welcome_credentials only)"),
         ("token", "Password-reset token (password_reset only)"),
+        // Bound by the INBOX STORAGE REMINDER (`private_email::storage::evaluate_and_notify`,
+        // kanban t_82551415). Advertised because a stored `storage_warning` row OVERRIDES the inline
+        // arm, so an operator who writes one must be able to name these figures — otherwise the row
+        // they author mails the braces verbatim.
+        (
+            "percent",
+            "Storage used, whole percent (storage_warning only)",
+        ),
+        (
+            "threshold",
+            "The rung that fired: 50, 75 or 99 (storage_warning only)",
+        ),
+        (
+            "used",
+            "Storage used, human figure e.g. 1.56 GB (storage_warning only)",
+        ),
+        (
+            "quota",
+            "The mailbox allowance, human figure e.g. 2 GB (storage_warning only)",
+        ),
+        (
+            "mail_used",
+            "Bytes of the allowance held by mail (storage_warning only)",
+        ),
+        (
+            "files_used",
+            "Bytes of the allowance held by logo/avatars (storage_warning only)",
+        ),
+        (
+            "inbox_url",
+            "The mail client's front door (storage_warning only)",
+        ),
+        (
+            "plans_url",
+            "The dashboard's Plan & billing screen (storage_warning only)",
+        ),
+        (
+            "retention",
+            "This account's own retention sentence (storage_warning only)",
+        ),
+        (
+            "retention_days",
+            "This account's retention window in days (storage_warning only)",
+        ),
     ]
 }
 

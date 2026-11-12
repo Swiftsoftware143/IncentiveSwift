@@ -45,6 +45,17 @@ pub const ACCOUNT_MAILS: &[(&str, &str)] = &[
         "Purchase confirmation (checkout / plan upgrade)",
     ),
     ("password_reset", "Password reset (forgot password)"),
+    // The remaining account mails had inline arms in `send_inline` but were NOT in this list, so the
+    // console could not offer them and the API refused a row of their type (kanban t_82551415,
+    // audit pass): the panel could not author the very mails the senders ask for.
+    (
+        "email_change",
+        "Sign-in address change — confirm the new address",
+    ),
+    (
+        "plan_changed",
+        "Plan changed (moved onto a tier by the team)",
+    ),
     (
         "plan_request_update",
         "Plan request answered (the customer's own billing/support request)",
@@ -52,6 +63,30 @@ pub const ACCOUNT_MAILS: &[(&str, &str)] = &[
     (
         "support_request_receipt",
         "Request received (sent the moment a customer files a support/plan request)",
+    ),
+    (
+        "public_support_reply",
+        "Contact-page answer (someone with no account wrote in)",
+    ),
+    (
+        "plan_request_operator_alert",
+        "Operator alert — a customer asked to buy a plan",
+    ),
+    (
+        "support_request_operator_alert",
+        "Operator alert — a support request needs an answer",
+    ),
+    (
+        "signup_operator_alert",
+        "Operator alert — a new workspace signed up",
+    ),
+    (
+        "storage_warning",
+        "Storage reminder (50 / 75 / 99% of the mailbox allowance)",
+    ),
+    (
+        "branding_preview",
+        "Email branding preview (the sample a workspace sends itself)",
     ),
 ];
 
@@ -134,6 +169,9 @@ mod tests {
             "welcome_credentials",
             "purchase_confirmed",
             "password_reset",
+            // kanban t_82551415: the storage rung reminder is sent by
+            // `private_email::storage::evaluate_and_notify`, so the panel must be able to author it.
+            "storage_warning",
         ] {
             assert!(
                 keys.contains(needed),

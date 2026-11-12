@@ -388,7 +388,7 @@ pub async fn evaluate_and_notify(db: &PgPool, tenant_id: Uuid) -> Vec<i32> {
             break;
         }
         // Claim BEFORE queueing. `sent_at` is the claim time; the mail is queued immediately after.
-        let claimed: Option<Uuid> = sqlx::query_scalar(
+        let claimed: Result<Option<Uuid>, sqlx::Error> = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO private_email_storage_notices
                 (tenant_id, threshold_pct, period, usage_bytes, quota_bytes)
@@ -403,10 +403,26 @@ pub async fn evaluate_and_notify(db: &PgPool, tenant_id: Uuid) -> Vec<i32> {
         .bind(u.used_bytes)
         .bind(u.quota_bytes)
         .fetch_optional(db)
-        .await
-        .unwrap_or(None);
+        .await;
 
-        let Some(claim_id) = claimed else { continue };
+        // A claim that cannot be WRITTEN is not "already sent for this month": migration
+        // `zz_is28_workspaces_and_private_inbox.sql` ported this table from CoreSwift without the
+        // UNIQUE guard the ON CONFLICT clause needs, so every claim raised 42P10 and the old
+        // `unwrap_or(None)` read it as "rung already claimed" — no storage reminder was ever mailed
+        // on this app (kanban t_82551415). Never swallow this again.
+        let claim_id = match claimed {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::error!(
+                    tenant = %tenant_id,
+                    threshold,
+                    error = %e,
+                    "storage reminder claim failed — no mail can be sent for this rung"
+                );
+                continue;
+            }
+        };
 
         let Some((email, name)) = owner_recipient(db, tenant_id).await else {
             // Nobody to tell: release the claim rather than burn the rung for a month.
@@ -428,10 +444,12 @@ pub async fn evaluate_and_notify(db: &PgPool, tenant_id: Uuid) -> Vec<i32> {
             "mail_used": human_bytes(u.mail_bytes),
             "files_used": human_bytes(u.file_bytes),
             "inbox_url": crate::email::APP_URL_MAIL,
-            // The console's Billing & Plans screen is a TAB, not a route: `?tab=billing` is the deep
-            // link its boot honours, and it is the only address that opens the thing this mail is
-            // selling. `/pricing` does not exist and would be a dead door.
-            "plans_url": format!("{}/?tab=billing", crate::email::APP_URL),
+            // The Plan & billing card lives on the dashboard page itself (measured in the served
+            // console: `/dashboard/` carries the "Plan &amp; billing" section, and this app's
+            // console has no `?tab=`/hash router to deep-link a tab), so that is the address that
+            // opens the thing this mail is selling. `/pricing` does not exist and would be a dead
+            // door; `?tab=billing` is silently ignored by the boot.
+            "plans_url": format!("{}/dashboard", crate::email::APP_URL),
             "retention": retention_sentence(&ret),
             "retention_days": ret.days,
         });
