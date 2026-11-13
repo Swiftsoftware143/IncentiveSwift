@@ -1607,14 +1607,53 @@ pub async fn close_account(
     .await?;
 
     // Durable credentials are NOT covered by the session counter, so they are retired explicitly.
-    // Best effort on purpose: the closure above has already succeeded and must not be reported as
-    // failed because a bookkeeping statement lost a race.
-    if let Err(e) = sqlx::query("UPDATE api_keys SET is_active = false WHERE user_id = $1")
+    //
+    // FAILURE POLICY — the customer's right to close outranks audit completeness. The `accounts`
+    // row was already committed as closed above, so NOTHING here can un-close the account. The bulk
+    // revoke and its `api_key_events` ledger rows share ONE transaction, so every key that stops
+    // authenticating here either lands with its `action='revoked'` row (metadata
+    // `{"source":"account_close"}`) or neither change does. If that transaction fails for ANY
+    // reason — including a broken `api_key_events` table — the failure is logged at ERROR level and
+    // the close still returns success. Audit completeness is best-effort here and must never block
+    // a customer from closing their account.
+    let revoke_and_audit: Result<(), AppError> = async {
+        let mut tx = state.db.begin().await?;
+        // Read every key this close is about to disable (id, prefix, owner) BEFORE the write, so
+        // each ledger row can name the exact credential — prefix only, never a secret.
+        let keys = sqlx::query_as::<_, (Uuid, String, Uuid)>(
+            "SELECT id, prefix, tenant_id FROM api_keys \
+             WHERE user_id = $1 AND is_active = true FOR UPDATE",
+        )
         .bind(account_uuid)
-        .execute(&state.db)
-        .await
-    {
-        tracing::warn!("could not retire api_keys for closed account {account_uuid}: {e}");
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE api_keys SET is_active = false, updated_at = now() WHERE user_id = $1")
+            .bind(account_uuid)
+            .execute(&mut *tx)
+            .await?;
+        for (key_id, prefix, owner_id) in &keys {
+            crate::handlers::api_keys::record_api_key_event(
+                &mut *tx,
+                *key_id,
+                *owner_id,
+                "revoked",
+                prefix,
+                Some(account_uuid),
+                Some(json!({ "source": "account_close" })),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = revoke_and_audit {
+        tracing::error!(
+            error = %e,
+            account = %account_uuid,
+            "account close: could not retire api_keys and write their lifecycle ledger; the account remains closed"
+        );
     }
     if let Err(e) = sqlx::query("DELETE FROM api_credentials WHERE account_id = $1")
         .bind(account_uuid)
