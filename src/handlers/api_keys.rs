@@ -167,6 +167,49 @@ pub async fn list_api_keys(
     Ok(Json(json!({ "api_keys": keys })))
 }
 
+/// GET /api/v1/api-key-events — the credential lifecycle ledger, newest first.
+///
+/// `record_api_key_event` has written one row for every mint, rotation and revoke since
+/// 2026-11-13, but nothing could read them back: the audit the feature records was invisible to the
+/// owner it protects. This is its reader. Scoping is the SAME owner resolution the key list uses —
+/// rows are selected by the resolved owner account, never by a caller-supplied id — so a teammate
+/// sees their workspace's credential history and no other workspace's.
+pub async fn list_api_key_events(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let user_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
+    let owner_id = resolve_owner_account_id(&state.db, user_id).await?;
+
+    let rows = sqlx::query(
+        r#"SELECT e.action, e.key_prefix, e.created_at,
+                  COALESCE(a.name, a.email) AS actor
+             FROM api_key_events e
+             LEFT JOIN accounts a ON a.id = e.actor_user_id
+            WHERE e.owner_id = $1
+            ORDER BY e.created_at DESC
+            LIMIT 100"#,
+    )
+    .bind(owner_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let events: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "action": row.get::<String, _>("action"),
+                "key_prefix": row.get::<Option<String>, _>("key_prefix"),
+                "actor": row.get::<Option<String>, _>("actor"),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "events": events })))
+}
+
 /// Resolve the accounts row that owns rows written on behalf of `account_id`.
 ///
 /// `accounts.tenant_id` is a legacy free-form uuid with NO foreign key. Of the 56 accounts live on

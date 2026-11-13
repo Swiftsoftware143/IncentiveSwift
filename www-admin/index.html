@@ -3861,8 +3861,19 @@ const AnalyticsView = () => {
 
 // ---- API KEYS ----
 const ApiKeysView = () => {
-  const st = viewState('apikeys', { list: [], showModal: false, newKeyName: '', revealed: null, revealedPrefix: '' });
-  const load = async () => { try { const data = await API.get('/api-keys'); st.list = Array.isArray(data) ? data : []; renderApp(); } catch(e) { console.error(e); } };
+  const st = viewState('apikeys', { list: [], events: [], showModal: false, newKeyName: '', revealed: null, revealedPrefix: '' });
+  // The API answers `{ api_keys: [...] }`, not a bare array. Reading it as an array left this panel
+  // permanently empty even when the account held a key, so the owner could not see, rotate or revoke
+  // it (measured 2026-11-13 against the live route: one key returned, "No API keys yet" painted).
+  // The ledger rides the same load, so a mint / rotate / revoke shows up the moment it happens.
+  const load = async () => {
+    try {
+      const [keys, ledger] = await Promise.all([API.get('/api-keys'), API.get('/api-key-events')]);
+      st.list = Array.isArray(keys) ? keys : (keys.api_keys || []);
+      st.events = (ledger && ledger.events) || [];
+      renderApp();
+    } catch(e) { console.error(e); }
+  };
   if (!st._loaded) { st._loaded = true; load(); }
   // View = re-authenticate, then show the SAME stored key again (repeatable, audited).
   const view = async (id) => {
@@ -3896,8 +3907,8 @@ const ApiKeysView = () => {
       ${st.list.map(key => html`<div class="card p-3 flex items-center justify-between">
         <div>
           <div class="font-medium text-sm">${key.name||'API Key'}</div>
-          <div class="text-xs text-gray-400 font-mono">${key.key_prefix||''}****${key.key_suffix||''}</div>
-          <div class="text-xs text-gray-400">Created: ${key.created_at ? new Date(key.created_at).toLocaleDateString() : '—'}</div>
+          <div class="text-xs text-gray-400 font-mono">${key.prefix||''}${key.prefix?'…':''}</div>
+          <div class="text-xs text-gray-400">Created: ${key.created_at ? new Date(key.created_at).toLocaleDateString() : '—'}${key.is_active === false ? ' · revoked' : ''}</div>
         </div>
         <div class="flex gap-3">
           <button class="text-blue-600 text-sm" onClick=${() => view(key.id)}>View</button>
@@ -3906,6 +3917,19 @@ const ApiKeysView = () => {
         </div>
       </div>`)}
       ${!st.list.length ? html`<div class="text-center text-gray-400 py-8">No API keys yet</div>` : null}
+    </div>
+    <div class="card p-4 mt-6">
+      <div class="text-sm font-medium">Key activity</div>
+      <p class="text-xs text-gray-500 mb-2">Every time a key was created, rotated or revoked is recorded automatically. Only the key's first characters are shown here — never the key itself.</p>
+      ${st.events.length ? html`<div class="divide-y">
+        ${st.events.map(ev => html`<div class="py-2 flex items-center justify-between gap-4 text-sm">
+          <div>
+            <span class="font-medium">${ev.action === 'created' ? 'Created' : ev.action === 'regenerated' ? 'Rotated — the previous key stopped working' : ev.action === 'revoked' ? 'Revoked' : (ev.action || 'Changed')}</span>
+            ${ev.key_prefix ? html`<span class="text-xs text-gray-400 font-mono ml-2">${ev.key_prefix}…</span>` : null}
+          </div>
+          <div class="text-xs text-gray-400 whitespace-nowrap">${ev.actor ? ev.actor + ' · ' : ''}${ev.created_at ? new Date(ev.created_at).toLocaleString() : ''}</div>
+        </div>`)}
+      </div>` : html`<div class="text-sm text-gray-400 py-3">No key activity yet.</div>`}
     </div>
     ${st.revealed ? html`<div class="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50" onClick=${() => { st.revealed = null; renderApp(); }}>
       <div class="bg-white rounded-xl p-6 w-[34rem] shadow-xl" onClick=${e => e.stopPropagation()}>

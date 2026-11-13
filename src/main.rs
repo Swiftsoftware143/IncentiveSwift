@@ -1213,6 +1213,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/api-keys/:id/regenerate",
             post(handlers::api_keys::regenerate_api_key),
         )
+        // The reader for the credential lifecycle ledger (handlers::api_keys::list_api_key_events).
+        // Until it existed the app recorded every mint / rotate / revoke and could show none of them.
+        .route(
+            "/api/v1/api-key-events",
+            get(handlers::api_keys::list_api_key_events),
+        )
         // Surface routes (public ??? no auth required)
         .route(
             "/api/v1/widget/:hash",
