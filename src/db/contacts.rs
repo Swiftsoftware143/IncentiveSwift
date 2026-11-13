@@ -94,16 +94,37 @@ pub async fn upsert_contact(
     account_id: Option<Uuid>,
     source: &str,
 ) -> Result<Uuid, AppError> {
+    // A BLANK FIELD IS NOT AN IDENTITY (measured live 2026-11-13). The public check-in page sends
+    // `phone` as a present-but-empty string when the customer leaves the field blank, and an address
+    // may be absent on purpose (a person captured by phone alone — `check_lead_address` accepts "").
+    // `if let Some(phone)` accepted the empty string, so the fallback below ran
+    // `SELECT id FROM contacts WHERE phone = ''` and matched ANY earlier contact whose phone was
+    // blank. Two different customers checking in with a blank phone therefore collapsed into ONE
+    // loyalty member (their points merged: 10, then 20 on the same row) and the roster showed one
+    // person where there were two. The match was not even scoped to one account, so a blank-phone
+    // customer at one business could be attached to a contact row owned by another. Normalise both
+    // fields first: trim, and treat empty as ABSENT, so a blank value can never be a dedup key and
+    // is never stored as ''.
+    let email = input
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let phone = input
+        .phone
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     // A capture door, not a login door (kanban t_5230513b): the address may be absent, but a value
     // no mail system could deliver is refused BEFORE the SELECT — otherwise it becomes the dedup key
     // of a contact nobody can ever mail. Guarded in this shared writer so every capture path that
     // funnels here inherits it.
-    if let Some(ref email) = input.email {
+    if let Some(email) = email {
         crate::security::email_addr::check_lead_address(email)
             .map_err(AppError::UnprocessableEntity)?;
     }
     // First try to find by email (case-insensitive)
-    if let Some(ref email) = input.email {
+    if let Some(email) = email {
         let existing: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM contacts WHERE lower(email) = lower($1)")
                 .bind(email)
@@ -125,8 +146,8 @@ pub async fn upsert_contact(
         }
     }
 
-    // Fallback: try by phone
-    if let Some(ref phone) = input.phone {
+    // Fallback: try by phone — only when the caller actually supplied one (see the note above).
+    if let Some(phone) = phone {
         let existing: Option<Uuid> = sqlx::query_scalar("SELECT id FROM contacts WHERE phone = $1")
             .bind(phone)
             .fetch_optional(pool)
@@ -146,7 +167,8 @@ pub async fn upsert_contact(
         }
     }
 
-    // Insert new contact
+    // Insert new contact. A blank field lands as NULL, not as '' — the row must not carry a value
+    // that a later lookup can collide on.
     let id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name, website)
@@ -155,8 +177,8 @@ pub async fn upsert_contact(
     .bind(id)
     .bind(&input.first_name)
     .bind(&input.last_name)
-    .bind(&input.email)
-    .bind(&input.phone)
+    .bind(email)
+    .bind(phone)
     .bind(&input.business_name)
     .bind(&input.website)
     .execute(pool)
