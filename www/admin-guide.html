@@ -932,6 +932,8 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
 
 <p><strong>The mail host.</strong> The client is served at <code>inbox.incentiveswift.com</code> (the old <code>pmail.incentiveswift.com</code> address permanently redirects there) from the nginx mail root, proxying the API to the same container as the app, so there is one backend. No <code>inbox.&lt;customer-domain&gt;</code> record is printed: that wildcard belongs to another product, and the API answers <code>branded: unavailable</code> rather than sending a customer somewhere wrong.</p>
 
+<p><strong>Searching the list.</strong> The customer's console Inbox screen lists the newest mail and carries a search box (<strong>Search subject, sender or text</strong>) above <strong>Recent mail</strong>. It queries the same list route with <code>q</code>, which matches the subject, the sender and the opening text case-insensitively, and a search that finds nothing says &ldquo;No mail matches &hellip;&rdquo; rather than &ldquo;nothing has arrived&rdquo;, so a customer can tell a filtered list from an empty one. The mail client's own search sends the same parameter.</p>
+
 <p><strong>What is deliberately absent.</strong> Mail-to-ticket creation and AI thread summaries are not part of this app's inbox: there is no matching queue and no summariser on this install. The client hides both controls instead of drawing dead buttons.</p>
 
 <h2 class="sec-title"><span class="sec-num">17</span> Plan requests (the operator queue)</h2>
