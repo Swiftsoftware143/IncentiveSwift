@@ -53,7 +53,7 @@ pub async fn get_active_milestones(
     .bind(campaign_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
     Ok(milestones)
 }
 
@@ -73,7 +73,7 @@ pub async fn get_achieved_milestones(
     .bind(contact_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
     Ok(achieved)
 }
 
@@ -100,7 +100,7 @@ async fn record_achieved(
     .bind(&action_result)
     .execute(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
     Ok(())
 }
 
@@ -196,7 +196,7 @@ async fn fire_award_coupon(
     .bind(&coupon_code)
     .execute(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     Ok(Some(json!({
         "coupon_code": coupon_code,
@@ -243,7 +243,7 @@ async fn fire_bonus_entry(
         )
         .execute(pool)
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        .map_err(AppError::Database)?;
     }
 
     Ok(Some(json!({"bonus_entries": spin_count})))
@@ -286,7 +286,7 @@ async fn fire_webhook_action(
             .bind(campaign_id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+            .map_err(AppError::Database)?;
 
     let Some(account_id) = account_id else {
         return Ok(None);
@@ -357,14 +357,14 @@ pub async fn create_milestone(
     .bind(input.cooldown_hours)
     .execute(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     let milestone =
         sqlx::query_as::<_, CampaignMilestone>("SELECT * FROM campaign_milestones WHERE id = $1")
             .bind(id)
             .fetch_one(pool)
             .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+            .map_err(AppError::Database)?;
 
     Ok(milestone)
 }
@@ -426,7 +426,7 @@ pub async fn update_milestone(
     .bind(campaign_id)
     .execute(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     // The UPDATE carries the campaign predicate, so rows_affected == 0 means the id is not in THIS
     // campaign: foreign, absent, or a milestone the caller owns under another campaign. Never read
@@ -444,7 +444,7 @@ pub async fn update_milestone(
             .bind(milestone_id)
             .fetch_optional(pool)
             .await
-            .map_err(|e| AppError::Database(e.to_string()))?
+            .map_err(AppError::Database)?
             .ok_or_else(|| AppError::NotFound("Milestone not found".to_string()))?;
 
     Ok(Some(milestone))
@@ -462,7 +462,7 @@ pub async fn delete_milestone(
         .bind(campaign_id)
         .execute(pool)
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        .map_err(AppError::Database)?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -481,6 +481,6 @@ pub async fn list_milestones(
     .bind(campaign_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
     Ok(milestones)
 }

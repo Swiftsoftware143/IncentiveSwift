@@ -83,7 +83,7 @@ impl From<CryptoError> for crate::error::AppError {
             CryptoError::NotConfigured => {
                 crate::error::AppError::Internal(format!("cannot store provider key: {}", e))
             }
-            CryptoError::Database(e) => crate::error::AppError::Database(e.to_string()),
+            CryptoError::Database(e) => crate::error::AppError::Database(e),
         }
     }
 }

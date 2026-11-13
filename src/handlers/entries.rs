@@ -890,7 +890,7 @@ pub async fn test_entry_webhook(
     .bind(account_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     let Some((name, slug, config)) = campaign else {
         return Err(AppError::NotFound("Campaign not found".to_string()));

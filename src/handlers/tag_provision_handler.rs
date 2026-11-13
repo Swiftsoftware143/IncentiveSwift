@@ -112,7 +112,7 @@ pub async fn handle_tag_provision(
                 .bind(id)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| AppError::Database(e.to_string()))?,
+                .map_err(AppError::Database)?,
             Err(_) => None,
         },
         None => None,
@@ -124,7 +124,7 @@ pub async fn handle_tag_provision(
                 .bind(&email)
                 .fetch_optional(&state.db)
                 .await
-                .map_err(|e| AppError::Database(e.to_string()))?;
+                .map_err(AppError::Database)?;
 
         if let Some((contact_id,)) = existing {
             // An already-known contact becomes visible to the campaign's owner too — the same
@@ -136,8 +136,7 @@ pub async fn handle_tag_provision(
                     &account,
                     "funnelswift_tag",
                 )
-                .await
-                .map_err(|e| AppError::Database(e.to_string()))?;
+                .await?;
             }
             return Ok((
                 axum::http::StatusCode::OK,
@@ -165,12 +164,11 @@ pub async fn handle_tag_provision(
     .bind(&notes)
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     if let Some(account) = campaign_account {
         crate::db::contacts::link_contact(&state.db, &contact_id, &account, "funnelswift_tag")
-            .await
-            .map_err(|e| AppError::Database(e.to_string()))?;
+            .await?;
     }
 
     tracing::info!(

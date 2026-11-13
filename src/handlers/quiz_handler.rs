@@ -277,8 +277,7 @@ pub async fn submit_quiz(
         Some(campaign.account_id),
         "quiz",
     )
-    .await
-    .map_err(|e| AppError::Database(format!("Contact upsert failed: {}", e)))?;
+    .await?;
 
     // The campaign's own daily entry cap (`config.max_spins_per_day`) — the same guard
     // `handlers::entries` applies to every mechanic it captures. A served quiz used to reach

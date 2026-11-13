@@ -20,6 +20,34 @@ mod lifecycle_emails;
 mod login_throttle;
 
 pub mod access;
+/// The fleet-standard auth boundary the canonical `integration_schema` module reads (`AuthUser`
+/// with `is_admin`, accepting an admin session OR the admin's API key).
+pub mod auth;
+
+/// The describe config for `GET /api/v1/integration/schema` (CoreSwift data-mapping spec
+/// 2026-11-13 §2). This is the ONE app-specific datum the byte-identical
+/// `crate::integration_schema` module reads.
+pub const SCHEMA: &integration_schema::AppSchema = &integration_schema::AppSchema {
+    app: "incentiveswift",
+    version: 1,
+    entities: &[
+        integration_schema::EntityConfig {
+            key: "contacts",
+            label: "Contacts",
+            table: "contacts",
+        },
+        integration_schema::EntityConfig {
+            key: "members",
+            label: "Members",
+            table: "loyalty_members",
+        },
+        integration_schema::EntityConfig {
+            key: "entries",
+            label: "Campaign entries",
+            table: "entries",
+        },
+    ],
+};
 /// The ONE mint of a self-serve signup unit (kanban t_3724204f) — see `account_mint`.
 pub mod account_mint;
 pub mod billing;
@@ -36,6 +64,7 @@ mod features;
 pub mod feedback;
 pub mod handlers;
 pub mod image_store;
+pub mod integration_schema;
 pub mod iqs_validation;
 pub mod mechanics;
 /// Plan resolution for the ported private-inbox module — IncentiveSwift sells through
@@ -951,6 +980,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/integration-targets/:id",
             put(handlers::integration_target_handler::update_integration_target)
                 .delete(handlers::integration_target_handler::delete_integration_target),
+        )
+        // The data-mapping schema describe (CoreSwift spec 2026-11-13 §2). The handler is the
+        // byte-identical `crate::integration_schema::integration_schema`, which does its OWN
+        // admin check via `AuthUser` (admin session OR the admin's API key); anonymous callers are
+        // refused 401 by the default-deny credential boundary.
+        .route(
+            "/api/v1/integration/schema",
+            get(crate::integration_schema::integration_schema),
         )
         // Auth endpoints
         .route(

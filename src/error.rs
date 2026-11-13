@@ -121,7 +121,7 @@ pub enum AppError {
     Internal(String),
 
     #[error("Database error: {0}")]
-    Database(String),
+    Database(sqlx::Error),
 }
 
 /// The sentence a PARTICIPANT reads when the CAMPAIGN OWNER's plan ceiling refuses their action.
@@ -223,7 +223,7 @@ impl IntoResponse for AppError {
 
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
-        AppError::Database(err.to_string())
+        AppError::Database(err)
     }
 }
 
@@ -237,9 +237,14 @@ impl From<anyhow::Error> for AppError {
 /// and workspace modules were written against.
 pub type ApiResult<T> = Result<T, AppError>;
 
+/// The fleet-standard name for the same type (the canonical `integration_schema` module and the
+/// sibling apps use `AppResult`). Kept beside `ApiResult` so both spellings resolve to the one
+/// error type.
+pub type AppResult<T> = Result<T, AppError>;
+
 /// The one adapter between a `sqlx::Error` and this app's [`AppError::Database`], which carries the
 /// message as a `String`. The ported modules were written against an enum whose `Database` variant
 /// held the error itself, so they call this by name at every SQL site.
 pub fn db_error(e: sqlx::Error) -> AppError {
-    AppError::Database(e.to_string())
+    AppError::Database(e)
 }

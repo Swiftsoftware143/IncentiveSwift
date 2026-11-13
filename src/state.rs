@@ -7,6 +7,9 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
+    /// The fleet-standard name for the same pool (the canonical `integration_schema` module reads
+    /// `state.pool`; the rest of this app reads `state.db`). Both are the SAME pool.
+    pub pool: sqlx::PgPool,
     pub config: Arc<AppConfig>,
     pub http_client: reqwest::Client,
     /// Failed-sign-in counter, keyed by client address (`crate::login_throttle`).
@@ -47,7 +50,8 @@ impl AppState {
             .build()?;
 
         Ok(Self {
-            db: pool,
+            db: pool.clone(),
+            pool,
             config: Arc::clone(config),
             http_client,
             login_throttle: crate::login_throttle::LoginThrottle::new(),

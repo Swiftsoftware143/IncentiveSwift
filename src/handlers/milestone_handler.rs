@@ -104,7 +104,7 @@ pub async fn list_achieved_milestones(
     .bind(campaign.id)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    .map_err(AppError::Database)?;
 
     Ok(Json(json!({
         "achieved": achieved,

@@ -14,6 +14,34 @@
 //! Keep the module structure identical to main.rs so tests can reference everything.
 
 pub mod access;
+/// The fleet-standard auth boundary the canonical `integration_schema` module reads (`AuthUser`
+/// with `is_admin`, accepting an admin session OR the admin's API key).
+pub mod auth;
+
+/// The describe config for `GET /api/v1/integration/schema` (CoreSwift data-mapping spec
+/// 2026-11-13 §2). This is the ONE app-specific datum the byte-identical
+/// `crate::integration_schema` module reads.
+pub const SCHEMA: &integration_schema::AppSchema = &integration_schema::AppSchema {
+    app: "incentiveswift",
+    version: 1,
+    entities: &[
+        integration_schema::EntityConfig {
+            key: "contacts",
+            label: "Contacts",
+            table: "contacts",
+        },
+        integration_schema::EntityConfig {
+            key: "members",
+            label: "Members",
+            table: "loyalty_members",
+        },
+        integration_schema::EntityConfig {
+            key: "entries",
+            label: "Campaign entries",
+            table: "entries",
+        },
+    ],
+};
 // The ONE mint of a self-serve signup unit (kanban t_3724204f): the signup door and the FunnelSwift
 // tag door both call `account_mint::mint_account`.
 pub mod account_mint;
@@ -34,6 +62,10 @@ pub mod error;
 pub mod features;
 pub mod handlers;
 pub mod image_store;
+/// Fleet-canonical `GET /api/v1/integration/schema` describe module (CoreSwift data-mapping spec
+/// 2026-11-13 §2). Byte-identical across every SwiftSoftware app; only the `EntitySpec` list in
+/// `handlers::integration_schema` and the route registration in `main.rs` are app-specific.
+pub mod integration_schema;
 pub mod iqs_validation;
 mod lifecycle_emails;
 mod login_throttle;
