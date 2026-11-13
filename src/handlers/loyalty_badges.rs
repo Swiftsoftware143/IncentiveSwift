@@ -7,7 +7,10 @@
 //! (t_f76c9950). What remains is authenticated and scoped to the caller's own programme.
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
+    http::header,
+    response::Response,
     Json,
 };
 use rand::Rng;
@@ -191,6 +194,153 @@ pub async fn program_members(
         "total": total,
         "members": members,
     })))
+}
+
+/// `GET /api/v1/loyalty/members/export?program_id=<uuid>` — the SAME roster `program_members`
+/// serves, as a spreadsheet file.
+///
+/// Why it exists (2026-11-13): the roster read stops at the first 500 rows because it feeds a
+/// scrolling console table, so an owner whose programme has more members than that had no way to
+/// reach the rest, and no way to take the list anywhere at all. `loyalty_members` is the product's
+/// core customer data; the fleet's rule is integration over walled gardens, so the whole roster
+/// leaves as CSV — one file, header row, the same six facts the table shows plus the two dates.
+///
+/// Scoped exactly like `program_members`: another account's programme is a 404, never an empty
+/// file, so the refusal cannot be used to probe for a programme's existence.
+pub async fn program_members_export(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let program_id = q
+        .get("program_id")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
+        .ok_or_else(|| AppError::BadRequest("program_id must be a uuid".into()))?;
+
+    // The three-arm ownership predicate `program_members` uses, kept in one place so the export can
+    // never answer for a programme the roster would refuse. Reading the NAME here too gives the
+    // download a filename the operator can tell apart.
+    let program_name: Option<String> = sqlx::query_scalar(
+        "SELECT lp.name FROM loyalty_programs lp \
+          WHERE lp.id = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c \
+                             WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns fwd \
+                             WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+    )
+    .bind(program_id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let program_name =
+        program_name.ok_or_else(|| AppError::NotFound("Program not found".into()))?;
+
+    #[derive(sqlx::FromRow)]
+    struct ExportRow {
+        first_name: Option<String>,
+        last_name: Option<String>,
+        email: Option<String>,
+        phone: Option<String>,
+        points_balance: i32,
+        lifetime_points: i32,
+        tier_name: Option<String>,
+        current_streak: i32,
+        member_since: Option<chrono::DateTime<chrono::Utc>>,
+        last_checkin_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    // No LIMIT: the point of the file is completeness. The ceiling is a memory guard only, set an
+    // order of magnitude above any real programme on this box.
+    let rows: Vec<ExportRow> = sqlx::query_as(
+        r#"SELECT c.first_name, c.last_name, c.email, c.phone,
+                  COALESCE(lm.points_balance, 0)   AS points_balance,
+                  COALESCE(lm.lifetime_points, 0)  AS lifetime_points,
+                  t.name                           AS tier_name,
+                  COALESCE(lm.current_streak, 0)   AS current_streak,
+                  lm.member_since, lm.last_checkin_at
+             FROM loyalty_members lm
+             LEFT JOIN contacts c ON c.id = lm.contact_id
+             LEFT JOIN loyalty_tiers t ON t.id = lm.tier_id
+            WHERE lm.program_id = $1
+            ORDER BY COALESCE(lm.points_balance, 0) DESC, lm.member_since DESC NULLS LAST
+            LIMIT 100000"#,
+    )
+    .bind(program_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut csv = String::from(
+        "Name,Email,Phone,Points balance,Lifetime points,Tier,Streak,Member since,Last check-in\n",
+    );
+    for r in &rows {
+        let name = [r.first_name.as_deref(), r.last_name.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let when = |t: Option<chrono::DateTime<chrono::Utc>>| {
+            t.map(|v| v.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_default()
+        };
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{}\n",
+            csv_field(&name),
+            csv_field(r.email.as_deref().unwrap_or("")),
+            csv_field(r.phone.as_deref().unwrap_or("")),
+            r.points_balance,
+            r.lifetime_points,
+            csv_field(r.tier_name.as_deref().unwrap_or("")),
+            r.current_streak,
+            when(r.member_since),
+            when(r.last_checkin_at),
+        ));
+    }
+
+    // A filename the operator can tell apart: the programme's own name reduced to safe characters.
+    let stem: String = program_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let stem = if stem.is_empty() {
+        "loyalty".to_string()
+    } else {
+        stem
+    };
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"members-{}.csv\"", stem),
+        )
+        // A UTF-8 BOM so a spreadsheet opens the accented names it contains, rather than mojibake.
+        .body(Body::from(format!("\u{feff}{}", csv)))
+        .map_err(|e| AppError::Internal(format!("Failed to build CSV response: {}", e)))
+}
+
+/// One CSV field, RFC 4180: quote when the value contains a comma, a quote or a newline, and double
+/// any quote inside it.
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// GET /api/v1/loyalty/member/:member_id/qr

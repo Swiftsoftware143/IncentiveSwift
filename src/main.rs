@@ -609,6 +609,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/members",
             get(handlers::loyalty_badges::program_members),
         )
+        // The same roster as a spreadsheet (2026-11-13). The list above stops at 500 rows because
+        // it feeds a table; the file is the complete set, and it is the owner's own customer data.
+        // Registered here so it inherits the default-deny posture: credential required, and the
+        // handler scopes the read to a programme the caller owns.
+        .route(
+            "/api/v1/loyalty/members/export",
+            get(handlers::loyalty_badges::program_members_export),
+        )
         // Loyalty QR endpoints (Phase 3)
         .route(
             "/api/v1/loyalty/member/:member_id/qr",

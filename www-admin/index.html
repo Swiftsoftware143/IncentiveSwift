@@ -2179,6 +2179,24 @@ const LoyaltyPrograms = () => {
     st.memberBusy = false; renderApp();
   }
 
+  /* The roster table is capped at 500 rows and has no way off the screen. `loyalty_members` is the
+     owner's own customer data, so the same read also comes out as a file (2026-11-13): one CSV of
+     the whole programme, opened straight from the Members tab. Auth rides the console's own token,
+     the route refuses another account's programme with a 404, and the browser does the download. */
+  const exportMembers = async () => {
+    const id = st.memberProg || (st.list[0] && st.list[0].id);
+    if (!id) { alert('Create a loyalty programme first - the export follows one programme.'); return; }
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/loyalty/members/export?program_id=' + encodeURIComponent(id), { headers: { 'Authorization': 'Bearer ' + API.token } });
+      if (!r.ok) { let m = 'Export failed'; try { const d = await r.json(); m = d.error || d.message || m; } catch (_) {} throw new Error(m); }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'loyalty-members.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) { alert('Could not export the member list: ' + (e.message || e)); }
+  };
   const show = (item) => { st.editItem = item; st.showModal = true; renderApp(); };
   const hide = () => { st.showModal = false; renderApp(); };
   const save = async (data) => {
@@ -2985,6 +3003,7 @@ const ledgerTab = html`<div>
         ${(st.list && st.list.length > 0) ? html`<select class="input" style="width:240px" value=${st.memberProg || ''} onChange=${e => loadMembers(e.target.value)}>${st.list.map(p => html`<option value=${p.id}>${p.name}</option>`)}</select>` : ''}
         <input class="input" style="width:240px" placeholder="Search name, email or phone" value=${st.memberSearch || ''} onInput=${e => { st.memberSearch = e.target.value; renderApp(); }} />
         <button class="btn btn-sm btn-outline" disabled=${st.memberBusy} onClick=${() => loadMembers(st.memberProg)}>Refresh</button>
+        <button class="btn btn-sm btn-outline" data-export-members disabled=${st.memberBusy} onClick=${exportMembers}>Export CSV</button>
       </div>
     </div>
     <div class="text-xs text-gray-500 mb-3">Everyone who has checked in at your counter for the selected programme. <b>Member card</b> shows the scannable code that customer presents, and replaces it if a card is lost or copied.</div>
