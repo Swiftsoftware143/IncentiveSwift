@@ -930,7 +930,7 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
 
 <p><strong>Credentials.</strong> A customer's provider key is sealed at rest (AES-256-GCM, keyed per account). The master is derived from the app's own signing secret, so there is no second environment variable to set and a key copied to another account's row cannot be opened.</p>
 
-<p><strong>The mail host.</strong> The client is served at <code>inbox.incentiveswift.com</code> and <code>pmail.incentiveswift.com</code> from the nginx mail root, proxying the API to the same container as the app, so there is one backend. No <code>inbox.&lt;customer-domain&gt;</code> record is printed: that wildcard belongs to another product, and the API answers <code>branded: unavailable</code> rather than sending a customer somewhere wrong.</p>
+<p><strong>The mail host.</strong> The client is served at <code>inbox.incentiveswift.com</code> (the old <code>pmail.incentiveswift.com</code> address permanently redirects there) from the nginx mail root, proxying the API to the same container as the app, so there is one backend. No <code>inbox.&lt;customer-domain&gt;</code> record is printed: that wildcard belongs to another product, and the API answers <code>branded: unavailable</code> rather than sending a customer somewhere wrong.</p>
 
 <p><strong>What is deliberately absent.</strong> Mail-to-ticket creation and AI thread summaries are not part of this app's inbox: there is no matching queue and no summariser on this install. The client hides both controls instead of drawing dead buttons.</p>
 
