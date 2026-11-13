@@ -201,6 +201,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     </div>
     <h3 style="font-size:15px;font-weight:600;color:#1e293b;margin:18px 0 8px">Recent mail</h3>
     <p style="color:#64748b;font-size:14px;margin:0 0 10px">The newest messages that arrived at any of your addresses, whichever address they came to. Reading the whole thread happens in the mail client.</p>
+    <!-- The Clear button sits on its OWN line, left-aligned: the inline-guide panel is fixed over the
+         right-hand column of this page (measured 2026-11-13: #ig-panel x 976-1336, z 99999), which
+         covered a right-aligned button and made it unclickable until the guide was closed. -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px;align-items:center">
+      <input type="search" id="inboxSearch" placeholder="Search subject, sender or text" aria-label="Search mail" autocomplete="off" style="flex:1 1 100%;min-width:200px;box-sizing:border-box;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
+      <button class="btn" id="inboxSearchClear" style="display:none">Clear search</button>
+    </div>
     <div id="inboxRecent" style="color:#64748b;font-size:14px">Loading messages&hellip;</div>
   </div>
 
@@ -999,7 +1006,7 @@ async function wsDeleteIdx(idx) {
 }
 
 /* ── Inbox (kanban t_101cd6ca) ───────────────────────────────────────────────────────────────── */
-var INBOX = { domains: [], boxes: [], messages: [] };
+var INBOX = { domains: [], boxes: [], messages: [], q: "" };
 
 function inboxNote(text, ok) {
   var el = document.getElementById('inboxMsg');
@@ -1009,6 +1016,7 @@ function inboxNote(text, ok) {
 }
 
 function inboxLoad() {
+  bindInboxSearch();
   apiCall('/api/v1/private-email/domains').then(function (d) {
     INBOX.domains = (d && d.domains) || [];
     inboxRenderDomains();
@@ -1017,13 +1025,58 @@ function inboxLoad() {
     var el = document.getElementById('inboxDomains');
     if (el) el.innerHTML = '<div style="color:#b91c1c">' + esc(e.message) + '</div>';
   });
-  apiCall('/api/v1/private-email/messages?limit=20').then(function (d) {
+  inboxLoadMessages();
+}
+
+/* SEARCH (kanban t_843293af). The server's list route has always accepted `q` (subject, sender and
+   the opening text, case-insensitive) and this list never sent it. Type-and-pause re-queries 350 ms
+   after typing stops, or at once on Enter. BOTH clear buttons are bound by hand: `a || b` binds only
+   the first element that exists, which is how the in-place button went dead in the mail client. */
+function inboxMessagesUrl() {
+  // `INBOX` is hoisted but still undefined while the boot block runs (this card's fetch is issued
+  // at boot, before the object literal below is evaluated) — reading through the guard keeps the
+  // first load working instead of throwing and aborting the whole boot.
+  var q = String((INBOX && INBOX.q) || '').trim();
+  return '/api/v1/private-email/messages?limit=20' + (q ? '&q=' + encodeURIComponent(q) : '');
+}
+
+function inboxLoadMessages() {
+  apiCall(inboxMessagesUrl()).then(function (d) {
     INBOX.messages = (d && d.messages) || [];
     inboxRenderRecent();
   }).catch(function (e) {
     var el = document.getElementById('inboxRecent');
     if (el) el.innerHTML = '<div style="color:#b91c1c">' + esc(e.message) + '</div>';
   });
+}
+
+function inboxRunSearch(val) {
+  var next = String(val == null ? '' : val).trim();
+  if (next === INBOX.q) return;
+  INBOX.q = next;
+  inboxLoadMessages();
+}
+
+function inboxClearSearch() {
+  INBOX.q = '';
+  var si = document.getElementById('inboxSearch');
+  if (si) { si.value = ''; try { si.focus(); } catch (e) {} }
+  inboxLoadMessages();
+}
+
+function bindInboxSearch() {
+  var si = document.getElementById('inboxSearch');
+  if (!si) return;
+  si.value = (INBOX && INBOX.q) || '';
+  var t = null;
+  si.oninput = function () {
+    var v = this.value;
+    clearTimeout(t);
+    t = setTimeout(function () { inboxRunSearch(v); }, 350);
+  };
+  si.onkeydown = function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); inboxRunSearch(this.value); }
+  };
 }
 
 function inboxRenderDomains() {
@@ -1074,8 +1127,14 @@ function inboxLoadBoxes() {
 function inboxRenderRecent() {
   var el = document.getElementById('inboxRecent');
   if (!el) return;
+  var sc = document.getElementById('inboxSearchClear');
+  if (sc) { sc.style.display = INBOX.q ? '' : 'none'; sc.onclick = inboxClearSearch; }
   if (!INBOX.messages.length) {
-    el.innerHTML = 'Nothing has arrived yet. Mail to any address above appears here.';
+    el.innerHTML = INBOX.q
+      ? 'No mail matches &ldquo;' + esc(INBOX.q) + '&rdquo;. The search looks at the subject, the sender and the opening text of every message in this view. <button class="btn" id="inboxSearchClear2">Clear the search</button>'
+      : 'Nothing has arrived yet. Mail to any address above appears here.';
+    var sc2 = document.getElementById('inboxSearchClear2');
+    if (sc2) sc2.onclick = inboxClearSearch;
     return;
   }
   el.innerHTML = INBOX.messages.map(function (m) {
