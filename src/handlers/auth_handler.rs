@@ -1592,11 +1592,21 @@ pub async fn close_account(
         }
     }
 
+    // The session counter (`session_epoch`) already kills every VERSIONED token at this instant, but
+    // it cannot judge a token that carries no `sv` (the shape `admin_handler::create_jwt` mints for an
+    // impersonation session) — that one is judged by `iat` against `sessions_valid_from`, and the
+    // boundary floors the line to a whole second and deliberately ALLOWS a token whose `iat` EQUALS
+    // it. So the line is pushed ONE SECOND past the current second (kanban t_a7117d0c), the shape
+    // ADASwift proved (88803aa, beaba5f). Measured live BEFORE this fix
+    // (probe-closeacct-sec-inc-*): the close answered 200, the row carried `sessions_valid_from`
+    // floored to the same second as the token's `iat`, and that token still read
+    // `/api/v1/auth/me` 200. Nothing can be minted in the future and a closed account cannot sign in
+    // at all, so moving the line forward a second revokes every token in existence.
     let closed_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
         "UPDATE accounts
             SET closed_at = NOW(),
                 password_hash = NULL,
-                sessions_valid_from = NOW(),
+                sessions_valid_from = date_trunc('second', NOW()) + interval '1 second',
                 session_epoch = COALESCE(session_epoch, 1) + 1,
                 password_undelivered = false
           WHERE id = $1
