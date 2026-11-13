@@ -209,6 +209,12 @@ pub async fn create_api_key(
 
     let id = Uuid::new_v4();
     let (full_key, prefix, key_hash) = generate_api_key()?;
+    // Store a sealed copy at rest (matches `mint_on`, kanban t_7863696b) so the key stays
+    // viewable — without it the reveal handler has nothing to open. Fail closed on a missing
+    // master key rather than writing a key nobody can ever read back.
+    let sealed = crate::security::provider_key_crypto::seal_in(&state.db, &full_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("could not seal the API key: {e}")))?;
     let name = body.name.unwrap_or_else(|| "default".to_string());
     // `api_keys.name` is `varchar(255)` and the label comes straight from the panel, so a long one
     // reached the INSERT and answered a bare 500 (measured LIVE 2026-10-17).
@@ -221,8 +227,8 @@ pub async fn create_api_key(
     let permissions = body.permissions.unwrap_or_else(|| json!([]));
 
     sqlx::query(
-        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, target_url, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#
+        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, target_url, expires_at, key_sealed)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
     )
     .bind(id)
     .bind(tenant_id)
@@ -233,6 +239,7 @@ pub async fn create_api_key(
     .bind(&permissions)
     .bind(&body.target_url)
     .bind(body.expires_at)
+    .bind(&sealed)
     .execute(&state.db)
     .await?;
 

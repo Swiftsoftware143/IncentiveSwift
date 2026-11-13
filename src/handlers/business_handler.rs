@@ -143,6 +143,10 @@ pub async fn register_business(
         .collect();
 
     let now = chrono::Utc::now();
+    // One transaction for the whole business unit (kanban t_4a744754 follow-up): a failure at any
+    // INSERT rolls the account, its portfolio company and its key back together instead of leaving a
+    // half-built business that a later call treats as "already exists" and never re-mints a key for.
+    let mut tx = s.db.begin().await?;
     // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this door is authenticated by
     // `X-Internal-Key` (a machine-to-machine call from a Multi-Directory site), not the served
     // signup, so it is not the anonymous door the marker exists for. Recording a marker here would
@@ -156,7 +160,7 @@ pub async fn register_business(
     .bind(&biz_name)
     .bind(&slug)
     .bind(now)
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await?;
 
     // Also create portfolio_company for directory integration tracking
@@ -178,7 +182,7 @@ pub async fn register_business(
     .bind(&biz_name)
     .bind(&slug)
     .bind(&settings)
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await?;
 
     // Generate API key
@@ -196,9 +200,17 @@ pub async fn register_business(
         .map_err(|e| AppError::Internal(format!("hash: {}", e)))?
         .to_string();
 
+    // Seal a copy at rest (kanban t_7863696b) so the business's key is viewable/revealable, exactly
+    // like every key `mint_on` writes. The key SHAPE stays `is_biz_` + argon2: it is resolved by
+    // `verify_business_auth`'s dedicated argon2 path, so the primary `is_key_`/bcrypt resolver
+    // (`security::auth::validate_api_key`) deliberately never sees it.
+    let sealed = crate::security::provider_key_crypto::seal_in(&mut *tx, &api_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("could not seal the API key: {e}")))?;
+
     sqlx::query(
-        r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, true)"#,
+        r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active, key_sealed)
+           VALUES ($1, $2, $3, $4, $5, $6, true, $7)"#,
     )
     .bind(business_id)
     .bind(business_id)
@@ -212,8 +224,11 @@ pub async fn register_business(
         "contacts:write",
         "stats:read"
     ]))
-    .execute(&s.db)
+    .bind(&sealed)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     tracing::info!(
         "[business] Registered business '{}' ({}), prefix={}",
