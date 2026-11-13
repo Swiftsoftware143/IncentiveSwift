@@ -198,6 +198,39 @@ pub(crate) async fn resolve_owner_account_id(
     resolved.ok_or_else(|| AppError::NotFound("Account not found".to_string()))
 }
 
+/// Append one row to the `api_key_events` lifecycle ledger.
+///
+/// NEVER carries a secret: `key_prefix` only — `key_hash` and `key_sealed` are deliberately not
+/// columns here, so a ledger dump hands over no credential material. The write is FAIL-CLOSED: it
+/// returns `Err` on failure (the caller's `?` unwinds the surrounding transaction), so a credential
+/// change can never silently succeed with its audit row missing.
+pub(crate) async fn record_api_key_event<'e, E>(
+    exec: E,
+    key_id: Uuid,
+    owner_id: Uuid,
+    action: &str,
+    key_prefix: &str,
+    actor_user_id: Option<Uuid>,
+    metadata: Option<Value>,
+) -> Result<(), AppError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
+        r#"INSERT INTO api_key_events (key_id, owner_id, action, key_prefix, actor_user_id, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
+    )
+    .bind(key_id)
+    .bind(owner_id)
+    .bind(action)
+    .bind(key_prefix)
+    .bind(actor_user_id)
+    .bind(metadata.unwrap_or_else(|| json!({})))
+    .execute(exec)
+    .await?;
+    Ok(())
+}
+
 /// POST /api/v1/api-keys
 pub async fn create_api_key(
     State(state): State<AppState>,
@@ -250,6 +283,8 @@ pub async fn create_api_key(
     .map_err(AppError::UnprocessableEntity)?;
     let permissions = body.permissions.unwrap_or_else(|| json!([]));
 
+    // The mint and its ledger row share ONE transaction so they commit or roll back together.
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, target_url, expires_at, key_sealed)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#
@@ -264,8 +299,19 @@ pub async fn create_api_key(
     .bind(&body.target_url)
     .bind(body.expires_at)
     .bind(&sealed)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    record_api_key_event(
+        &mut *tx,
+        id,
+        tenant_id,
+        "created",
+        &prefix,
+        Some(user_id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
 
     Ok(Json(json!({
         "api_key": {
@@ -359,17 +405,46 @@ pub async fn delete_api_key(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let result = sqlx::query(
-        "UPDATE api_keys SET is_active = false, updated_at = now() WHERE id = $1 AND (user_id = $2 OR tenant_id = $2)"
+    // Read the owner + prefix BEFORE the write so the ledger row can name them (prefix only —
+    // never a secret). The lock pins the row against a concurrent rotate/regenerate.
+    let mut tx = state.db.begin().await?;
+    let existing = sqlx::query(
+        "SELECT tenant_id, prefix, is_active FROM api_keys \
+         WHERE id = $1 AND (user_id = $2 OR tenant_id = $2) FOR UPDATE",
     )
     .bind(key_id)
     .bind(user_id)
-    .execute(&state.db)
-    .await?;
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+    let tenant_id: Uuid = existing.get("tenant_id");
+    let prefix: String = existing.get("prefix");
+    let was_active: bool = existing.get("is_active");
+
+    let result =
+        sqlx::query("UPDATE api_keys SET is_active = false, updated_at = now() WHERE id = $1")
+            .bind(key_id)
+            .execute(&mut *tx)
+            .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("API key not found".to_string()));
     }
+    // A revoke that actually took a key out of service is an event; a repeat revoke is a no-op and
+    // is not re-recorded.
+    if was_active {
+        record_api_key_event(
+            &mut *tx,
+            key_id,
+            tenant_id,
+            "revoked",
+            &prefix,
+            Some(user_id),
+            None,
+        )
+        .await?;
+    }
+    tx.commit().await?;
 
     Ok(Json(json!({ "status": "deleted", "id": id })))
 }
@@ -418,6 +493,18 @@ pub async fn mint_on(
     .bind(&prefix)
     .bind(&sealed)
     .execute(&mut *conn)
+    .await?;
+
+    // The mint and its ledger row share the caller's transaction: either both land or neither does.
+    record_api_key_event(
+        &mut *conn,
+        id,
+        tenant_id,
+        "created",
+        &prefix,
+        Some(user_id),
+        None,
+    )
     .await?;
 
     Ok(MintedKey {
@@ -526,14 +613,16 @@ pub async fn regenerate_api_key(
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
-    let name: Option<String> = sqlx::query_scalar(
-        "SELECT name FROM api_keys WHERE id = $1 AND user_id = $2 AND is_active = true",
+    let old = sqlx::query(
+        "SELECT name, prefix FROM api_keys WHERE id = $1 AND user_id = $2 AND is_active = true",
     )
     .bind(id)
     .bind(user_id)
     .fetch_optional(&state.db)
-    .await?;
-    let name = name.ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+    let name: String = old.get("name");
+    let old_prefix: String = old.get("prefix");
     let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
     // Retire the OLD key FIRST, then mint the replacement, in ONE transaction. The partial unique
@@ -547,6 +636,18 @@ pub async fn regenerate_api_key(
     .bind(id)
     .bind(user_id)
     .execute(&mut *tx)
+    .await?;
+    // The retire is the 'regenerated' event (the old key stopped authenticating); `mint_on` below
+    // writes the new key's own 'created' row on the same transaction.
+    record_api_key_event(
+        &mut *tx,
+        id,
+        tenant_id,
+        "regenerated",
+        &old_prefix,
+        Some(user_id),
+        None,
+    )
     .await?;
     let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
     tx.commit().await?;

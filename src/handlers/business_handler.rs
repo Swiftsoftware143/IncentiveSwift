@@ -208,10 +208,12 @@ pub async fn register_business(
         .await
         .map_err(|e| AppError::Internal(format!("could not seal the API key: {e}")))?;
 
+    let key_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active, key_sealed)
-           VALUES ($1, $2, $3, $4, $5, $6, true, $7)"#,
+        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, is_active, key_sealed)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8)"#,
     )
+    .bind(key_id)
     .bind(business_id)
     .bind(business_id)
     .bind(&format!("{} API Key", biz_name))
@@ -226,6 +228,19 @@ pub async fn register_business(
     ]))
     .bind(&sealed)
     .execute(&mut *tx)
+    .await?;
+
+    // The business mint and its ledger row share the registration transaction: either both land or
+    // the whole business rolls back. No actor — this door authenticates by X-Internal-Key, not a user.
+    crate::handlers::api_keys::record_api_key_event(
+        &mut *tx,
+        key_id,
+        business_id,
+        "created",
+        &key_prefix,
+        None,
+        None,
+    )
     .await?;
 
     tx.commit().await?;
@@ -585,12 +600,6 @@ pub async fn admin_rotate_business_key(
             .flatten()
             .ok_or(AppError::NotFound("Business not found".into()))?;
 
-    // Deactivate old keys
-    sqlx::query("UPDATE api_keys SET is_active = false, updated_at = NOW() WHERE tenant_id = $1")
-        .bind(account_id)
-        .execute(&s.db)
-        .await?;
-
     let biz_name: String = sqlx::query_scalar("SELECT name FROM portfolio_companies WHERE id = $1")
         .bind(pf_id)
         .fetch_one(&s.db)
@@ -607,13 +616,35 @@ pub async fn admin_rotate_business_key(
     let argon2 = Argon2::default();
     let key_hash = argon2
         .hash_password(new_key.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("hash: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("hash: {e}")))?
         .to_string();
 
+    // Rotate = revoke the old keys + mint the new one, in ONE transaction, each event on the ledger.
+    let mut tx = s.db.begin().await?;
+    let old_keys: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT id, prefix FROM api_keys WHERE tenant_id = $1 AND is_active = true")
+            .bind(account_id)
+            .fetch_all(&mut *tx)
+            .await?;
     sqlx::query(
-        r#"INSERT INTO api_keys (tenant_id, user_id, name, key_hash, prefix, permissions, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, true)"#,
+        "UPDATE api_keys SET is_active = false, updated_at = NOW() WHERE tenant_id = $1 AND is_active = true",
     )
+    .bind(account_id)
+    .execute(&mut *tx)
+    .await?;
+    for (kid, kprefix) in &old_keys {
+        crate::handlers::api_keys::record_api_key_event(
+            &mut *tx, *kid, account_id, "revoked", kprefix, None, None,
+        )
+        .await?;
+    }
+
+    let key_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, permissions, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, true)"#,
+    )
+    .bind(key_id)
     .bind(account_id)
     .bind(account_id)
     .bind(&format!("{} API Key", biz_name))
@@ -626,8 +657,19 @@ pub async fn admin_rotate_business_key(
         "contacts:write",
         "stats:read"
     ]))
-    .execute(&s.db)
+    .execute(&mut *tx)
     .await?;
+    crate::handlers::api_keys::record_api_key_event(
+        &mut *tx,
+        key_id,
+        account_id,
+        "created",
+        &key_prefix,
+        None,
+        None,
+    )
+    .await?;
+    tx.commit().await?;
 
     tracing::info!("[business] Rotated API key for {} ({})", biz_name, pf_id);
 
