@@ -1,7 +1,10 @@
-//! Authentication — API key validation (bcrypt) and JWT validation.
+//! Authentication — API key validation (sha256 + legacy bcrypt) and JWT validation.
 //!
 //! SECURITY RULES:
-//! - API keys: NEVER compare via direct hash equality. ALWAYS use bcrypt::verify.
+//! - API keys: NEVER compare via direct hash equality against a caller-supplied digest. New mints
+//!   store the lowercase SHA-256 hex of the whole key (the fleet MCP server's contract); legacy
+//!   rows still hold bcrypt. Compare the sha256 digest in constant time, and use bcrypt::verify
+//!   for the legacy shape.
 //! - JWTs: Decode header+payload, verify HMAC-SHA256 signature with the JWT secret.
 //!
 //! REQUEST-ENTRY ACCOUNT GUARD (kanban t_a7b7b5b9): a valid-but-stale token — a signed JWT (or an
@@ -58,7 +61,7 @@ where
 
         let app_state = crate::state::AppState::from_ref(state);
 
-        // Try API key validation first (bcrypt verify)
+        // Try API key validation first (sha256 hex for new keys, bcrypt for legacy rows)
         if let Some(user) = validate_api_key(&app_state, token).await? {
             // An ISSUED API key is an integration credential, not a browser session: a password
             // change must not revoke it, so it is never measured against `sessions_valid_from`.
@@ -294,8 +297,9 @@ async fn guard_account_exists(
 ///
 /// 1. `api_keys` — what `POST /api/v1/api-keys` writes (the admin + tenant
 ///    "API Keys" screens). Keys are `is_key_<48 random alphanumerics>`; the stored
-///    `prefix` is the first 8 characters of the random part and `key_hash` is a
-///    bcrypt hash of the WHOLE key.
+///    `prefix` is the first 8 characters of the random part and `key_hash` is the
+///    lowercase SHA-256 hex of the WHOLE key (new mints) or a bcrypt hash (legacy rows
+///    not yet migrated — both are accepted).
 /// 2. `api_credentials` — legacy rows (`key_identifier` + bcrypt `key_hash`).
 ///
 /// Returns `Ok(None)` when the token is not an API key at all, so the caller can
@@ -373,8 +377,9 @@ async fn verify_issued_api_key(
         }
 
         let stored_hash: String = r.get("key_hash");
-        // bcrypt::verify is the only correct comparison for a stored key hash.
-        if bcrypt::verify(token, &stored_hash).unwrap_or(false) {
+        // Dual read: new mints (and migrated rows) store lowercase sha256 hex; legacy rows still
+        // hold bcrypt. Try the sha256 comparison first, fall back to bcrypt for unmigrated rows.
+        if api_key_secret_matches(token, &stored_hash) {
             return Ok(Some(AuthenticatedUser {
                 account_id: r.get("user_id"),
                 email: r.get("email"),
@@ -386,6 +391,39 @@ async fn verify_issued_api_key(
     }
 
     Err(AppError::Unauthorized("Invalid API key".to_string()))
+}
+
+/// Does a presented key secret match the stored hash for the row it names?
+///
+/// Two shapes coexist during migration: new mints (and migrated rows) store the lowercase SHA-256
+/// hex digest of the whole key — the fleet MCP server's contract — while legacy rows still hold a
+/// bcrypt hash. Try the sha256 arm first, then the bcrypt verify, so a row that has not been
+/// migrated keeps authenticating.
+fn api_key_secret_matches(token: &str, stored_hash: &str) -> bool {
+    if is_sha256_hex(stored_hash) {
+        use sha2::{Digest, Sha256};
+        let digest = hex::encode(Sha256::digest(token.as_bytes()));
+        constant_time_eq(digest.as_bytes(), stored_hash.as_bytes())
+    } else {
+        bcrypt::verify(token, stored_hash).unwrap_or(false)
+    }
+}
+
+/// A stored sha256 hash is 64 lowercase hex characters; a bcrypt hash starts with `$2`.
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Constant-time byte comparison for the sha256 arm (the bcrypt arm is already constant-time).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Legacy store: `api_credentials.key_identifier` + bcrypt hash. Unchanged

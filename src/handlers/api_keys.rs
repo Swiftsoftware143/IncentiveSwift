@@ -61,13 +61,20 @@ pub struct VerifyApiKeyInput {
 /// Generate a random API key.
 /// Format: is_key_<random_alphanumeric>
 /// Returns (full_key, prefix, key_hash)
-/// Generate an issued API key as `(full_key, prefix, bcrypt_hash)`.
+/// Generate an issued API key as `(full_key, prefix, sha256_hex)`.
+///
+/// The stored hash is the lowercase SHA-256 hex digest of the WHOLE key — no salt — because the
+/// fleet MCP server authenticates by `key_hash = sha256_hex(bearer)` (see `/opt/swift/mcp`, the
+/// `incentiveswift` row of its `LOOKUPS`). A bcrypt hash there answered 401 for a live key, so the
+/// mint was moved onto the same hash contract every other fleet app's `api_keys.key_hash` already
+/// uses.
 ///
 /// `pub(crate)` so every producer of an `api_keys` row uses one shape — the integration-key
 /// handler in loyalty_badges.rs had its own literal and produced keys that could never
 /// authenticate (kanban t_cf7469bb).
 pub(crate) fn generate_api_key() -> Result<(String, String, String), AppError> {
     use rand::Rng;
+    use sha2::{Digest, Sha256};
 
     let rng = rand::thread_rng();
     let random_bytes: Vec<u8> = rng
@@ -80,9 +87,8 @@ pub(crate) fn generate_api_key() -> Result<(String, String, String), AppError> {
 
     let full_key = format!("is_key_{}", random_str);
 
-    // Hash with bcrypt for storage
-    let hash = bcrypt::hash(&full_key, 6)
-        .map_err(|e| AppError::Internal(format!("Failed to hash API key: {}", e)))?;
+    // Lowercase SHA-256 hex — the fleet MCP server's exact comparison, no salt.
+    let hash = hex::encode(Sha256::digest(full_key.as_bytes()));
 
     Ok((full_key, prefix, hash))
 }
@@ -206,6 +212,24 @@ pub async fn create_api_key(
     // see `resolve_owner_account_id` for why the raw `COALESCE(accounts.tenant_id, accounts.id)`
     // is not enough.
     let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
+
+    // ONE active key per account, enforced by the partial unique index on
+    // (tenant_id) WHERE is_active (see the migration). Refuse a second key with a clear
+    // instruction to Regenerate, so the caller is told what to do instead of meeting a bare 500
+    // from the index.
+    let already_has_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM api_keys WHERE tenant_id = $1 AND is_active = true)",
+    )
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await?;
+    if already_has_active {
+        return Err(AppError::Conflict(
+            "You already have an active API key. Use Regenerate to rotate it instead of creating a \
+             second one."
+                .to_string(),
+        ));
+    }
 
     let id = Uuid::new_v4();
     let (full_key, prefix, key_hash) = generate_api_key()?;
@@ -353,8 +377,9 @@ pub async fn delete_api_key(
 // ── Auto-provisioned, retrievable keys (kanban t_7863696b) ─────────────────────────────────────
 //
 // David, 2026-11-11 (withdrawing "shown once, never again"): every account is created with a key,
-// and the key stays viewable. `key_hash` (bcrypt) is the only thing `validate_api_key` reads;
-// `key_sealed` (fleet provider-key envelope) exists ONLY so the owner can see and copy the key.
+// and the key stays viewable. `key_hash` (sha256 hex for new mints, bcrypt for legacy rows — see
+// `security::auth::verify_issued_api_key`) is what `validate_api_key` reads; `key_sealed` (fleet
+// provider-key envelope) exists ONLY so the owner can see and copy the key.
 
 /// A key that was just minted. `full_key` is the plaintext: sealed before the row is written,
 /// handed to the caller's UI, never logged.
@@ -511,16 +536,19 @@ pub async fn regenerate_api_key(
     let name = name.ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
     let tenant_id = resolve_owner_account_id(&state.db, user_id).await?;
 
-    // Insert the replacement and remove the old row in ONE transaction: a failure at either step
-    // leaves the customer with the key they already had; after it commits the old key is gone and
-    // the very next bcrypt lookup for it misses.
+    // Retire the OLD key FIRST, then mint the replacement, in ONE transaction. The partial unique
+    // index on (tenant_id) WHERE is_active refuses two active keys per account, so the old
+    // insert-then-delete order would violate it; retire-then-mint keeps exactly one active key at
+    // every instant. If either step fails, both roll back and the old key keeps working.
     let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "UPDATE api_keys SET is_active = false, updated_at = now() WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
     let minted = mint_on(&mut tx, tenant_id, user_id, &name).await?;
-    sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
 
     tracing::info!(
