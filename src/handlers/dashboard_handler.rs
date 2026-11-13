@@ -285,7 +285,15 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
                       JOIN features f ON f.id = tf.feature_id
                       WHERE lower(pt.slug) = lower(p.slug)
                   ), p.features) as features,
-                  NULL::text as how_it_works
+                  NULL::text as how_it_works,
+                  -- The hosted payment page the operator pasted into this plan (Stripe Payment Link,
+                  -- PayPal button, anything that takes money). Exposed here (2026-11-13) because the
+                  -- console and the marketing pricing page both read THIS catalogue, and until now a
+                  -- plan that already carried a working link could only be bought by pressing Upgrade
+                  -- and being handed the URL in a JSON reply — one extra press on the money path, on
+                  -- every install whose operator has a link. A plan with no link answers NULL and both
+                  -- screens keep the request-and-we-activate flow unchanged.
+                  p.purchase_url
            FROM plans p LEFT JOIN plan_tiers pt ON lower(pt.slug) = lower(p.slug) WHERE p.is_active = true
            ORDER BY p.sort_order ASC NULLS LAST, p.price ASC NULLS LAST, p.name ASC"#,
     ).fetch_all(&state.db).await?;
@@ -304,6 +312,10 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
             "description": row.get::<Option<String>,_>("description"),
             "features": row.get::<Option<serde_json::Value>,_>("features"),
             "how_it_works": row.get::<Option<String>,_>("how_it_works"),
+            // NULL when the operator has not pasted a payment link: the screens then offer the
+            // request path they already had. A string is a working hosted checkout the buyer can be
+            // sent to directly.
+            "purchase_url": row.get::<Option<String>,_>("purchase_url"),
         }));
     }
     Ok(Json(json!({"plans": plans})))
