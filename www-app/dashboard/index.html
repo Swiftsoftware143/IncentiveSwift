@@ -294,6 +294,26 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     </div>
   </div>
   <div class="card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">API keys</h2>
+    <!-- THE TENANT'S OWN KEY SURFACE (2026-11-13). GET|POST /api/v1/api-keys, POST
+         /api/v1/api-keys/:id/reveal, POST /api/v1/api-keys/:id/regenerate, DELETE
+         /api/v1/api-keys/:id and GET /api/v1/api-key-events all existed and were reachable from the
+         OPERATOR console only, so a customer who wanted to connect their own software or MCP client
+         had no screen for it here — while every sibling app gives them one on their own dashboard.
+         A backend route with no customer screen is a defect, not a feature. The server owns every
+         rule (one active key per workspace, password-gated reveal, rotate-retires-the-old-key) and
+         each refusal is printed as the server's own sentence. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">The key that lets your own tools talk to IncentiveSwift as this workspace &mdash; an AI client, a script, or another Swift app you connect. Treat it like a password. You can view it again at any time by re-entering your sign-in password.</p>
+    <div id="ak-msg" style="font-size:13px;margin:0 0 10px;color:#64748b"></div>
+    <div id="ak-list" style="color:#64748b;font-size:14px">Loading your key&hellip;</div>
+    <div id="ak-shown" style="display:none;margin-top:12px"></div>
+    <div id="ak-new-row" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+      <input id="ak-name" placeholder="Key name (optional)" style="width:220px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
+      <button class="btn" onclick="akCreate()">Create key</button>
+    </div>
+    <div id="ak-ledger" style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;color:#64748b"></div>
+  </div>
+  <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Plan &amp; billing</h2>
     <!-- The plan ladder, read from the server (GET /api/v1/plans — the very catalogue the marketing
          pricing page serves, so the console can never quote a price the site does not), with the plan
@@ -388,6 +408,7 @@ if (!token) {
   fetchAccount();
   ebLoad();
   ebRender();
+  akLoad();
   pbLoad();
   pbCheckoutReturn();
   loadStats();
@@ -757,6 +778,165 @@ function ecSend() {
   }).then(function () { if (btn) btn.disabled = false; });
 }
 
+
+/* ── API keys (2026-11-13) ───────────────────────────────────────────────────────────────────────
+   This workspace's OWN key, on the customer's own dashboard. Reads GET /api/v1/api-keys, reveals
+   POST /api/v1/api-keys/:id/reveal (password-gated), rotates POST /api/v1/api-keys/:id/regenerate,
+   revokes DELETE /api/v1/api-keys/:id, creates POST /api/v1/api-keys when no active key exists, and
+   prints the credential ledger from GET /api/v1/api-key-events. The SERVER owns every rule — one
+   active key per workspace, rotate-retires-the-old-key, what a name may be — so a refusal is shown as
+   the server's own sentence and never softened. Field names are measured, not assumed: this app's
+   column is `prefix` (not the siblings' `key_prefix`), the lifecycle column is `is_active`, and the
+   reveal answers `api_key` (kanban: IncentiveSwift key surface). */
+var AK = { keys: [], busy: false };
+
+function akMsg(text, ok) {
+  var el = document.getElementById('ak-msg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = ok === false ? '#b91c1c' : '#64748b';
+}
+
+function akWhen(v) {
+  if (!v) return '';
+  var d = new Date(v);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function akLoad() {
+  var box = document.getElementById('ak-list');
+  if (!box) return;
+  apiCall('/api/v1/api-keys').then(function (d) {
+    AK.keys = (d && d.api_keys) || [];
+    akRender();
+  }).catch(function (e) {
+    box.innerHTML = '<div style="color:#b91c1c">' + esc(e.message || 'Could not read your key') + '</div>';
+  });
+  akLedger();
+}
+
+function akRender() {
+  var box = document.getElementById('ak-list');
+  if (!box) return;
+  var active = AK.keys.filter(function (k) { return k.is_active; });
+  var newRow = document.getElementById('ak-new-row');
+  if (newRow) newRow.style.display = active.length ? 'none' : 'flex';
+  if (!AK.keys.length) {
+    box.innerHTML = '<div style="color:#94a3b8">No key yet. Create one to let your own tools reach this workspace.</div>';
+    return;
+  }
+  var h = '';
+  AK.keys.forEach(function (k) {
+    var on = !!k.is_active;
+    h += '<div style="display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f5f9;flex-wrap:wrap">'
+      + '<span style="font-size:14px"><strong>' + esc(k.name || 'API key') + '</strong> '
+      + '<code style="font-size:12px;color:#4f46e5">' + esc(k.prefix || '') + '&hellip;</code> '
+      + (on ? '<span style="font-size:11px;background:#dcfce7;color:#166534;border-radius:6px;padding:1px 7px">Active</span>'
+            : '<span style="font-size:11px;background:#fee2e2;color:#991b1b;border-radius:6px;padding:1px 7px">Revoked</span>')
+      + '<br><span style="color:#94a3b8;font-size:12px">Created ' + esc(akWhen(k.created_at))
+      + (k.last_used_at ? ' &middot; last used ' + esc(akWhen(k.last_used_at)) : ' &middot; never used')
+      + '</span></span>'
+      + '<span style="white-space:nowrap;font-size:13px">'
+      + (on ? '<a href="#" onclick="akReveal(\'' + esc(k.id) + '\',false);return false;" style="color:#2563eb;margin-right:10px">View &amp; copy</a>'
+            + '<a href="#" onclick="akRegen(\'' + esc(k.id) + '\');return false;" style="color:#b45309;margin-right:10px">Regenerate</a>'
+            + '<a href="#" onclick="akRevoke(\'' + esc(k.id) + '\');return false;" style="color:#dc2626">Revoke</a>'
+            : '')
+      + '</span></div>';
+  });
+  box.innerHTML = h;
+}
+
+function akShow(note, key, bg, bd) {
+  var box = document.getElementById('ak-shown');
+  if (!box) return;
+  box.style.display = 'block';
+  box.innerHTML = '<div style="background:' + (bg || '#eff6ff') + ';border:1px solid ' + (bd || '#bfdbfe')
+    + ';border-radius:8px;padding:10px">'
+    + '<div style="font-size:12px;color:#334155;margin:0 0 6px">' + esc(note || 'Your key') + '</div>'
+    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+    + '<input id="ak-keyval" readonly value="' + esc(key) + '" onfocus="this.select()" style="flex:1;min-width:240px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px">'
+    + '<button class="btn" onclick="akClip(document.getElementById(\'ak-keyval\').value)">Copy</button>'
+    + '<button class="btn" style="background:#64748b" onclick="document.getElementById(\'ak-shown\').style.display=\'none\'">Hide</button>'
+    + '</div></div>';
+}
+
+function akClip(v) {
+  var ok = false;
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(v); ok = true; } } catch (e) {}
+  if (!ok) {
+    try {
+      var t = document.createElement('textarea'); t.value = v; document.body.appendChild(t); t.select();
+      ok = document.execCommand('copy'); document.body.removeChild(t);
+    } catch (e) {}
+  }
+  akMsg(ok ? 'Key copied.' : 'Could not copy automatically — select the key and press Ctrl+C.', ok);
+}
+
+function akReveal(id, copyOnly) {
+  var pw = prompt('Enter your sign-in password to view this key');
+  if (pw === null) return;
+  apiCall('/api/v1/api-keys/' + id + '/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw }) }).then(function (r) {
+    var key = (r && r.api_key) || '';
+    if (copyOnly) { akClip(key); return; }
+    akShow('This key stays viewable — you can open it again any time.', key);
+    akMsg('');
+  }).catch(function (e) { akMsg(e.message || 'Could not show the key — check the password.', false); });
+}
+
+function akCreate() {
+  var nameEl = document.getElementById('ak-name');
+  var body = {};
+  if (nameEl && nameEl.value.trim()) body.name = nameEl.value.trim();
+  AK.busy = true;
+  apiCall('/api/v1/api-keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) {
+    AK.busy = false;
+    if (nameEl) nameEl.value = '';
+    // The create response carries the row object under `api_key` and the PLAINTEXT under `full_key`
+    // (measured: handlers/api_keys.rs::create_api_key). Reading `api_key` alone printed
+    // "[object Object]" into the copy box, so the plaintext comes from `full_key` first.
+    akShow('Copy this key now — you can view it again at any time.',
+      (r && (r.full_key || (r.api_key && r.api_key.full_key))) || '');
+    akMsg('Key created.');
+    akLoad();
+  }).catch(function (e) { AK.busy = false; akMsg(e.message || 'Could not create the key.', false); });
+}
+
+function akRegen(id) {
+  if (!confirm('Regenerate this key? The old key stops working immediately, so anything using it must be given the new one.')) return;
+  apiCall('/api/v1/api-keys/' + id + '/regenerate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function (r) {
+    akShow('The old key no longer works. Copy the new one now.', (r && r.api_key) || '', '#f0fdf4', '#bbf7d0');
+    akMsg('Key regenerated.');
+    akLoad();
+  }).catch(function (e) { akMsg(e.message || 'Could not regenerate the key.', false); });
+}
+
+function akRevoke(id) {
+  if (!confirm('Revoke this key? It stops working immediately, and anything using it loses access.')) return;
+  apiCall('/api/v1/api-keys/' + id, { method: 'DELETE' }).then(function () {
+    akMsg('Key revoked. You can create a new one.');
+    var shown = document.getElementById('ak-shown');
+    if (shown) shown.style.display = 'none';
+    akLoad();
+  }).catch(function (e) { akMsg(e.message || 'Could not revoke the key.', false); });
+}
+
+function akLedger() {
+  var box = document.getElementById('ak-ledger');
+  if (!box) return;
+  apiCall('/api/v1/api-key-events').then(function (d) {
+    var ev = (d && d.events) || [];
+    if (!ev.length) { box.textContent = 'No key activity yet.'; return; }
+    var h = '<div style="font-weight:600;color:#334155;margin-bottom:6px;font-size:13px">Key activity</div>';
+    ev.slice(0, 6).forEach(function (e) {
+      var word = { created: 'created', regenerated: 'regenerated', revoked: 'revoked',
+                   revealed: 'viewed', updated: 'updated' }[e.action] || String(e.action || '');
+      h += '<div style="padding:3px 0">' + esc((e.key_prefix || '') + '…') + ' ' + esc(word)
+        + ' <span style="color:#94a3b8">&middot; ' + esc(akWhen(e.created_at)) + '</span></div>';
+    });
+    box.innerHTML = h;
+  }).catch(function () { box.textContent = ''; });
+}
 
 /* ── Workspaces (kanban t_101cd6ca) ──────────────────────────────────────────────────────────────
    Five routes, ported from ADASwift/CoreSwift: GET|POST /api/v1/workspaces, PATCH|DELETE
