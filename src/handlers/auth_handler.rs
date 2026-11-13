@@ -1631,8 +1631,15 @@ pub async fn close_account(
             .bind(account_uuid)
             .execute(&mut *tx)
             .await?;
+        // The REVOKE above must survive any audit problem: a missing or broken ledger must never leave a
+        // closed account holding a live credential. So the audit writes sit behind a savepoint — if they
+        // fail, we roll back only the audit, log at ERROR, and still commit the revocation.
+        sqlx::query("SAVEPOINT account_close_audit")
+            .execute(&mut *tx)
+            .await?;
+        let mut audit_ok = true;
         for (key_id, prefix, owner_id) in &keys {
-            crate::handlers::api_keys::record_api_key_event(
+            if let Err(e) = crate::handlers::api_keys::record_api_key_event(
                 &mut *tx,
                 *key_id,
                 *owner_id,
@@ -1641,7 +1648,23 @@ pub async fn close_account(
                 Some(account_uuid),
                 Some(json!({ "source": "account_close" })),
             )
-            .await?;
+            .await
+            {
+                audit_ok = false;
+                tracing::error!(
+                    error = %e,
+                    account = %account_uuid,
+                    key = %key_id,
+                    "account close: lifecycle ledger write failed; the API key is still revoked \
+                     (revocation is committed, audit for this key is missing)"
+                );
+                break;
+            }
+        }
+        if !audit_ok {
+            sqlx::query("ROLLBACK TO SAVEPOINT account_close_audit")
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(())
