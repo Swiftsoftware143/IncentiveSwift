@@ -2666,32 +2666,113 @@ function loadSiteConfig() {
 }
 
 
-// MCP — the fleet slot directly above Settings (docs/fleet-mcp-nav-convention.md). Every tool this
-// app exposes is a SELECT: there is no write door and no free-form SQL tool.
-const mcpTab = html`<div>
-    <h2 class="text-xl font-bold mb-2">MCP — connect your AI tools</h2>
-    <p class="text-sm text-gray-600 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace's IncentiveSwift data. Read-only.</p>
+// MCP — the fleet slot directly above Settings (docs/fleet-mcp-nav-convention.md). Point any MCP
+// client at https://hooks.swiftsoftware.net/mcp with THIS workspace's API key as the Bearer token.
+// The token block reads the SAME GET /api/v1/api-keys the API Keys screen reads; Reveal/Copy/
+// Regenerate call the app's existing reveal/regenerate routes (password-gated reveal, atomic
+// regenerate). Prefix only until a Reveal, exactly like the API Keys screen. The tool list is the
+// REAL set the fleet mcp server exposes for an incentiveswift key: each /opt/swift/mcp/src/main.rs
+// AppSpec key yields <key>_summary and <key>_search (the third, <key>_list_tenants, is admin-only
+// and never offered here). There is deliberately NO audit block — the MCP audit log is a file owned
+// by the mcp service and has no read API.
+const MCP_ENDPOINT = 'https://hooks.swiftsoftware.net/mcp';
+const MCP_TOOL_SPECS = [
+  ['incentiveswift', 'entries (leads): contact name, email, phone, outcome'],
+  ['incentiveswift_contacts', 'contacts: name, email, phone, business name'],
+  ['incentiveswift_campaigns', 'campaigns: name, slug, type, status'],
+  ['incentiveswift_referrals', 'referrals: code, source, campaign, converted or pending'],
+  ['incentiveswift_tags', 'tags: name and colour'],
+  ['incentiveswift_tickets', 'support tickets: subject, category, status'],
+  ['incentiveswift_inbound_messages', 'inbound messages: from number, direction, campaign'],
+  ['incentiveswift_loyalty_programs', 'loyalty programmes: name, description, active state'],
+  ['incentiveswift_loyalty_tiers', 'loyalty tiers: name, perks, minimum points'],
+  ['incentiveswift_credit_transactions', 'credit transactions: action, description, amount'],
+  ['incentiveswift_pending_emails', 'pending emails: template type, recipient, status'],
+];
+const MCP_CONFIG_TEXT = JSON.stringify({
+  mcpServers: { incentiveswift: { url: 'https://hooks.swiftsoftware.net/mcp', headers: { Authorization: 'Bearer YOUR_API_KEY' } } },
+}, null, 2);
+const Mcp = () => {
+  const mst = viewState('mcp', { keys: [], revealed: null, revealedId: null, loaded: false });
+  const mcpCopy = (t) => {
+    const legacy = () => { try { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok; } catch (e) { return false; } };
+    const done = (ok) => { if (!ok) alert('Could not copy automatically — select the text and press Ctrl+C'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => done(true), () => done(legacy()));
+    else done(legacy());
+  };
+  const loadKeys = async () => {
+    try { const r = await API.get('/api-keys'); mst.keys = Array.isArray(r) ? r : ((r && r.api_keys) || []); }
+    catch (e) { mst.keys = []; }
+    mst.loaded = true; renderApp();
+  };
+  if (!mst._loaded) { mst._loaded = true; loadKeys(); }
+  const reveal = async (id, copyOnly) => {
+    const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
+    if (pw === null || pw === '') return;
+    try {
+      const r = await API.post('/api-keys/' + id + '/reveal', { password: pw });
+      if (copyOnly) { mcpCopy(r.api_key); return; }
+      mst.revealedId = id; mst.revealed = r.api_key; renderApp();
+    } catch (e) { alert('Could not show the key: ' + e.message); }
+  };
+  const regen = async (id) => {
+    if (!confirm('Regenerate this key? The old key stops working immediately, so anything already wired up with it — including any connected MCP client — stops until you paste the new one in.')) return;
+    try {
+      const r = await API.post('/api-keys/' + id + '/regenerate', {});
+      mst.revealedId = r.id; mst.revealed = r.api_key; await loadKeys();
+    } catch (e) { alert('Could not regenerate the key: ' + e.message); }
+  };
+  const k = mst.keys.find(x => x.is_active !== false) || null;
+  return html`<div class="max-w-3xl">
+    <h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>
+    <p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace's IncentiveSwift data. Read-only.</p>
 
-    <h3 class="text-lg font-bold mb-2">Endpoint</h3>
-    <div class="flex gap-2 items-center mb-6 flex-wrap">
-      <code class="px-3 py-2 bg-gray-100 rounded text-sm">https://hooks.swiftsoftware.net/mcp</code>
-      <button class="btn btn-sm btn-outline" id="mcpCopyEndpoint" onClick=${() => copyText('mcp', 'https://hooks.swiftsoftware.net/mcp')}>Copy</button>
+    <div class="card">
+      <h3 class="font-semibold text-gray-700 mb-1">Endpoint</h3>
+      <div class="flex items-center gap-2 flex-wrap">
+        <code style="background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:13px">${MCP_ENDPOINT}</code>
+        <button class="btn btn-sm btn-outline" onClick=${() => mcpCopy(MCP_ENDPOINT)}>Copy</button>
+      </div>
     </div>
 
-    <h3 class="text-lg font-bold mb-2">Your token</h3>
-    <p class="text-sm text-gray-600 mb-3">The server accepts your workspace API key. Treat it like a password: anyone holding it can read this workspace. Keys are issued and rotated on the <strong>API Keys</strong> screen.</p>
+    <div class="card">
+      <h3 class="font-semibold text-gray-700 mb-1">Your token</h3>
+      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed here by prefix only — the secret is never shown until you Reveal it, which asks for your account password. Treat it like a password: anyone holding it can read this workspace.</p>
+      ${!mst.loaded ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
+        : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the API Keys screen, then come back to connect an MCP client.</p>`
+        : html`<div>
+          <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
+            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:#6366f1">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">Created ${k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}</span></span>
+            <span style="white-space:nowrap">
+              <button class="btn btn-sm btn-outline" onClick=${() => reveal(k.id, false)}>Reveal</button>
+              <button class="btn btn-sm btn-outline" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
+              <button class="btn btn-sm btn-outline" style="margin-left:6px;color:#b45309" onClick=${() => regen(k.id)}>Regenerate</button>
+            </span>
+          </div>
+          ${(mst.revealed && mst.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
+            <input style="flex:1;min-width:220px;font-size:12px;border:1px solid #d1d5db;border-radius:6px;padding:6px 10px" class="font-mono" readonly value=${mst.revealed} onFocus=${e => e.target.select()} />
+            <button class="btn btn-sm" onClick=${() => mcpCopy(mst.revealed)}>Copy</button>
+          </div>` : null}
+        </div>`)}
+    </div>
 
-    <h3 class="text-lg font-bold mb-2">What it can read</h3>
-    <ul class="text-sm text-gray-700 list-disc pl-5 space-y-1">
-      <li><code>incentiveswift_summary</code> / <code>incentiveswift_search</code> — entries (leads): contact, campaign, score, outcome</li>
-      <li><code>incentiveswift_contacts_summary</code> / <code>_search</code> — contacts</li>
-      <li><code>incentiveswift_campaigns_summary</code> / <code>_search</code> — campaigns</li>
-      <li><code>incentiveswift_referrals_summary</code> / <code>_search</code> — referral codes and conversions</li>
-      <li><code>incentiveswift_tags_summary</code> / <code>_search</code> — tags</li>
-      <li><code>incentiveswift_tickets_summary</code> / <code>_search</code> — support tickets</li>
-    </ul>
-    <p class="text-xs text-gray-500 mt-4">Every tool is read-only and tenant-scoped: a workspace token can only ever return this workspace's rows. There is no write tool and no free-form SQL door, and operator-wide tools are refused for a workspace credential.</p>
-</div>`;
+    <div class="card">
+      <h3 class="font-semibold text-gray-700 mb-1">What it can read</h3>
+      <p class="text-xs text-gray-500 mb-3">These are the read-only tools this app exposes to a workspace credential — the real tool names, each scoped to this workspace.</p>
+      <ul style="font-size:13px;color:#334155;line-height:1.9;padding-left:18px;margin:0">
+        ${MCP_TOOL_SPECS.map(([name, desc]) => html`<li><code>${name}_summary</code> / <code>${name}_search</code> — ${desc}</li>`)}
+      </ul>
+      <p class="text-xs text-gray-400" style="margin:10px 0 0">Every tool is a SELECT. There is no write tool and no free-form SQL door, and operator-wide tools are refused for a workspace credential.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="font-semibold text-gray-700 mb-1">Connect</h3>
+      <p class="text-xs text-gray-500 mb-3">Paste this into your MCP client config (Claude Desktop / Cursor). Replace YOUR_API_KEY with this workspace's key.</p>
+      <pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">${MCP_CONFIG_TEXT}</pre>
+      <button class="btn btn-sm btn-outline" style="margin-top:8px" onClick=${() => mcpCopy(MCP_CONFIG_TEXT)}>Copy config</button>
+    </div>
+  </div>`;
+};
 
 const settingsTab = html`<div>
     <h2 class="text-xl font-bold mb-4">Clearinghouse Settings</h2>
@@ -3005,7 +3086,7 @@ const ledgerTab = html`<div>
       </div>`
     : html`<div class="text-xs text-gray-500 mb-3" data-ops="loyalty-plan-gate" data-plan-gate="included">Loyalty is included in your ${tierLabel(st.planGate.plan_tier)} plan.</div>`);
 
-  const tabContent = st.tab==='mcp' ? mcpTab : st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  const tabContent = st.tab==='mcp' ? Mcp() : st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     ${planGateBanner}
