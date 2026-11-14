@@ -571,9 +571,14 @@ button:disabled{opacity:.6;cursor:not-allowed}
             var b = out.data;
             var cur = d.currency_name || 'points';
             el('secretCode').value = '';
+            // ONE award sentence, in the OWNER's currency (2026-11-14). This used to print the
+            // server's own `message` as well, and that sentence hardcodes the word "points" — so a
+            // programme whose currency is "stars" read "+5 stars / Secret code redeemed! +5 points /
+            // You now have 47 stars." on one screen: the same award twice, in two vocabularies. The
+            // server sentence still serves any other client; this page states the award once.
             el('success').innerHTML = '<div class="big">+' + (b.points_earned || 0) + ' ' + cur + '</div>' +
-              (b.message ? b.message + '<br>' : '') +
-              'You now have ' + (b.total_points != null ? b.total_points : '') + ' ' + cur + '.';
+              'Code redeemed. ' +
+              (b.total_points != null ? 'You now have ' + b.total_points + ' ' + cur + '.' : '');
             el('success').style.display = 'block';
           })
           .catch(function () { fail('Could not reach the rewards service. Please try again.', false); btn.disabled = false; btn.textContent = 'Redeem code'; });
