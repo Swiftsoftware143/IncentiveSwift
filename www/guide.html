@@ -349,6 +349,17 @@
 
       <p>Two mechanics you may have read about elsewhere &mdash; a three-reel <em>Slots</em> machine and a multi-tier <em>Wheel of Fortune</em> &mdash; are not offered in the builder. If a campaign of that kind is what you need, use Spin Wheel with more segments; it is the same wheel with the odds you set.</p>
 
+      <h2 id="mcp">🤖 MCP &mdash; connect your AI tools</h2>
+      <p><strong>MCP</strong> is the open standard an AI client (Claude Code, Cursor, Hermes, or your own agent) speaks to read your business data. IncentiveSwift runs one on the fleet server, so you do not install anything: you paste one endpoint and one key into the client, and it can read this workspace. It is <strong>read-only</strong> &mdash; the server offers no tool that creates, changes or deletes anything, so a misbehaving assistant cannot touch your data.</p>
+      <p><strong>Where it is in the console:</strong> the card <strong>MCP &mdash; connect your AI tools</strong> sits on your dashboard, directly above <strong>Your account</strong>. It shows four things:</p>
+      <ul>
+        <li><strong>The endpoint</strong> &mdash; <code>https://hooks.swiftsoftware.net/mcp</code>, with a <strong>Copy</strong> button.</li>
+        <li><strong>Your token</strong> &mdash; the same workspace key as the <strong>API keys</strong> card, shown by its first characters. <strong>View &amp; copy</strong> asks for your sign-in password first, and every view is recorded; <strong>Regenerate</strong> on the API keys card retires the old key, so any client already wired up stops until you paste the new one.</li>
+        <li><strong>The tools your key can call</strong> &mdash; the read-only list this app exposes, each named exactly as the client sees it: your entries, contacts, campaigns, referrals, tags, support tickets, inbound messages, loyalty programmes, loyalty tiers, credit transactions and pending emails. Each one answers a summary or a search, and every answer holds only this workspace&rsquo;s rows.</li>
+        <li><strong>Connect</strong> &mdash; a ready-made block of client configuration with your endpoint and an <code>Authorization: Bearer</code> line where your key goes. <strong>Copy config</strong> puts it on your clipboard.</li>
+      </ul>
+      <p><strong>If the token block says you have no active key</strong>, create one on the <strong>API keys</strong> card just below and come back; the MCP card reads the same key, so the two can never disagree. <strong>If a client answers that it cannot reach the server</strong>, check that the key is the one on this card &mdash; a regenerated or revoked key stops working immediately, by design.</p>
+
       <!-- ==================== LOYALTY SECTION ==================== -->
       <h2 id="loyalty-overview">🏪 Loyalty Program</h2>
       <p>IncentiveSwift powers comprehensive loyalty programs with purchase verification, credit earning and redeeming, custom offers, and a referral system. The loyalty module transforms one-time campaign participants into repeat, engaged customers.</p>
