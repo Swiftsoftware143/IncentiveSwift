@@ -172,6 +172,41 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
   if (!slug) { fail('This check-in link is incomplete. Please scan the QR code again.', true); return; }
 
+  // ── WHAT THE MEMBER SEES WHEN THEY COME BACK (2026-11-14) ─────────────────────────────────────
+  // The daily-visit arm answers `already_visited_today` for the commonest visit of all: a member
+  // opening their own card link a second time the same day. This page used to return early on any
+  // answer that awarded nothing, so those members were shown NOTHING — the balance they came to look
+  // at was nowhere on the page, and the form sat there as if they had never arrived. `total_balance`
+  // is on EVERY arm of that reply, so the note now states it, names the owner's own currency once the
+  // programme is loaded, and measures the gap to the next rung of the owner's ladder. The server's own
+  // sentence is preferred wherever it sent one; nothing here invents a number.
+  var progDoc = null;
+  var visitReply = null;
+  function renderVisitNote() {
+    var note = el('visitNote');
+    var r = visitReply;
+    if (!note || !r) return;
+    var cur = (progDoc && progDoc.currency_name) || r.currency_name || 'points';
+    var n = Number(r.points_awarded || 0);
+    var bal = (r.total_balance != null) ? Number(r.total_balance) : null;
+    var parts = [];
+    if (r.message) parts.push(String(r.message));
+    else if (n > 0) parts.push('Visit recorded \u2014 ' + n + ' ' + cur + ' added to this card today.');
+    if (bal != null) parts.push('You now have ' + bal + ' ' + cur + '.');
+    var ladder = (progDoc && progDoc.tiers && progDoc.tiers.length) ? progDoc.tiers : null;
+    if (ladder && bal != null) {
+      for (var i = 0; i < ladder.length; i++) {
+        if ((ladder[i].min_points || 0) > bal) {
+          parts.push(((ladder[i].min_points || 0) - bal) + ' ' + cur + ' to go until ' + ladder[i].name + '.');
+          break;
+        }
+      }
+    }
+    if (!parts.length) return;
+    note.textContent = parts.join(' ');
+    note.style.display = 'block';
+  }
+
   // A friend arriving from a member's sharing link (`?ref=<code>`). Recorded ONCE per browser per
   // code, and only after the server confirmed it, so a reload (or a flaky connection that already
   // landed) cannot inflate the referrer's click count. No points are awarded here — the endpoint
@@ -213,13 +248,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
       .then(function (res) {
         if (!res.ok) return;
         try { localStorage.setItem(key, '1'); } catch (e) {}
-        var d = res.data || {};
-        var n = Number(d.points_awarded || 0);
-        if (!n) return;
-        var note = el('visitNote');
-        if (!note) return;
-        note.textContent = 'Visit recorded \u2014 ' + n + ' ' + (d.currency_name || 'points') + ' added to this card today.';
-        note.style.display = 'block';
+        // Kept, not painted here: the note names the owner's currency and ladder, which arrive with
+        // the programme document below — whichever fetch lands first calls `renderVisitNote`.
+        visitReply = res.data || {};
+        renderVisitNote();
       })
       .catch(function () {});
   })();
@@ -304,6 +336,10 @@ button:disabled{opacity:.6;cursor:not-allowed}
         });
         el('panel').insertBefore(box, el('checkinForm'));
       }
+      // The programme document is what names the currency and the ladder, so the daily-visit note is
+      // (re)painted HERE — this fetch and the visit fetch race, and whichever lands second wins.
+      progDoc = d;
+      renderVisitNote();
       el('loading').style.display = 'none';
       el('panel').style.display = 'block';
 
