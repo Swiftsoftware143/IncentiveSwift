@@ -227,6 +227,7 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <code style="background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:13px">https://hooks.swiftsoftware.net/mcp</code>
         <button class="btn" style="padding:4px 10px;font-size:12px" onclick="mcpCopy('https://hooks.swiftsoftware.net/mcp')">Copy</button>
+        <span id="mcp-msg" style="font-size:12px"></span>
       </div>
     </div>
 
@@ -854,23 +855,50 @@ function akWhen(v) {
    disagree. The tool list is the real set the fleet MCP server exposes for an incentiveswift key
    (each AppSpec key yields <key>_summary and <key>_search; the admin-only <key>_list_tenants is
    never offered here). No audit block: the MCP audit log has no read API. */
-var MCP_TOOLS = [
-  ['incentiveswift_summary / _search', 'entries (leads): contact name, email, phone, outcome'],
-  ['incentiveswift_contacts_summary / _search', 'contacts: name, email, phone, business name'],
-  ['incentiveswift_campaigns_summary / _search', 'campaigns: name, slug, type, status'],
-  ['incentiveswift_referrals_summary / _search', 'referrals: code, source, campaign, converted or pending'],
-  ['incentiveswift_tags_summary / _search', 'tags: name and colour'],
-  ['incentiveswift_tickets_summary / _search', 'support tickets: subject, category, status'],
-  ['incentiveswift_inbound_messages_summary / _search', 'inbound messages: from number, direction, campaign'],
-  ['incentiveswift_loyalty_programs_summary / _search', 'loyalty programmes: name, description, active state'],
-  ['incentiveswift_loyalty_tiers_summary / _search', 'loyalty tiers: name, perks, minimum points'],
-  ['incentiveswift_credit_transactions_summary / _search', 'credit transactions: action, description, amount'],
-  ['incentiveswift_pending_emails_summary / _search', 'pending emails: template type, recipient, status']
-];
 
-function mcpCopy(v) { akClip(v); }
+
+function mcpMsg(text, ok) {
+  var el = document.getElementById('mcp-msg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = ok === false ? '#b91c1c' : '#166534';
+}
+
+function mcpCopy(v) {
+  var done = function (good) {
+    mcpMsg(good ? 'Copied.' : 'Could not copy automatically — select the text and press Ctrl+C', good);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(v).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+  } catch (e) {}
+  try {
+    var t = document.createElement('textarea');
+    t.value = v; document.body.appendChild(t); t.select();
+    var good = document.execCommand('copy');
+    document.body.removeChild(t); done(good);
+  } catch (e) { done(false); }
+}
 
 function mcpLoad() {
+  // The tool list lives INSIDE the loader: `mcpLoad()` is called from the boot block, which runs
+  // before this block's own top-level statements, so a shared `var` would be undefined there
+  // (measured live 2026-11-14 — TypeError, empty list, no token block).
+  var MCP_TOOLS = [
+    ['incentiveswift_summary / _search', 'entries (leads): contact name, email, phone, outcome'],
+    ['incentiveswift_contacts_summary / _search', 'contacts: name, email, phone, business name'],
+    ['incentiveswift_campaigns_summary / _search', 'campaigns: name, slug, type, status'],
+    ['incentiveswift_referrals_summary / _search', 'referrals: code, source, campaign, converted or pending'],
+    ['incentiveswift_tags_summary / _search', 'tags: name and colour'],
+    ['incentiveswift_tickets_summary / _search', 'support tickets: subject, category, status'],
+    ['incentiveswift_inbound_messages_summary / _search', 'inbound messages: from number, direction, campaign'],
+    ['incentiveswift_loyalty_programs_summary / _search', 'loyalty programmes: name, description, active state'],
+    ['incentiveswift_loyalty_tiers_summary / _search', 'loyalty tiers: name, perks, minimum points'],
+    ['incentiveswift_credit_transactions_summary / _search', 'credit transactions: action, description, amount'],
+    ['incentiveswift_pending_emails_summary / _search', 'pending emails: template type, recipient, status']
+  ];
   var ul = document.getElementById('mcp-tools');
   if (ul) {
     var h = '';
