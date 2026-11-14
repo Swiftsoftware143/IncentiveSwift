@@ -868,18 +868,26 @@ function mcpCopy(v) {
   var done = function (good) {
     mcpMsg(good ? 'Copied.' : 'Could not copy automatically — select the text and press Ctrl+C', good);
   };
+  // A clipboard write can be DENIED (permissions policy, an unfocused tab, a hardened browser) even
+  // when the API exists — measured 2026-11-14 in headless Chromium, where writeText rejected while
+  // execCommand('copy') succeeded. So a rejection falls THROUGH to the legacy path instead of
+  // reporting a failure the user can see through.
+  var legacy = function () {
+    try {
+      var t = document.createElement('textarea');
+      t.value = v; document.body.appendChild(t); t.select();
+      var good = document.execCommand('copy');
+      document.body.removeChild(t);
+      return good;
+    } catch (e) { return false; }
+  };
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(v).then(function () { done(true); }, function () { done(false); });
+      navigator.clipboard.writeText(v).then(function () { done(true); }, function () { done(legacy()); });
       return;
     }
   } catch (e) {}
-  try {
-    var t = document.createElement('textarea');
-    t.value = v; document.body.appendChild(t); t.select();
-    var good = document.execCommand('copy');
-    document.body.removeChild(t); done(good);
-  } catch (e) { done(false); }
+  done(legacy());
 }
 
 function mcpLoad() {
