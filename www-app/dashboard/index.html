@@ -211,6 +211,49 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <div id="inboxRecent" style="color:#64748b;font-size:14px">Loading messages&hellip;</div>
   </div>
 
+  <div class="card" id="mcp-card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">MCP &mdash; connect your AI tools</h2>
+    <!-- Customer-facing MCP entry (2026-11-14). docs/fleet-mcp-nav-convention.md asks for ONE entry
+         labelled MCP, in the same slot relative to the account/Settings entry, in every app; this
+         console is a page of cards rather than a nav, so the card sits directly above "Your account"
+         (anchor rule 2: the account entry). Blocks 1-4 only: endpoint, this workspace's token by
+         prefix with the app's own password-gated reveal, the real tool list for an incentiveswift
+         key, and a copy-paste client config. There is no audit block — the MCP audit log is a file
+         the mcp service owns and no app can read it. -->
+    <p style="color:#64748b;font-size:14px;margin:0 0 14px">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below, with this workspace&rsquo;s API key as the Bearer token, and it can read this workspace&rsquo;s IncentiveSwift data. Read-only &mdash; nothing on this page can change your data.</p>
+
+    <div style="margin:0 0 14px">
+      <div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Endpoint</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <code style="background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:13px">https://hooks.swiftsoftware.net/mcp</code>
+        <button class="btn" style="padding:4px 10px;font-size:12px" onclick="mcpCopy('https://hooks.swiftsoftware.net/mcp')">Copy</button>
+      </div>
+    </div>
+
+    <div style="margin:0 0 14px">
+      <div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Your token</div>
+      <div id="mcp-token" style="font-size:14px;color:#64748b">Loading your key&hellip;</div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:4px">This is the same key as the <strong>API keys</strong> card below. Viewing it asks for your sign-in password, and every view is recorded.</div>
+    </div>
+
+    <div style="margin:0 0 14px">
+      <div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Tools your key can call</div>
+      <ul id="mcp-tools" style="margin:0;padding-left:18px;font-size:13px;color:#475569;line-height:1.7"></ul>
+    </div>
+
+    <div>
+      <div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Connect</div>
+      <textarea id="mcp-config" readonly style="width:100%;box-sizing:border-box;height:118px;padding:10px;border:1px solid #e2e8f0;border-radius:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#334155;background:#f8fafc">{
+  "mcpServers": {
+    "incentiveswift": {
+      "url": "https://hooks.swiftsoftware.net/mcp",
+      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+    }
+  }
+}</textarea>
+      <button class="btn" style="padding:4px 10px;font-size:12px;margin-top:6px" onclick="mcpCopy(document.getElementById('mcp-config').value)">Copy config</button>
+    </div>
+  </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
     <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
@@ -409,6 +452,7 @@ if (!token) {
   ebLoad();
   ebRender();
   akLoad();
+  mcpLoad();
   pbLoad();
   pbCheckoutReturn();
   loadStats();
@@ -802,6 +846,54 @@ function akWhen(v) {
   var d = new Date(v);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/* ── MCP card (2026-11-14) ───────────────────────────────────────────────────────────────────────
+   The customer's own MCP door. The token block reads the SAME GET /api/v1/api-keys the API keys
+   card reads and reveals through the app's own password-gated route, so the two screens cannot
+   disagree. The tool list is the real set the fleet MCP server exposes for an incentiveswift key
+   (each AppSpec key yields <key>_summary and <key>_search; the admin-only <key>_list_tenants is
+   never offered here). No audit block: the MCP audit log has no read API. */
+var MCP_TOOLS = [
+  ['incentiveswift_summary / _search', 'entries (leads): contact name, email, phone, outcome'],
+  ['incentiveswift_contacts_summary / _search', 'contacts: name, email, phone, business name'],
+  ['incentiveswift_campaigns_summary / _search', 'campaigns: name, slug, type, status'],
+  ['incentiveswift_referrals_summary / _search', 'referrals: code, source, campaign, converted or pending'],
+  ['incentiveswift_tags_summary / _search', 'tags: name and colour'],
+  ['incentiveswift_tickets_summary / _search', 'support tickets: subject, category, status'],
+  ['incentiveswift_inbound_messages_summary / _search', 'inbound messages: from number, direction, campaign'],
+  ['incentiveswift_loyalty_programs_summary / _search', 'loyalty programmes: name, description, active state'],
+  ['incentiveswift_loyalty_tiers_summary / _search', 'loyalty tiers: name, perks, minimum points'],
+  ['incentiveswift_credit_transactions_summary / _search', 'credit transactions: action, description, amount'],
+  ['incentiveswift_pending_emails_summary / _search', 'pending emails: template type, recipient, status']
+];
+
+function mcpCopy(v) { akClip(v); }
+
+function mcpLoad() {
+  var ul = document.getElementById('mcp-tools');
+  if (ul) {
+    var h = '';
+    MCP_TOOLS.forEach(function (t) {
+      h += '<li><code style="font-size:12px;color:#4f46e5">' + esc(t[0]) + '</code> &mdash; ' + esc(t[1]) + '</li>';
+    });
+    ul.innerHTML = h;
+  }
+  var box = document.getElementById('mcp-token');
+  if (!box) return;
+  apiCall('/api/v1/api-keys').then(function (d) {
+    var keys = (d && d.api_keys) || [];
+    var k = keys.filter(function (x) { return x.is_active; })[0];
+    if (!k) {
+      box.innerHTML = '<span style="color:#94a3b8">No active key yet &mdash; create one in the <strong>API keys</strong> card below, then come back here.</span>';
+      return;
+    }
+    box.innerHTML = '<strong>' + esc(k.name || 'API key') + '</strong> '
+      + '<code style="font-size:12px;color:#4f46e5">' + esc(k.prefix || '') + '&hellip;</code> '
+      + '<a href="#" onclick="akReveal(\'' + esc(k.id) + '\',true);return false;" style="color:#2563eb;margin-left:6px">View &amp; copy</a>';
+  }).catch(function (e) {
+    box.innerHTML = '<span style="color:#b91c1c">' + esc(e.message || 'Could not read your key') + '</span>';
+  });
 }
 
 function akLoad() {
