@@ -1287,6 +1287,34 @@ pub async fn record_signup_plan_request(
     // intent as the dashboard's Upgrade button, and the row alone waits for someone to open the
     // console. Best effort — the account already exists and nothing here may fail the signup.
     let notified = crate::email::send_plan_request_operator_alert(db, account_id, &name).await;
+    // ACKNOWLEDGE THE BUYER (2026-11-14). The dashboard's "Request the plan" button mails the filer
+    // "we have your request" (`send_support_request_receipt_email`); THIS door — the one the pricing
+    // cards lead into — wrote the row and told only the operator. Measured live: a signup asking for
+    // Pro filed the request and sent the buyer nothing but the welcome mail, so the person who had
+    // just said they wanted to pay heard nothing back. Best effort for the same reason as the alert:
+    // the row is the record and the signup is already committed.
+    let filer: Option<(String, String)> =
+        sqlx::query_as("SELECT email, COALESCE(NULLIF(name, ''), '') FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(db)
+            .await
+            .unwrap_or(None);
+    if let Some((filer_email, filer_name)) = filer {
+        if !filer_email.trim().is_empty() {
+            let subject = format!("Upgrade request: {name} plan");
+            if let Err(e) = crate::email::send_support_request_receipt_email(
+                db,
+                account_id,
+                &filer_email,
+                &filer_name,
+                &subject,
+            )
+            .await
+            {
+                tracing::warn!("signup plan-request receipt to {filer_email} failed: {e}");
+            }
+        }
+    }
     tracing::info!(
         account = %account_id,
         operator_notified = notified,
