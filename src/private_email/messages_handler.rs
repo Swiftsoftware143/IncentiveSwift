@@ -21,6 +21,8 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::{header, HeaderValue},
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use chrono::{DateTime, Utc};
@@ -28,6 +30,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
+
+use super::attachments::{self, InboundFile};
 
 use crate::access::claims::Claims;
 use crate::error::{ApiResult, AppError};
@@ -408,18 +412,25 @@ pub async fn get_message(
     .map_err(crate::error::db_error)?
     .ok_or_else(|| AppError::NotFound("Message not found".into()))?;
 
+    // THE FILES (kanban t_f919924f): the reader draws a chip per attachment and, for an inline
+    // part, the body's own `cid:` reference is rewritten to a `data:` URI so the branded logo
+    // renders without a second, unauthenticated route. Computed BEFORE the body is borrowed.
+    let files = attachments::list_for_message(&state.db, tenant_id, message_id).await?;
+    let inline_parts =
+        attachments::inline_parts_for_message(&state.db, tenant_id, message_id).await?;
+    let body_html: Option<String> = row
+        .try_get::<Option<String>, _>("body_html")
+        .unwrap_or(None)
+        .map(|html| attachments::rewrite_inline_images(&html, &inline_parts));
+
     let mut body = message_json(&row);
     if let Some(obj) = body.as_object_mut() {
         obj.insert(
             "body_plain".into(),
             json!(row.try_get::<String, _>("body_plain").unwrap_or_default()),
         );
-        obj.insert(
-            "body_html".into(),
-            json!(row
-                .try_get::<Option<String>, _>("body_html")
-                .unwrap_or(None)),
-        );
+        obj.insert("body_html".into(), json!(body_html));
+        obj.insert("attachments".into(), json!(files));
         obj.insert(
             "labels".into(),
             message_labels(&state, tenant_id, message_id).await?,
@@ -427,6 +438,51 @@ pub async fn get_message(
         obj.insert("is_read".into(), json!(true));
     }
     Ok(Json(body))
+}
+
+/// GET /api/private-email/messages/:id/attachments/:attachment_id
+///
+/// The file a message carried (kanban t_f919924f). Authenticated and TENANCY-SCOPED: the row is
+/// resolved through the caller's account AND the message, so an id guessed from another workspace
+/// finds nothing (404, not a 403 that confirms the id exists). `?inline=1` answers
+/// `Content-Disposition: inline` so a reader can draw the part in place; the default is a download.
+/// `nosniff` means the browser never reinterprets a stored file as a page.
+pub async fn download_attachment(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((message_id, attachment_id)): Path<(Uuid, Uuid)>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<Response> {
+    let tenant_id = account_id(&claims)?;
+    let inline = q
+        .get("inline")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+
+    let found = attachments::load_bytes(&state.db, tenant_id, message_id, attachment_id).await?;
+    let Some((filename, content_type, bytes)) = found else {
+        return Err(AppError::NotFound("Attachment not found".into()));
+    };
+
+    let disposition =
+        attachments::content_disposition(if inline { "inline" } else { "attachment" }, &filename);
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition)
+            .unwrap_or_else(|_| HeaderValue::from_static("attachment")),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1394,9 +1450,11 @@ pub struct InboundMessage<'a> {
     pub is_spam: bool,
     pub has_attachments: bool,
     /// Bytes carried by the delivery's file parts, added to `size_bytes` so an account's storage
-    /// figure includes what an attached message costs (kanban t_237e3005). The FILES themselves are
-    /// not stored by this receiver — only the message is.
+    /// figure includes what an attached message costs (kanban t_237e3005).
     pub attachment_bytes: usize,
+    /// The FILE parts themselves (kanban t_f919924f), written against the message row so the reader
+    /// can draw an inline logo and offer a real download.
+    pub files: &'a [InboundFile],
 }
 
 /// Store one received message. Returns (message id, whether this call created it).
@@ -1449,7 +1507,13 @@ pub async fn store_inbound(
     .map_err(crate::error::db_error)?;
 
     match row {
-        Some(r) => Ok((r.try_get::<Uuid, _>("id").unwrap_or_default(), true)),
+        Some(r) => {
+            let id: Uuid = r.try_get::<Uuid, _>("id").unwrap_or_default();
+            // The files travel WITH the message row (kanban t_f919924f). A retry finds the row
+            // already there and therefore writes no second copy of each file.
+            attachments::store_for_message(db, msg.tenant_id, id, msg.files).await;
+            Ok((id, true))
+        }
         None => {
             // Either a retry of a delivery already stored, or no Message-Id at all (the ON CONFLICT
             // clause cannot fire for NULL/empty). Fall back to the newest matching row so the caller

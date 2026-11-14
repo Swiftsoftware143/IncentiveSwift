@@ -26,6 +26,7 @@ use crate::state::AppState;
 use axum::{middleware, Router};
 
 pub mod api_keys_handler;
+pub mod attachments;
 pub mod domain_handler;
 pub mod encryption;
 pub mod feature_gate;
@@ -107,6 +108,12 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route(
             "/messages/:id/reply",
             axum::routing::post(messages_handler::reply_to_message),
+        )
+        // THE FILE A MESSAGE CARRIED (kanban t_f919924f): authenticated, tenancy-scoped through
+        // (account, message, attachment) in one statement, `?inline=1` for an inline part.
+        .route(
+            "/messages/:id/attachments/:attachment_id",
+            axum::routing::get(messages_handler::download_attachment),
         )
         // The people a message can be assigned to — this account's members only.
         .route(
