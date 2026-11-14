@@ -16,10 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pin the toolchain to 1.97.1 to match the fleet build box: @stable would
+      # pull in newer clippy lints (e.g. needless_bool) that fail in CI while
+      # passing locally. The version and components are also declared in
+      # rust-toolchain.toml at the repo root.
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

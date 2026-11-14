@@ -1656,11 +1656,13 @@ mod tests {
         assert_eq!(safe_filename(""), "download");
     }
 
+    /// Compile-time invariant: the multipart envelope must always exceed the filed-byte cap so a
+    /// legitimate part at the cap is never refused 413 before the handler sees it.
+    const _: () = assert!(ASSET_ENVELOPE_BYTES > MAX_ASSET_BYTES);
+
     #[test]
     fn the_body_limit_leaves_room_for_multipart_overhead() {
-        // The filed bytes are capped at 10 MB, so the axum body limit must be a little larger or a
-        // legitimate part at the cap is refused 413 before the handler ever sees it.
+        // The filed bytes are capped at 10 MB.
         assert_eq!(MAX_ASSET_BYTES, 10 * 1024 * 1024);
-        assert!(ASSET_ENVELOPE_BYTES > MAX_ASSET_BYTES);
     }
 }

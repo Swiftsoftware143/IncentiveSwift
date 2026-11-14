@@ -122,11 +122,7 @@ pub async fn check_daily_limit(
     .await
     .map_err(|e| format!("DB error checking daily limit: {}", e))?;
 
-    if count >= daily_limit as i64 {
-        return Ok(false);
-    }
-
-    Ok(true)
+    Ok(count < daily_limit as i64)
 }
 
 /// The gate for a TENANT-supplied outbound webhook destination that has no `integration_targets`

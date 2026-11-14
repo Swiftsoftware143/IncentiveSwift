@@ -424,7 +424,7 @@ mod tests {
 
         assert!(
             is_stale(
-                &verify_stripe_signature_any_at(&payload[..], &header, &credentials, now, 300)
+                &verify_stripe_signature_any_at(payload, &header, &credentials, now, 300)
                     .expect_err("600 s old is outside a 300 s tolerance")
             ),
             "300 s tolerance must refuse a 600 s old stamp"

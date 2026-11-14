@@ -685,14 +685,10 @@ pub async fn apply_prize_draw(
         prizes
             .iter()
             .filter(|p| {
-                if inventory_tracking
+                !(inventory_tracking
                     && !allow_when_exhausted
                     && p.inventory.is_some()
-                    && exhausted_prize_ids.contains(&p.id)
-                {
-                    return false;
-                }
-                true
+                    && exhausted_prize_ids.contains(&p.id))
             })
             .cloned()
             .collect()
@@ -706,14 +702,10 @@ pub async fn apply_prize_draw(
             .iter()
             .filter(|p| p.prize_type != "lose")
             .filter(|p| {
-                if inventory_tracking
+                !(inventory_tracking
                     && !allow_when_exhausted
                     && p.inventory.is_some()
-                    && exhausted_prize_ids.contains(&p.id)
-                {
-                    return false;
-                }
-                true
+                    && exhausted_prize_ids.contains(&p.id))
             })
             .cloned()
             .collect();
