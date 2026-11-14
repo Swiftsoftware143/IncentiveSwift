@@ -225,11 +225,14 @@ const API = (() => {
   const post = (p, b) => fetch(base + p, {method:'POST', headers:headers(), ...(b === undefined ? {} : {body:JSON.stringify(b)})}).then(handle);
   const put = (p, b) => fetch(base + p, {method:'PUT', headers:headers(), body:JSON.stringify(b)}).then(handle);
   const del = (p) => fetch(base + p, {method:'DELETE', headers:headers()}).then(handle);
+  // kanban B203 — renaming a workspace is `PATCH /workspaces/:id`; the helper had no patch
+  // verb, so the only manage route the backend lacked a caller for was a body edit.
+  const patch = (p, b) => fetch(base + p, {method:'PATCH', headers:headers(), body:JSON.stringify(b)}).then(handle);
   // A `multipart/form-data` route must NOT be handed a Content-Type: the browser has to set the
   // multipart boundary itself. Same auth header and same error handling as `post`.
   const postForm = (p, fd) => fetch(base + p, {method:'POST', headers: token ? { 'Authorization': 'Bearer ' + token } : {}, body: fd}).then(handle);
   return {
-    login, get, post, put, del, postForm,
+    login, get, post, put, patch, del, postForm,
     get token(){ return token; },
     get user(){ return user; },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('is_token', t); sessionStorage.setItem('is_user', JSON.stringify(u)); },
@@ -302,6 +305,8 @@ API.get = async (p) => _get(p)
   });
 API.post = async (p, b) => _post(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 API.put = async (p, b) => _put(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
+const _patch = API.patch;
+API.patch = async (p, b) => _patch(p, b).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 API.del = async (p) => _del(p).catch(e => { if (e.message && e.message.includes('Upgrade')) showUpgradePrompt(e.message); throw e; });
 
 const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
@@ -3620,6 +3625,172 @@ const TagModal = ({ st, show, hide, save }) => {
         <button class="px-4 py-1.5 text-sm rounded border" onClick=${hide}>Cancel</button>
         <button class="px-4 py-1.5 text-sm rounded bg-blue-600 text-white" onClick=${submit}>Save</button>
       </div>
+    </div>
+  </div>`;
+};
+
+// ---- WORKSPACES (kanban B203) -----------------------------------------------------------------
+// `src/workspaces/` serves list / create / rename / set-default / delete / switch, complete with a
+// plan ceiling, portfolio protection and role gating — and until this screen existed the console
+// called NONE of it. The defect this closes is the fleet's own rule: a backend route with no UI is
+// a defect, not a feature. The session token carries `wsid` (create_jwt), so the active workspace
+// is read from the token rather than guessed.
+const wsTokenId = () => {
+  try {
+    const t = API.token || '';
+    const part = t.split('.')[1];
+    if (!part) return '';
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    const claims = JSON.parse(json);
+    return claims && claims.wsid ? String(claims.wsid) : '';
+  } catch (e) { return ''; }
+};
+
+// Switch the whole console to another workspace: the server re-mints the session with the new
+// `wsid`, so the token is replaced and every screen's cached read is dropped — the data a customer
+// sees must never be the previous workspace's.
+const wsSwitch = async (id) => {
+  try {
+    const d = await API.post('/workspaces/' + id + '/switch');
+    if (d && d.token) API.setAuth(d.token, API.user);
+    S.views = {};
+    try { const me = await API.get('/auth/me'); if (me && me.user) S.me = me.user; } catch (e) {}
+    renderApp();
+  } catch (e) { alert('Could not switch workspace: ' + e.message); }
+};
+
+const WorkspaceSwitcher = () => {
+  const st = viewState('ws_switcher', { list: [], loaded: false });
+  if (!st.loaded) {
+    st.loaded = true;
+    API.get('/workspaces')
+      .then(d => { st.list = Array.isArray(d.workspaces) ? d.workspaces : []; renderApp(); })
+      .catch(e => { st.err = e.message; renderApp(); });
+  }
+  const current = wsTokenId() || ((st.list.find(w => w.is_default) || {}).id || '');
+  const active = st.list.find(w => String(w.id) === String(current)) || st.list[0] || null;
+  if (!st.list.length) return null;
+  return html`<div class="nav-text" style="margin-bottom:10px" data-workspace-switcher="1">
+    <label for="ws-pick" style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8">Workspace</label>
+    <select id="ws-pick" class="input" style="margin-top:4px;padding:6px 8px;font-size:13px" value=${active ? active.id : ''}
+      onChange=${(e) => { const v = e.target.value; if (v && String(v) !== String(current)) wsSwitch(v); }}
+      title="Switch the console to another workspace">
+      ${st.list.map(w => html`<option value=${w.id} selected=${active && String(w.id) === String(active.id)}>${w.name}${w.is_default ? ' (default)' : ''}</option>`)}
+    </select>
+    <button type="button" class="btn btn-sm btn-outline" style="margin-top:6px;width:100%" data-open-workspaces="1"
+      onClick=${() => { S.view = 'workspaces'; setViewHash && setViewHash('workspaces'); renderApp(); }}>Manage workspaces</button>
+  </div>`;
+};
+
+// Any mutation makes the switcher's cached list stale; drop it so the next render re-reads.
+const wsInvalidate = () => { const s = S.views && S.views['ws_switcher']; if (s) { s.loaded = false; s.list = []; } };
+
+const Workspaces = () => {
+  const st = viewState('workspaces', { list: [], loaded: false, name: '', err: '', msg: '', editing: null, editName: '', busy: false });
+  const load = async () => {
+    try {
+      const d = await API.get('/workspaces');
+      st.list = Array.isArray(d.workspaces) ? d.workspaces : [];
+      st.err = '';
+    } catch (e) { st.err = e.message; }
+    renderApp();
+  };
+  if (!st.loaded) { st.loaded = true; load(); }
+  const current = wsTokenId();
+  const canManage = ['company_admin', 'admin', 'super_admin'].indexOf(String((S.me && S.me.role) || (API.user && API.user.role) || '')) >= 0;
+
+  const add = async () => {
+    const name = String(st.name || '').trim();
+    if (!name) { st.err = 'Give the workspace a name.'; renderApp(); return; }
+    st.busy = true; st.err = '';
+    try {
+      await API.post('/workspaces', { name: name });
+      wsInvalidate();
+      st.name = ''; st.msg = 'Workspace added.';
+      st.loaded = false; load();
+    } catch (e) { st.err = e.message; }
+    st.busy = false; renderApp();
+  };
+  const rename = async (id) => {
+    const name = String(st.editName || '').trim();
+    if (!name) { st.err = 'Give the workspace a name.'; renderApp(); return; }
+    st.busy = true; st.err = '';
+    try {
+      await API.patch('/workspaces/' + id, { name: name });
+      wsInvalidate();
+      st.editing = null; st.editName = ''; st.msg = 'Workspace renamed.';
+      st.loaded = false; load();
+    } catch (e) { st.err = e.message; }
+    st.busy = false; renderApp();
+  };
+  const makeDefault = async (id) => {
+    st.busy = true; st.err = '';
+    try {
+      await API.post('/workspaces/' + id + '/default');
+      wsInvalidate();
+      st.msg = 'Default workspace changed.';
+      st.loaded = false; load();
+    } catch (e) { st.err = e.message; }
+    st.busy = false; renderApp();
+  };
+  const remove = async (w) => {
+    if (!confirm('Delete the workspace "' + w.name + '"? This cannot be undone.')) return;
+    st.busy = true; st.err = '';
+    try {
+      await API.del('/workspaces/' + w.id);
+      wsInvalidate();
+      st.msg = 'Workspace deleted.';
+      st.loaded = false; load();
+    } catch (e) { st.err = e.message; }
+    st.busy = false; renderApp();
+  };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-xl font-bold">Workspaces</h2>
+        <p class="text-sm text-gray-500">Each workspace keeps its own campaigns, leads and programmes. Switch between them from the sidebar.</p>
+      </div>
+    </div>
+    ${st.err ? html`<div data-ws-error="1" style="margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:10px;font-size:13px">${st.err}</div>` : null}
+    ${st.msg ? html`<div data-ws-msg="1" style="margin-bottom:12px;padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#065f46;border-radius:10px;font-size:13px">${st.msg}</div>` : null}
+    <div class="card">
+      <h3 class="font-semibold mb-3" style="font-size:15px">Your workspaces</h3>
+      <table class="table w-full" data-workspaces-table="1">
+        <thead><tr><th>Name</th><th>Default</th><th>Active</th><th style="text-align:right">Actions</th></tr></thead>
+        <tbody>
+          ${st.list.map(w => html`<tr data-workspace-row=${w.id}>
+            <td>${st.editing === w.id
+              ? html`<input class="input" style="max-width:260px" value=${st.editName} onInput=${e => { st.editName = e.target.value; }} onKeyDown=${e => { if (e.key === 'Enter') rename(w.id); }} />`
+              : html`<span style="font-weight:500">${w.name}</span>`}</td>
+            <td>${w.is_default ? html`<span class="badge badge-blue">Default</span>` : html`<span style="color:#94a3b8">—</span>`}</td>
+            <td>${String(w.id) === String(current) ? html`<span class="badge badge-green">Active</span>` : html`<span style="color:#94a3b8">—</span>`}</td>
+            <td style="text-align:right;white-space:nowrap">
+              ${st.editing === w.id
+                ? html`<button class="btn btn-sm" disabled=${st.busy} onClick=${() => rename(w.id)}>Save</button>
+                       <button class="btn btn-sm btn-outline" onClick=${() => { st.editing = null; st.editName = ''; renderApp(); }}>Cancel</button>`
+                : html`${String(w.id) !== String(current) ? html`<button class="btn btn-sm btn-outline" onClick=${() => wsSwitch(w.id)}>Switch to</button>` : null}
+                       ${canManage ? html`<button class="btn btn-sm btn-outline" style="margin-left:6px" onClick=${() => { st.editing = w.id; st.editName = w.name; renderApp(); }}>Rename</button>` : null}
+                       ${canManage && !w.is_default ? html`<button class="btn btn-sm btn-outline" style="margin-left:6px" onClick=${() => makeDefault(w.id)}>Make default</button>` : null}
+                       ${canManage && st.list.length > 1 ? html`<button class="btn btn-sm btn-red" style="margin-left:6px" onClick=${() => remove(w)}>Delete</button>` : null}`}
+            </td>
+          </tr>`)}
+          ${!st.list.length ? html`<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:18px">No workspaces yet.</td></tr>` : null}
+        </tbody>
+      </table>
+      <p class="text-xs text-gray-500" style="margin-top:10px">An account always keeps at least one workspace, and the workspace you are signed into cannot be deleted — switch away first. Portfolio businesses always keep their workspaces.</p>
+    </div>
+    <div class="card">
+      <h3 class="font-semibold mb-3" style="font-size:15px">Add a workspace</h3>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <label class="block text-xs font-medium mb-1" for="ws-new-name">Name</label>
+          <input id="ws-new-name" class="input" placeholder="e.g. Downtown store" value=${st.name}
+            onInput=${e => { st.name = e.target.value; }} onKeyDown=${e => { if (e.key === 'Enter') add(); }} />
+        </div>
+        <button class="btn" disabled=${st.busy} onClick=${add}>Add workspace</button>
+      </div>
+      <p class="text-xs text-gray-500" style="margin-top:8px">If your plan includes a set number of workspaces, adding past it tells you to upgrade — the ceiling is read from your plan, not from this screen.</p>
     </div>
   </div>`;
 };
@@ -7112,6 +7283,7 @@ const PromoCodes = () => {
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
     { id: 'feedback', label: 'Feedback', icon: '💬', adminOnly: true },
+    { id: 'workspaces', label: 'Workspaces', icon: '🏢' },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'analytics', label: 'Analytics', icon: '📈' },
     { id: 'profile', label: 'Profile', icon: '👤' },
@@ -7144,7 +7316,7 @@ const PromoCodes = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
+  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
@@ -7180,6 +7352,7 @@ const PromoCodes = () => {
             : html`<span class="badge" style="color:#94a3b8">\u2014</span>`}</div>
         </div>
       </div>
+      ${WorkspaceSwitcher()}
       <div class="flex-1 space-y-1">
         ${nav.map(n => html`<button type="button" class="nav-item ${S.view === n.id ? 'active' : ''}" onClick=${() => { S.view = n.id; setViewHash(n.id); renderApp(); }} aria-label=${n.label + (n.id === 'plans' && (S.buyRequestsWaiting || 0) > 0 ? ', ' + plural(S.buyRequestsWaiting, 'customer is', 'customers are') + ' waiting to be activated' : '')}>
           <span>${n.icon}</span><span class="nav-text">${n.label}</span>
