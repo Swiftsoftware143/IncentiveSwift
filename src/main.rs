@@ -1183,6 +1183,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/plans/assign",
             post(crate::handlers::plans_handler::admin_assign_plan),
         )
+        // Re-open every stored payment page NOW (2026-11-13). A link is proven once, when it is
+        // pasted; nothing looked again, so a page retired by the provider left the plan reading
+        // sellable while a buyer pressed Upgrade onto a dead page. Read-only, operator-only by the
+        // `/api/v1/admin/` gate.
+        .route(
+            "/api/v1/admin/plans/payment-pages/check",
+            post(crate::handlers::plans_handler::check_plan_payment_pages),
+        )
         // The operator's "switch this loyalty plan on" action (cron 2026-11-08). A loyalty
         // purchase request reaches the queue as a `loyalty_plan_request` ticket, and until this
         // route existed NOTHING but the Stripe webhook could set `loyalty_plan_status = 'active'`

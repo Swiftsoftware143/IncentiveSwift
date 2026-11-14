@@ -618,8 +618,29 @@ const Plans = () => {
     } catch(e){ alert(e.message); }
   };
 
+  // RE-OPEN EVERY STORED PAYMENT PAGE (2026-11-13). A plan's payment link is proven once, when it is
+  // pasted; nothing looked again, so a page the provider retired left the plan reading sellable while
+  // a buyer pressed Upgrade onto a dead page. This asks the question again and prints the verdict per
+  // plan. Read-only: it opens the stored URLs and writes nothing, so it is safe to press any time.
+  const checkPages = async () => {
+    st.payCheckBusy = true; renderApp();
+    try {
+      const r = await API.post('/admin/plans/payment-pages/check', {});
+      st.payCheck = r || null;
+    } catch (e) {
+      st.payCheck = { checked: 0, ok: 0, dead: 0, plans: [], note: 'Could not run the check: ' + (e && e.message ? e.message : e) };
+    }
+    st.payCheckBusy = false; renderApp();
+  };
+
   return html`<div>
-    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div>
+    <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Plans</h2><div class="flex gap-2"><button class="btn btn-sm btn-outline" disabled=${st.payCheckBusy === true} onClick=${() => checkPages()}>${st.payCheckBusy === true ? 'Opening pages…' : 'Check payment pages'}</button><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Plan</button></div></div>
+    ${st.payCheck ? html`<div class="card p-3 mb-4" data-pay-check-result="1" style=${'border-left:4px solid ' + ((st.payCheck.dead || 0) > 0 ? '#dc2626' : '#16a34a')}>
+      <div class="font-bold text-base">${(st.payCheck.dead || 0) > 0 ? 'At least one payment page is dead' : ((st.payCheck.checked || 0) > 0 ? 'Every stored payment page opened' : 'No plan has a payment page yet')}</div>
+      <div class="text-sm text-gray-600 mt-1">${st.payCheck.note || ''}</div>
+      <div class="text-xs text-gray-400 mt-1">Checked ${st.payCheck.checked || 0} page(s) — ${st.payCheck.ok || 0} opened, ${st.payCheck.dead || 0} dead.</div>
+      ${(st.payCheck.plans || []).length ? html`<table class="table mt-2"><thead><tr><th>Plan</th><th>Page</th><th>Verdict</th><th>HTTP</th></tr></thead><tbody>${(st.payCheck.plans || []).map(p => html`<tr><td class="font-medium">${p.name}</td><td class="text-xs break-all">${p.url}</td><td>${p.status}</td><td>${p.http || '—'}</td></tr>`)}</tbody></table>` : ''}
+    </div>` : ''}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Payment link</th><th>Actions</th></tr></thead>
         <tbody>${st.list.map(p => html`<tr>

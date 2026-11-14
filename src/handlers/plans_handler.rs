@@ -835,3 +835,115 @@ pub async fn admin_update_plan_features(
 
     Ok(Json(json!({ "plan": plan })))
 }
+
+/// What ONE stored payment page answered, in the vocabulary the operator sees.
+///
+/// A plan's `purchase_url` is proven once, when it is pasted
+/// ([`require_hosted_payment_url_resolves`]). Nothing opened it again afterwards, so a page the
+/// provider retired left the plan reading sellable while a buyer pressed Upgrade onto nothing.
+/// This asks the question again. `needs_browser` is deliberately its own verdict: a provider that
+/// answers 403 to a script has NOT said the page is dead, and calling that dead would train the
+/// operator to ignore the check. A BROWSER-shaped user agent is used for the same reason — the
+/// save-time helper's bot UA is refused by Stripe on every slug, live or not.
+async fn probe_payment_page(client: &reqwest::Client, url: &str) -> (&'static str, Option<u16>) {
+    if !url.trim().to_ascii_lowercase().starts_with("https://") {
+        return ("not_https", None);
+    }
+    match client.get(url).send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            if status == 404 || status == 410 {
+                ("dead", Some(status))
+            } else if (200..400).contains(&status) {
+                ("ok", Some(status))
+            } else {
+                ("needs_browser", Some(status))
+            }
+        }
+        Err(e) => {
+            tracing::info!("payment-page check: {url} did not answer: {e}");
+            ("unreachable", None)
+        }
+    }
+}
+
+/// `POST /api/v1/admin/plans/payment-pages/check` — re-open every plan's stored payment page NOW.
+///
+/// Read-only: it opens each stored URL once and writes nothing. Every plan carrying a link is
+/// probed, active or not, because a plan an operator is about to re-enable is exactly the one whose
+/// stale link nobody has looked at. The `/api/v1/admin/` prefix is the operator gate
+/// (`security::auth::admin_guard`), so this is platform-admin only without a second role test.
+pub async fn check_plan_payment_pages(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let rows = sqlx::query(
+        "SELECT id, name, slug, purchase_url FROM plans \
+         WHERE purchase_url IS NOT NULL AND btrim(purchase_url) <> '' ORDER BY sort_order, name",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+             Chrome/131.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| {
+            tracing::error!("payment-page check: could not build the HTTP client: {e:?}");
+            AppError::Internal("Could not run the payment-page check just now".to_string())
+        })?;
+
+    let mut out: Vec<Value> = Vec::with_capacity(rows.len());
+    let mut ok = 0usize;
+    let mut dead = 0usize;
+    for row in &rows {
+        let url = row
+            .try_get::<Option<String>, _>("purchase_url")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if url.is_empty() {
+            continue;
+        }
+        let (verdict, http) = probe_payment_page(&client, &url).await;
+        if verdict == "ok" {
+            ok += 1;
+        }
+        if verdict == "dead" {
+            dead += 1;
+        }
+        out.push(json!({
+            "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+            "name": row.try_get::<String, _>("name").unwrap_or_default(),
+            "slug": row.try_get::<String, _>("slug").unwrap_or_default(),
+            "url": url,
+            "status": verdict,
+            "http": http,
+        }));
+    }
+
+    let note = if out.is_empty() {
+        "No plan carries a payment page yet, so there is nothing to open. Paste the address your \
+         payment provider gives you for a plan and this check proves it before a buyer sees it."
+    } else if dead > 0 {
+        "At least one stored payment page no longer opens. A buyer pressing Upgrade on that plan \
+         would land on a dead page — replace the link, or take that plan off sale."
+    } else {
+        "Every stored payment page opened. A card can still be refused later, but nothing is \
+         silently dead right now."
+    };
+
+    Ok(Json(json!({
+        "checked": out.len(),
+        "ok": ok,
+        "dead": dead,
+        "plans": out,
+        "note": note,
+    })))
+}
