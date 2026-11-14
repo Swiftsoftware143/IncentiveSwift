@@ -192,13 +192,12 @@ footer .links a:hover{color:#d1d5db}
       card.setAttribute('data-plan', slug);
       if (slug === 'pro') { var bg = document.createElement('div'); bg.className = 'badge'; bg.textContent = 'Most popular'; card.appendChild(bg); }
       var h = document.createElement('h3'); h.textContent = p.name || 'Plan'; card.appendChild(h);
-      var pr = document.createElement('div'); pr.className = 'price';
-      var amt = document.createElement('span'); amt.className = 'amt'; amt.textContent = money(p.monthly_price);
-      var per = document.createElement('span'); per.className = 'per'; per.textContent = '/month';
-      pr.appendChild(amt); pr.appendChild(per); card.appendChild(pr);
+      // NO PRICE ON A SALES PAGE (David, 2026-11-11): the plan and its amount live on the
+      // workspace's own Upgrade screen. 72e00a50 removed the static amounts; this builder kept
+      // painting them back from the plan records, so the page still advertised a number the
+      // visitor is never charged here.
       var yr = document.createElement('p'); yr.className = 'yr';
-      yr.textContent = Number(p.annual_price) > 0 ? 'or ' + money(p.annual_price) + '/year'
-        : (slug === 'free' ? 'Free forever \u2014 no card required' : '');
+      yr.textContent = slug === 'free' ? 'Free forever \u2014 no card required' : '';
       card.appendChild(yr);
       var ul = document.createElement('ul');
       var rows = CURATED[slug];
