@@ -245,6 +245,20 @@ async fn main() -> anyhow::Result<()> {
             post(crate::private_email::webhook_handler::inbound_webhook)
                 .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
         )
+        // SendGrid Inbound Parse — the OTHER receiver a domain can pick (measured 2026-11-14: the
+        // handler and its named router existed, the console handed every SendGrid-hosted customer a
+        // `…/api/v1/webhooks/sendgrid/inbound/<token>` URL, and nothing ever mounted the router, so
+        // that URL answered a router 404 and those inboxes could receive nothing). Mounted with the
+        // same 25 MB envelope and its own body-read deadline; the token in the path is the whole
+        // credential (SendGrid signs nothing), so the path is in
+        // `security::route_policy::PUBLIC_ROUTES`. The router is a NAMED fn rather than an inline
+        // `Router::new()` so the route censuses can see the real prefix (kanban t_f75da95f).
+        .nest(
+            "/api/v1/webhooks/sendgrid",
+            crate::private_email::webhook_handler::sendgrid_router(
+                body_deadline::BodyReadDeadline::from_secs(config.body_read_deadline_secs),
+            ),
+        )
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
         // Account email-branding logo, PUBLIC by design (kanban t_feab8aff): a mail client renders

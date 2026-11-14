@@ -199,6 +199,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the raw body (`timestamp`+`token`+`signature`). A domain with no key configured accepts
     // nothing, so an unconfigured address is refused rather than trusted.
     "/api/v1/webhooks/mailgun/inbound",
+    // The OTHER receiver a domain can choose (kanban 2026-11-14): SendGrid Inbound Parse. It signs
+    // nothing — there is no HMAC and no header — so the credential is the unguessable per-domain
+    // `inbound_token` IN THE PATH, and the handler resolves the domain BY IT before writing
+    // anything. A token that names no domain writes nothing. Without this entry the mounted route
+    // would be refused 401 by default-deny before the token was ever looked at.
+    "/api/v1/webhooks/sendgrid/inbound/:token",
     "/api/v1/channels/inbound",
     // Read by the businesses themselves (the served admin guide documents it).
     "/api/v1/treasury/rules",
