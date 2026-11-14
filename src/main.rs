@@ -790,6 +790,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/check-plan",
             get(handlers::loyalty::check_plan_loyalty),
         )
+        // The two guardrails the REDEMPTION WRITER enforces (`accounts.redemption_cap_pct`,
+        // `accounts.min_redemption_credits`). Nothing in the product could write them: every
+        // account carried the column default (10 % / 100), so an owner could not change the cap on
+        // their own programme and every quote answered 10 %. Owner-scoped by the bearer — no id in
+        // the path, so one account cannot touch another's.
+        .route(
+            "/api/v1/loyalty/redeem-settings",
+            get(handlers::loyalty::get_redeem_settings).put(handlers::loyalty::put_redeem_settings),
+        )
         // Secret code admin routes
         .route(
             "/api/v1/loyalty/secret-codes",

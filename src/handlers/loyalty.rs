@@ -1728,6 +1728,93 @@ pub async fn plan_allows_loyalty(db: &sqlx::PgPool, account_id: Uuid) -> Result<
     Ok(enabled.unwrap_or(true))
 }
 
+/* ===== Redemption guardrails (owner-configurable, 2026-11-14) ===== */
+
+/// Read the two redemption guardrails the WRITER enforces.
+///
+/// `accounts.redemption_cap_pct` and `min_redemption_credits` are what the redemption path
+/// (`loyalty_v2.rs`) applies to compute `max_redeemable_this_visit` and to refuse a redemption
+/// below the floor. Until this pair of handlers existed there was **no write path anywhere in the
+/// product**: every account carried the column DEFAULT (10 % / 100 credits), so an owner could not
+/// change the single most valuable loyalty guardrail on their own programme, and every customer
+/// quote answered 10 %. `loyalty_programs.max_redeem_percent` looked like the setting, but no code
+/// read it — the enforced number and the visible one were different columns.
+pub async fn get_redeem_settings(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    let row: Option<(i32, i32)> = sqlx::query_as(
+        "SELECT redemption_cap_pct, min_redemption_credits FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    // The same fallback the redemption writer uses when the row cannot be read, so the screen and
+    // the enforcement can never disagree about what applies.
+    let (cap_pct, min_credits) = row.unwrap_or((10, 100));
+    Ok(Json(json!({
+        "redemption_cap_pct": cap_pct,
+        "min_redemption_credits": min_credits,
+    })))
+}
+
+/// Body for the redemption guardrails. Both fields optional so a screen can send one.
+#[derive(Deserialize)]
+pub struct RedeemSettingsInput {
+    pub redemption_cap_pct: Option<i32>,
+    pub min_redemption_credits: Option<i32>,
+}
+
+/// Set the redemption guardrails for the caller's OWN account (owner-scoped by the bearer; there is
+/// no id in the path, so one account can never write another's). The response is the row as stored,
+/// read back by `RETURNING`, which is what makes the save provable without a second request.
+pub async fn put_redeem_settings(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<RedeemSettingsInput>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".to_string()))?;
+    if body.redemption_cap_pct.is_none() && body.min_redemption_credits.is_none() {
+        return Err(AppError::BadRequest("Nothing to update".to_string()));
+    }
+    // A percentage of a bill, so 0..=100 — 0 pauses point redemption without pausing earning.
+    if let Some(pct) = body.redemption_cap_pct {
+        if !(0..=100).contains(&pct) {
+            return Err(AppError::BadRequest(
+                "The redemption cap must be between 0 and 100 percent".to_string(),
+            ));
+        }
+    }
+    if let Some(min) = body.min_redemption_credits {
+        if !(0..=1_000_000).contains(&min) {
+            return Err(AppError::BadRequest(
+                "The minimum redemption must be between 0 and 1000000 credits".to_string(),
+            ));
+        }
+    }
+    let row: Option<(i32, i32)> = sqlx::query_as(
+        "UPDATE accounts
+            SET redemption_cap_pct = COALESCE($1, redemption_cap_pct),
+                min_redemption_credits = COALESCE($2, min_redemption_credits)
+          WHERE id = $3
+      RETURNING redemption_cap_pct, min_redemption_credits",
+    )
+    .bind(body.redemption_cap_pct)
+    .bind(body.min_redemption_credits)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (cap_pct, min_credits) =
+        row.ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+    Ok(Json(json!({
+        "redemption_cap_pct": cap_pct,
+        "min_redemption_credits": min_credits,
+    })))
+}
+
 /// Check if the account's plan has loyalty enabled.
 pub async fn check_plan_loyalty(
     State(state): State<AppState>,
