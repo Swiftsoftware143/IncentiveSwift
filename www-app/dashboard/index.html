@@ -2800,7 +2800,15 @@ function pbRender() {
     var pressVerb = verb;
     var pressPath = 'checkout';
     if (tillPath === 'request') { pressVerb = 'Request '; pressPath = 'request'; }
-    else if (tillPath === 'payment_link') { pressVerb = 'Open payment page for '; pressPath = 'payment_link'; }
+    else if (tillPath === 'payment_link') {
+      // PER PLAN, not per installation (2026-11-13). The till's `upgrade_path` is decided once for
+      // the whole install (any sellable plan flips it to `payment_link`), so a plan carrying NO
+      // hosted page was labelled "Open payment page for X" too — and pressing it filed a request
+      // instead. The catalogue now publishes each plan's own `purchase_url`, so the promise on the
+      // button matches what the press will do.
+      if (p.purchase_url) { pressVerb = 'Open payment page for '; pressPath = 'payment_link'; }
+      else { pressVerb = 'Request '; pressPath = 'request'; }
+    }
     var action;
     if (isCur) {
       action = '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>';
@@ -3198,5 +3206,6 @@ function downloadMyCsv(type, btn) {
 })();
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
+
 </body>
 </html>
