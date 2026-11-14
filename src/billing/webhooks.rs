@@ -468,8 +468,9 @@ async fn deliver_credentials(
         // credential path (a provider-signed payment webhook), not the served, unauthenticated
         // signup — the only door the `X-Swift-Harness` marker belongs to.
         sqlx::query(
-            "INSERT INTO accounts (id, name, email, password_hash, slug, role, tenant_id, purchase_pin)
-             VALUES ($1, $2, $3, $4, $5, 'company_admin', $6, '0000')"
+            "INSERT INTO accounts (id, name, email, password_hash, slug, role, tenant_id, purchase_pin, plan_tier_id)
+             VALUES ($1, $2, $3, $4, $5, 'company_admin', $6, '0000',
+                     (SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true AND price_monthly = 0 LIMIT 1))"
         )
         .bind(account_id)
         .bind(customer_name)

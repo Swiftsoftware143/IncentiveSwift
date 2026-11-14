@@ -70,6 +70,9 @@ pub mod mechanics;
 /// Plan resolution for the ported private-inbox module — IncentiveSwift sells through
 /// `plan_tiers`/`tier_features`, not CoreSwift's module registry.
 mod module_registry;
+/// No account is ever left without a named plan tier (measured 2026-11-14: one real customer and
+/// two canaries carried `plan_tier_id = NULL`, so their console showed no plan at all).
+mod plan_seating;
 /// The private inbox (multi-address mail on the customer's own domain) and the workspace model,
 /// ported from CoreSwift/ADASwift (kanban t_101cd6ca).
 pub mod private_email;
@@ -204,6 +207,12 @@ async fn main() -> anyhow::Result<()> {
     // them, so they accumulated for ever. First tick is immediate, so the deploy retires the
     // backlog; never fatal, a janitor must not take the app down.
     probe_sweep::spawn_probe_sweeper(state.db.clone());
+
+    // Name the plan on an account that has none (cron 2026-11-14, measured: 3 of 8 live accounts
+    // carried `plan_tier_id = NULL`, one of them a real customer). Every surface that names a level
+    // reads that column, so a bare account showed no plan at all while its limits silently fell back
+    // to free. One indexed anti-NULL UPDATE at boot; zero rows is the normal answer.
+    plan_seating::spawn_plan_seater(state.db.clone());
 
     // Request-body read deadline (kanban t_af70c0ca). Printed here so the number an operator sees
     // at boot is the number the middleware enforces — both come from this one config field.

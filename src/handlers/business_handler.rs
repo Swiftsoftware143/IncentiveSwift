@@ -152,8 +152,9 @@ pub async fn register_business(
     // signup, so it is not the anonymous door the marker exists for. Recording a marker here would
     // attribute a real directory partner's business account to fleet machinery.
     sqlx::query(
-        r#"INSERT INTO accounts (id, email, name, role, slug, credits_balance, credits_lifetime_used, created_at)
-           VALUES ($1, $2, $3, 'company_admin', $4, 0, 0, $5)"#
+        r#"INSERT INTO accounts (id, email, name, role, slug, credits_balance, credits_lifetime_used, created_at, plan_tier_id)
+           VALUES ($1, $2, $3, 'company_admin', $4, 0, 0, $5,
+                   (SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true AND price_monthly = 0 LIMIT 1))"#
     )
     .bind(business_id)
     .bind(&email)

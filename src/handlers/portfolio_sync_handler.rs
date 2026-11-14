@@ -60,7 +60,9 @@ pub(crate) async fn ensure_account(
         email.to_string()
     };
     sqlx::query(
-        "INSERT INTO accounts (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
+        "INSERT INTO accounts (id, name, email, plan_tier_id) VALUES ($1, $2, $3, \
+         (SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true AND price_monthly = 0 LIMIT 1)) \
+         ON CONFLICT (id) DO NOTHING",
     )
     .bind(aid)
     .bind(name)
