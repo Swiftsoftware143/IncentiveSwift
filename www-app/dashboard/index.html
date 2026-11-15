@@ -1696,13 +1696,21 @@ function renderUsage() {
   ];
   var h = '<div class="stats">';
   var over = [];
+  var atLimit = [];
   for (var i = 0; i < rows.length; i++) {
     var used = rows[i][1];
     var n = (rows[i][2] === undefined || rows[i][2] === null) ? null : Number(rows[i][2]);
     var label = esc(rows[i][0]) + ' \u2014 of ' + esc(usageLimitLabel(rows[i][2]));
-    if (n !== null && isFinite(n) && n > 0 && Number(used) > n) {
+    var numUsed = Number(used);
+    if (n !== null && isFinite(n) && n > 0 && isFinite(numUsed) && numUsed > n) {
       label += ' \u26a0 over your plan limit';
       over.push(rows[i][0].toLowerCase());
+    } else if (n !== null && isFinite(n) && n > 0 && isFinite(numUsed) && numUsed >= n) {
+      // REACHED the ceiling, not above it. The server refuses the NEXT create with 402
+      // "<resource> limit reached", so a panel that only warns when used > n is silent at
+      // exactly the moment the customer needs to know. Worded with the refusal's own facts.
+      label += ' \u2014 at your plan limit';
+      atLimit.push(rows[i][0].toLowerCase());
     }
     h += '<div class="stat"><div class="v">' + esc(dashNum(used)) + '</div><div class="l">' + label + '</div></div>';
   }
@@ -1711,6 +1719,10 @@ function renderUsage() {
     h += '<p style="color:#b45309;font-size:13px;margin:12px 0 0">This workspace is above its plan\'s '
       + esc(over.join(' and ')) + ' allowance. Nothing already here is removed \u2014 the count is live. '
       + 'The way up is in Plan &amp; billing at the bottom of this page.</p>';
+  } else if (atLimit.length) {
+    h += '<p style="color:#b45309;font-size:13px;margin:12px 0 0">This workspace has used its whole '
+      + esc(atLimit.join(' and ')) + ' allowance, so the next one is refused until the plan changes. '
+      + 'Nothing already here is removed. The way up is in Plan &amp; billing at the bottom of this page.</p>';
   }
   el.innerHTML = h;
 }
