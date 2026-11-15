@@ -426,7 +426,11 @@ var LOY = { status: null, plans: null, programs: null, err: false, email: '', bu
             editing: null, saving: false, newOpen: false, newName: '', newPpc: '',
             // The owner's STATUS LADDER, per programme id (cron 2026-11-11). `null` means "not read
             // yet", so the panel can say so instead of claiming an empty ladder.
-            ladder: {}, ladderErr: {}, ladderSaving: false, ladderNotice: {} };
+            ladder: {}, ladderErr: {}, ladderSaving: false, ladderNotice: {},
+            // The REDEMPTION GUARDRAILS the server actually enforces (2026-11-14): the cap on how
+            // much of a bill points may pay, and the smallest redemption. `null` means "not read
+            // yet", so the block says so instead of painting an invented 0.
+            redeem: null, redeemErr: false, redeemSaving: false };
 try { user = JSON.parse(sessionStorage.getItem(USER_KEY) || 'null'); } catch (e) { user = null; }
 
 // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ──────────────────────────────────────────────
@@ -1937,7 +1941,76 @@ function loyEdit(id) {
   loyRender();
   // Read the ladder when the panel opens, so the editor never shows an assumed state (cron
   // 2026-11-11). A failed read leaves LOY.ladder[id] null and the block says it could not read.
-  if (LOY.editing === id) loyLadderLoad(id);
+  if (LOY.editing === id) { loyLadderLoad(id); loyRedeemLoad(); }
+}
+
+// ── THE REDEMPTION GUARDRAILS (2026-11-14) ───────────────────────────────────────────────────────
+// GET /api/v1/loyalty/redeem-settings answers what the redemption WRITER enforces for this account
+// (`accounts.redemption_cap_pct` / `min_redemption_credits`). Until this screen existed neither
+// number had a writer anywhere in the product, so every programme quoted the same 10 % and an owner
+// could not change it. Read on panel open so the inputs show the enforced values, never defaults.
+function loyRedeemLoad() {
+  LOY.redeem = null; LOY.redeemErr = false;
+  fetch(window.location.origin + '/api/v1/loyalty/redeem-settings',
+        { headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store' })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (x) {
+      if (!x.ok || !x.j || x.j.redemption_cap_pct == null) { LOY.redeemErr = true; }
+      else { LOY.redeem = x.j; }
+      loyRender();
+    })
+    .catch(function () { LOY.redeemErr = true; loyRender(); });
+}
+function loySaveRedeem() {
+  if (LOY.redeemSaving) return;
+  var cap = loyReadNum('loy-p-cap'), min = loyReadNum('loy-p-min');
+  if (cap > 100) { loySay('The cap is a percentage of the bill, so it cannot be more than 100.', true); return; }
+  LOY.redeemSaving = true;
+  loySay('Saving redemption limits\u2026', false);
+  fetch(window.location.origin + '/api/v1/loyalty/redeem-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    body: JSON.stringify({ redemption_cap_pct: cap, min_redemption_credits: min })
+  }).then(function (r) {
+    return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+  }).then(function (x) {
+    LOY.redeemSaving = false;
+    if (!x.ok || !x.j || x.j.redemption_cap_pct == null) {
+      loySay(loySayServer(x, 'The server refused those limits.'), true); return;
+    }
+    LOY.redeem = x.j;
+    loySay('Saved \u2014 redemptions now follow ' + x.j.redemption_cap_pct + '% of the bill, minimum '
+           + x.j.min_redemption_credits + ' points.', false);
+    loyRender();
+  }).catch(function (e) {
+    LOY.redeemSaving = false;
+    loySay('Could not save the redemption limits: ' + e.message, true);
+  });
+}
+// Renders the two enforced guardrails. THREE states, because "could not read" must never look like
+// "set to 0": unread -> a loading line, failed -> says so honestly, read -> the real inputs.
+function loyRedeemBlock() {
+  if (LOY.redeemErr) {
+    return '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #cbd5e1;font-size:12px;color:#b91c1c">'
+      + 'Redemption limits could not be read right now \u2014 reload the page to try again. '
+      + 'Nothing here is shown as a default, because the real numbers are unknown.</div>';
+  }
+  if (!LOY.redeem) {
+    return '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #cbd5e1;font-size:12px;color:#64748b">'
+      + 'Redemption limits \u2014 reading\u2026</div>';
+  }
+  var r = LOY.redeem;
+  return '<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #cbd5e1">'
+    + '<div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:6px">Redemption limits'
+    + ' <span style="font-weight:400;color:#64748b">(applies to your whole account)</span></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px">'
+    + loyNumField('Most of a bill points can pay (%)', 'loy-p-cap', r.redemption_cap_pct,
+        'The rest of the bill must be paid in money. 0 stops point redemption without stopping earning.')
+    + loyNumField('Smallest redemption (points)', 'loy-p-min', r.min_redemption_credits,
+        'A member cannot redeem fewer points than this.')
+    + '</div>'
+    + '<div style="margin-top:6px"><button class="btn btn-sm" onclick="loySaveRedeem()">Save redemption limits</button></div>'
+    + '</div>';
 }
 function loyNumField(label, id, v, hint) {
   return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">' + esc(label)
@@ -1978,6 +2051,12 @@ function loyPanel(p) {
     + loyCheck('Status tiers on', 'loy-p-tiers', p.tiers_enabled)
     + loyCheck('Milestones on', 'loy-p-mile', p.milestones_enabled)
     + loyCheck('Programme running (un-tick to pause)', 'loy-p-active', p.is_active !== false)
+    // THE REDEMPTION GUARDRAILS (2026-11-14). These two numbers are the ones the redemption path
+    // REALLY applies — they live on the account, not the programme, so they cover every programme
+    // this workspace runs and the block says so. Both had NO writer anywhere: the columns carried
+    // their defaults (10 % / 100) so every quote answered 10 %, and an owner had no control over the
+    // one setting that decides how much of a bill points can pay.
+    + loyRedeemBlock()
     // THE STATUS LADDER (cron 2026-11-11). "Status tiers on" above switches the tier multiplier on,
     // and until now nothing on this console could say WHAT the tiers are: the ladder writer existed
     // (PUT /loyalty/programs/:id/status-tiers, owner-scoped) but only the operator's admin console
