@@ -42,9 +42,13 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
+<nav class="navx-crumb" aria-label="Breadcrumb"><a href="/">Home</a><span class="navx-sep" aria-hidden="true">&rsaquo;</span><span aria-current="page">Sign up</span></nav><script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://incentiveswift.com/"},{"@type":"ListItem","position":2,"name":"Sign up","item":"https://incentiveswift.com/signup.html"}]}</script><style id="navx-style">.navx-crumb{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;font-size:.82rem;max-width:1100px;margin:0 auto;padding:14px 18px 0;line-height:1.4}.navx-crumb a{text-decoration:underline;text-underline-offset:2px}.navx-crumb .navx-sep{opacity:.55}.navx-crumb [aria-current]{opacity:.75}.navx-rel{max-width:1100px;margin:34px auto 18px;padding:16px 18px;border:1px solid rgba(128,128,128,.45);border-radius:10px;background:rgba(128,128,128,.08);color:inherit}.navx-rel h2{font-size:1rem;margin:0 0 .6rem;letter-spacing:.01em}.navx-rel ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.45rem 1.4rem}.navx-rel a{text-decoration:underline;text-underline-offset:2px;font-size:.93rem}</style>
+
+
 <div class="signup-card">
   <div class="logo"><svg width="24" height="24" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="13" stroke="#00E5FF" stroke-width="2"/><path d="M9 14l3 3 7-7" stroke="#00E5FF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg> <span>IncentiveSwift</span></div>
-  <p class="subtitle">Free account — no credit card required <span class="plan-badge">Free Plan</span></p>
+  <p class="subtitle">Free account — no credit card required <span class="plan-badge" id="signup-plan-badge">Free Plan</span></p>
+  <p class="terms" id="signup-plan-note" style="display:none;font-size:12.5px;color:#cfd2dd;line-height:1.5"></p>
 
   <div class="feature-list">
     <div class="feature-row"><span class="check">✓</span> Spin-to-Win, Raffles, Quizzes &amp; more</div>
@@ -59,30 +63,48 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 
   <form id="signup-form" onsubmit="handleSignup(event)">
     <div class="form-group">
-      <label>Full Name</label>
-      <input type="text" id="signup-name" placeholder="Your name or company" required>
+      <label>Full name</label>
+      <input type="text" id="signup-name" placeholder="Your name" required aria-label="Full name">
     </div>
     <div class="form-group">
-      <label>Email Address</label>
-      <input type="email" id="signup-email" placeholder="you@company.com" required>
+      <label>Workspace name</label>
+      <input type="text" id="signup-workspace" placeholder="Your company or team" required aria-label="Workspace name">
     </div>
     <div class="form-group">
-      <label>Password</label>
-      <input type="password" id="signup-password" placeholder="At least 6 characters" minlength="6" required>
+      <label>Work email</label>
+      <input type="email" id="signup-email" placeholder="you@company.com" required aria-label="Work email">
     </div>
-    <button type="submit" id="signup-btn" class="submit-btn">Create Free Account →</button>
+    <button type="submit" id="signup-btn" class="submit-btn">Create free account</button>
   </form>
 
-  <p class="terms">By signing up, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</p>
+  <p class="terms">We'll email your login details to the address above. You can change your password any time in your profile settings.</p>
+
+  <p class="terms">By signing up, you agree to our <a href="/terms.html">Terms of Service</a> and <a href="/privacy.html">Privacy Policy</a>.</p>
   <p class="login-link">Already have an account? <a href="https://app.incentiveswift.com/">Sign In →</a></p>
 </div>
 
 <script>
+/* WHICH TIER the visitor picked on /pricing (measured live 2026-10-21).
+   Every card on /pricing advertised a tier, but its CTA carried nothing, so a visitor who
+   clicked "Get Pro" landed on a page whose only plan word was "Free Plan" - the pick vanished.
+   The CTA now carries the slug, and this page says out loud what the account starts on. */
+var TIER_NAMES = {free: 'Free', pro: 'Pro', enterprise: 'Enterprise'};
+var pickedTier = (new URLSearchParams(location.search).get('plan') || '').trim().toLowerCase();
+var pickedLabel = TIER_NAMES[pickedTier];
+if (pickedLabel && pickedTier !== 'free') {
+  document.getElementById('signup-plan-badge').textContent = 'Starts on Free';
+  var planNote = document.getElementById('signup-plan-note');
+  planNote.textContent = 'You picked ' + pickedLabel + '. New accounts start on Free \u2014 no card. '
+    + 'Open Plan & billing in your dashboard whenever you want us to switch the workspace to '
+    + pickedLabel + '.';
+  planNote.style.display = 'block';
+}
+
 async function handleSignup(e) {
   e.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
+  const workspaceName = document.getElementById('signup-workspace').value.trim();
   const email = document.getElementById('signup-email').value.trim();
-  const password = document.getElementById('signup-password').value;
   const btn = document.getElementById('signup-btn');
   const errDiv = document.getElementById('signup-error');
   const sucDiv = document.getElementById('signup-success');
@@ -90,13 +112,8 @@ async function handleSignup(e) {
   errDiv.style.display = 'none';
   sucDiv.style.display = 'none';
 
-  if (!email || !password) {
-    errDiv.textContent = 'Please fill in all required fields';
-    errDiv.style.display = 'block';
-    return;
-  }
-  if (password.length < 6) {
-    errDiv.textContent = 'Password must be at least 6 characters';
+  if (!name || !workspaceName || !email) {
+    errDiv.textContent = 'Please enter your full name, workspace name and work email';
     errDiv.style.display = 'block';
     return;
   }
@@ -105,10 +122,15 @@ async function handleSignup(e) {
   btn.innerHTML = '<span class="spinner"></span> Creating account...';
 
   try {
+    // No password is sent: the server generates the login credentials and emails them to this
+    // address (the SAME path the auto-created tag accounts use), so signup and auto-provisioning
+    // can never drift. The customer confirms their address by signing in with the emailed password
+    // — the mail is the proof the address is real, and the workspace they name is the account's
+    // first workspace.
     const res = await fetch('/api/v1/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email, workspace_name: workspaceName, plan: pickedTier || 'free' }),
     });
 
     const data = await res.json();
@@ -117,21 +139,91 @@ async function handleSignup(e) {
       throw new Error(data.message || data.error || 'Registration failed');
     }
 
-    // Success — show message then redirect to app with token
-    sucDiv.textContent = '✅ Account created! Redirecting to your dashboard...';
-    sucDiv.style.display = 'block';
+    // Success — do NOT log them in. The button becomes "Check your email" and the message names
+    // the address the login details were sent to. No redirect: the emailed password is the only way
+    // in, which is the two-step address check.
+    var safeEmail = email.replace(/[<>&]/g, '');
+    var resetLink = '<a href="https://app.incentiveswift.com/forgot-password.html?email=' +
+      encodeURIComponent(email) + '" style="color:var(--accent);font-weight:600">send yourself a reset code</a>';
 
-    // Store token and redirect to the app subdomain
-    setTimeout(() => {
-      window.location.href = 'https://app.incentiveswift.com/#token=' + encodeURIComponent(data.token);
-    }, 1000);
+    // Did the server keep the tier they picked? Say it plainly instead of leaving it ignored.
+    var keptPlan = '';
+    if (data && data.plan_request && data.plan_request.plan_name) {
+      keptPlan = String(data.plan_request.plan_name).replace(/[<>&]/g, '');
+    }
+    var keptPlanNote = keptPlan
+      ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'Your <strong>' + keptPlan + '</strong> pick is with our team — your workspace starts on Free (no card taken) ' +
+        'and they make the switch for you.</div>'
+      : '';
+
+    var emailed = !(data && data.credentials_emailed === false);
+    if (emailed) {
+      sucDiv.innerHTML = '<strong>Account created!</strong> Check your email \u2014 we sent your login details to ' +
+        safeEmail + '.' +
+        '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'Nothing in your inbox after a minute? Check your spam folder, then ' + resetLink + '.' +
+        '</div>' +
+        keptPlanNote;
+    } else {
+      window.__signupToken = (data && data.token) || '';
+      sucDiv.innerHTML = '<strong>Account created \u2014 but we could not send your login details to ' +
+        safeEmail + '.</strong><br>So there is nothing waiting in your inbox, and we will not pretend otherwise. ' +
+        'Choose a password below and sign in with it - no email needed.' +
+        initialPwBoxHtml() +
+        '<div style="font-size:13px;margin-top:8px">Prefer a code? ' + resetLink +
+        ' (it uses the same email that just failed).</div>' +
+        keptPlanNote +
+        '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
+        'If that reset code does not arrive either, the mail service for this site is having trouble — ' +
+        'try again in a few minutes, or ' +
+        '<a href="https://app.incentiveswift.com/contact.html" style="color:var(--accent);font-weight:600">send us a message here</a> ' +
+        'and we will let you in by hand.' +
+        '</div>';
+    }
+    sucDiv.style.display = 'block';
+    // The primary action is now "check the inbox", never "create account" again.
+    btn.textContent = 'Check your email';
+    btn.disabled = true;
   } catch (e) {
     errDiv.textContent = e.message;
     errDiv.style.display = 'block';
     btn.disabled = false;
-    btn.textContent = 'Create Free Account →';
+    btn.textContent = 'Create free account';
+  }
+}
+
+// The mail-independent way in (2026-10-29). `POST /api/v1/auth/initial-password` already exists for
+// exactly this state: it takes the SIGNUP session's own token, needs no email at all, and is gated in
+// SQL on `accounts.password_undelivered`, so it can never overwrite a password the customer already
+// knows. Offered on the honest-failure arm, so a customer whose mail never left can still get in.
+function initialPwBoxHtml() {
+  return '<div style="margin-top:12px;padding:12px;border:1px solid rgba(52,211,153,.35);background:rgba(16,185,129,.08);border-radius:8px;text-align:left">' +
+    '<strong style="font-size:14px">Set your password now</strong>' +
+    '<div style="font-size:13px;margin:6px 0">You are already signed up - choose the password you will sign in with:</div>' +
+    '<label for="initPw" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:4px">Choose your password</label>'
+    + '<input id="initPw" type="password" minlength="8" aria-label="Choose your password" placeholder="At least 8 characters" style="width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px">' +
+    '<button type="button" onclick="saveInitialPassword()" style="margin-top:8px;width:100%;padding:9px 10px;border:0;border-radius:6px;background:#0d9488;color:#fff;font-weight:600;cursor:pointer">Save password</button>' +
+    '<div id="initPwMsg" style="font-size:13px;margin-top:8px"></div>' +
+    '</div>';
+}
+async function saveInitialPassword() {
+  var box = document.getElementById('initPwMsg');
+  var pw = (document.getElementById('initPw') || {}).value || '';
+  if (pw.length < 8) { box.innerHTML = '<span style="color:#b91c1c">That is shorter than 8 characters - try again.</span>'; return; }
+  if (!window.__signupToken) { box.innerHTML = '<span style="color:#b91c1c">Your signup session has expired. Use the reset code above, or write to support.</span>'; return; }
+  try {
+    var r = await fetch('/api/v1/auth/initial-password', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + window.__signupToken }, body: JSON.stringify({ password: pw }) });
+    var d = await r.json().catch(function(){ return {}; });
+    if (!r.ok) throw new Error(d.message || d.error || 'Could not save that password.');
+    box.innerHTML = '<span style="color:#15803d"><strong>Password saved.</strong> Sign in with it at the link below.</span>';
+  } catch (err) {
+    box.innerHTML = '<span style="color:#b91c1c">' + String(err.message).replace(/[<>&]/g, '') + '</span>';
   }
 }
 </script>
+
+
+<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring IncentiveSwift</h2><ul><li><a href="/iqs-play.html">IQS game</a></li><li><a href="/long-form-qualifier.html">Long-form qualifier</a></li><li><a href="/guide.html">Guide</a></li><li><a href="/admin-guide.html">Admin guide</a></li></ul></section>
 </body>
 </html>

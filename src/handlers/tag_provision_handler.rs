@@ -485,6 +485,9 @@ pub async fn handle_provision_free_account(
             // indistinguishable from a customer's. A real lead's domain matches neither list, so
             // the answer is `None` and their account is written exactly as before.
             probe_harness: probe_harness.as_deref(),
+            // The machine door never asks a lead for a workspace name; the mint falls back to the
+            // historical "My Workspace" default.
+            workspace_name: None,
         },
     )
     .await?;

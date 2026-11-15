@@ -72,6 +72,13 @@ pub struct RegisterInput {
     /// (cron 2026-10-23) — before this, the pick was dropped and the operator never knew.
     #[serde(default, alias = "plan_slug")]
     pub plan: Option<String>,
+    /// The name the customer gave their first workspace (the signup page's "Workspace name" field,
+    /// David's rule — a customer names their workspace, never a placeholder). OPTIONAL: a caller
+    /// that omits it (the machine door never reaches this handler, but an API client might) keeps
+    /// the "My Workspace" default the mint falls back to. `account_name` is accepted as an alias so
+    /// a CoreSwift-shaped caller does not silently drop the field.
+    #[serde(default, alias = "account_name")]
+    pub workspace_name: Option<String>,
 }
 
 /// POST /api/v1/auth/register — self-service signup, assigns Free plan.
@@ -140,6 +147,9 @@ pub async fn register(
             // The self-serve signup is always the platform's own free tier, never a setting.
             entry_plan_slug: "free",
             probe_harness: probe_harness.as_deref(),
+            // The first workspace is named from the signup's "Workspace name" field; `None` keeps
+            // the historical "My Workspace" default.
+            workspace_name: body.workspace_name.as_deref(),
         },
     )
     .await

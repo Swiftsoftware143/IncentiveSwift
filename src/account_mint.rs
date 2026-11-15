@@ -73,6 +73,11 @@ pub struct MintRequest<'a> {
     /// query field. `None` mints a row byte-identical to every row minted before the column
     /// existed, which is what every authenticated door passes.
     pub probe_harness: Option<&'a str>,
+    /// The name the account's FIRST workspace carries (the signup page's "Workspace name" field,
+    /// David's rule: a customer names their workspace, never a placeholder). `None` or a
+    /// whitespace-only value leaves the trigger-minted 'My Workspace' label in place (zz_is29), so
+    /// the machine door (which passes `None`) mints exactly what it always did.
+    pub workspace_name: Option<&'a str>,
 }
 
 /// The tier id a mint will be seated on, or `None` when this app has no such free, active tier.
@@ -229,9 +234,30 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
         .await?;
     }
 
-    // The account row, its purchase PIN, its default industry and its API key are now ONE unit of
-    // work (kanban t_7863696b): the commit lands only when all four are complete, so a rolled-back
-    // signup leaves no key row and a committed signup never ends without a key.
+    // ── 5b. NAME the account's first workspace (David's rule: a customer names their workspace) ──
+    // `zz_is29_workspace_on_account_insert.sql` mints the default workspace ('My Workspace') with an
+    // AFTER-INSERT trigger on `accounts` (the same rule CoreSwift ships), so this mint must never
+    // INSERT a workspace itself — a second INSERT collides with `ux_workspaces_one_default` (measured
+    // live: duplicate-key 500). It only RENAMES the trigger's row when the signup supplied a
+    // "Workspace name". A blank/absent name keeps the trigger's 'My Workspace' label (the machine
+    // door passes None and is unchanged). The value is TRIMMED and clipped to `workspaces.name`
+    // (VARCHAR(120)); an over-long value must not turn the rename into a 22001.
+    if let Some(ws_name) = req.workspace_name.map(str::trim).filter(|s| !s.is_empty()) {
+        let clipped: String = ws_name.chars().take(120).collect();
+        sqlx::query(
+            "UPDATE workspaces SET name = $1, updated_at = now() \
+             WHERE tenant_id = $2 AND is_default = true",
+        )
+        .bind(&clipped)
+        .bind(account_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // The account row, its purchase PIN, its default industry, its (trigger-minted, now-named) first
+    // workspace and its API key are now ONE unit of work (kanban t_7863696b): the commit lands only
+    // when all five are complete, so a rolled-back signup leaves no key row and a committed signup
+    // never ends without one.
     let api_key = crate::handlers::api_keys::mint_on(
         &mut tx,
         account_id, // tenant_id = self (standalone workspace), exactly as the accounts row

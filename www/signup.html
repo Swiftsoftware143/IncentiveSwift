@@ -63,14 +63,18 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
 
   <form id="signup-form" onsubmit="handleSignup(event)">
     <div class="form-group">
-      <label>Full Name</label>
-      <input type="text" id="signup-name" placeholder="Your name or company" required aria-label="Your name or company">
+      <label>Full name</label>
+      <input type="text" id="signup-name" placeholder="Your name" required aria-label="Full name">
     </div>
     <div class="form-group">
-      <label>Email Address</label>
-      <input type="email" id="signup-email" placeholder="you@company.com" required aria-label="Email">
+      <label>Workspace name</label>
+      <input type="text" id="signup-workspace" placeholder="Your company or team" required aria-label="Workspace name">
     </div>
-    <button type="submit" id="signup-btn" class="submit-btn">Create Free Account →</button>
+    <div class="form-group">
+      <label>Work email</label>
+      <input type="email" id="signup-email" placeholder="you@company.com" required aria-label="Work email">
+    </div>
+    <button type="submit" id="signup-btn" class="submit-btn">Create free account</button>
   </form>
 
   <p class="terms">We'll email your login details to the address above. You can change your password any time in your profile settings.</p>
@@ -99,6 +103,7 @@ if (pickedLabel && pickedTier !== 'free') {
 async function handleSignup(e) {
   e.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
+  const workspaceName = document.getElementById('signup-workspace').value.trim();
   const email = document.getElementById('signup-email').value.trim();
   const btn = document.getElementById('signup-btn');
   const errDiv = document.getElementById('signup-error');
@@ -107,8 +112,8 @@ async function handleSignup(e) {
   errDiv.style.display = 'none';
   sucDiv.style.display = 'none';
 
-  if (!name || !email) {
-    errDiv.textContent = 'Please enter your name and email address';
+  if (!name || !workspaceName || !email) {
+    errDiv.textContent = 'Please enter your full name, workspace name and work email';
     errDiv.style.display = 'block';
     return;
   }
@@ -119,15 +124,13 @@ async function handleSignup(e) {
   try {
     // No password is sent: the server generates the login credentials and emails them to this
     // address (the SAME path the auto-created tag accounts use), so signup and auto-provisioning
-    // can never drift. The user confirms their address by signing in with the emailed password.
-    // The tier picked on the pricing page now travels WITH the signup (cron 2026-10-23). Before this
-    // the page said "You picked Pro" and then posted name+email only, so the pick died at the door and
-    // nothing in the operator's console knew a paid tier had been asked for. The server files the same
-    // plan-request row the dashboard's upgrade button creates, which the Plan requests view reads.
+    // can never drift. The customer confirms their address by signing in with the emailed password
+    // — the mail is the proof the address is real, and the workspace they name is the account's
+    // first workspace.
     const res = await fetch('/api/v1/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, plan: pickedTier || 'free' }),
+      body: JSON.stringify({ name, email, workspace_name: workspaceName, plan: pickedTier || 'free' }),
     });
 
     const data = await res.json();
@@ -136,44 +139,35 @@ async function handleSignup(e) {
       throw new Error(data.message || data.error || 'Registration failed');
     }
 
-    // Success — do NOT log them in. They confirm their email by signing in with the password we sent.
-    // The panel also names the way back in when that mail never arrives (cron 2026-10-19): the reset
-    // request page is on the APP host and prefills the address from ?email=, so the customer does not
-    // retype it. Without this, "check your email" was a dead end whenever the mail was filtered —
-    // the same gap closed on FunnelSwift (a8ed8ad) and MissedCall.
-    document.getElementById('signup-form').style.display = 'none';
-    // Did the server keep the tier they picked? It answers `plan_request: {plan_slug, plan_name}`
-    // when the pick named a paid plan and the request row was filed (cron 2026-10-23), null when they
-    // picked Free or named nothing. Say it plainly instead of leaving the pick looking ignored.
+    // Success — do NOT log them in. The button becomes "Check your email" and the message names
+    // the address the login details were sent to. No redirect: the emailed password is the only way
+    // in, which is the two-step address check.
+    var safeEmail = email.replace(/[<>&]/g, '');
+    var resetLink = '<a href="https://app.incentiveswift.com/forgot-password.html?email=' +
+      encodeURIComponent(email) + '" style="color:var(--accent);font-weight:600">send yourself a reset code</a>';
+
+    // Did the server keep the tier they picked? Say it plainly instead of leaving it ignored.
     var keptPlan = '';
     if (data && data.plan_request && data.plan_request.plan_name) {
       keptPlan = String(data.plan_request.plan_name).replace(/[<>&]/g, '');
     }
-    // ── Did the login mail actually LEAVE? (kanban t_41da58ca) ─────────────────────────────────
-    // The server now answers `credentials_emailed`: false when the send failed, and false for a
-    // reserved/test address the sender withholds. This page used to print "Check your email" no
-    // matter what, so a customer whose mail never went was left holding an account whose generated
-    // password nobody could read, hunting an inbox that would stay empty. Say what happened.
-    // Shape copied from FunnelSwift's signup.html; the reset page is the way in when the mail is lost.
-    var safeEmail = email.replace(/[<>&]/g, '');
     var keptPlanNote = keptPlan
       ? '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
         'Your <strong>' + keptPlan + '</strong> pick is with our team — your workspace starts on Free (no card taken) ' +
         'and they make the switch for you.</div>'
       : '';
-    var resetLink = '<a href="https://app.incentiveswift.com/forgot-password.html?email=' +
-      encodeURIComponent(email) + '" style="color:var(--accent);font-weight:600">send yourself a reset code</a>';
+
     var emailed = !(data && data.credentials_emailed === false);
     if (emailed) {
-      sucDiv.innerHTML = '✅ Account created!<br><strong>Check your email</strong> — we\'ve sent your login details to ' +
-        safeEmail + '.<br><br>You can change your password any time in your profile settings.' +
-        keptPlanNote +
+      sucDiv.innerHTML = '<strong>Account created!</strong> Check your email \u2014 we sent your login details to ' +
+        safeEmail + '.' +
         '<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(52,211,153,.3);font-size:13px">' +
         'Nothing in your inbox after a minute? Check your spam folder, then ' + resetLink + '.' +
-        '</div>';
+        '</div>' +
+        keptPlanNote;
     } else {
       window.__signupToken = (data && data.token) || '';
-      sucDiv.innerHTML = '⚠️ <strong>Account created — but we could not send your login details to ' +
+      sucDiv.innerHTML = '<strong>Account created \u2014 but we could not send your login details to ' +
         safeEmail + '.</strong><br>So there is nothing waiting in your inbox, and we will not pretend otherwise. ' +
         'Choose a password below and sign in with it - no email needed.' +
         initialPwBoxHtml() +
@@ -188,19 +182,21 @@ async function handleSignup(e) {
         '</div>';
     }
     sucDiv.style.display = 'block';
+    // The primary action is now "check the inbox", never "create account" again.
+    btn.textContent = 'Check your email';
+    btn.disabled = true;
   } catch (e) {
     errDiv.textContent = e.message;
     errDiv.style.display = 'block';
     btn.disabled = false;
-    btn.textContent = 'Create Free Account →';
+    btn.textContent = 'Create free account';
   }
 }
 
 // The mail-independent way in (2026-10-29). `POST /api/v1/auth/initial-password` already exists for
 // exactly this state: it takes the SIGNUP session's own token, needs no email at all, and is gated in
 // SQL on `accounts.password_undelivered`, so it can never overwrite a password the customer already
-// knows. ADASwift, FunnelSwift, MissedCall and WorkflowSwift all offer it on the same arm; this page
-// pointed the customer at the reset page, which travels the SAME mail path that had just failed.
+// knows. Offered on the honest-failure arm, so a customer whose mail never left can still get in.
 function initialPwBoxHtml() {
   return '<div style="margin-top:12px;padding:12px;border:1px solid rgba(52,211,153,.35);background:rgba(16,185,129,.08);border-radius:8px;text-align:left">' +
     '<strong style="font-size:14px">Set your password now</strong>' +
@@ -220,8 +216,7 @@ async function saveInitialPassword() {
     var r = await fetch('/api/v1/auth/initial-password', { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + window.__signupToken }, body: JSON.stringify({ password: pw }) });
     var d = await r.json().catch(function(){ return {}; });
     if (!r.ok) throw new Error(d.message || d.error || 'Could not save that password.');
-    box.innerHTML = '<span style="color:#15803d"><strong>Password saved.</strong> Opening your dashboard...</span>';
-    setTimeout(function(){ window.location = (d.token ? 'https://app.incentiveswift.com/dashboard/#token=' + encodeURIComponent(d.token) : 'https://app.incentiveswift.com/login.html'); }, 900);
+    box.innerHTML = '<span style="color:#15803d"><strong>Password saved.</strong> Sign in with it at the link below.</span>';
   } catch (err) {
     box.innerHTML = '<span style="color:#b91c1c">' + String(err.message).replace(/[<>&]/g, '') + '</span>';
   }
