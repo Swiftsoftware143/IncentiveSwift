@@ -249,6 +249,26 @@ async fn guard_protected(
     .bind(account_id)
     .fetch_optional(&state.db)
     .await?;
+
+    // THE TABLE IS THE AUTHORITY (measured live 2026-11-15). A portfolio company is a row the hub
+    // writes into `portfolio_companies`, so any account that parents one is one of David's own
+    // businesses and must never be retired. The three NAME markers below only know the companies
+    // that existed when they were written: the live list showed BV Premiere Products and Xride
+    // Drivers as portfolio rows with no protection, i.e. the console offered an enabled delete on two
+    // of his own companies. The table cannot go stale — the next company the hub syncs is covered
+    // the moment its row lands.
+    let is_portfolio: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM portfolio_companies WHERE account_id = $1)",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await?;
+    if is_portfolio {
+        return Err(AppError::BadRequest(
+            "refusing to delete a portfolio account (portfolio sync)".to_string(),
+        ));
+    }
+
     if let Some((name, email)) = row {
         let hay = format!("{} {}", name, email).to_lowercase();
         if let Some(hit) = PORTFOLIO_MARKERS.iter().find(|m| hay.contains(*m)) {
@@ -412,7 +432,14 @@ pub async fn list_all_tenants(
             -- remedies were "delete and re-mint" (which throws away the account's history) or
             -- direct SQL. Published here so the owner cell can badge it and offer the ONE recovery
             -- action the app already has the plumbing for.
-            a.password_undelivered
+            a.password_undelivered,
+            -- A PORTFOLIO COMPANY IS NOT DELETABLE (measured live 2026-11-15). The delete doors
+            -- refused a portfolio account only when its NAME matched one of three hard-coded markers,
+            -- so BV Premiere Products and Xride Drivers — both rows the hub writes into
+            -- `portfolio_companies` — came back unprotected and the console offered an enabled delete
+            -- on two of David's own businesses. The parent table is the authority: the next company
+            -- the hub syncs is covered the moment its row lands, with no constant to edit.
+            EXISTS (SELECT 1 FROM portfolio_companies pc WHERE pc.account_id = a.id) as is_portfolio
         FROM accounts a
         LEFT JOIN plan_tiers pt ON a.plan_tier_id = pt.id
         LEFT JOIN (
@@ -487,6 +514,9 @@ pub async fn list_all_tenants(
             // address is on a reserved / fleet-harness domain, i.e. this account is fleet machinery
             // rather than a customer (only reachable with `?include_probe=1`).
             let reserved_owner = owner_is_fleet_machinery(&email);
+            // TRUE => this account parents a `portfolio_companies` row, so it is one of David's own
+            // businesses: never deletable, and the console disables its delete checkbox (2026-11-15).
+            let is_portfolio: bool = row.get("is_portfolio");
             json!({
                 "id": id.to_string(),
                 "name": name.unwrap_or_default(),
@@ -506,6 +536,16 @@ pub async fn list_all_tenants(
                 // the resend action below.
                 "credentials_undelivered": credentials_undelivered,
                 "last_login_at": last_login_at.map(|t| t.to_rfc3339()),
+                // David's own businesses (the companies the hub mirrors into `portfolio_companies`)
+                // are never deletable. Published so the console can disable the row's delete
+                // checkbox and say why, instead of offering an action the server will refuse.
+                "is_portfolio": is_portfolio,
+                "protected": is_portfolio,
+                "protected_reason": if is_portfolio {
+                    "portfolio (portfolio sync)"
+                } else {
+                    ""
+                },
             })
         })
         .collect();

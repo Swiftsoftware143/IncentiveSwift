@@ -82,6 +82,59 @@ fn resolve_account_slug(name: &str, slug: &str) -> String {
     format!("{base}-{suffix}")
 }
 
+/// The tier a mirrored portfolio workspace must hold: this app's own TOP tier (highest
+/// `price_monthly` among active `plan_tiers`) — David's rule that his own businesses sit on the top
+/// plan in EVERY app.
+///
+/// WHY (measured live 2026-11-15): `ensure_account` minted every mirror on the FREE tier and no arm
+/// of this door ever rewrote an existing account's tier, so two of the five portfolio companies —
+/// BV Premiere Products and Xride Drivers — were served the free ceiling (5 programmes, 10 tags,
+/// 2 services) while Giraudy Capital, SwiftImpact Solutions and ZaarHub held Enterprise. Nothing was
+/// broken; the owners' own businesses were capped by an INSERT default that a re-sync never fixed.
+///
+/// Idempotent by construction: a workspace already on the top tier is left alone (no write), one on a
+/// lower tier is moved up in place, and an account naming no tier is seated. Only the account passed
+/// in is touched — that account is the parent of a `portfolio_companies` row by the time this runs.
+async fn seat_top_plan(
+    tx: &mut sqlx::PgConnection,
+    account_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let top: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, slug FROM plan_tiers WHERE is_active = true \
+         ORDER BY price_monthly DESC NULLS LAST, sort_order DESC NULLS LAST, name LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((tier_id, slug)) = top else {
+        tracing::warn!("portfolio sync: no active plan tier exists to seat");
+        return Ok(None);
+    };
+
+    let current: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+    match current {
+        Some(Some(existing)) if existing == tier_id => Ok(None),
+        Some(_) => {
+            sqlx::query("UPDATE accounts SET plan_tier_id = $2, updated_at = NOW() WHERE id = $1")
+                .bind(account_id)
+                .bind(tier_id)
+                .execute(&mut *tx)
+                .await?;
+            tracing::info!(account = %account_id, tier = %slug, "portfolio sync: workspace seated on the top plan");
+            Ok(Some(slug))
+        }
+        None => {
+            // The account vanished between the resolve and this call — nothing to seat.
+            tracing::warn!(account = %account_id, "portfolio sync: account missing while seating a plan");
+            Ok(None)
+        }
+    }
+}
+
 /// The parent `accounts` row a mirrored portfolio must have (kanban t_47315540), and the account id
 /// the mirrored `portfolio_companies` row must point at.
 ///
@@ -123,7 +176,8 @@ pub(crate) async fn ensure_account(
     };
     sqlx::query(
         "INSERT INTO accounts (id, name, email, plan_tier_id) VALUES ($1, $2, $3, \
-         (SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true AND price_monthly = 0 LIMIT 1)) \
+         (SELECT id FROM plan_tiers WHERE is_active = true \
+          ORDER BY price_monthly DESC NULLS LAST, sort_order DESC NULLS LAST, name LIMIT 1)) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(aid)
@@ -520,6 +574,10 @@ async fn adopt_existing_company(
         }
     };
 
+    // 3. Seat the workspace on the top plan BEFORE provisioning, so the welcome mail and the
+    //    customer's first screen both read the tier the account actually holds (2026-11-15).
+    let plan_seated = seat_top_plan(&mut tx, found.account_id).await?;
+
     tx.commit().await?;
 
     let welcome_sent = if prov.user_created {
@@ -542,6 +600,7 @@ async fn adopt_existing_company(
         "key_minted": prov.key_minted,
         "welcome_sent": welcome_sent,
         "key_prefix": prov.key_prefix,
+        "plan_seated": plan_seated,
     })))
 }
 
@@ -653,6 +712,8 @@ pub async fn portfolio_sync_internal(
                 .bind(&email)
                 .execute(&mut *tx)
                 .await?;
+                // The owner's own businesses hold the TOP plan in every app (2026-11-15).
+                let plan_seated = seat_top_plan(&mut tx, parent_id).await?;
                 let prov = if can_provision {
                     provision_account(
                         &mut tx,
@@ -685,6 +746,7 @@ pub async fn portfolio_sync_internal(
                     "key_minted": prov.key_minted,
                     "welcome_sent": welcome_sent,
                     "key_prefix": prov.key_prefix,
+                    "plan_seated": plan_seated,
                 })));
             }
         }
@@ -741,6 +803,8 @@ pub async fn portfolio_sync_internal(
                     .bind(&email)
                     .execute(&mut *tx)
                     .await?;
+                    // The owner's own businesses hold the TOP plan in every app (2026-11-15).
+                    let plan_seated = seat_top_plan(&mut tx, parent_id).await?;
                     let prov = if can_provision {
                         provision_account(
                             &mut tx,
@@ -773,6 +837,7 @@ pub async fn portfolio_sync_internal(
                         "key_minted": prov.key_minted,
                         "welcome_sent": welcome_sent,
                         "key_prefix": prov.key_prefix,
+                        "plan_seated": plan_seated,
                     })));
                 }
                 // The company row already existed: this is the "update when provisioning is
@@ -787,6 +852,8 @@ pub async fn portfolio_sync_internal(
                     return Ok(Json(json!({ "status": "synced" })));
                 };
                 let mut tx = state.db.begin().await?;
+                // The owner's own businesses hold the TOP plan in every app (2026-11-15).
+                let plan_seated = seat_top_plan(&mut tx, aid).await?;
                 let prov = if can_provision {
                     provision_account(
                         &mut tx,
@@ -819,6 +886,7 @@ pub async fn portfolio_sync_internal(
                     "key_minted": prov.key_minted,
                     "welcome_sent": welcome_sent,
                     "key_prefix": prov.key_prefix,
+                    "plan_seated": plan_seated,
                 })));
             }
         }
