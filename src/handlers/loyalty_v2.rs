@@ -343,9 +343,26 @@ pub async fn purchase_verify(
     // ZC value: 100 ZaarCash = $1 (1 cent per credit)
     const ZC_PER_DOLLAR: i32 = 100;
 
+    // ── The owner's two redemption guardrails, ENFORCED ─────────────
+    // `redemption_cap_pct` and `min_redemption_credits` are what the owner sets on the loyalty
+    // screen, and that screen tells them verbatim: "redemptions now follow N% of the bill,
+    // minimum M points", "the rest of the bill must be paid in money", "0 stops point redemption
+    // without stopping earning", and "a member cannot redeem fewer points than this". Until now
+    // both numbers were only DISPLAYED (`max_redeemable_this_visit`) and the floor was bound at
+    // the top of this function and never read, so an offer could redeem any amount of a bill and
+    // the visible number and the enforced one were different again. The line below is the most
+    // points may pay on THIS bill.
+    let cap_credits_this_bill: i32 =
+        ((req.amount.max(0.0) * tenant_redemption_cap_pct as f64 / 100.0) * ZC_PER_DOLLAR as f64)
+            .floor() as i32;
+
     // ── Handle offer-based redemption (business applies a named offer) ──
     let mut redeemed_credits: i32 = 0;
     let mut offer_name: Option<String> = None;
+    // Set when the offer cannot be redeemed under the owner's guardrails. The PURCHASE still
+    // completes and still earns (the screen promises "0 stops point redemption without stopping
+    // earning"); only the redemption is withheld, and the answer says why.
+    let mut offer_refused: Option<String> = None;
 
     if let Some(oid) = req.offer_id {
         let offer = sqlx::query_as::<_, (String, i32, i32, bool)>(
@@ -382,7 +399,24 @@ pub async fn purchase_verify(
             )));
         }
 
-        redeemed_credits = max_discount_credits;
+        // The owner's guardrails decide whether this offer may be redeemed at all. A refusal
+        // here withholds the REDEMPTION, never the earning.
+        if max_discount_credits > cap_credits_this_bill {
+            offer_refused = Some(format!(
+                "This offer would take ${:.2} off in points, more than this business allows on one bill: {}% of a ${:.2} bill is ${:.2}. The points were NOT taken and the rest of the bill must be paid in money.",
+                max_discount_credits as f64 / ZC_PER_DOLLAR as f64,
+                tenant_redemption_cap_pct,
+                req.amount,
+                cap_credits_this_bill as f64 / ZC_PER_DOLLAR as f64
+            ));
+        } else if max_discount_credits < tenant_min_redemption {
+            offer_refused = Some(format!(
+                "This offer redeems {} points, below the smallest redemption this business allows ({} points). The points were NOT taken.",
+                max_discount_credits, tenant_min_redemption
+            ));
+        } else {
+            redeemed_credits = max_discount_credits;
+        }
     }
 
     // Calculate earned credits using configurable credit_rate.
@@ -523,9 +557,13 @@ pub async fn purchase_verify(
                 json!(format!("${:.2}", zc_dollars)),
             );
         }
+        if let Some(ref why) = offer_refused {
+            resp.insert("offer_refused".to_string(), json!(true));
+            resp.insert("offer_refused_reason".to_string(), json!(why));
+        }
 
         let zc_value = credit_amount as f64 / ZC_PER_DOLLAR as f64;
-        let msg = if deal_discount > 0.01 {
+        let mut msg = if deal_discount > 0.01 {
             format!(
                 "${:.2} deal excluded! Earned {} ZaarCash (worth ${:.2}) on ${:.2} spend{}",
                 deal_discount,
@@ -544,6 +582,9 @@ pub async fn purchase_verify(
                 credit_amount, zc_value, earnable_amount
             )
         };
+        if let Some(ref why) = offer_refused {
+            msg = format!("{} {}", why, msg);
+        }
         resp.insert("message".to_string(), json!(msg));
 
         Ok(Json(Value::Object(resp)))
