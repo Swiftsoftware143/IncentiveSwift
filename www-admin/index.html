@@ -150,6 +150,7 @@ function isdConfigKeys(cfg) {
    hash, so renderApp tells the widget which screen is open via window.inlineGuidePage(view). */
 window.appGuidePages = {
   dashboard:      { title: "Dashboard", desc: "Your numbers at a glance \u2014 campaigns, participants and activity in one place.", actions: ["Scan recent activity", "Jump into a campaign"] },
+  profile:        { title: "Profile", desc: "Your own name, company, username and picture, the password you sign in with, and the devices signed into your account. The last card closes the account: that ends every session and API key and refuses sign-in from then on, while keeping your campaigns, loyalty journal and ledger so support can reopen the business if you change your mind \u2014 nothing is deleted. Nothing on this screen sends email.", actions: ["Set your name, company and username", "Upload a picture", "Change your password", "Sign out every other device", "Close the account \u2014 ends every session and API key, keeps the data"] },
   campaigns:      { title: "Campaigns", desc: "Your incentive campaigns \u2014 the games and forms customers play (quizzes, spin wheels, scratch cards and more).", actions: ["Create a campaign", "Open one to edit it", "Publish it"] },
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
   wins:           { title: "Wins & Redemptions", desc: "Everyone who has won a prize in a campaign, with the redemption code they were shown and whether you have honoured it yet.", actions: ["Pick a campaign", "Read the code the winner was shown", "Mark a win redeemed when you hand the prize over"] },
@@ -6654,6 +6655,12 @@ const ProfileView = () => {
     // hands back after a request. `delivered:false` means the address is a reserved test address,
     // so the message says "no mail was sent" rather than "check your inbox".
     newEmail: '', mailMsg: '', mailKind: 'info', mailBusy: false,
+    // Close my account (cron 2026-11-15): POST /api/v1/auth/close-account has been mounted and
+    // documented since migration zz_is27 - it re-verifies the password, demands the word CLOSE,
+    // records closed_at, clears the password hash, bumps session_epoch and retires every API key -
+    // but NO console screen called it, so a customer's only route out was asking support to DELETE
+    // the row (which CASCADEs campaigns, the loyalty journal and the ledger). A closure is a STATE.
+    clPw: '', clConfirm: '', clBusy: false, clDone: false, clMsg: '', clKind: 'info',
   });
 
   // ONE reader of the profile: /auth/me. It also feeds the sidebar header (`S.me`), so the name,
@@ -6773,6 +6780,21 @@ const ProfileView = () => {
     renderApp();
   };
 
+  const closeAccount = async () => {
+    if (!window.confirm('Close this account? Every session and API key on it ends, and signing in is refused from then on.')) return;
+    st.clBusy = true; st.clMsg = ''; st.clKind = 'info'; renderApp();
+    try {
+      const d = await API.post('/auth/close-account', { password: (st.clPw || ''), confirm: ((st.clConfirm || '') + '').trim() });
+      st.clDone = true; st.clBusy = false;
+      st.clMsg = (d && d.message) || 'Your account is closed.'; st.clKind = 'ok';
+      renderApp();
+      // The closure bumped session_epoch, so the token this tab holds is dead: leave for sign-in
+      // rather than keep a shell that answers 401 on every screen.
+      setTimeout(() => { API.logout(); S.sessionEnded = true; S.view = 'dashboard'; renderApp(); }, 1600);
+    } catch (e) {
+      st.clBusy = false; st.clMsg = (e && e.message) || 'Could not close the account'; st.clKind = 'err'; renderApp();
+    }
+  };
   // The NEW password and its confirmation first, the CURRENT password UNDERNEATH as the check,
   // then Save — the order the fleet profile contract specifies.
   const changePw = async () => {
@@ -6884,6 +6906,22 @@ const ProfileView = () => {
       <button class="btn" id="signout-others" onClick=${signOutOthers} disabled=${st.soBusy}>${st.soBusy ? 'Signing out…' : 'Sign out every other device'}</button>
       <span id="signout-others-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.soKind === 'err' ? '#dc2626' : (st.soKind === 'ok' ? '#059669' : '#64748b'))}>${st.soMsg}</span>
     </div>`}
+    <div class="card" id="close-account-block">
+      <h3 class="text-base font-semibold mb-1">Close my account</h3>
+      <p class="text-sm text-gray-500 mb-3">Closing ends every session and API key on this account, and signing in is refused from then on. Your campaigns, loyalty journal and ledger are kept so support can reopen the business if you change your mind — nothing is deleted.</p>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div class="mb-3">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-pw">Your password (verifies it is you)</label>
+          <input class="input" id="cl-pw" type="password" autocomplete="current-password" value=${st.clPw || ''} onInput=${e => { st.clPw = e.target.value; }} />
+        </div>
+        <div class="mb-3">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-confirm">Type CLOSE to confirm</label>
+          <input class="input" id="cl-confirm" value=${st.clConfirm || ''} placeholder="CLOSE" onInput=${e => { st.clConfirm = e.target.value; }} />
+        </div>
+      </div>
+      <button class="btn" id="close-account-btn" onClick=${closeAccount} disabled=${st.clBusy || st.clDone}>${st.clBusy ? 'Closing…' : (st.clDone ? 'Account closed' : 'Close my account')}</button>
+      <span id="close-account-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.clKind === 'err' ? '#dc2626' : (st.clKind === 'ok' ? '#059669' : '#64748b'))}>${st.clMsg}</span>
+    </div>
   </div>`;
 };
 
