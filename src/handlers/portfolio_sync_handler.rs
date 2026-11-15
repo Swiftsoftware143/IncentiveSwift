@@ -532,6 +532,9 @@ async fn adopt_existing_company(
         "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
         "adopted": true,
         "account_id": found.account_id.to_string(),
+        // Fleet shape: FunnelSwift/ADASwift/MissedCall call this `tenant_id`. Emit both so a single
+        // contract can read the workspace id from every app without branching on the app name.
+        "tenant_id": found.account_id.to_string(),
         "portfolio_id": found.company_id
             .map(|c| c.to_string())
             .or_else(|| payload_pid.map(|p| p.to_string())),
