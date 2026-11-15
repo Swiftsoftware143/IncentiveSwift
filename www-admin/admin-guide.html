@@ -633,6 +633,16 @@ bytes a customer would receive: the uploaded logo, the display name, the colour 
 mailed, the recipient is always the caller's own address, and a reserved test address changes nothing
 here because no send is attempted. Use <strong>Send me a preview email</strong> when the proof you
 need is an inbox.</p>
+<p><strong>Company signature.</strong> Below the branding card the console carries a
+<strong>Company signature</strong> card: five fields (full name, job title, company, phone, a line)
+written by <code>PUT /api/v1/private-email/signature/workspace</code> &mdash; the <em>only</em> writer of
+the account default in <code>tenant_email_signatures</code>, and the block the single send path
+(<code>private_email::send_handler::deliver</code>) prints under the logo for compose, replies and
+forwards. <code>include_signature: false</code> on a send drops it for one message, and each mailbox
+carries its own <code>signature_mode</code> (<code>inherit</code> / <code>custom</code> /
+<code>off</code>) at <code>PUT /api/v1/private-email/signature?mailbox=</code>. Fields are capped at 120
+characters (160 for the line). The mail client tells a user to set the signature here, which is why the
+card exists: before it, the route had no UI.</p>
 <p>Routes: <code>POST|DELETE /api/v1/settings/branding/logo</code> (authenticated, the caller's own
 account) and the <strong>public</strong> <code>GET /api/v1/branding/logo/:tenant_id</code> &mdash;
 public by design, because a mail client renders <code>&lt;img src&gt;</code> with no credential.

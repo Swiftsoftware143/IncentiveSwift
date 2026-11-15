@@ -4316,7 +4316,7 @@ const ApiKeysView = () => {
 // /api/v1/settings/email/test never falls back to the platform mailer) — hence the unsaved-changes
 // note beside the button instead of a silent surprise.
 const SettingsView = () => {
-  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false, brand: {}, brandMsg: null, brandBusy: false, previewBusy: false, previewMsg: null });
+  const st = viewState('settings', { rows: [], mail: {}, stored: {}, error: null, saved: false, saving: false, testing: false, test: null, removing: false, removed: false, brand: {}, brandMsg: null, brandBusy: false, previewBusy: false, previewMsg: null, sig: { full_name: '', job_title: '', company: '', phone: '', line: '' }, sigBusy: false, sigMsg: null });
   const MAIL_KEYS = ['smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_email', 'smtp_from_name'];
   const asText = (v) => (v === null || v === undefined) ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
   const load = async () => {
@@ -4331,11 +4331,33 @@ const SettingsView = () => {
       // key; keep the raw object (asText would stringify it) for the branding card below.
       const brandRow = st.rows.find(r => r.key === 'email_branding');
       st.brand = (brandRow && brandRow.value && typeof brandRow.value === 'object') ? brandRow.value : {};
+      // The workspace signature (kanban cron 2026-11-15). GET|PUT /api/v1/private-email/signature/workspace
+      // is the ONLY writer of the account default the send path prints under the logo, and this pane is
+      // where a user is told to set it — a route with no UI on the screen that promises it is a defect.
+      try {
+        const sg = await API.get('/private-email/signature/workspace');
+        const g = (sg && sg.signature) || {};
+        st.sig = { full_name: g.full_name || '', job_title: g.job_title || '', company: g.company || '',
+                   phone: g.phone || '', line: g.line || '' };
+      } catch (e) { /* the signature is optional — a refusal must never blank this pane */ }
       st.error = null;
     } catch (e) { st.error = e.message; }
     renderApp();
   };
   if (!st._loaded) { st._loaded = true; load(); }
+  // The workspace signature save: PUT /private-email/signature/workspace is the one writer the mail
+  // client's "set it in the branding pane" promise depends on.
+  const saveSignature = async () => {
+    st.sigBusy = true; st.sigMsg = null; renderApp();
+    try {
+      const d = await API.put('/private-email/signature/workspace', {
+        full_name: asText(st.sig.full_name).trim(), job_title: asText(st.sig.job_title).trim(),
+        company: asText(st.sig.company).trim(), phone: asText(st.sig.phone).trim(), line: asText(st.sig.line).trim() });
+      st.sigMsg = { ok: true, text: (d && d.detail) || 'Signature saved' };
+      if (d && d.signature) st.sig = Object.assign({}, d.signature);
+    } catch (e) { st.sigMsg = { ok: false, text: 'Signature not saved: ' + (e.message || e) }; }
+    st.sigBusy = false; renderApp();
+  };
   const dirty = MAIL_KEYS.some(k => asText(st.mail[k] || '') !== asText(st.stored[k] || ''));
   const save = async () => {
     const host = asText(st.mail.smtp_host).trim();
@@ -4609,6 +4631,26 @@ const SettingsView = () => {
           ? html`<div><strong>Sent.</strong> ${st.test.detail} <span class="text-xs">(to ${st.test.to})</span></div>`
           : html`<div><strong>Not sent.</strong> ${st.test.detail}</div>`}
       </div>` : null}
+    </div>
+    <div class="card p-4 max-w-2xl">
+      <h3 class="font-medium mb-2">Company signature</h3>
+      <div class="text-sm text-gray-500 mb-3">Five plain fields printed under your logo on every message this account sends — welcome mail, receipts, password resets and the campaign mail you send. Each mailbox can use this default, write its own, or send without one.</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div><label class="text-xs font-medium text-gray-500 mb-1 block">Full name</label>
+          <input id="sig-full-name" class="input" maxlength="120" placeholder="e.g. Dana Reed" value=${asText(st.sig.full_name)} onInput=${e => { st.sig.full_name = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium text-gray-500 mb-1 block">Job title</label>
+          <input id="sig-job-title" class="input" maxlength="120" placeholder="e.g. Owner" value=${asText(st.sig.job_title)} onInput=${e => { st.sig.job_title = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium text-gray-500 mb-1 block">Company</label>
+          <input id="sig-company" class="input" maxlength="120" placeholder="e.g. Acme Rewards" value=${asText(st.sig.company)} onInput=${e => { st.sig.company = e.target.value; }} /></div>
+        <div><label class="text-xs font-medium text-gray-500 mb-1 block">Phone</label>
+          <input id="sig-phone" class="input" maxlength="120" placeholder="e.g. +1 555 010 1234" value=${asText(st.sig.phone)} onInput=${e => { st.sig.phone = e.target.value; }} /></div>
+        <div class="md:col-span-2"><label class="text-xs font-medium text-gray-500 mb-1 block">A line</label>
+          <input id="sig-line" class="input" maxlength="160" placeholder="e.g. Miami - Mon-Fri" value=${asText(st.sig.line)} onInput=${e => { st.sig.line = e.target.value; }} /></div>
+      </div>
+      <div class="flex items-center gap-2 mt-4 flex-wrap">
+        <button class="btn" id="sig-save" disabled=${st.sigBusy} onClick=${saveSignature}>${st.sigBusy ? 'Saving...' : 'Save signature'}</button>
+        ${st.sigMsg ? html`<span class=${'text-xs ' + (st.sigMsg.ok ? 'text-green-700' : 'text-red-700')}>${st.sigMsg.text}</span>` : null}
+      </div>
     </div>
     <div class="card p-4 max-w-2xl">
       <h3 class="font-medium mb-2">All tenant settings</h3>
