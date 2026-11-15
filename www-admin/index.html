@@ -5919,8 +5919,10 @@ const BulkTenantDelete = () => {
           </tr></thead>
           <tbody>${shown.map((r) => html`<tr>
             <td class="border-b px-2 py-1"><input type="checkbox" class="tenant-row" data-tenant-id=${r.id}
+              disabled=${!!r.protected} title=${r.protected ? 'Protected - ' + (r.protected_reason || '') : ''}
               checked=${sel.indexOf(r.id) >= 0} onChange=${() => toggle(r.id)} /></td>
-            <td class="border-b px-2 py-1">${r.name || ''}</td>
+            <td class="border-b px-2 py-1">${r.name || ''}${r.protected ? html`<span class="px-1 ml-1 rounded bg-yellow-100 text-yellow-800" style="font-size:10px" data-protected=${r.id}
+              title="One of your own businesses, mirrored from the portfolio. It cannot be deleted, so its checkbox is disabled.">Protected</span>` : ''}</td>
             <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}${r.credentials_undelivered ? html`<button class="px-1 ml-1 rounded border border-red-300 bg-red-50 text-red-700" style="font-size:10px"
               data-credentials-undelivered=${r.id} disabled=${busy}
               title="The first password was minted but the email carrying it never went out, so nobody has ever read this customer's password. This mints a new one and emails it."
