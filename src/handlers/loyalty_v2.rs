@@ -391,17 +391,18 @@ pub async fn purchase_verify(
                 .await?
                 .unwrap_or(0);
 
-        // Customer must have enough ZC to redeem the offer
+        // Every reason to withhold the redemption is handled in ONE chain: the customer's own
+        // balance first, then the owner's two guardrails. Each refusal withholds the REDEMPTION
+        // only -- the purchase still completes and still earns, which is exactly what the loyalty
+        // screen promises when it says "0 stops point redemption without stopping earning". The
+        // balance arm used to return 400 and fail the whole sale, so a customer a few points short
+        // cost the business the earned credits as well.
         if customer_balance < max_discount_credits {
-            return Err(AppError::BadRequest(format!(
-                "Insufficient ZaarCash. Offer needs {} ZC but you have {}.",
-                max_discount_credits, customer_balance
-            )));
-        }
-
-        // The owner's guardrails decide whether this offer may be redeemed at all. A refusal
-        // here withholds the REDEMPTION, never the earning.
-        if max_discount_credits > cap_credits_this_bill {
+            offer_refused = Some(format!(
+                "The customer has {} points, not enough for this offer ({} points). The points were NOT taken and the rest of the bill must be paid in money.",
+                customer_balance, max_discount_credits
+            ));
+        } else if max_discount_credits > cap_credits_this_bill {
             offer_refused = Some(format!(
                 "This offer would take ${:.2} off in points, more than this business allows on one bill: {}% of a ${:.2} bill is ${:.2}. The points were NOT taken and the rest of the bill must be paid in money.",
                 max_discount_credits as f64 / ZC_PER_DOLLAR as f64,
