@@ -41,3 +41,11 @@ credentials.json
 !*.example
 !*.sample
 !*.template
+
+# THE MAIL CLIENT IS TRACKED SOURCE (kanban t_5ef8ffc6). The bare build-artifact pattern above
+# (incentiveswift) matches ANY path component named incentiveswift, which swallowed www-mail/incentiveswift/ whole: 13
+# served files sat on disk, ignored by git, so a clone of this repo had no mail client at all and the
+# front-end push gate could not judge them (it skips a file the app repo does not track). Re-include
+# the directory and everything in it; the artifact ignore above still applies to build outputs.
+!www-mail/incentiveswift/
+!www-mail/incentiveswift/**
