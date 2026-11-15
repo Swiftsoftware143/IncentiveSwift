@@ -2048,7 +2048,7 @@ const PrizePools = () => {
 
 const LoyaltyPrograms = () => {
   const st = viewState('loyalty', { tab: 'programs', list: [], tiers: [], rewards: [], earned: [], earnedPending: 0, pledges: [], referrals: [], credits: [], members: [], memberProg: null, memberSearch: '', memberErr: '', memberBusy: false, card: null, md: null, mdBusy: false, mdErr: '', scans: [], dashboard: null, showModal: false, editItem: null, search: '', refLoading: false, tierProgId: null, tierErr: '', ladder: [], ladderErr: '', ladderMsg: '', ladderDraft: null });
-  if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); loadPlanGate(); }
+  if (!st._loaded) { st._loaded = true; loadPrograms(); loadEarned(); loadPlanGate(); loadRedeemSettings(); }
 
   // The plan gate (cron 2026-11-09). `GET /loyalty/check-plan` existed with no screen anywhere, so
   // a workspace whose plan excludes `module_loyalty_program` met a builder that silently refused
@@ -2263,8 +2263,46 @@ const LoyaltyPrograms = () => {
     try { await API.del('/loyalty/tiers/' + id); refreshTiers(); } catch(e){ alert(e.message); }
   };
 
+  // REDEMPTION GUARDRAILS (cron 2026-11-15). `GET|PUT /api/v1/loyalty/redeem-settings` are the only
+  // write path for `accounts.redemption_cap_pct` / `accounts.min_redemption_credits` — the two numbers
+  // the redemption path (`loyalty_v2.rs`) actually enforces, and until this card neither had a screen,
+  // so every owner was stuck on the column default (10 % / 100 credits) with no way to change the
+  // single most valuable guardrail on their own programme. A backend route with no UI is a defect.
+  async function loadRedeemSettings() {
+    try { st.redeem = await API.get('/loyalty/redeem-settings'); st.redeemErr = ''; }
+    catch(e){ st.redeemErr = (e && e.message) || 'Could not load the guardrails'; }
+    renderApp();
+  }
+  const saveRedeemSettings = async () => {
+    const capEl = document.getElementById('redeem-cap');
+    const minEl = document.getElementById('redeem-min');
+    const msg = document.getElementById('redeem-msg');
+    const cap = capEl ? parseInt(capEl.value, 10) : NaN;
+    const min = minEl ? parseInt(minEl.value, 10) : NaN;
+    if (!Number.isFinite(cap) || !Number.isFinite(min)) {
+      if (msg) { msg.style.color = '#991b1b'; msg.textContent = 'Both numbers are needed.'; }
+      return;
+    }
+    if (cap < 0 || cap > 100) { if (msg) { msg.style.color = '#991b1b'; msg.textContent = 'The cap must be between 0 and 100 percent.'; } return; }
+    if (min < 0) { if (msg) { msg.style.color = '#991b1b'; msg.textContent = 'The minimum cannot be negative.'; } return; }
+    try {
+      const saved = await API.put('/loyalty/redeem-settings', { redemption_cap_pct: cap, min_redemption_credits: min });
+      // The route echoes the row it wrote (RETURNING), so the screen shows what the redemption path
+      // will apply rather than what was typed.
+      st.redeem = saved || { redemption_cap_pct: cap, min_redemption_credits: min };
+      st.redeemErr = '';
+      renderApp();
+      const m2 = document.getElementById('redeem-msg');
+      if (m2) { m2.style.color = '#047857'; m2.textContent = 'Saved — ' + st.redeem.redemption_cap_pct + '% of a bill, minimum ' + st.redeem.min_redemption_credits + ' credits.'; }
+    } catch(e) {
+      const m2 = document.getElementById('redeem-msg');
+      if (m2) { m2.style.color = '#991b1b'; m2.textContent = 'Save failed: ' + ((e && e.message) || 'unknown error'); }
+    }
+  };
+
   const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','MCP','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
+    if (t==='Programs') loadRedeemSettings();
     if (t==='Plans') loadLoyaltyPlans();
     if (t==='Members') loadMembers();
     if (t==='Tiers') refreshTiers();
@@ -2362,6 +2400,16 @@ const LoyaltyPrograms = () => {
           ? html`<button class="btn btn-sm btn-outline" data-ops="loyalty-add-blocked" title="Your plan does not include Loyalty — the create route refuses with the same sentence." onClick=${() => go('my-plan')}>Upgrade to add programmes</button>`
           : html`<button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Program</button>`}</div></div>
     <div class="text-xs text-gray-500 mb-2">The check-in link is what your counter QR encodes — scanning it opens the customer check-in page and awards points to THIS programme. It works as soon as the programme is active. Linking the programme to a campaign (from the campaign editor) is optional: it adds that campaign's milestones and delivery to the same points.</div>
+    <div class="card mb-4" data-redeem-guardrails>
+      <div class="font-semibold">Redemption guardrails</div>
+      <div class="text-xs text-gray-500 mb-2">How much of a bill a member may pay with points, and the smallest redemption you accept. These are the numbers the redemption screen enforces the moment you save them — 0% pauses paying with points without pausing earning.</div>
+      ${st.redeemErr ? html`<div class="text-xs" style="color:#991b1b">Could not load the guardrails: ${st.redeemErr}</div>` : html`<div class="flex gap-3 items-end flex-wrap">
+        <label class="text-xs">Cap — % of a bill<input id="redeem-cap" class="input" type="number" min="0" max="100" style="width:120px" value=${st.redeem ? st.redeem.redemption_cap_pct : ''} /></label>
+        <label class="text-xs">Minimum credits per redemption<input id="redeem-min" class="input" type="number" min="0" style="width:170px" value=${st.redeem ? st.redeem.min_redemption_credits : ''} /></label>
+        <button class="btn btn-sm btn-green" onClick=${saveRedeemSettings}>Save guardrails</button>
+        <span id="redeem-msg" class="text-xs"></span>
+      </div>`}
+    </div>
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Currency</th><th>Points/Checkin</th><th>Streaks</th><th>Active</th><th>Check-in link</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(p => html`<tr>
