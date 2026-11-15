@@ -2000,12 +2000,20 @@ pub async fn public_program(
     let target = crate::mechanics::loyalty_checkin::resolve_public_program(&state, &slug).await?;
     let program = target.program;
 
-    let business_name: Option<String> =
-        sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
-            .bind(target.account_id)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten();
+    // THE BUSINESS a member sees at the till is the owner's COMPANY, not the person (cron
+    // 2026-11-15). Signup asks NAME + EMAIL only, so `accounts.name` is a human's name and every
+    // organic customer's QR page therefore introduced their shop as "John Smith" — and it kept
+    // doing so after the owner typed their business into the profile, because this read looked at
+    // `name` alone and never at the company they had configured. The company is the identity the
+    // owner chose for their business everywhere else; prefer it, and fall back to the account name
+    // for the rows that have none (a blank/whitespace company is treated as unset, not as a name).
+    let business_name: Option<String> = sqlx::query_scalar(
+        "SELECT COALESCE(NULLIF(btrim(COALESCE(company, '')), ''), name) FROM accounts WHERE id = $1",
+    )
+    .bind(target.account_id)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
 
     // What the page posts to award the points. A campaign slug when one serves this programme;
     // otherwise the programme's own slug — a first-class check-in target, not a fallback.
