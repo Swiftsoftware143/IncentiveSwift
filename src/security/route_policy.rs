@@ -417,6 +417,24 @@ mod tests {
     const ROUTE_SOURCES: &[(&str, &str)] = &[
         ("src/main.rs", include_str!("../main.rs")),
         ("src/billing/mod.rs", include_str!("../billing/mod.rs")),
+        // Routers MOUNTED BY `.nest(prefix, router)` (kanban t_f75da95f). A nested router's own
+        // templates are RELATIVE to the nest prefix, so they only become real paths once the
+        // prefix is glued back on: `nested_routes()` does that, and the top-level pass skips these
+        // files so nothing is counted twice. Add every module whose `router(...)` is nested into
+        // `main.rs`; `nested_routers_are_censused` fails when one is missing.
+        (
+            "src/workspaces/mod.rs",
+            include_str!("../workspaces/mod.rs"),
+        ),
+        ("src/feedback.rs", include_str!("../feedback.rs")),
+        (
+            "src/private_email/mod.rs",
+            include_str!("../private_email/mod.rs"),
+        ),
+        (
+            "src/private_email/webhook_handler.rs",
+            include_str!("../private_email/webhook_handler.rs"),
+        ),
     ];
 
     fn quoted_after(source: &str, needle: &[u8]) -> Vec<String> {
@@ -444,12 +462,158 @@ mod tests {
         out
     }
 
-    fn mounted_routes() -> Vec<String> {
+    /// Every `nest(prefix, callee(…))` call in `main.rs`, as `(prefix, callee)`.
+    fn nest_calls(main: &str) -> Vec<(String, String)> {
+        let bytes = main.as_bytes();
+        let needle = b".nest(";
         let mut out = Vec::new();
-        for (_, source) in ROUTE_SOURCES {
-            out.extend(quoted_after(source, b".route("));
+        let mut i = 0usize;
+        while i + needle.len() <= bytes.len() {
+            if &bytes[i..i + needle.len()] != needle {
+                i += 1;
+                continue;
+            }
+            let mut j = i + needle.len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j >= bytes.len() || bytes[j] != b'"' {
+                i = j + 1;
+                continue;
+            }
+            let mut k = j + 1;
+            while k < bytes.len() && bytes[k] != b'"' {
+                k += 1;
+            }
+            let prefix = main[j + 1..k].to_string();
+            let mut m = k + 1;
+            while m < bytes.len() && (bytes[m].is_ascii_whitespace() || bytes[m] == b',') {
+                m += 1;
+            }
+            let mut e = m;
+            while e < bytes.len() && bytes[e] != b'(' && bytes[e] != b')' && bytes[e] != b'\n' {
+                e += 1;
+            }
+            let callee = main[m..e].trim().to_string();
+            if !callee.is_empty() {
+                out.push((prefix, callee));
+            }
+            i = e.max(i + needle.len());
         }
         out
+    }
+
+    /// The source name a nested router's module path resolves to, both module shapes.
+    fn resolve_source(module: &str) -> Option<&'static str> {
+        let flat = format!("src/{module}.rs");
+        let dir = format!("src/{module}/mod.rs");
+        ROUTE_SOURCES
+            .iter()
+            .find(|(name, _)| *name == flat || *name == dir)
+            .map(|(name, _)| *name)
+    }
+
+    /// The body of `fn <name>` in `source`: from the definition to the first column-zero `}`.
+    fn fn_body<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+        let needle = format!("fn {name}");
+        let start = source.find(&needle)?;
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").map(|e| e + 2).unwrap_or(rest.len());
+        Some(&rest[..end])
+    }
+
+    /// Templates a `nest`ed router mounts, with the nest prefix glued back on so the allowlist is
+    /// compared against the REAL path (`/api/v1/webhooks/sendgrid` + `/inbound/:token`).
+    fn nested_routes() -> Vec<String> {
+        let main = ROUTE_SOURCES
+            .iter()
+            .find(|(name, _)| *name == "src/main.rs")
+            .map(|(_, src)| *src)
+            .expect("src/main.rs must be one of ROUTE_SOURCES");
+        let mut out = Vec::new();
+        for (prefix, callee) in nest_calls(main) {
+            let path = callee.trim_start_matches("crate::");
+            let mut parts: Vec<&str> = path.split("::").collect();
+            let Some(fn_name) = parts.pop() else {
+                continue;
+            };
+            let module = parts.join("/");
+            let Some(source_name) = resolve_source(&module) else {
+                continue;
+            };
+            let Some((_, source)) = ROUTE_SOURCES.iter().find(|(n, _)| *n == source_name) else {
+                continue;
+            };
+            let Some(body) = fn_body(source, fn_name) else {
+                continue;
+            };
+            for r in quoted_after(body, b".route(") {
+                if r == "/" {
+                    out.push(prefix.clone());
+                } else if r.starts_with('/') {
+                    out.push(format!("{prefix}{r}"));
+                } else {
+                    out.push(format!("{prefix}/{r}"));
+                }
+            }
+        }
+        out
+    }
+
+    fn mounted_routes() -> Vec<String> {
+        let nested = nested_routes();
+        let main = ROUTE_SOURCES
+            .iter()
+            .find(|(name, _)| *name == "src/main.rs")
+            .map(|(_, src)| *src)
+            .expect("src/main.rs must be one of ROUTE_SOURCES");
+        let nested_sources: Vec<String> = nest_calls(main)
+            .into_iter()
+            .filter_map(|(_, callee)| {
+                let path = callee.trim_start_matches("crate::").to_string();
+                let mut parts: Vec<&str> = path.split("::").collect();
+                parts.pop();
+                resolve_source(&parts.join("/")).map(|s| s.to_string())
+            })
+            .collect();
+        let mut out = Vec::new();
+        for (name, source) in ROUTE_SOURCES {
+            if nested_sources.iter().any(|n| n == name) {
+                continue;
+            }
+            out.extend(quoted_after(source, b".route("));
+        }
+        out.extend(nested);
+        out
+    }
+
+    /// A `nest`ed sub-router that is not in [`ROUTE_SOURCES`] is invisible to the census for the
+    /// same reason a `merge`d one is — and that is how the SendGrid receiver's allowlist entry read
+    /// as a hole (kanban t_f75da95f). Fail at the moment the nest is written.
+    #[test]
+    fn nested_routers_are_censused() {
+        let main = ROUTE_SOURCES
+            .iter()
+            .find(|(name, _)| *name == "src/main.rs")
+            .map(|(_, src)| *src)
+            .expect("src/main.rs must be one of ROUTE_SOURCES");
+        let calls = nest_calls(main);
+        assert!(
+            !calls.is_empty(),
+            "no `.nest(` call found in src/main.rs — this test's own extractor is broken"
+        );
+        for (prefix, callee) in calls {
+            let path = callee.trim_start_matches("crate::");
+            let mut parts: Vec<&str> = path.split("::").collect();
+            parts.pop();
+            let module = parts.join("/");
+            assert!(
+                resolve_source(&module).is_some(),
+                "src/main.rs nests {callee} at {prefix} but neither src/{module}.rs nor \
+                 src/{module}/mod.rs is in ROUTE_SOURCES, so its routes are invisible to the \
+                 public-allowlist census"
+            );
+        }
     }
 
     /// A `merge`d sub-router that is not in [`ROUTE_SOURCES`] is invisible to the census — the
