@@ -116,6 +116,13 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
     <p style="color:#64748b;font-size:14px;margin:0 0 14px">The loyalty programme your customers check in to. All of it is read from your own workspace: the plan you are on, the points credit left this month, and each programme's printable check-in link.</p>
     <div id="loy-status" style="font-size:14px;color:#64748b">Loading your loyalty plan&hellip;</div>
     <div id="loy-programs" style="margin-top:14px"></div>
+    <!-- The CUSTOMER REWARDS the owner settles (2026-11-15). GET /api/v1/loyalty/rewards/earned and
+         POST /api/v1/loyalty/rewards/:id/{approve,deny} are owner-scoped (the account that owns the
+         programme owns the redemption; a stranger gets 404), and until now their only caller was the
+         OPERATOR's admin console -- which a business owner cannot open. A programme with
+         `requires_approval` on a tier therefore had no one able to approve anything from the console
+         the owner actually has. Every figure below is the server's own answer at load. -->
+    <div id="loy-rewards" style="margin-top:14px"></div>
     <div id="loy-plans" style="margin-top:14px"></div>
     <div id="loy-msg" role="status" style="font-size:13px;margin-top:10px"></div>
   </div>
@@ -423,6 +430,10 @@ var USAGE = { data: null, err: false };
 // Loyalty card state — declared above the boot block for the same reason as USAGE/PB:
 // the boot block calls loyLoad(), and paintAccount() fills LOY.email.
 var LOY = { status: null, plans: null, programs: null, err: false, email: '', busy: false,
+            // The customer's redemptions. `earned === null` means "not read yet" and
+            // `earnedErr` means the read failed, so the panel never shows an empty list as
+            // if it were an answer.
+            earned: null, earnedErr: false, earnedPending: 0, rwBusy: '',
             editing: null, saving: false, newOpen: false, newName: '', newPpc: '',
             // The owner's STATUS LADDER, per programme id (cron 2026-11-11). `null` means "not read
             // yet", so the panel can say so instead of claiming an empty ladder.
@@ -1751,6 +1762,49 @@ function loyLoad() {
   get('/api/v1/loyalty/plan/status', 'status');
   get('/api/v1/loyalty/programs', 'programs');
   get('/api/v1/loyalty/plans', 'plans');
+  loyLoadEarned();
+}
+// ---- The customer rewards the owner settles ------------------------------------------------
+// Its own loader rather than `get()` above: `get()` folds every failure into LOY.err, and a rewards
+// list that FAILED to read must not be painted as "nothing waiting". 200 + [] is the real empty
+// answer; a refusal or a network error is a different sentence.
+function loyLoadEarned() {
+  fetch(window.location.origin + '/api/v1/loyalty/rewards/earned',
+        { headers: { 'Authorization': 'Bearer ' + token }, cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (d) {
+      LOY.earned = (d && Array.isArray(d.earned)) ? d.earned : [];
+      LOY.earnedPending = (d && typeof d.pending === 'number') ? d.pending : 0;
+      LOY.earnedErr = false;
+      loyRender();
+    })
+    .catch(function () { LOY.earnedErr = true; loyRender(); });
+}
+function loyRewardAct(id, action) {
+  if (LOY.rwBusy) return;
+  LOY.rwBusy = id;
+  loyRender();
+  fetch(window.location.origin + '/api/v1/loyalty/rewards/' + encodeURIComponent(id) + '/' + action,
+        { method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: '{}' })
+    .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+    .then(function (res) {
+      LOY.rwBusy = '';
+      if (!res.ok) {
+        var why = (res.d && (res.d.message || res.d.error)) || ('Could not ' + action + ' that reward.');
+        loySay(why, true);
+        loyRender();
+        return;
+      }
+      loySay(action === 'approve' ? 'Reward approved.' : 'Reward declined.', false);
+      loyLoadEarned();
+    })
+    .catch(function () {
+      LOY.rwBusy = '';
+      loySay('Could not reach the server \u2014 nothing was changed.', true);
+      loyRender();
+    });
 }
 function loyCheckinUrl(slug) { return window.location.origin + '/loyalty-checkin/' + slug; }
 function loyCopy(slug) {
@@ -2420,6 +2474,42 @@ function loyRender() {
           + (LOY.newOpen ? loyCreateForm() : '') + '</div>';
       }
       pr.innerHTML = h;
+    }
+  }
+  var rw = document.getElementById('loy-rewards');
+  if (rw) {
+    if (LOY.earned === null && LOY.earnedErr) {
+      rw.innerHTML = '<div style="color:#b91c1c;font-size:13px">Your customers\u2019 rewards could not be read right now \u2014 reload the page to try again.</div>';
+    } else if (LOY.earned === null) {
+      rw.innerHTML = '<div style="color:#64748b;font-size:14px">Loading customer rewards\u2026</div>';
+    } else {
+      var earns = LOY.earned;
+      var hr = '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:8px">Customer rewards'
+        + (LOY.earnedPending ? ' <span class="badge" style="background:#fef3c7;color:#92400e">' + esc(dashNum(LOY.earnedPending)) + ' waiting for you</span>' : '')
+        + '</div>';
+      if (!earns.length) {
+        hr += '<div style="color:#64748b;font-size:14px">No customer has claimed a reward yet. When one does, it appears here with Approve and Decline.</div>';
+      } else {
+        for (var k = 0; k < earns.length; k++) {
+          var er = earns[k];
+          var st2 = er.status || 'pending';
+          var pend = st2 === 'pending';
+          var who = er.member_name || er.member_email || 'A customer';
+          hr += '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">'
+            + '<div><div style="font-weight:600;color:#0f172a">' + esc(who) + ' \u2014 ' + esc(er.tier_name || 'reward') + '</div>'
+            + '<div style="color:#64748b;font-size:13px">' + esc(er.program_name || '') + ' \u00b7 ' + esc(dashNum(er.points)) + ' points'
+            + (er.earned_at ? (' \u00b7 ' + esc(String(er.earned_at).slice(0, 10))) : '')
+            + ' \u00b7 ' + esc(pend ? 'waiting for you' : (st2 === 'approved' ? 'approved' : (st2 === 'denied' ? 'declined' : st2))) + '</div></div>'
+            + (pend
+                ? '<div><button class="btn btn-sm" onclick="loyRewardAct(\'' + esc(String(er.id)) + '\',\'approve\')"'
+                  + (LOY.rwBusy === er.id ? ' disabled' : '') + '>Approve</button> '
+                  + '<button class="btn btn-sm" onclick="loyRewardAct(\'' + esc(String(er.id)) + '\',\'deny\')"'
+                  + (LOY.rwBusy === er.id ? ' disabled' : '') + '>Decline</button></div>'
+                : '')
+            + '</div>';
+        }
+      }
+      rw.innerHTML = hr;
     }
   }
   var pl = document.getElementById('loy-plans');
