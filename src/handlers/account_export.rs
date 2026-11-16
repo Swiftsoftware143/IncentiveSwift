@@ -115,6 +115,20 @@ const COLLECTIONS: &[(&str, &str)] = &[
                FROM tags WHERE account_id = $1) x",
     ),
     (
+        // HOW the business lets a member earn (cron 2026-11-15). The Earn-channels screen is a
+        // first-class config surface in this app, and it was absent from a document that calls
+        // itself the whole-account door — a business leaving could take its programmes, offers and
+        // members but not the rules that award the points. `expected_answer` is deliberately NOT
+        // exported: it is the secret a member must type to prove the action, i.e. a replayable
+        // answer, the same class as a password (see `excluded`).
+        "earn_channels",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT id, campaign_id, channel_code, label, description, points_per_click,
+                    max_clicks_per_contact, redirect_url, verification_type, verification_label,
+                    approval_notes, is_active, created_at, updated_at
+               FROM earn_channels WHERE account_id = $1) x",
+    ),
+    (
         "offers",
         "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
              SELECT id, name, discount_percent, cap_dollars, active, created_at, updated_at
