@@ -81,6 +81,10 @@ pub const ACCOUNT_MAILS: &[(&str, &str)] = &[
         "Operator alert — a new workspace signed up",
     ),
     (
+        "undelivered_credential_operator_alert",
+        "Operator alert — a customer's first password never arrived",
+    ),
+    (
         "storage_warning",
         "Storage reminder (50 / 75 / 99% of the mailbox allowance)",
     ),

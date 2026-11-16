@@ -74,6 +74,9 @@ pub mod mechanics;
 // (`X-Swift-Harness`, kanban t_4a744754). Declared here as well as in `main.rs` because the
 // integration tests build the LIB, and the module structure of the two must stay identical.
 pub mod probe_harness;
+// Declared here as well as in `main.rs` for the same reason: the lib and the bin must carry the
+// same module tree.
+mod credential_watch;
 pub mod security;
 mod smtp;
 pub mod state;

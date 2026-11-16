@@ -243,6 +243,13 @@ fn get_default_subject(template_type: &str, app_name: &str) -> String {
         // WorkflowSwift). Named for the event, because the recipient is the person who runs the
         // install and a new workspace is the one arrival they most want to notice.
         "signup_operator_alert" => format!("New workspace signed up — {app_name}"),
+        // The OPERATOR's copy of a LOCKED-OUT customer (2026-11-16, parity with MissedCall Respondr
+        // commit 273e092). Named for the two facts that matter: somebody cannot get in, and the
+        // reason is that no password ever reached them — so the operator does not try a password
+        // reset, which travels the same mail path that just failed.
+        "undelivered_credential_operator_alert" => {
+            format!("A customer cannot sign in — no password was delivered ({app_name})")
+        }
         // The customer's own "show me my branding in a real inbox" sample (cron 2026-10-23).
         // Named as a preview so it can never be mistaken for a system notice.
         "branding_preview" => format!("Your email branding — a preview from {app_name}"),
@@ -673,6 +680,50 @@ async fn send_inline(
             );
             Ok((subject, text_body, html_body))
         }
+        // The OPERATOR's copy of a LOCKED-OUT customer (2026-11-16). Reached when no stored template
+        // row exists for the key — the row is seeded by
+        // `migrations/zz_is32_undelivered_credential_alert_template.sql`, and this arm keeps the
+        // mail honest if an operator deletes it. The account's own id is carried in the subject on
+        // purpose: it is the only field `email_send_log` keeps that can name this account, and the
+        // watch's "already reported" query reads it back from there.
+        "undelivered_credential_operator_alert" => {
+            let workspace = vars
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A workspace");
+            let who = vars
+                .get("who")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let signed_up = vars
+                .get("signed_up")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let account_ref = vars
+                .get("account_ref")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.incentiveswift.com");
+            let subject =
+                format!("A customer cannot sign in — no password was delivered ({account_ref})");
+            let text = format!(
+                "{workspace} signed up, but the email carrying their first password never reached \
+                 them, so they cannot sign in.\n\n\
+                 Workspace: {workspace}\n\
+                 Customer: {who}\n\
+                 Signed up: {signed_up}\n\n\
+                 A reset code travels the same mail path that just failed, so it may not reach them \
+                 either. Set a first password for this account from the admin console (Accounts), \
+                 then tell them the password by a route that is not that mailbox: {admin_url}\n\n\
+                 This message is sent once per account, and only after the mail has actually failed \
+                 to arrive.\n\n\
+                 - {app_name}"
+            );
+            Ok((subject, text, String::new()))
+        }
         _ => {
             let body = format!("{} Notification:\n\n{}", app_name, vars);
             Ok((format!("{} Notification", app_name), body, String::new()))
@@ -1098,6 +1149,83 @@ pub async fn send_signup_operator_alert(
             false
         }
     }
+}
+
+/// Tell the OPERATOR that a customer's FIRST PASSWORD never reached them (2026-11-16).
+///
+/// WHY THIS EXISTS: the signup door latches `accounts.password_undelivered` when the credentials
+/// mail does not go, the admin console badges that row, and
+/// `POST /api/v1/admin/accounts/:id/reset-password` is the door that sets a first password — but a
+/// badge is only read by somebody who happens to open the Accounts screen. The measured incident
+/// behind this arm (ADASwift, 2026-11-13..15) is exactly that shape: a real customer signed up, the
+/// mail carrying the first password never left the box, and the account sat unusable for two days.
+/// Nobody was told. `credential_watch` is the timer that calls this; MissedCall Respondr
+/// (commit 273e092), FunnelSwift and ADASwift carry the same arm.
+///
+/// Destination = the operator's own `operator_alert_email` (`admin_settings.email`, set from the
+/// console's Email Provider card); the caller resolves it and an unset address sends nothing.
+/// Sent through the SYSTEM mail configuration (`None`), never the locked-out workspace's, because
+/// that workspace has no working sender identity yet and this is platform mail.
+///
+/// Returns the status the transport ACTUALLY recorded (`sent`, `withheld`, …), read back from
+/// `email_send_log`. That distinction is the whole point: only `sent` may retire the account, or a
+/// withheld send would silence the alert for ever.
+pub async fn send_undelivered_credential_operator_alert(
+    pool: &sqlx::PgPool,
+    account_id: uuid::Uuid,
+    customer_email: &str,
+    workspace: &str,
+    owner_name: &str,
+    signed_up: &str,
+    to: &str,
+) -> Result<String, String> {
+    let workspace = if workspace.trim().is_empty() {
+        customer_email
+    } else {
+        workspace.trim()
+    };
+    let who = if owner_name.trim().is_empty() {
+        customer_email.to_string()
+    } else {
+        format!("{} ({})", owner_name.trim(), customer_email)
+    };
+    let signed_up = if signed_up.trim().is_empty() {
+        "unknown"
+    } else {
+        signed_up.trim()
+    };
+    // The account's own id rides in the SUBJECT because `email_send_log` keeps no account column:
+    // it is what `credential_watch` reads back to decide "this account was already reported to
+    // THIS operator". Same shape as the MissedCall Respondr arm.
+    let account_ref = account_id.to_string();
+    let vars = json!({
+        "workspace": workspace,
+        "who": who,
+        "signed_up": signed_up,
+        "account_ref": account_ref,
+        "admin_url": "https://admin.incentiveswift.com",
+        "app_name": APP_NAME,
+    });
+    send_template_email(
+        pool,
+        None,
+        to,
+        "undelivered_credential_operator_alert",
+        &vars,
+    )
+    .await?;
+    // What the send ACTUALLY did, read back from the history row it just wrote. A withheld row is
+    // the transport's own answer, and the caller must not treat it as a report.
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM email_send_log WHERE to_email = $1 AND subject LIKE '%' || $2 || '%' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(to)
+    .bind(&account_ref)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("read back the alert row: {e}"))?;
+    Ok(status.unwrap_or_else(|| "unknown".to_string()))
 }
 
 /// Tell the VISITOR who used the contact page that their message moved (2026-11-06).

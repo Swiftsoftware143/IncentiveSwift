@@ -54,6 +54,10 @@ pub mod billing;
 mod body_deadline;
 pub mod branding;
 mod config;
+/// Tell the OPERATOR when a customer's first password never reached them (2026-11-16, parity with
+/// MissedCall Respondr commit 273e092). Without it a locked-out customer was only a badge on a
+/// screen nobody opens.
+mod credential_watch;
 mod db;
 pub mod delivery;
 mod error;
@@ -213,6 +217,14 @@ async fn main() -> anyhow::Result<()> {
     // reads that column, so a bare account showed no plan at all while its limits silently fell back
     // to free. One indexed anti-NULL UPDATE at boot; zero rows is the normal answer.
     plan_seating::spawn_plan_seater(state.db.clone());
+
+    // Tell the OPERATOR when a customer's first password never reached them (kanban t_b4ca6bfe,
+    // parity with MissedCall Respondr commit 273e092 / FunnelSwift / ADASwift). The signup door
+    // already latches `accounts.password_undelivered` and the console badges it, but a badge is only
+    // read by somebody who opens the Accounts screen — the measured incident is a customer locked
+    // out for two days. First tick is immediate, so a deploy reports the existing backlog; a failing
+    // pass is logged and the loop continues, because an alerter must never take the app down.
+    credential_watch::spawn_credential_watch(state.db.clone());
 
     // Request-body read deadline (kanban t_af70c0ca). Printed here so the number an operator sees
     // at boot is the number the middleware enforces — both come from this one config field.
