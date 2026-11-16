@@ -72,6 +72,18 @@ pub async fn create_entry(
     //    that owner (kanban t_369cb159). A bad slug therefore no longer side-effects the pool.
     let campaign = campaigns::get_campaign_by_slug(&state.db, &body.campaign_slug).await?;
 
+    // A PAUSED or DRAFT campaign accepts nothing (cron 2026-11-16). `campaigns.status` now has a
+    // writer — the console's Pause / Publish control — and the play READ has always refused a
+    // non-active campaign, but THIS door still accepted an entry for a paused one (measured live:
+    // the paused campaign answered 200 and minted an entry plus its contact). An embed or a cached
+    // play page can POST here minutes after an operator pauses, so the refusal belongs at the door
+    // — and BEFORE the contact upsert below, so a paused campaign leaves no lead behind either.
+    if campaign.status != "active" {
+        return Err(AppError::Forbidden(
+            "This campaign is not accepting entries right now.".to_string(),
+        ));
+    }
+
     // 2. Upsert contact (shared identity row) and link it to the campaign's account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),

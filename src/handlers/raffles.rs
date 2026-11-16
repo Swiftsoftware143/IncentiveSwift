@@ -45,6 +45,15 @@ pub async fn enter_raffle(
     //    owner (kanban t_369cb159).
     let campaign = campaigns::get_campaign_by_slug(&state.db, &slug).await?;
 
+    // A PAUSED or DRAFT campaign accepts nothing (cron 2026-11-16): the console can now pause a
+    // live campaign, and this door minted a contact + entry for a paused one (measured). Refused
+    // before the contact upsert below, exactly like the generic entry door.
+    if campaign.status != "active" {
+        return Err(AppError::Forbidden(
+            "This campaign is not accepting entries right now.".to_string(),
+        ));
+    }
+
     // 2. Upsert contact (shared identity row) and link it to the campaign's account.
     let contact_input = contacts::ContactInput {
         first_name: body.contact.first_name.clone(),

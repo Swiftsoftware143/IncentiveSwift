@@ -184,6 +184,16 @@ pub async fn submit_quiz(
     // Get campaign
     let campaign = campaigns::get_campaign_by_id(&state.db, &campaign_id).await?;
 
+    // A PAUSED or DRAFT campaign accepts nothing (cron 2026-11-16): the console can now pause a
+    // live campaign, and a cached play page or an embed still POSTs here afterwards. Same refusal
+    // and same place as the generic entry door (`handlers::entries::create_entry`) — before the
+    // submission is scored or a contact is minted.
+    if campaign.status != "active" {
+        return Err(AppError::Forbidden(
+            "This campaign is not accepting entries right now.".to_string(),
+        ));
+    }
+
     // Play-time gate: enforce the campaign owner's plan tier includes this mechanic
     // (402 before any quiz is scored/recorded for free/subtracted tiers).
     crate::access::feature_gate::enforce_mechanic_feature(
