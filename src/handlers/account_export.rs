@@ -129,6 +129,54 @@ const COLLECTIONS: &[(&str, &str)] = &[
                FROM earn_channels WHERE account_id = $1) x",
     ),
     (
+        // The rest of the workspace a business actually filled in (cron 2026-11-15). Each of these
+        // is content the OWNER wrote and would expect to take with them: how their tags are grouped,
+        // their item categories, the answers on their help page, the signature that ends their mail,
+        // the leads they captured and the settings behind their branding. None of it is a
+        // credential; `tenant_logos` (the image bytes) and `provider_keys` stay out, and the
+        // `excluded` note says so.
+        "tag_groups",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT id, name, color, sort_order, created_at, updated_at
+               FROM tag_groups WHERE account_id = $1) x",
+    ),
+    (
+        "categories",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT id, name, description, created_at
+               FROM categories
+              WHERE tenant_id = (SELECT tenant_id FROM accounts WHERE id = $1)) x",
+    ),
+    (
+        "knowledge_base",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT id, title, content, audience, slug, category, sort_order, is_published,
+                    created_at, updated_at
+               FROM knowledge_base
+              WHERE tenant_id = (SELECT tenant_id FROM accounts WHERE id = $1)) x",
+    ),
+    (
+        "email_signature",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT full_name, job_title, company, phone, line, updated_at
+               FROM tenant_email_signatures
+              WHERE tenant_id = (SELECT tenant_id FROM accounts WHERE id = $1)) x",
+    ),
+    (
+        "leads",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT id, name, email, phone, status, created_at
+               FROM leads
+              WHERE tenant_id = (SELECT tenant_id FROM accounts WHERE id = $1)) x",
+    ),
+    (
+        "settings",
+        "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
+             SELECT key, value, updated_at
+               FROM tenant_settings
+              WHERE tenant_id = (SELECT tenant_id FROM accounts WHERE id = $1)) x",
+    ),
+    (
         "offers",
         "SELECT coalesce(json_agg(x), '[]'::json)::text FROM (
              SELECT id, name, discount_percent, cap_dollars, active, created_at, updated_at
