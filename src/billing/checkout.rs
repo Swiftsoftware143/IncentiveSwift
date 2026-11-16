@@ -176,6 +176,13 @@ pub async fn checkout_status(
         },
         "upgrade_path": upgrade_path,
         "sellable_plans": sellable_plans,
+        // ── How this business actually takes money (2026-11-16) ─────────────────────────────────
+        // With no provider row the till answers `request`, so the customer presses "Request the
+        // plan" — and until this field existed nothing in the product told them where to send the
+        // money. The operator's own words, empty when he has not written any (feature off).
+        "payment_instructions": crate::billing::instructions::load(&state.db)
+            .await
+            .unwrap_or_default(),
         "message": match upgrade_path {
             "checkout" => "Upgrades are open: pressing a plan takes you to a secure payment page.",
             "payment_link" => "Pressing a plan opens its own payment page; the workspace is switched \

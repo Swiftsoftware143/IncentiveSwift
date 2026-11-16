@@ -3213,7 +3213,7 @@ const ppPostureCell = (set, sealed) => !set
   : (sealed ? html`<span class="badge badge-green" data-pp="sealed">encrypted</span>`
             : html`<span class="badge badge-red" data-pp="plain">in the clear</span>`);
 const PaymentProviders = () => {
-  const st = viewState('payment_providers_view', { list: null, err: null, busy: false, msg: null, form: null, test: null });
+  const st = viewState('payment_providers_view', { list: null, err: null, busy: false, msg: null, form: null, test: null, pay: null, payBusy: false, payMsg: null });
   const load = async () => {
     try { const d = await API.get('/payment-providers'); st.list = (d && d.items) || []; st.err = null; }
     catch (e) { st.list = []; st.err = (e && e.message) || 'Could not load the payment providers'; }
@@ -3235,6 +3235,29 @@ const PaymentProviders = () => {
       .then((d) => { st._status = { loading: false, data: d || null }; renderApp(); })
       .catch((e) => { st._status = { loading: false, err: (e && e.message) || 'the check did not answer' }; renderApp(); });
   }
+  // HOW A CUSTOMER PAYS YOU (2026-11-16). With no provider row the till answers `request`, so the
+  // customer presses "Request the plan" — and until this box existed the product never told them
+  // where to send the money. The operator's own words, stored platform-wide (`admin_settings`
+  // key `billing`) and read back by the customer's till status and by the receipt mail. Loaded here
+  // so the operator sees exactly what is published; a failed read leaves the box untouched and says
+  // so rather than pretending the field is empty (which would look like "nothing is set").
+  if (st.pay === null) {
+    API.get('/admin/billing-settings')
+      .then((d) => { st.pay = (d && d.payment_instructions) || ''; st._paySet = !!(d && d.payment_instructions_set); st._payErr = null; renderApp(); })
+      .catch((e) => { st._payErr = (e && e.message) || 'the setting could not be read'; renderApp(); });
+  }
+  const savePay = async () => {
+    st.payBusy = true; st.payMsg = null; renderApp();
+    try {
+      const d = await API.put('/admin/billing-settings', { payment_instructions: st.pay || '' });
+      st._paySet = !!(d && d.payment_instructions_set);
+      st._payErr = null;
+      st.payMsg = st._paySet
+        ? 'Saved. A customer who asks to buy now sees these words, and they are printed in the receipt email.'
+        : 'Cleared. Nothing is shown to a customer who asks to buy, and the receipt email is unchanged.';
+    } catch (e) { st.payMsg = 'Not saved: ' + ((e && e.message) || e); }
+    st.payBusy = false; renderApp();
+  };
   // The DELETE route removes THIS account's own row (kanban t_27514bae): it was platform-wide
   // ("DELETE ... WHERE provider_type = $1" behind a super-admin gate) and is now
   // "WHERE provider_type = $1 AND account_id = <caller>" with no role gate, so the control is
@@ -3320,6 +3343,16 @@ const PaymentProviders = () => {
         if (d.upgrade_path && d.upgrade_path !== 'request') return html`<div class="card mb-3" data-pay-status="ok" style="border-left:4px solid #16a34a"><strong>Buyers can pay.</strong> A customer who presses Upgrade reaches a real payment page (${d.upgrade_path === 'checkout' ? 'your connected provider' : 'a hosted payment page on one of your plans'}).</div>`;
         return html`<div class="card mb-3" data-pay-status="blocked" style="border-left:4px solid #f59e0b"><strong>Buyers cannot pay yet.</strong> ${d.message || 'No payment provider is connected on this installation, so nothing can be charged.'} Connect a provider below and press <strong>Test key</strong> to prove the key works; until then every Upgrade press is recorded as a plan request you can act on.</div>`;
       })()}
+    <div class="card mb-3" data-pay-instructions="1">
+      <h3 class="font-bold mb-1">How a customer pays you</h3>
+      <p class="text-sm text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request the plan&rdquo; and a request is filed here for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words reach the customer on their Plan &amp; billing screen and in the receipt email they get the moment they ask. Leave it empty and nothing is shown; nothing here ever charges anyone.</p>
+      ${st._payErr ? html`<div class="text-sm mb-2 text-red-700" data-pay-readerr="1">The saved words could not be read (${st._payErr}), so this box may not show what is published. Reload before saving.</div>` : null}
+      <textarea id="pp-pay-instructions" data-pay-field="1" class="border rounded px-3 py-2 w-full text-sm" rows="4" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as it lands." value=${st.pay || ''} onInput=${(e) => { st.pay = e.target.value; }}></textarea>
+      <div class="flex items-center gap-3 mt-2">
+        <button class="btn btn-sm btn-green" disabled=${st.payBusy} onClick=${savePay}>Save</button>
+        <span class=${'text-sm ' + ((st.payMsg || '').indexOf('Not saved') === 0 ? 'text-red-700' : 'text-gray-700')} data-pay-msg="1">${st.payMsg || (st._paySet ? 'Published to customers who ask to buy.' : 'Nothing written yet — nothing is shown to customers.')}</span>
+      </div>
+    </div>
     ${st.list === null ? html`<div class="card text-center text-gray-400 py-8">Loading...</div>`
       : rows.length === 0 ? html`<div class="card text-center text-gray-400 py-8">No payment provider is connected yet. Add your Stripe or PayPal keys so checkout and the inbound payment webhooks can work.</div>`
       : html`<div class="card p-0 overflow-hidden"><table class="table">

@@ -438,9 +438,22 @@ async fn send_inline(
                 .get("request")
                 .and_then(|v| v.as_str())
                 .unwrap_or("your request");
+            let how_to_pay = vars
+                .get("payment_instructions")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            // Said only when the operator has written it, and only on a request to BUY (the caller
+            // decides): "How to pay now:" followed by his own words, word for word — a customer who
+            // is ready to send money must not have to ask where.
+            let pay_block = if how_to_pay.is_empty() {
+                String::new()
+            } else {
+                format!("\n\nHow to pay now:\n\n{}\n", how_to_pay)
+            };
             let body = format!(
-                "Hi {},\n\nThank you — we have your request:\n\n    {}\n\nA person, not a robot, reads this and replies by email. Nothing has been charged, and nothing will be charged until you agree to it.\n\nYou can follow its state on your dashboard's Plan & billing screen at {}/dashboard/ at any time; it updates as the team moves it along.\n\n- The {} Team",
-                name, request, app_url, app_name
+                "Hi {},\n\nThank you — we have your request:\n\n    {}\n\nA person, not a robot, reads this and replies by email. Nothing has been charged, and nothing will be charged until you agree to it.{}\n\nYou can follow its state on your dashboard's Plan & billing screen at {}/dashboard/ at any time; it updates as the team moves it along.\n\n- The {} Team",
+                name, request, pay_block, app_url, app_name
             );
             Ok((
                 format!("We have your request — {}", app_name),
@@ -780,10 +793,22 @@ pub async fn send_support_request_receipt_email(
     to: &str,
     name: &str,
     request: &str,
+    include_payment_instructions: bool,
 ) -> Result<(), String> {
+    // How this business takes money, in the operator's own words (2026-11-16). Only a REQUEST TO
+    // BUY carries it: an ordinary "I cannot sign in" ticket must not be answered with bank details.
+    // Empty stays exactly as before, so an install that never sets them sends the same mail it did.
+    let payment_instructions = if include_payment_instructions {
+        crate::billing::instructions::load(pool)
+            .await
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let vars = json!({
         "name": if name.trim().is_empty() { "there" } else { name.trim() },
         "request": request,
+        "payment_instructions": payment_instructions,
         "app_name": APP_NAME,
         "login_url": APP_URL,
         "app_url": APP_URL,

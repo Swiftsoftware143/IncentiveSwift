@@ -377,6 +377,11 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
          page hands them back. Filled by pbCheckoutReturn(), hidden until then. -->
     <div id="pb-return" style="display:none;font-size:13.5px;line-height:1.5;margin:0 0 12px;padding:10px 12px;border-radius:8px"></div>
     <div id="pb-current" style="font-size:13.5px;color:#334155;margin:0 0 14px">Loading your plan&hellip;</div>
+    <!-- HOW TO PAY (2026-11-16). On an installation with no card provider a plan request IS the
+         buying path, so this box carries the operator's own payment words ("Pay by bank transfer
+         to ..., reference your workspace") from GET /api/v1/checkout/status. Hidden while it is
+         empty, so an install that has set nothing looks exactly as it did. -->
+    <div id="pb-how-to-pay" data-pb-how-to-pay="1" style="display:none;margin:0 0 14px"></div>
     <!-- BILLING TERM (2026-10-24). Checkout can sell either term; until this switch existed this
          screen only ever quoted the monthly rate, so the yearly price these plan records carry could
          not be bought from the one place a customer buys. The saving on each card is computed from
@@ -3133,6 +3138,25 @@ function pbTermBar() {
 function pbRender() {
   var cur = PB.plan || {};
   var curSlug = cur.slug || '';
+  // ── HOW TO PAY (2026-11-16) ─────────────────────────────────────────────────────────────────
+  // The operator's own payment words, as published by GET /api/v1/checkout/status. Painted only
+  // when he has written some: an empty field leaves the box hidden and the screen exactly as it
+  // was. This is the last step of the buying path on an install with no card provider.
+  var payEl = document.getElementById('pb-how-to-pay');
+  if (payEl) {
+    var pay = String((PB.till && PB.till.payment_instructions) || '').trim();
+    if (!pay) {
+      payEl.style.display = 'none';
+      payEl.innerHTML = '';
+    } else {
+      payEl.style.display = 'block';
+      payEl.innerHTML = '<div style="border:1px solid #bfdbfe;background:#eff6ff;border-radius:10px;padding:12px 14px">'
+        + '<div style="font-weight:600;color:#1e3a8a;margin:0 0 6px">How to pay now</div>'
+        + '<div style="white-space:pre-wrap;font-size:13.5px;line-height:1.5;color:#1e293b" data-pb-pay-text="1">' + esc(pay) + '</div>'
+        + '<div style="font-size:12.5px;color:#475569;margin-top:8px">Ask for a plan above and the same words are emailed to you. Nothing is charged until a person on the team confirms your payment.</div>'
+        + '</div>';
+    }
+  }
   var curEl = document.getElementById('pb-current');
   if (curEl) {
     if (PB.assigned === false) {

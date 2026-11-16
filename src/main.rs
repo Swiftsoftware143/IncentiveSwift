@@ -1411,6 +1411,11 @@ async fn main() -> anyhow::Result<()> {
         )
         // Provider Keys routes
         .route(
+            "/api/v1/admin/billing-settings",
+            get(handlers::billing_settings_handler::get_billing_settings)
+                .put(handlers::billing_settings_handler::update_billing_settings),
+        )
+        .route(
             "/api/v1/admin/email-settings",
             get(handlers::email_settings_handler::get_email_settings)
                 .put(handlers::email_settings_handler::update_email_settings),

@@ -27,6 +27,7 @@ pub mod prize_pool_handler;
 pub mod surface_handler;
 
 pub mod analytics_handler;
+pub mod billing_settings_handler;
 pub mod campaign_integrations;
 pub mod campaign_secret_codes;
 pub mod chat_handler;

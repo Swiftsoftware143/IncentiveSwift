@@ -28,6 +28,7 @@ use axum::{
 };
 
 pub mod checkout;
+pub mod instructions;
 pub mod providers;
 pub mod stripe_signature;
 pub mod webhooks;

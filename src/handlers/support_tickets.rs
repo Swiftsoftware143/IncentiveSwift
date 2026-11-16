@@ -456,6 +456,8 @@ pub async fn create_ticket(
             &email,
             &name,
             &body.subject,
+            // Only a request to BUY carries the operator's payment details.
+            !plan_name.is_empty(),
         )
         .await
         {
@@ -1308,6 +1310,8 @@ pub async fn record_signup_plan_request(
                 &filer_email,
                 &filer_name,
                 &subject,
+                // This door only ever files a request to BUY.
+                true,
             )
             .await
             {
