@@ -417,6 +417,9 @@ pub async fn update_campaign(
     loyalty_points_per_play: Option<i32>,
     auto_enroll_loyalty: Option<bool>,
     iqs_funnel_id: IqsGate,
+    // `active` / `paused`, already validated by the handler (cron 2026-11-16). `None` leaves the
+    // column untouched — which is what every other caller of this function wants.
+    status: Option<&str>,
 ) -> Result<Campaign, AppError> {
     let existing = get_campaign_by_id(pool, id).await?;
 
@@ -444,7 +447,8 @@ pub async fn update_campaign(
                loyalty_program_id = $6,
                loyalty_points_per_play = $7,
                auto_enroll_loyalty = $8,
-               iqs_funnel_id = $10
+               iqs_funnel_id = $10,
+               status = COALESCE($11, status)
            WHERE id = $9"#,
     )
     .bind(new_name)
@@ -457,6 +461,7 @@ pub async fn update_campaign(
     .bind(new_auto_enroll_loyalty)
     .bind(id)
     .bind(new_iqs_funnel_id)
+    .bind(status)
     .execute(pool)
     .await
     .map_err(map_campaign_write_violation)?;

@@ -151,7 +151,7 @@ function isdConfigKeys(cfg) {
 window.appGuidePages = {
   dashboard:      { title: "Dashboard", desc: "Your numbers at a glance \u2014 campaigns, participants and activity in one place.", actions: ["Scan recent activity", "Jump into a campaign"] },
   profile:        { title: "Profile", desc: "Your own name, company, username and picture, the password you sign in with, and the devices signed into your account. The last card closes the account: that ends every session and API key and refuses sign-in from then on, while keeping your campaigns, loyalty journal and ledger so support can reopen the business if you change your mind \u2014 nothing is deleted. Nothing on this screen sends email.", actions: ["Set your name, company and username", "Upload a picture", "Change your password", "Sign out every other device", "Close the account \u2014 ends every session and API key, keeps the data"] },
-  campaigns:      { title: "Campaigns", desc: "Your incentive campaigns \u2014 the games and forms customers play (quizzes, spin wheels, scratch cards and more).", actions: ["Create a campaign", "Open one to edit it", "Publish it"] },
+  campaigns:      { title: "Campaigns", desc: "Your incentive campaigns \u2014 the games and forms customers play (quizzes, spin wheels, scratch cards and more).", actions: ["Create a campaign", "Open one to edit it", "Pause a live campaign, or publish a draft copy"] },
   prizes:         { title: "Prize Pools", desc: "The prizes your campaigns can award, and how many of each are left.", actions: ["Add a prize", "Set how many are available"] },
   wins:           { title: "Wins & Redemptions", desc: "Everyone who has won a prize in a campaign, with the redemption code they were shown and whether you have honoured it yet.", actions: ["Pick a campaign", "Read the code the winner was shown", "Mark a win redeemed when you hand the prize over"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
@@ -1225,6 +1225,28 @@ const Campaigns = () => {
   // publishes it, and the entry-form fields now come with it (the server copies
   // campaign_custom_fields too). Refusals are shown in the operator's own words — the 403 for a
   // plan at its campaign cap says so, and says nothing about a broken button.
+  // -- Publish / pause (cron 2026-11-16) -------------------------------------------------
+  // `campaigns.status` had NO writer in the product: every campaign the operator created was
+  // INSERTed 'active', a CLONE was INSERTed 'draft' together with the message "it is a draft,
+  // publish it when you are ready" — and no control existed to publish it, nor to stop a live
+  // campaign for a season without DELETING it and its entries. The public play door already
+  // refuses anything that is not 'active' and the play page already renders that refusal as
+  // "This campaign is not accepting entries right now", so only the write was missing. The row's
+  // new state is re-read from the server (load()), never assumed from the click.
+  const setCampaignStatus = async (item, next) => {
+    if (next === 'paused' && !confirm('Pause "' + item.name + '"?\n\nThe shared link keeps working, but a visitor is told the campaign is not accepting entries. Nothing is deleted, and Publish brings it straight back.')) return;
+    st.statusMsg = ''; st.statusErr = '';
+    try {
+      await API.put('/campaigns/' + (item.slug || item.id), { status: next });
+      st.statusMsg = (next === 'active' ? 'Published — "' : 'Paused — "') + (item.name || 'this campaign')
+        + (next === 'active' ? '" is accepting entries again.' : '" is not accepting entries; Publish it again when you are ready.');
+      await load();
+    } catch (e) {
+      st.statusErr = e.message;
+      renderApp();
+    }
+  };
+
   const cloneCampaign = async (item) => {
     if (!confirm('Make a draft copy of "' + item.name + '"?')) return;
     st.cloneMsg = ''; st.cloneErr = '';
@@ -1565,14 +1587,14 @@ const Campaigns = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
     ${st.cloneMsg && html`<div class="text-xs mb-3" style="color:#15803d" id="cloneSaved">✓ ${st.cloneMsg}</div>`}
-    ${st.cloneErr && html`<div class="text-xs mb-3 text-red-500" id="cloneErr">${st.cloneErr}</div>`}
+    ${st.cloneErr && html`<div class="text-xs mb-3 text-red-500" id="cloneErr">${st.cloneErr}</div>`}${st.statusMsg && html`<div class="text-xs mb-3" style="color:#15803d" id="campaignStatusMsg">\u2713 ${st.statusMsg}</div>`}${st.statusErr && html`<div class="text-xs mb-3 text-red-500" id="campaignStatusErr">${st.statusErr}</div>`}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td>
           <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}${needsPersonalityQuestions(c) && html` <span class="badge badge-yellow" data-needs-personality-questions=${c.slug} title="Nobody can play this quiz yet: it has no questions. Edit the campaign, add questions to Config (each with two options), then share the link.">Needs questions</span>`}${needsQuizQuestions(c) && html` <span class="badge badge-yellow" data-needs-quiz-questions=${c.slug} title="Nobody can answer anything yet: this quiz has no questions, so a visitor presses the button and is told they did not win. Add questions on the campaign's Questions screen, then share the link.">Needs questions</span>`}</td>
-          <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button>${c.type === 'raffle' && html`<button class="btn btn-sm btn-outline" data-draw-slug=${c.slug} onClick=${() => openDraw(c)}>Draw winner</button>`}<button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}" data-campaign-status=${c.slug} title=${c.status === 'active' ? 'Accepting entries — the shared link plays this campaign.' : 'Not accepting entries — a visitor is told to check back. Nothing is deleted.'}>${c.status === 'active' ? 'Live' : (c.status === 'paused' ? 'Paused' : 'Draft')}</span></td>
+          <td>${c.status === 'active' ? html`<button class="btn btn-sm btn-outline" data-pause-slug=${c.slug} title="Stop accepting entries. The shared link keeps working and tells visitors to check back; nothing is deleted." onClick=${() => setCampaignStatus(c, 'paused')}>Pause</button>` : html`<button class="btn btn-sm btn-green" data-publish-slug=${c.slug} title="Start accepting entries again. The shared link plays this campaign." onClick=${() => setCampaignStatus(c, 'active')}>Publish</button>`}<button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button>${c.type === 'raffle' && html`<button class="btn btn-sm btn-outline" data-draw-slug=${c.slug} onClick=${() => openDraw(c)}>Draw winner</button>`}<button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
         ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No campaigns yet.'}</td></tr>`}
       </tbody></table>

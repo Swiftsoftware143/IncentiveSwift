@@ -369,6 +369,19 @@ pub struct UpdateCampaignBody {
     /// See `double_option` for why the plain `Option<Option<String>>` shape was not enough.
     #[serde(default, deserialize_with = "double_option")]
     pub iqs_funnel_id: Option<Option<String>>,
+    /// The operator's own publish / pause control (cron 2026-11-16).
+    ///
+    /// `campaigns.status` was a write-only column: the signup-side INSERT hard-codes `'active'` and
+    /// the CLONE door INSERTs `'draft'`, so the console's own words — *"it is a draft, publish it
+    /// when you are ready"* — named an action NO surface could perform. A cloned campaign could
+    /// never be played, and a live campaign could not be stopped for a season without DELETING it
+    /// (which throws its entries away). The play door already refuses anything that is not `active`
+    /// and the play page already renders that refusal as "This campaign is not accepting entries
+    /// right now", so only the writer was missing.
+    ///
+    /// Accepted: `active` (accepting entries) and `paused` (not accepting entries). A clone's
+    /// `draft` is published by sending `active`. Absent = leave the column untouched.
+    pub status: Option<String>,
 }
 
 /// PUT /api/v1/campaigns/:slug — update campaign (authenticated).
@@ -422,6 +435,21 @@ pub async fn update_campaign(
     )
     .await?;
 
+    // The operator's publish / pause control (cron 2026-11-16). Validated BEFORE any write, exactly
+    // like the gates above: an unknown word must 400 with the two words that work, never reach the
+    // column (there is no CHECK on `campaigns.status`, so the API is the only guard).
+    let new_status: Option<&'static str> = match body.status.as_deref().map(str::trim) {
+        None => None,
+        Some(s) if s.eq_ignore_ascii_case("active") => Some("active"),
+        Some(s) if s.eq_ignore_ascii_case("paused") => Some("paused"),
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "Unknown campaign status '{other}'. Send 'active' to accept entries again, or \
+                 'paused' to stop accepting them."
+            )))
+        }
+    };
+
     // Validate the requested loyalty program BEFORE any write (kanban t_28431966), same shape as the
     // survey gate above: an id this caller cannot use must never reach the FK (a 500), and the
     // refusal must leave the row untouched.
@@ -439,6 +467,7 @@ pub async fn update_campaign(
         body.loyalty_points_per_play,
         body.auto_enroll_loyalty,
         iqs_gate,
+        new_status,
     )
     .await?;
 
