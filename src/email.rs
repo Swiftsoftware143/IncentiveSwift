@@ -707,8 +707,25 @@ async fn send_inline(
                 .get("admin_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("https://admin.incentiveswift.com");
+            // THE SUBJECT MUST NAME THE CUSTOMER IN PLAIN ENGLISH (2026-11-16, parity with
+            // FunnelSwift 2332b6c). It used to carry only the account's uuid — "A customer cannot
+            // sign in — no password was delivered (437870e2-…)" — so the operator could not tell
+            // from the notification list WHO was locked out; he had to open every one to find out.
+            // `who` is the owner's name with their address (or the address alone when no name was
+            // given), which is what a person recognises.
+            //
+            // The uuid STAYS in the subject on purpose: `credential_watch`'s "already reported"
+            // test is `email_send_log.subject LIKE '%' || accounts.id || '%' AND to_email =
+            // operator AND status='sent'`, and this function's own read-back matches the same way.
+            // Dropping the id would turn every pass into a fresh report of every account. Keep
+            // both: the name to read, the id to de-duplicate on.
+            //
+            // The same sentence lives in the seeded default template row
+            // (`migrations/zz_is33_undelivered_alert_subject_names_customer.sql`), which is the copy
+            // the mail path actually uses while the row exists; this arm is the honest fallback if
+            // an operator deletes it.
             let subject =
-                format!("A customer cannot sign in — no password was delivered ({account_ref})");
+                format!("A customer cannot sign in — {who} has no password ({account_ref})");
             let text = format!(
                 "{workspace} signed up, but the email carrying their first password never reached \
                  them, so they cannot sign in.\n\n\

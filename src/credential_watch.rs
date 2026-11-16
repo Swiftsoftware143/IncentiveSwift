@@ -97,14 +97,28 @@ pub async fn alert_once(pool: &PgPool) -> Result<usize, String> {
         return Ok(0);
     };
 
+    // The SELECT names the two identities the alert prints (kanban t_0f8bf1c0). It used to put the
+    // owner's NAME in the `workspace` column and the OPTIONAL `username` in the `owner_name` column,
+    // so the operator alert read "Workspace: <person>" and — because `username` is usually empty —
+    // its subject fell back to the bare address, which is the defect: the notification list could
+    // not say WHO was locked out. `accounts.name` is what the signup's "your name" field stores
+    // (auth_handler::register), so that is the OWNER name; the workspace comes from the account's
+    // own default workspace row, and only falls back to the company/account name when the tenant
+    // has no workspace row at all.
     let rows: Vec<(Uuid, String, String, String, String)> = sqlx::query_as(
         r#"
         SELECT a.id,
                a.email,
+               COALESCE(NULLIF(btrim(w.name), ''), NULLIF(btrim(a.company), ''), NULLIF(btrim(a.name), ''), a.email),
                COALESCE(NULLIF(btrim(a.name), ''), a.email),
-               COALESCE(NULLIF(btrim(a.username), ''), ''),
                a.created_at::date::text
           FROM accounts a
+          LEFT JOIN LATERAL (
+                SELECT name FROM workspaces
+                 WHERE tenant_id = a.tenant_id
+                 ORDER BY is_default DESC, created_at ASC
+                 LIMIT 1
+               ) w ON true
          WHERE a.password_undelivered
            AND a.closed_at IS NULL
            AND a.created_at < now() - make_interval(mins => $1::int)
