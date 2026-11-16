@@ -1066,7 +1066,20 @@ const FONT_OPTIONS = [
 
 const Campaigns = () => {
   const st = viewState('campaigns', { list: [], showModal: false, editItem: null, search: '', theme: null, themeErr: '', themeSaved: '', embedItem: null, embed: null, embedErr: '', embedCopied: '', deliveryItem: null, deliveryLegs: null, deliveryTargets: null, deliveryErr: '', deliverySaved: '', boostItem: null, boostCfg: null, boostLoaded: false, boostOn: false, boostType: 'dining_voucher', boostAmount: '50', boostDest: '', boostSender: '', boostBusiness: '', boostWin: true, boostRedeem: true, boostDests: null, boostDestsErr: '', boostErr: '', boostSaved: '', fieldsItem: null, fields: null, fieldsErr: '', fieldsSaved: '', fieldsForm: { field_label: '', field_type: 'text', required: false, options: '' }, cloneMsg: '', cloneErr: '', linkItem: null, links: null, linkTargets: null, linkErr: '', linkMsg: '', linkPick: '', linkSaving: false, drawItem: null, drawEntries: null, drawErr: '', drawMsg: '' });
-  const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); } catch(e) { console.error(e); } };
+  // A quiz campaign keeps its questions in the `questions` table (POST /campaigns/:slug/questions),
+  // so the list payload cannot carry a count. Ask each quiz's OWN endpoint once per screen load and
+  // stamp `question_count` on the row, so `needsQuizQuestions` can warn before the link is shared.
+  // A failed read leaves the count UNKNOWN (no badge) rather than claiming zero — a wrong badge is
+  // the same class of lie as a missing one.
+  const fillQuestionCounts = (rows) => {
+    const quizzes = (rows || []).filter((c) => c && c.type === 'quiz' && c.slug);
+    if (!quizzes.length) { return; }
+    Promise.all(quizzes.map((c) => API.get('/campaigns/' + encodeURIComponent(c.slug) + '/questions')
+      .then((d) => { c.question_count = ((d && d.questions) || []).length; })
+      .catch(() => {})))
+      .then(() => renderApp());
+  };
+  const load = async () => { try { const data = await API.get('/campaigns'); st.list = Array.isArray(data) ? data : (data.campaigns || []); renderApp(); fillQuestionCounts(st.list); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
 
   const show = (item) => {
@@ -1542,6 +1555,12 @@ const Campaigns = () => {
   // it here, before the operator hands out the link.
   const needsPersonalityQuestions = (c) => c.type === 'personality'
     && !(c.config && Array.isArray(c.config.questions) && c.config.questions.length);
+  // The same warning for a `quiz` campaign. Its questions live in the `questions` table, not in
+  // `config`, so the list row cannot see them: the screen asks each quiz's own questions endpoint
+  // and stamps `question_count` on the row (see fillQuestionCounts below). Without this the operator
+  // handed out a link to a quiz that asks nothing and answers every visitor "Better luck next time"
+  // (measured 2026-11-16 on a freshly created campaign).
+  const needsQuizQuestions = (c) => c.type === 'quiz' && c.question_count === 0;
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Campaigns</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Campaign</button></div></div>
@@ -1551,7 +1570,7 @@ const Campaigns = () => {
       <table class="table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>${filtered.map(c => html`<tr>
           <td class="font-medium">${c.name}</td>
-          <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}${needsPersonalityQuestions(c) && html` <span class="badge badge-yellow" data-needs-personality-questions=${c.slug} title="Nobody can play this quiz yet: it has no questions. Edit the campaign, add questions to Config (each with two options), then share the link.">Needs questions</span>`}</td>
+          <td><span class="badge badge-blue">${c.type || '—'}</span>${needsPrizePool(c) && html` <span class="badge badge-yellow" data-needs-prize-pool=${c.slug} title="Nobody can play this campaign yet: the spin refuses because no prize pool is set. Open Prize Pools, add at least one prize, then share the link.">Needs a prize pool</span>`}${needsPersonalityQuestions(c) && html` <span class="badge badge-yellow" data-needs-personality-questions=${c.slug} title="Nobody can play this quiz yet: it has no questions. Edit the campaign, add questions to Config (each with two options), then share the link.">Needs questions</span>`}${needsQuizQuestions(c) && html` <span class="badge badge-yellow" data-needs-quiz-questions=${c.slug} title="Nobody can answer anything yet: this quiz has no questions, so a visitor presses the button and is told they did not win. Add questions on the campaign's Questions screen, then share the link.">Needs questions</span>`}</td>
           <td><span class="badge ${c.status === 'active' ? 'badge-green' : 'badge-yellow'}">${c.status || 'draft'}</span></td>
           <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-outline" data-clone-slug=${c.slug} onClick=${() => cloneCampaign(c)}>Clone</button><button class="btn btn-sm btn-outline" data-embed-slug=${c.slug} onClick=${() => openEmbed(c)}>Embed</button><button class="btn btn-sm btn-outline" data-fields-slug=${c.slug} onClick=${() => openFields(c)}>Fields</button><button class="btn btn-sm btn-outline" data-deliver-slug=${c.slug} onClick=${() => openDelivery(c)}>Delivery</button><button class="btn btn-sm btn-outline" data-links-slug=${c.slug} onClick=${() => openLinks(c)}>Connections</button><button class="btn btn-sm btn-outline" data-boost-slug=${c.slug} onClick=${() => openBoost(c)}>Marketing Boost</button>${c.type === 'raffle' && html`<button class="btn btn-sm btn-outline" data-draw-slug=${c.slug} onClick=${() => openDraw(c)}>Draw winner</button>`}<button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}

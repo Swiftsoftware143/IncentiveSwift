@@ -528,7 +528,16 @@ label.opt:hover{border-color:var(--brand)}
         }
         if (!res.ok) { show('Could not load this quiz right now. Please try again.', true); return; }
         var qs = (res.data && res.data.questions) || [];
-        if (!qs.length) { return; }   // nothing to answer -> the generic entry form stays
+        if (!qs.length) {
+          // A quiz with NOTHING to answer keeps the generic entry form — there is nothing to score,
+          // and this page never invents a result. But the button must not PROMISE a quiz that will
+          // never ask anything: a visitor pressed "Start the quiz" and was answered "Better luck next
+          // time" without a single question on screen (measured 2026-11-16 on a freshly created
+          // campaign). Name what the form actually does instead.
+          var b0 = el('btn');
+          if (b0) { b0.textContent = 'Submit my entry'; }
+          return;
+        }
         renderQuizQuestions(qs);
       })
       .catch(function () { show('Could not reach the campaign service. Please try again.', true); });
