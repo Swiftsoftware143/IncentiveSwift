@@ -581,6 +581,20 @@ function paintAccount(u) {
      + ' <button class="btn btn-sm" id="loCancelBtn" onclick="loCancel()" style="background:#fff;color:#334155;border:1px solid #cbd5e1">Cancel</button>'
      + '</div>'
      + '</div>'
+     // ── DOWNLOAD YOUR DATA (2026-11-16) ────────────────────────────────────────────────────
+     // GET /api/v1/account/export answers a DOCUMENT (a JSON file the browser saves), and until now
+     // only the operator console had a press that reached it — so a business leaving had no way to
+     // take its own records from the console it signs in to. The server takes the workspace from the
+     // session, so the file can only ever be this account's own copy; nothing is written.
+     + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0" id="dlCard">'
+     + '<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Download your data</div>'
+     + '<div style="font-size:12.5px;color:#64748b;margin:0 0 8px;line-height:1.5">'
+     + 'One file with everything this workspace holds \u2014 your loyalty programme, campaigns, members, '
+     + 'the points they earned and spent, tags, offers, reviews, support tickets and settings \u2014 saved '
+     + 'to your computer as JSON. It is built when you press the button, and it is only ever your own data.</div>'
+     + '<div id="dlMsg" role="status" aria-live="polite" style="font-size:12.5px;color:#64748b;margin:0 0 8px"></div>'
+     + '<div><button class="btn btn-sm" id="dlBtn" onclick="dlData()">Download my data</button></div>'
+     + '</div>'
      // ── CLOSING THE ACCOUNT (2026-11-11) ────────────────────────────────────────────────────────
      // Every other card here changes something; this one ends the relationship, so it is a THREE
      // step control: arm, then type CLOSE and the password, then the server decides. The wording is
@@ -754,6 +768,43 @@ function pwSave() {
 // of the tab they were looking at would be a trap. So the fresh token is adopted into both stores
 // before anything else, and the result is confirmed by re-reading /auth/me with that new token
 // rather than by trusting the write's echo.
+// ── DOWNLOAD YOUR DATA (2026-11-16) ─────────────────────────────────────────────────────────────
+// The route answers a FILE, not a value this page renders, so it is fetched directly instead of
+// through the JSON helper. The filename comes from the server's Content-Disposition when it sends
+// one; every refusal is printed in the card rather than swallowed.
+function dlData() {
+  var btn = document.getElementById('dlBtn');
+  var msg = document.getElementById('dlMsg');
+  function say(t, ok) { msg.textContent = t; msg.style.color = ok ? '#047857' : '#b91c1c'; }
+  var refusal = function (body, status) {
+    var m = 'Could not build your copy (error ' + status + ').';
+    try { var d = JSON.parse(body); m = d.message || d.error || m; } catch (e) { /* not JSON */ }
+    return m;
+  };
+  say('', true);
+  btn.disabled = true;
+  btn.textContent = 'Building your file…';
+  fetch('/api/v1/account/export', { headers: token ? { 'Authorization': 'Bearer ' + token } : {}, cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(refusal(t, r.status)); });
+      var name = 'incentiveswift-account-' + new Date().toISOString().slice(0, 10) + '.json';
+      var cd = r.headers.get('content-disposition') || '';
+      var m = /filename="?([^";]+)"?/i.exec(cd);
+      if (m && m[1]) name = m[1];
+      return r.blob().then(function (bl) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(bl);
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) { /* revoked */ } a.remove(); }, 1500);
+        say('Your copy has been downloaded.', true);
+      });
+    })
+    .catch(function (e) { say((e && e.message) || 'Could not build your copy', false); })
+    .then(function () { btn.disabled = false; btn.textContent = 'Download my data'; });
+}
+
 function loArm() {
   var a = document.getElementById('loArmRow'), c = document.getElementById('loConfirmRow');
   acctNote('loMsg', '', 'i');
