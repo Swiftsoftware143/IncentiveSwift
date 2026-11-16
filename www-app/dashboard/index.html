@@ -756,7 +756,30 @@ function pwSave() {
       document.getElementById('pwCur').value = '';
       document.getElementById('pwNew').value = '';
       document.getElementById('pwConfirm').value = '';
-      acctNote('pwMsg', 'Password updated.', 'ok');
+      // The server bumps `accounts.session_epoch`, so the bearer this tab was holding is refused
+      // from the next request on — measured live 2026-11-16: PUT /api/v1/auth/password answers 200
+      // with a FRESH `token`, the old bearer 401s, the new one 200s. Ignoring that token left the
+      // customer on a dead session: "Password updated." on screen while every panel behind it
+      // answered 401 and the page's own wrapper signed them out — the exact trap the server-side
+      // re-mint was written to close. Adopt it the same way loDo() adopts the logout-all token, and
+      // only show the success sentence once /auth/me has answered with the new bearer, so "still
+      // signed in" is measured rather than hoped.
+      if (!d.token) {
+        acctNote('pwMsg', 'Password updated. This tab\'s session ended — sign in again with the new password.', 'ok');
+        return;
+      }
+      token = d.token;
+      try { sessionStorage.setItem(TOKEN_KEY, d.token); } catch (e) {}
+      try { localStorage.setItem(STORE_KEY, d.token); } catch (e) {}
+      return __rawFetch(window.location.origin + '/api/v1/auth/me', {
+        headers: { 'Authorization': 'Bearer ' + d.token }, cache: 'no-store'
+      }).then(function (rr) {
+        if (!rr.ok) {
+          acctNote('pwMsg', 'Password updated, but this tab could not confirm its new session. Reload the page and sign in again.', 'e');
+          return;
+        }
+        acctNote('pwMsg', 'Password updated. Every other device is signed out; this one stays signed in.', 'ok');
+      });
     });
   }).catch(function (e) { acctNote('pwMsg', e.message || 'Could not change the password', 'e'); });
 }
