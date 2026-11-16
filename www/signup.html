@@ -67,8 +67,8 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
       <input type="text" id="signup-name" placeholder="Your name" required aria-label="Full name">
     </div>
     <div class="form-group">
-      <label>Workspace name</label>
-      <input type="text" id="signup-workspace" placeholder="Your company or team" required aria-label="Workspace name">
+      <label>Workspace name <span style="font-weight:400;opacity:.7">(optional)</span></label>
+      <input type="text" id="signup-workspace" placeholder="Your company or team — we'll name it for you" aria-label="Workspace name (optional)">
     </div>
     <div class="form-group">
       <label>Work email</label>
@@ -112,8 +112,11 @@ async function handleSignup(e) {
   errDiv.style.display = 'none';
   sucDiv.style.display = 'none';
 
-  if (!name || !workspaceName || !email) {
-    errDiv.textContent = 'Please enter your full name, workspace name and work email';
+  // NAME + EMAIL are the whole form (David's model); a workspace name is a convenience, and the
+  // server names the first workspace for the customer when it is left blank (account_mint trims and
+  // ignores an empty value, so the "My Workspace" default still applies).
+  if (!name || !email) {
+    errDiv.textContent = 'Please enter your full name and work email';
     errDiv.style.display = 'block';
     return;
   }
@@ -130,7 +133,7 @@ async function handleSignup(e) {
     const res = await fetch('/api/v1/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, workspace_name: workspaceName, plan: pickedTier || 'free' }),
+      body: JSON.stringify({ name, email, workspace_name: workspaceName || undefined, plan: pickedTier || 'free' }),
     });
 
     const data = await res.json();
