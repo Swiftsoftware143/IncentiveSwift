@@ -12,6 +12,7 @@ pub(crate) mod tri_state;
 pub use loyalty::*;
 pub mod loyalty_v2;
 pub use loyalty_v2::*;
+pub mod account_export;
 pub mod admin_handler;
 pub mod api_keys;
 pub mod auth_handler;

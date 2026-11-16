@@ -1554,6 +1554,13 @@ async fn main() -> anyhow::Result<()> {
             put(handlers::email_templates_handler::update)
                 .delete(handlers::email_templates_handler::delete),
         )
+        // The business's OWN copy of its data (2026-11-15): one JSON document, scoped by the
+        // session's account with no id in the path to spoof. The sibling apps ship the same door;
+        // this app was the one missing it. Read-only.
+        .route(
+            "/api/v1/account/export",
+            get(handlers::account_export::export_account),
+        )
         // Settings routes
         .route(
             "/api/v1/settings",

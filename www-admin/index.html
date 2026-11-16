@@ -6661,6 +6661,10 @@ const ProfileView = () => {
     // but NO console screen called it, so a customer's only route out was asking support to DELETE
     // the row (which CASCADEs campaigns, the loyalty journal and the ledger). A closure is a STATE.
     clPw: '', clConfirm: '', clBusy: false, clDone: false, clMsg: '', clKind: 'info',
+    // Download my data (2026-11-15): GET /api/v1/account/export hands the whole workspace back as
+    // one JSON file. The button streams it to the browser's own download, so the console never
+    // holds the document in memory.
+    dlBusy: false, dlMsg: '', dlKind: 'info',
   });
 
   // ONE reader of the profile: /auth/me. It also feeds the sidebar header (`S.me`), so the name,
@@ -6778,6 +6782,35 @@ const ProfileView = () => {
       return;
     } catch (e) { st.avKind = 'err'; st.avMsg = e.message || 'Remove failed'; }
     renderApp();
+  };
+
+  // The whole workspace as one file (2026-11-15). GET /api/v1/account/export is scoped by this
+  // session's account, so there is nothing to type and nothing to choose: the button is the whole
+  // interaction. The name the server puts on the file wins when it sends one.
+  const downloadMyData = async () => {
+    st.dlBusy = true; st.dlKind = 'info'; st.dlMsg = 'Preparing your copy…'; renderApp();
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/account/export', {
+        headers: { 'Authorization': 'Bearer ' + API.token },
+      });
+      if (!r.ok) {
+        let d = null; try { d = await r.json(); } catch (x) {}
+        throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="([^"]+)"/);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = (m && m[1]) || 'incentiveswift-account.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      const kb = Math.max(1, Math.round(blob.size / 1024));
+      st.dlKind = 'ok'; st.dlMsg = 'Your copy downloaded (' + kb + ' KB).';
+    } catch (e) {
+      st.dlKind = 'err'; st.dlMsg = 'Could not build your copy: ' + (e.message || e);
+    }
+    st.dlBusy = false; renderApp();
   };
 
   const closeAccount = async () => {
@@ -6906,6 +6939,12 @@ const ProfileView = () => {
       <button class="btn" id="signout-others" onClick=${signOutOthers} disabled=${st.soBusy}>${st.soBusy ? 'Signing out…' : 'Sign out every other device'}</button>
       <span id="signout-others-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.soKind === 'err' ? '#dc2626' : (st.soKind === 'ok' ? '#059669' : '#64748b'))}>${st.soMsg}</span>
     </div>`}
+    <div class="card" id="download-my-data-card">
+      <h3 class="text-base font-semibold mb-1">Download my data</h3>
+      <p class="text-sm text-gray-500 mb-3">Get your own copy of everything this workspace holds — your account details, team, campaigns, loyalty programmes, members and their entries, offers, tags, credit history, reviews, support tickets and API key names — in one file you keep. Nothing that could be used to sign in as anyone is included: no passwords, no key secrets, no mail-server passwords.</p>
+      <button class="btn" id="download-my-data-btn" onClick=${downloadMyData} disabled=${st.dlBusy}>${st.dlBusy ? 'Preparing…' : 'Download my data'}</button>
+      <span id="download-my-data-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.dlKind === 'err' ? '#dc2626' : (st.dlKind === 'ok' ? '#059669' : '#64748b'))}>${st.dlMsg}</span>
+    </div>
     <div class="card" id="close-account-block">
       <h3 class="text-base font-semibold mb-1">Close my account</h3>
       <p class="text-sm text-gray-500 mb-3">Closing ends every session and API key on this account, and signing in is refused from then on. Your campaigns, loyalty journal and ledger are kept so support can reopen the business if you change your mind — nothing is deleted.</p>
