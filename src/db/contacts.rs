@@ -300,7 +300,7 @@ pub async fn create_contact(
     }
 
     let id = Uuid::new_v4();
-    sqlx::query(
+    let insert = sqlx::query(
         r#"INSERT INTO contacts (id, first_name, last_name, email, phone, business_name, website)
            VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
@@ -312,7 +312,40 @@ pub async fn create_contact(
     .bind(&input.business_name)
     .bind(&input.website)
     .execute(pool)
-    .await?;
+    .await;
+
+    // A SECOND PRESS IS THE SAME CONTACT, NOT A 500 (measured live 2026-11-17). The dedup SELECT
+    // above cannot see a row whose INSERT has not committed yet, so two callers arriving together
+    // for the SAME NEW address both inserted and the loser was answered
+    // `500 {"error":"Internal server error"}` (`duplicate key value violates unique constraint
+    // "contacts_email_idx"` in the app log). Measured on the origin: 12 simultaneous
+    // `POST /api/v1/contacts {"email":"<new>"}` answered **3 × 500 and 9 × 200** — a double press of
+    // Save, or two import workers on one address, reads as the server breaking. This function IS a
+    // find-or-create, so the row that won the race is the answer: re-read it and take the same
+    // link + update path the dedup SELECT takes. Any other database error is still the real answer.
+    if let Err(e) = insert {
+        let is_duplicate =
+            matches!(&e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505"));
+        let raced_email = input.email.as_deref().filter(|v| !v.trim().is_empty());
+        if !is_duplicate {
+            return Err(e.into());
+        }
+        let Some(email) = raced_email else {
+            return Err(e.into());
+        };
+        let winner: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM contacts WHERE lower(email) = lower($1)")
+                .bind(email)
+                .fetch_optional(pool)
+                .await?;
+        return match winner {
+            Some(existing_id) => {
+                link_contact(pool, &existing_id, account_id, source).await?;
+                update_contact(pool, account_id, &existing_id, input).await
+            }
+            None => Err(e.into()),
+        };
+    }
 
     link_contact(pool, &id, account_id, source).await?;
 
