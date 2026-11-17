@@ -96,6 +96,22 @@ pub async fn create_workspace(
     let tid = tenant(&claims)?;
     let name = clean_name(&req.name)?;
 
+    // ONE PRESS AT A TIME PER ACCOUNT (cron 2026-11-17). The ceiling count, the duplicate-name
+    // probe and the INSERT are three separate statements, so two overlapping presses — a
+    // double-click on "Create workspace" — both read dup = none and the loser then hits
+    // `ux_workspaces_tenant_name`, which surfaced to the customer as HTTP 500 "Internal server
+    // error" (measured live on this app, before this fix: 8 simultaneous same-name creates ->
+    // 1 x 200, 6 x 409, 1 x 500). A transaction-scoped advisory lock on the tenant makes the
+    // reads and the write one critical section, so the second press sees the first row and gets
+    // the ordinary 409 ("you already have a workspace with that name"), and the plan ceiling
+    // cannot be beaten by parallelism either.
+    let mut tx = state.db.begin().await.map_err(crate::error::db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::error::db_error)?;
+
     // Plan ceiling, when the plan states one. IncentiveSwift sells its allowances as
     // `plan_tiers` -> `tier_features` -> `features` (the tier `accounts.plan_tier_id` names); a
     // tier that names no `max_workspaces` is uncapped, because a ceiling exists only where one was
@@ -106,7 +122,7 @@ pub async fn create_workspace(
 
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE tenant_id = $1")
         .bind(tid)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(crate::error::db_error)?;
 
@@ -123,7 +139,7 @@ pub async fn create_workspace(
     )
     .bind(tid)
     .bind(&name)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(crate::error::db_error)?;
     if dup.is_some() {
@@ -135,15 +151,24 @@ pub async fn create_workspace(
     // the very first workspace is always the default
     let make_default = count == 0;
     let row = sqlx::query(
-        "INSERT INTO workspaces (tenant_id, name, is_default) VALUES ($1, $2, $3) \
-         RETURNING id, name, is_default",
+        "INSERT INTO workspaces (tenant_id, name, is_default) VALUES ($1, $2, $3) RETURNING id, name, is_default",
     )
     .bind(tid)
     .bind(&name)
     .bind(make_default)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
-    .map_err(crate::error::db_error)?;
+    // The advisory lock above already serialises this per account, so this arm should be
+    // unreachable — keep it so ANY other write path into `workspaces` (a second door, a future
+    // handler) still answers the customer's own sentence instead of a 500.
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            AppError::Duplicate("You already have a workspace with that name.".into())
+        }
+        _ => crate::error::db_error(e),
+    })?;
+
+    tx.commit().await.map_err(crate::error::db_error)?;
 
     Ok(Json(json!({ "workspace": row_json(&row) })))
 }
@@ -163,13 +188,22 @@ pub async fn rename_workspace(
     }
     let name = clean_name(&req.name)?;
 
+    // The SAME per-account critical section as create: two overlapping renames onto one name both
+    // read dup = none and the loser hits `ux_workspaces_tenant_name` (a 500 before this fix).
+    let mut tx = state.db.begin().await.map_err(crate::error::db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::error::db_error)?;
+
     let dup: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM workspaces WHERE tenant_id = $1 AND lower(name) = lower($2) AND id <> $3",
     )
     .bind(tid)
     .bind(&name)
     .bind(id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(crate::error::db_error)?;
     if dup.is_some() {
@@ -179,16 +213,22 @@ pub async fn rename_workspace(
     }
 
     let row = sqlx::query(
-        "UPDATE workspaces SET name = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 \
-         RETURNING id, name, is_default",
+        "UPDATE workspaces SET name = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 RETURNING id, name, is_default",
     )
     .bind(&name)
     .bind(id)
     .bind(tid)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
-    .map_err(crate::error::db_error)?
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            AppError::Duplicate("You already have a workspace with that name.".into())
+        }
+        _ => crate::error::db_error(e),
+    })?
     .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
+
+    tx.commit().await.map_err(crate::error::db_error)?;
 
     Ok(Json(json!({ "workspace": row_json(&row) })))
 }
