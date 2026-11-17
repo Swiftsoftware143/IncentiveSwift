@@ -145,6 +145,11 @@ footer .links a:hover{color:#d1d5db}
 
   </div>
 
+  <div id="how-to-pay" hidden style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:12px;padding:18px 20px;margin:18px 0">
+    <h3 style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:6px">How to pay for a paid plan</h3>
+    <p style="font-size:14px;color:#334155;white-space:pre-wrap" id="how-to-pay-text"></p>
+  </div>
+
   <p class="note">Prices in US dollars, billed monthly. Every account starts on Free. To move up, open <strong>Plan &amp; Billing</strong> in your dashboard and send the upgrade request — our team switches the workspace to the plan you ask for, and your limits change at once. Questions about a volume or white-label deal? <a href="/signup">Tell us what you need</a>.</p>
 </main>
 
@@ -181,6 +186,15 @@ footer .links a:hover{color:#d1d5db}
   if (!grid) return;
   function money(n) { var v = Number(n); if (!isFinite(v)) return '$' + n; return '$' + (v % 1 === 0 ? String(v) : v.toFixed(2)); }
   fetch('/api/v1/plans', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+    // HOW TO PAY (2026-11-17): the operator's own payment details, published by GET /api/v1/plans so
+    // a VISITOR — not only a signed-in buyer on Plan & billing — can see how this installation
+    // actually takes the money while no card provider is configured. Empty/absent leaves the block
+    // hidden, so the page is exactly what it was before. Painted BEFORE the plans branch returns, so
+    // an empty catalogue still shows it.
+    var pay = (d && typeof d.payment_instructions === 'string') ? d.payment_instructions.trim() : '';
+    var payBox = document.getElementById('how-to-pay');
+    var payText = document.getElementById('how-to-pay-text');
+    if (pay && payBox && payText) { payText.textContent = pay; payBox.hidden = false; }
     var plans = (d && d.plans) || [];
     if (!plans.length) return;
     plans.sort(function (a, b) { return Number(a.monthly_price) - Number(b.monthly_price); });
