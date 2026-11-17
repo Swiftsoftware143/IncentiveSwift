@@ -501,6 +501,17 @@ pub async fn tags_for_contacts(
 /// allowance (`plans.max_tags`) is NOT re-checked here: this path may be reached by a loyalty rule
 /// the account already configured, and refusing the tag at reward time would lose the fact that the
 /// member earned it. Explicit tag creation (POST /tags) keeps its own gate.
+///
+/// THE CREATE IS ONE ATOMIC STATEMENT (measured live 2026-11-17). The SELECT below cannot see a row
+/// whose INSERT has not committed yet, so two callers arriving together for the SAME new name both
+/// missed it, both inserted, and the loser was answered `500 {"error":"Internal server error"}`
+/// (`duplicate key value violates unique constraint "tags_account_lower_name_uidx"` in the app log).
+/// Measured on the origin: 12 simultaneous `POST /api/v1/contacts/:id/tags {"name":"<new>"}` answered
+/// **5 × 500 and 7 × 200** for one customer action a double press can produce, and the loyalty
+/// reward path (`apply_named_tag_to_contact`) reaches this function too, so a reward run tagging
+/// many members at once could fail on its own tag. `ON CONFLICT` on the SAME key the unique index
+/// enforces (`account_id`, `lower(name)`) makes insert-or-take-the-winner atomic: the winner of the
+/// race is returned to every caller, no second row is written, and no request is answered 500.
 pub async fn ensure_tag_named(
     pool: &PgPool,
     account_id: &Uuid,
@@ -525,8 +536,12 @@ pub async fn ensure_tag_named(
     {
         return Ok(existing);
     }
+    // `DO UPDATE SET name = tags.name` is the no-op arm that makes this a find-or-create: on a lost
+    // race the existing row is returned (and re-written with its own value), never a 23505.
     let id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO tags (account_id, name) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO tags (account_id, name) VALUES ($1, $2) \
+         ON CONFLICT (account_id, lower(name)) DO UPDATE SET name = tags.name \
+         RETURNING id",
     )
     .bind(account_id)
     .bind(trimmed)
