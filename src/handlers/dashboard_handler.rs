@@ -274,16 +274,41 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
            -- inventing a figure.
            SELECT p.id, p.name, p.slug, ROUND(p.price)::int as monthly_price, 0 as monthly_zc_pool, NULL::text as description,
                   COALESCE(NULLIF(p.price_yearly, 0), NULLIF(pt.price_annual, 0), 0)::float8 as annual_price,
+                  -- THE TWO BASE ALLOWANCES (2026-11-17). `plan_tiers.max_campaigns` and
+                  -- `plan_tiers.max_entries_per_month` are the tier columns every runtime gate reads
+                  -- (features.rs), and the public price list already states both — but neither has a
+                  -- row in the `features` catalogue, so the catalogue-only list above published
+                  -- NEITHER number and the page and this endpoint disagreed by omission (kanban
+                  -- t_9896be3c). They are read from `plan_tiers` directly and placed AHEAD of the
+                  -- catalogue rows (ord 1/2 < 3). A negative campaigns value is skipped because
+                  -- Enterprise already publishes `Unlimited Campaigns` from the catalogue; a negative
+                  -- entry allowance publishes ` - unlimited`. A plan whose slug has no tier still falls
+                  -- back to the legacy `plans.features` array.
                   COALESCE((
-                      SELECT jsonb_agg(CASE WHEN tf.limit_value IS NULL THEN f.label
-                                            WHEN tf.limit_value < 0 THEN f.label
-                                                 || CASE WHEN f.label ILIKE 'Unlimited%' THEN '' ELSE ' - unlimited' END
-                                            ELSE f.label || ' - ' || tf.limit_value::text END
-                                       ORDER BY f.category NULLS LAST, f.label)
-                      FROM plan_tiers pt
-                      JOIN tier_features tf ON tf.tier_id = pt.id AND tf.enabled
-                      JOIN features f ON f.id = tf.feature_id
-                      WHERE lower(pt.slug) = lower(p.slug)
+                      SELECT jsonb_agg(t.line ORDER BY t.ord, t.cat NULLS LAST, t.label)
+                      FROM (
+                          SELECT 1 AS ord, NULL::text AS cat, 'Campaigns' AS label,
+                                 'Campaigns - ' || pt2.max_campaigns::text AS line
+                          FROM plan_tiers pt2
+                          WHERE lower(pt2.slug) = lower(p.slug) AND pt2.max_campaigns >= 0
+                          UNION ALL
+                          SELECT 2, NULL::text, 'Entries per month',
+                                 CASE WHEN pt2.max_entries_per_month < 0
+                                      THEN 'Entries per month - unlimited'
+                                      ELSE 'Entries per month - ' || pt2.max_entries_per_month::text END
+                          FROM plan_tiers pt2
+                          WHERE lower(pt2.slug) = lower(p.slug) AND pt2.max_entries_per_month IS NOT NULL
+                          UNION ALL
+                          SELECT 3, f.category, f.label,
+                                 CASE WHEN tf.limit_value IS NULL THEN f.label
+                                      WHEN tf.limit_value < 0 THEN f.label
+                                           || CASE WHEN f.label ILIKE 'Unlimited%' THEN '' ELSE ' - unlimited' END
+                                      ELSE f.label || ' - ' || tf.limit_value::text END
+                          FROM plan_tiers pt
+                          JOIN tier_features tf ON tf.tier_id = pt.id AND tf.enabled
+                          JOIN features f ON f.id = tf.feature_id
+                          WHERE lower(pt.slug) = lower(p.slug)
+                      ) t
                   ), p.features) as features,
                   NULL::text as how_it_works,
                   -- The hosted payment page the operator pasted into this plan (Stripe Payment Link,
