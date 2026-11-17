@@ -96,6 +96,19 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
   
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-IS2026"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-IS2026');</script></head>
 <body>
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:10px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:13px">🍪 Cookie Consent</strong>
+      <p style="margin:2px 0 0;color:#94a3b8;font-size:12px;line-height:1.45"><span class="cb-long">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our </span><a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+
 <style>.suite{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:10px 24px;background:#0f172a;border-bottom:1px solid #1e293b}.suite-brand{font-weight:800;color:#38bdf8;text-decoration:none;font-size:14px;margin-right:4px;white-space:nowrap}.suite-links{display:flex;flex-wrap:wrap;gap:6px 16px}.suite-links a{color:#cbd5e1;text-decoration:none;font-size:13px;white-space:nowrap}.suite-links a:hover{color:#38bdf8}</style>
 <nav class="suite" aria-label="Our Suite">
   <a class="suite-brand" href="https://swiftsoftware.net">SwiftSoftware</a>
@@ -277,36 +290,20 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
 </div>
 
 <!-- Cookie Consent Banner -->
-<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:10px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
-  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-    <div style="flex:1;min-width:250px">
-      <strong style="font-size:13px">🍪 Cookie Consent</strong>
-      <p style="margin:2px 0 0;color:#94a3b8;font-size:12px;line-height:1.45"><span class="cb-long">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our </span><a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
-    </div>
-    <div style="display:flex;gap:8px;flex-shrink:0">
-      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
-      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
-    </div>
-  </div>
-</div>
-<!-- Consent bar placement (cron 2026-11-16). It used to be a full-width FIXED overlay pinned to the
-     bottom of the viewport: measured in Chromium at 800x600 it occupied the bottom band while the
-     hero signup button occupied y 509-571 (IncentiveSwift) / 541-603 (MissedCall), so a real
-     first-visit click landed on the bar and did nothing (elementFromPoint returned the bar). It is
-     now a compact card parked in the bottom-RIGHT corner on desktop and a single slim row on a
-     phone, so it never reaches the hero button. Same copy, same accept/decline behaviour. -->
 <style>
-#cookie-banner{left:auto !important;right:12px !important;bottom:12px !important;max-width:240px !important;
-  border-radius:12px !important;padding:10px 12px !important;box-shadow:0 8px 24px rgba(0,0,0,.45) !important}
-#cookie-banner>div{flex-direction:column !important;align-items:flex-start !important;gap:8px !important}
+#cookie-banner{position:static !important;left:auto !important;right:auto !important;bottom:auto !important;
+  width:auto !important;max-width:none !important;border-radius:0 !important;border-bottom:1px solid #1e293b !important;
+  padding:8px 16px !important;box-shadow:0 2px 10px rgba(0,0,0,.35) !important}
+#cookie-banner>div{max-width:none !important;flex-direction:row !important;align-items:center !important;
+  gap:12px !important;flex-wrap:wrap !important}
 #cookie-banner>div>div{min-width:0 !important}
+#cookie-banner p{margin:0 !important;font-size:12px !important;line-height:1.4 !important}
+#cookie-banner .cb-long{display:none !important}
+#cookie-banner strong{font-size:12px !important;white-space:nowrap !important}
+#cookie-banner button{padding:5px 14px !important;font-size:12px !important}
 @media (max-width:640px){
-  #cookie-banner{left:8px !important;right:8px !important;bottom:8px !important;max-width:none !important;
-    padding:6px 10px !important;border-radius:10px !important}
-  #cookie-banner>div{flex-direction:row !important;align-items:center !important;gap:8px !important}
-  #cookie-banner p{font-size:10px !important;line-height:1.35 !important;margin:2px 0 0 !important}
-  #cookie-banner .cb-long{display:none !important}
-  #cookie-banner strong{font-size:12px !important;white-space:nowrap !important}
+  #cookie-banner{left:auto !important;right:auto !important;bottom:auto !important;max-width:none !important;
+    padding:6px 10px !important;border-radius:0 !important}
   #cookie-banner button{padding:4px 10px !important;font-size:11px !important}
 }
 </style>
