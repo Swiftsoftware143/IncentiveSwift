@@ -5104,6 +5104,7 @@ const SupportTickets = () => {
           <span class="badge badge-blue">${prio(st.detail.ticket.priority)}</span>
           ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
         </div>
+        ${(st.detail.ticket.account_name || st.detail.ticket.account_email) ? html`<div class="mb-4 text-sm" data-requester="1"><span class="text-gray-500">From:</span> <strong>${st.detail.ticket.account_name || 'Unnamed workspace'}</strong>${st.detail.ticket.account_email ? html` <span class="text-gray-500">(${st.detail.ticket.account_email})</span>` : null}</div>` : null}
         ${(st.detail.ticket.plan_name || st.detail.ticket.plan_slug) ? html`<div class="mb-4 text-sm" data-plan-detail="1"><span class="text-gray-500">Asks for:</span> <strong>${st.detail.ticket.plan_name || st.detail.ticket.plan_slug}</strong>${st.detail.ticket.plan_applied_at ? html` <span class="badge badge-green">switched to this plan</span>` : html` <span class="badge">not switched yet — Resolve does it</span>`}</div>` : null}
         ${st.planMsg ? html`<div class="rounded-lg p-3 text-sm mb-4 ${st.planMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-plan-msg=${st.planMsg.ok ? 'applied' : 'not-applied'}>${st.planMsg.text}</div>` : null}
         ${st.detail.ticket.source === 'loyalty_plan_request' ? html`<div class="rounded-lg p-3 mb-4" style="background:#f8fafc;border:1px solid #e2e8f0" data-loyalty-activate="1">
