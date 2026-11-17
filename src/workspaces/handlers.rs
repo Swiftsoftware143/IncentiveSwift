@@ -257,18 +257,42 @@ pub async fn set_default_workspace(
         return Err(AppError::NotFound("Workspace not found.".into()));
     }
 
+    // ONE PRESS AT A TIME PER ACCOUNT (kanban t_7f79647c). The clear and the set are two separate
+    // statements, so two overlapping presses aimed at DIFFERENT workspaces both clear the old
+    // default and then both set their own -- and the partial unique index
+    // `ux_workspaces_one_default` (one default workspace per tenant) refuses the loser. Measured
+    // live on the pre-fix binary: 24 simultaneous presses answered 11 x 200 and 13 x HTTP 500
+    // ("Database error": duplicate key ... "ux_workspaces_one_default", plus cross-arm deadlocks),
+    // which is exactly what a double-click on the default control showed the customer. The
+    // tenant-scoped advisory lock `create_workspace` already takes makes the clear+set pair one
+    // critical section, so overlapping presses serialise and every one of them answers 200. The
+    // constraint arm below is the belt: any future path reaching this UPDATE without the lock
+    // answers a readable 409 instead of a raw database error.
     let mut tx = state.db.begin().await.map_err(crate::error::db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::error::db_error)?;
     sqlx::query("UPDATE workspaces SET is_default = false, updated_at = now() WHERE tenant_id = $1 AND is_default")
         .bind(tid)
         .execute(&mut *tx)
         .await
         .map_err(crate::error::db_error)?;
-    sqlx::query("UPDATE workspaces SET is_default = true, updated_at = now() WHERE id = $1 AND tenant_id = $2")
+    let promoted = sqlx::query("UPDATE workspaces SET is_default = true, updated_at = now() WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
         .execute(&mut *tx)
-        .await
-        .map_err(crate::error::db_error)?;
+        .await;
+    match promoted {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db)) if db.constraint() == Some("ux_workspaces_one_default") => {
+            return Err(AppError::Duplicate(
+                "Another workspace was made the default at the same moment. Try again.".into(),
+            ));
+        }
+        Err(e) => return Err(crate::error::db_error(e)),
+    }
     tx.commit().await.map_err(crate::error::db_error)?;
 
     Ok(Json(json!({ "ok": true, "default_workspace_id": id })))
