@@ -867,6 +867,132 @@ async fn probe_payment_page(client: &reqwest::Client, url: &str) -> (&'static st
     }
 }
 
+/// `GET /api/v1/admin/plans/payment-readiness` — can this install take money at all, right now?
+///
+/// WHY THIS EXISTS (2026-11-17). Every sibling install the operator runs answers this question
+/// somewhere on the panel, and this one did not: an operator could read the plan list, see three
+/// sellable plans, and never learn that none of them carried a payment page. The measured
+/// fleet-wide state was **19 sellable plans and 0 payable destinations**, and nothing on this
+/// console said so. This is the same read CoreSwift's dashboard warning was built on, said in this
+/// app's own vocabulary: a PAID plan with no page, or a page that no longer opens, means a buyer who
+/// presses Upgrade cannot pay.
+///
+/// Read the way the customer catalogue is read, not the way the panel lists plans: `is_active` only
+/// (a retired plan is not on sale), and a tier is PAID when either price is above zero, taking the
+/// yearly figure from `plan_tiers` when this table carries none — the same fallback
+/// [`list_plans`] already uses, so the two screens can never disagree about what is on sale.
+///
+/// Read-only: it opens each distinct stored link once and writes nothing. Admin-only through the
+/// `/api/v1/admin/` gate, like every other operator route here.
+pub async fn payment_readiness(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let rows = sqlx::query(
+        r#"SELECT p.slug, p.purchase_url,
+                  (COALESCE(NULLIF(p.price_monthly, 0), p.price, 0) > 0
+                   OR COALESCE(NULLIF(p.price_yearly, 0), pt.price_annual, 0) > 0) AS paid
+             FROM plans p LEFT JOIN plan_tiers pt ON lower(pt.slug) = lower(p.slug)
+            WHERE p.is_active = true
+            ORDER BY p.sort_order ASC NULLS LAST, p.name ASC"#,
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut paid: Vec<(String, String)> = Vec::new();
+    for row in &rows {
+        let is_paid: bool = row.try_get("paid").unwrap_or(false);
+        if !is_paid {
+            continue;
+        }
+        let slug: String = row.try_get("slug").unwrap_or_default();
+        let url: String = row
+            .try_get::<Option<String>, _>("purchase_url")
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        paid.push((slug, url));
+    }
+
+    // No usable link is the "cannot pay at all" case and is reported as such; a link that no longer
+    // opens is a different defect, and one must never hide the other.
+    let unpayable: Vec<String> = paid
+        .iter()
+        .filter(|(_, u)| u.is_empty())
+        .map(|(s, _)| s.clone())
+        .collect();
+    let with_link = paid.len() - unpayable.len();
+
+    let mut distinct: Vec<String> = Vec::new();
+    for (_, u) in &paid {
+        if !u.is_empty() && !distinct.iter().any(|t| t == u) {
+            distinct.push(u.clone());
+        }
+    }
+    distinct.truncate(8);
+
+    let mut links_ok = 0usize;
+    let mut links_dead = 0usize;
+    let mut links_unverified = 0usize;
+    if !distinct.is_empty() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(6))
+            .redirect(reqwest::redirect::Policy::limited(6))
+            .user_agent(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+                 Chrome/131.0.0.0 Safari/537.36",
+            )
+            .build()
+            .map_err(|e| {
+                tracing::error!("payment-readiness: could not build the HTTP client: {e:?}");
+                AppError::Internal("Could not run the payment-readiness check just now".to_string())
+            })?;
+        for url in &distinct {
+            match probe_payment_page(&client, url).await {
+                ("ok", _) => links_ok += 1,
+                ("dead", _) => links_dead += 1,
+                _ => links_unverified += 1,
+            }
+        }
+    }
+
+    // A provider row is not required to sell by hand-off, so it is reported, never decisive.
+    let providers: i64 = sqlx::query_scalar("SELECT count(*) FROM payment_providers")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+
+    let can_sell = !paid.is_empty() && unpayable.is_empty() && links_dead == 0;
+
+    let note = if paid.is_empty() {
+        "No paid plan is on sale yet, so there is nothing a buyer could be charged for."
+    } else if can_sell {
+        "Every paid plan carries a payment page, and every stored page opened. Nothing is silently \
+         dead right now."
+    } else if !unpayable.is_empty() {
+        "Buyers cannot complete a purchase on at least one paid plan: it has no payment page, so \
+         pressing Upgrade only files a request. Paste the address your payment provider gives you \
+         on the plan, or take the plan off sale."
+    } else {
+        "At least one stored payment page no longer opens. A buyer pressing Upgrade on that plan \
+         would land on a dead page — replace the link, or take the plan off sale."
+    };
+
+    Ok(Json(json!({
+        "can_sell": can_sell,
+        "paid_plans": paid.len(),
+        "plans_with_link": with_link,
+        "unpayable_plans": unpayable,
+        "links_ok": links_ok,
+        "links_dead": links_dead,
+        "links_unverified": links_unverified,
+        "payment_providers": providers,
+        "note": note,
+    })))
+}
+
 /// `POST /api/v1/admin/plans/payment-pages/check` — re-open every plan's stored payment page NOW.
 ///
 /// Read-only: it opens each stored URL once and writes nothing. Every plan carrying a link is

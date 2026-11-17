@@ -1235,6 +1235,13 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/admin/plans/payment-pages/check",
             post(crate::handlers::plans_handler::check_plan_payment_pages),
         )
+        // Can this install take money at all, right now? (2026-11-17) The panel could show three
+        // sellable plans while NONE of them carried a payment page, and nothing said so. Read-only,
+        // operator-only through the `/api/v1/admin/` gate.
+        .route(
+            "/api/v1/admin/plans/payment-readiness",
+            get(crate::handlers::plans_handler::payment_readiness),
+        )
         // The operator's "switch this loyalty plan on" action (cron 2026-11-08). A loyalty
         // purchase request reaches the queue as a `loyalty_plan_request` ticket, and until this
         // route existed NOTHING but the Stripe webhook could set `loyalty_plan_status = 'active'`
