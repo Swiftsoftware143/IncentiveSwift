@@ -77,6 +77,17 @@ pub fn pool_prize_count(config: &JsonValue) -> usize {
         .unwrap_or(0)
 }
 
+/// The mechanics that pay a player out of `config.prize_pool` — the two whose play doors answer
+/// "This campaign isn't ready to play yet" when the pool is empty (`handlers::spin_handler` and
+/// `handlers::scratch_handler` read the same pool through [`pool_prize_count`]).
+///
+/// Used by the campaign write paths (2026-11-16): a campaign of one of these mechanics that has no
+/// prizes must never be born `active` and must never be published, because the operator's screen
+/// would say "live" while every player is refused.
+pub fn pays_from_prize_pool(campaign_type: &str) -> bool {
+    matches!(campaign_type, "spin_wheel" | "scratch_card")
+}
+
 /// The pity timer section of campaign config.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PityTimerConfig {

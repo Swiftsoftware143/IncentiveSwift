@@ -1,6 +1,7 @@
 //! Campaign database operations.
 
 use crate::error::AppError;
+use crate::mechanics::prize_draw;
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -293,10 +294,25 @@ pub async fn create_campaign(
         Some(t) => serde_json::json!({ "theme": t }),
         None => serde_json::json!({}),
     };
+    // A PRIZE-PAYING CAMPAIGN IS BORN A DRAFT WHEN IT HAS NOTHING TO PAY (cron 2026-11-16).
+    // This INSERT hard-coded 'active', so a brand-new spin-wheel or scratch-card campaign was live
+    // the moment it existed — while its pool was still empty, so every player was refused with
+    // "This campaign isn't ready to play yet — please check back soon" and NOTHING on the owner's
+    // screen said so. Measured live tonight: `POST /api/v1/campaigns {type: spin_wheel}` → 200,
+    // status `active`, then `POST /campaigns/<slug>/spin` → 409 "isn't ready to play". The owner
+    // adds prizes, then publishes (the publish control lands here); the campaign is not advertised
+    // as live in the meantime. Mechanics that pay from somewhere else are untouched.
+    let status = if prize_draw::pays_from_prize_pool(&input.r#type)
+        && prize_draw::pool_prize_count(&config) == 0
+    {
+        "draft"
+    } else {
+        "active"
+    };
 
     sqlx::query(
         r#"INSERT INTO campaigns (id, account_id, name, slug, type, status, config, tag_namespace, outcome_tags, delivery_method, delivery_config, loyalty_program_id, loyalty_points_per_play, auto_enroll_loyalty, surface_config, iqs_funnel_id)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#
+           VALUES ($1, $2, $3, $4, $5, $16, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)"#
     )
     .bind(id)
     .bind(input.account_id)
@@ -313,6 +329,7 @@ pub async fn create_campaign(
     .bind(auto_enroll_loyalty)
     .bind(&surface_config)
     .bind(input.iqs_funnel_id.as_deref())
+    .bind(status)
     .execute(pool)
     .await
     .map_err(map_campaign_write_violation)?;

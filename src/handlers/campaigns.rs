@@ -416,7 +416,10 @@ pub async fn update_campaign(
 
     // Merge branding into existing campaign config if provided
     let config: Option<Value> = if let Some(ref branding) = body.branding {
-        let mut merged = body.config.clone().unwrap_or(campaign.config);
+        let mut merged = body
+            .config
+            .clone()
+            .unwrap_or_else(|| campaign.config.clone());
         if let Some(obj) = merged.as_object_mut() {
             obj.insert("branding".to_string(), branding.clone());
         }
@@ -449,6 +452,25 @@ pub async fn update_campaign(
             )))
         }
     };
+
+    // NOTHING TO PAY MEANS NOT PUBLISHABLE (cron 2026-11-16). The play doors answer a player with
+    // "This campaign isn't ready to play yet — please check back soon" when the prize pool is empty
+    // (`handlers::spin_handler`, `handlers::scratch_handler`), and no owner screen said so: the row
+    // read `active` and the operator believed it was live while every player hit a wall. Publishing
+    // is refused here, by name, with the fix, and the row is left exactly as it was. The pool that
+    // will exist afterwards is what is judged — the same request may carry the prizes.
+    if new_status == Some("active")
+        && crate::mechanics::prize_draw::pays_from_prize_pool(&campaign.r#type)
+    {
+        let effective_config = config.as_ref().unwrap_or(&campaign.config);
+        if crate::mechanics::prize_draw::pool_prize_count(effective_config) == 0 {
+            return Err(AppError::BadRequest(format!(
+                "This campaign has no prizes yet, so nobody could play it. Add at least one prize \
+                 under Prizes, then publish — it stays '{}' until you do.",
+                campaign.status
+            )));
+        }
+    }
 
     // Validate the requested loyalty program BEFORE any write (kanban t_28431966), same shape as the
     // survey gate above: an id this caller cannot use must never reach the FK (a 500), and the
