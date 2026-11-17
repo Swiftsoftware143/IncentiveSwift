@@ -673,13 +673,30 @@ pub async fn regenerate_api_key(
     // insert-then-delete order would violate it; retire-then-mint keeps exactly one active key at
     // every instant. If either step fails, both roll back and the old key keeps working.
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "UPDATE api_keys SET is_active = false, updated_at = now() WHERE id = $1 AND user_id = $2",
+    // ONE PRESS AT A TIME (cron 2026-11-17). The SELECT above runs outside the transaction and the
+    // UPDATE used to carry no `is_active` predicate at all, so a DOUBLE PRESS of Regenerate had both
+    // presses read the same live key: the first retired it and minted a replacement, the second
+    // matched the already-retired row (a no-op UPDATE it never inspected) and minted a SECOND active
+    // key — which the partial unique index `api_keys_one_active_per_tenant` refuses, surfacing to the
+    // customer as HTTP 500 `{"code":500,"error":"Internal server error"}` (reproduced live
+    // 2026-11-17: 200 on press 1, 500 on press 2). The predicate makes the loser's UPDATE match zero
+    // rows once the winner commits, and the rows_affected check answers that press with the ordinary
+    // 409 instead of letting the mint collide. Same shape FunnelSwift already ships
+    // (`handlers/api_keys.rs::regenerate_api_key`).
+    let retired = sqlx::query(
+        "UPDATE api_keys SET is_active = false, updated_at = now() \
+         WHERE id = $1 AND user_id = $2 AND is_active = true",
     )
     .bind(id)
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    if retired.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "This key was already replaced by another press — reload the key list to see the new one."
+                .to_string(),
+        ));
+    }
     // The retire is the 'regenerated' event (the old key stopped authenticating); `mint_on` below
     // writes the new key's own 'created' row on the same transaction.
     record_api_key_event(
