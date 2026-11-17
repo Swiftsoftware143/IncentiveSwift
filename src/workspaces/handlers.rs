@@ -366,6 +366,18 @@ pub async fn delete_workspace(
     }
 
     let mut tx = state.db.begin().await.map_err(crate::error::db_error)?;
+    // The SAME tenant-scoped lock `set_default_workspace` takes, and taken FIRST so both writers
+    // acquire it before touching workspace rows — the other order lets a press hold the advisory
+    // lock while waiting for this row, and this delete hold the row while waiting for the lock (a
+    // deadlock the customer would see as a 500). Without it, the replacement-default UPDATE below
+    // is a second, unlocked writer of the one-default rule and can race a press into
+    // `ux_workspaces_one_default`. Measured live before the fix: with the tenant lock held by
+    // another session a delete answered in 0.01s, i.e. it never took it.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(crate::error::db_error)?;
     sqlx::query("DELETE FROM workspaces WHERE id = $1 AND tenant_id = $2")
         .bind(id)
         .bind(tid)
@@ -375,14 +387,24 @@ pub async fn delete_workspace(
 
     // never leave the account without a default
     if was_default {
-        sqlx::query(
+        let promoted = sqlx::query(
             "UPDATE workspaces SET is_default = true, updated_at = now() \
              WHERE id = (SELECT id FROM workspaces WHERE tenant_id = $1 ORDER BY created_at LIMIT 1)",
         )
         .bind(tid)
         .execute(&mut *tx)
-        .await
-        .map_err(crate::error::db_error)?;
+        .await;
+        match promoted {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(db))
+                if db.constraint() == Some("ux_workspaces_one_default") =>
+            {
+                return Err(AppError::Conflict(
+                    "Another workspace was made the default at the same moment. Try again.".into(),
+                ));
+            }
+            Err(e) => return Err(crate::error::db_error(e)),
+        }
     }
     tx.commit().await.map_err(crate::error::db_error)?;
 
