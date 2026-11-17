@@ -289,6 +289,26 @@ body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased
     </div>
   </div>
 </div>
+<!-- Consent bar placement (cron 2026-11-16). It used to be a full-width FIXED overlay pinned to the
+     bottom of the viewport: measured in Chromium at 800x600 it occupied the bottom band while the
+     hero signup button occupied y 509-571 (IncentiveSwift) / 541-603 (MissedCall), so a real
+     first-visit click landed on the bar and did nothing (elementFromPoint returned the bar). It is
+     now a compact card parked in the bottom-RIGHT corner on desktop and a single slim row on a
+     phone, so it never reaches the hero button. Same copy, same accept/decline behaviour. -->
+<style>
+#cookie-banner{left:auto !important;right:12px !important;bottom:12px !important;max-width:240px !important;
+  border-radius:12px !important;padding:10px 12px !important;box-shadow:0 8px 24px rgba(0,0,0,.45) !important}
+#cookie-banner>div{flex-direction:column !important;align-items:flex-start !important;gap:8px !important}
+#cookie-banner>div>div{min-width:0 !important}
+@media (max-width:640px){
+  #cookie-banner{left:8px !important;right:8px !important;bottom:8px !important;max-width:none !important;
+    padding:6px 10px !important;border-radius:10px !important}
+  #cookie-banner>div{flex-direction:row !important;align-items:center !important;gap:8px !important}
+  #cookie-banner p{display:none !important}
+  #cookie-banner strong{white-space:nowrap !important}
+  #cookie-banner button{padding:5px 12px !important}
+}
+</style>
 <script>
 (function(){
   var choice = localStorage.getItem('cookie_consent');
