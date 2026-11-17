@@ -318,7 +318,17 @@ pub async fn list_public_plans(State(state): State<AppState>) -> Result<Json<Val
             "purchase_url": row.get::<Option<String>,_>("purchase_url"),
         }));
     }
-    Ok(Json(json!({"plans": plans})))
+    // HOW TO PAY while this installation has no card provider (2026-11-17). The operator writes his
+    // own payment details once on the Payment Providers screen; a signed-in buyer already reads them
+    // on the Plan & billing screen and in the receipt mail, but a VISITOR on the public pricing page
+    // had no way to see them — so the one rail this install can actually collect on was invisible
+    // everywhere a customer decides to buy. Same rule as FunnelSwift's feed: empty/absent stays
+    // absent, so the page is byte-for-byte what it was until the operator fills the field in.
+    let payment_instructions = crate::billing::instructions::load(&state.db).await;
+    Ok(Json(json!({
+        "plans": plans,
+        "payment_instructions": payment_instructions,
+    })))
 }
 
 #[cfg(test)]
