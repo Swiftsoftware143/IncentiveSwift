@@ -582,6 +582,14 @@ const Plans = () => {
         const rq = await API.get('/admin/checkout-requests?limit=50');
         st.req = (rq && rq.requests) ? rq.requests : [];
       } catch (_) { st.req = []; }
+      // CAN BUYERS PAY? (2026-11-17) The panel could show three sellable plans while NONE of them
+      // carried a payment page and say nothing about it, so the operator only found out when a
+      // buyer complained. GET /admin/plans/payment-readiness answers it in one read (paid plans,
+      // how many carry a page, and whether the stored pages still open), so it loads with the
+      // screen instead of waiting for a button press.
+      try {
+        st.ready = await API.get('/admin/plans/payment-readiness');
+      } catch (_) { st.ready = null; }
       renderApp();
     } catch(e) { console.error(e); }
   };
@@ -646,6 +654,12 @@ const Plans = () => {
       <div class="text-sm text-gray-600 mt-1">${st.payCheck.note || ''}</div>
       <div class="text-xs text-gray-400 mt-1">Checked ${st.payCheck.checked || 0} page(s) — ${st.payCheck.ok || 0} opened, ${st.payCheck.dead || 0} dead.</div>
       ${(st.payCheck.plans || []).length ? html`<table class="table mt-2"><thead><tr><th>Plan</th><th>Page</th><th>Verdict</th><th>HTTP</th></tr></thead><tbody>${(st.payCheck.plans || []).map(p => html`<tr><td class="font-medium">${p.name}</td><td class="text-xs break-all">${p.url}</td><td>${p.status}</td><td>${p.http || '—'}</td></tr>`)}</tbody></table>` : ''}
+    </div>` : ''}
+    ${st.ready ? html`<div class="card p-3 mb-4" data-pay-readiness=${st.ready.can_sell ? 'yes' : 'no'} style=${'border-left:4px solid ' + (st.ready.can_sell ? '#16a34a' : '#dc2626')}>
+      <div class="font-bold text-base">${st.ready.can_sell ? 'Buyers can pay' : 'Buyers cannot pay'}</div>
+      <div class="text-sm text-gray-600 mt-1">${st.ready.note || ''}</div>
+      <div class="text-xs text-gray-400 mt-1">${st.ready.paid_plans || 0} paid plan(s) on sale, ${st.ready.plans_with_link || 0} with a payment page. Payment providers connected: ${st.ready.payment_providers || 0}.</div>
+      ${(st.ready.unpayable_plans || []).length ? html`<div class="text-xs text-red-600 mt-1">No payment page: ${(st.ready.unpayable_plans || []).join(', ')}</div>` : ''}
     </div>` : ''}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Payment link</th><th>Actions</th></tr></thead>
