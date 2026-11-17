@@ -37,6 +37,11 @@ pub struct SupportTicket {
     /// not join `accounts` decoding unchanged.
     #[sqlx(default)]
     pub account_email: Option<String>,
+    /// The requesting workspace's own NAME. `account_email` alone answers "who signed up", but the
+    /// operator thinks in workspace names ("the bakery in Kendall"), and a plan request read in the
+    /// detail screen had NO identity at all until this pair rode both reads (2026-11-17).
+    #[sqlx(default)]
+    pub account_name: Option<String>,
     /// The plan CATALOGUE slug this request is about (cron 2026-10-20). NULL for every ticket that
     /// names no plan, which is almost all of them. `#[sqlx(default)]` keeps every scoped SELECT
     /// that predates the column decoding unchanged.
@@ -228,7 +233,8 @@ pub async fn list_tickets(
                       t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
                       t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
                       COALESCE(p.name, t.plan_slug) AS plan_name,
-                      COALESCE(a.email, t.requested_by) AS account_email
+                      COALESCE(a.email, t.requested_by) AS account_email,
+                      a.name AS account_name
                FROM support_tickets t
                LEFT JOIN accounts a ON a.id = t.tenant_id
                LEFT JOIN plans p ON p.slug = t.plan_slug
@@ -746,9 +752,12 @@ pub async fn get_ticket(
         r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
                   t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by,
                   t.created_at, t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
-                  COALESCE(p.name, t.plan_slug) AS plan_name
+                  COALESCE(p.name, t.plan_slug) AS plan_name,
+                  COALESCE(a.email, t.requested_by) AS account_email,
+                  a.name AS account_name
            FROM support_tickets t
            LEFT JOIN plans p ON p.slug = t.plan_slug
+           LEFT JOIN accounts a ON a.id = t.tenant_id
            WHERE t.id = $1 AND (t.tenant_id = $2 OR t.created_by = $2 OR $3)"#,
     )
     .bind(id)
