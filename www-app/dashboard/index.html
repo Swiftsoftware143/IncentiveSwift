@@ -395,6 +395,12 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
          live state; this is the same read over the app's own scoped routes
          (GET /api/v1/support-tickets + GET /api/v1/support-tickets/:id), never a second store. -->
     <div id="pb-requests" style="margin-top:16px"></div>
+    <!-- PAYMENT HISTORY (2026-11-18). What this workspace has TRIED to buy, read from the app's own
+         scoped route GET /api/v1/checkout/sessions -- the date, the amount, the currency and the
+         state are the server's own columns, never written into this page. An installation with no
+         card provider answers an empty list, and the card then says plainly that nothing has been
+         charged instead of showing a dead table. -->
+    <div id="pb-billing" style="margin-top:16px"></div>
   </div>
 </div>
 <script>
@@ -3006,6 +3012,77 @@ function pbLoadRequests() {
       el.innerHTML = h;
     }).catch(function () { el.innerHTML = ''; });
 }
+// ── PAYMENT HISTORY (2026-11-18) ────────────────────────────────────────────────────────────
+// Every other buying surface in this app tells the customer what they asked for (pbLoadRequests)
+// but nothing told them what they had TRIED to pay for. `GET /api/v1/checkout/sessions` is the
+// app's own scoped read of those attempts (account-scoped on the server, so this can only ever
+// show our own rows). ADASwift has shown this card for weeks; this is the same read on this app.
+// Nothing is computed here: the amount, its currency, the provider and the state are the row's
+// own values, and an unknown state is printed rather than guessed at.
+function pbBillingState(v) {
+  var s = String(v || '').trim().toLowerCase();
+  var map = { paid: 'Paid', completed: 'Paid', succeeded: 'Paid',
+              payment_link: 'Payment page opened', pending: 'Waiting for payment',
+              created: 'Waiting for payment', open: 'Waiting for payment',
+              failed: 'Did not go through', cancelled: 'Cancelled', canceled: 'Cancelled',
+              expired: 'Expired', refunded: 'Refunded' };
+  if (map[s]) return map[s];
+  return s ? s.replace(/_/g, ' ') : '\u2014';
+}
+function pbBillingThrough(v) {
+  var s = String(v || '').trim().toLowerCase();
+  if (!s) return '\u2014';
+  if (s === 'payment_link') return 'Your own payment page';
+  if (s === 'stripe') return 'Stripe';
+  if (s === 'paypal') return 'PayPal';
+  return s.replace(/_/g, ' ');
+}
+function pbBillingWhen(v) {
+  var s = String(v || '').trim();
+  if (!s) return '\u2014';
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function pbLoadBilling() {
+  var el = document.getElementById('pb-billing');
+  if (!el) return;
+  fetch(window.location.origin + '/api/v1/checkout/sessions', { headers: pbAuth(), cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      var rows = (d && (d.items || d.sessions)) || [];
+      var h = '<h3 style="font-size:14px;font-weight:600;color:#1e293b;margin:0 0 8px">Payment history</h3>';
+      if (!rows.length) {
+        el.innerHTML = h + '<p style="color:#64748b;font-size:12.5px;margin:0">Nothing has been charged on this workspace yet. When a plan is bought or a payment is attempted, it appears here with its date, amount and outcome.</p>';
+        return;
+      }
+      h += '<p style="color:#64748b;font-size:12.5px;margin:0 0 10px">Newest first. The amount and the outcome are the ones the payment record carries.</p>'
+        + '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+        + '<thead><tr>'
+        + '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">Date</th>'
+        + '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">What for</th>'
+        + '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">Amount</th>'
+        + '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">Paid through</th>'
+        + '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">What happened</th>'
+        + '</tr></thead><tbody>';
+      for (var i = 0; i < rows.length; i++) {
+        var s2 = rows[i] || {};
+        var cur = String(s2.price_currency || s2.currency || '').toUpperCase();
+        var amt = (s2.price_amount !== undefined && s2.price_amount !== null) ? s2.price_amount : s2.amount;
+        var money = (amt === undefined || amt === null || amt === '') ? '\u2014'
+          : ((cur === 'USD' || !cur) ? pbPrice(amt) : String(amt) + ' ' + cur);
+        h += '<tr data-billing-row="' + esc(s2.id || '') + '">'
+          + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(pbBillingWhen(s2.created_at)) + '</td>'
+          + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(s2.description || s2.purchasable_type || 'Plan') + '</td>'
+          + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(money) + '</td>'
+          + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(pbBillingThrough(s2.payment_provider || s2.provider_type)) + '</td>'
+          + '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' + esc(pbBillingState(s2.status)) + '</td>'
+          + '</tr>';
+      }
+      el.innerHTML = h + '</tbody></table></div>';
+    })
+    .catch(function () { el.innerHTML = ''; });
+}
 // Withdraw a plan request this workspace filed (cron 2026-10-27). The server permits it only on
 // our OWN request while it is still open, and it answers a sentence when it refuses; the row leaves
 // the team's queue, nothing was charged, and the customer can ask again.
@@ -3103,6 +3180,7 @@ function pbLoad() {
       PB.plans = list;
       pbRender();
       pbLoadRequests();
+      pbLoadBilling();
     })
     .catch(function () { pbMsg('Could not load the plan list right now.', 'e'); });
 }
