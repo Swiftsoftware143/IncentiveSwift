@@ -2679,7 +2679,21 @@ const LoyaltyPrograms = () => {
       <div class="stat-card"><div class="stat-value">${st.dashboard?.enrolled_businesses??0}</div><div class="stat-label">Businesses</div></div>
       <div class="stat-card"><div class="stat-value">${st.dashboard?.total_suppliers||st.dashboard?.enrolled_suppliers||0}</div><div class="stat-label">Suppliers</div></div>
       <div class="stat-card"><div class="stat-value">${st.dashboard?.scans_this_month??0}</div><div class="stat-label">Scans this month</div></div>
-      <div class="stat-card"><div class="stat-value">${st.dashboard?.total_redemptions??0}</div><div class="stat-label">Redemptions</div></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.online?.visits??0}</div><div class="stat-label">Online visits</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.online?.shares??0}</div><div class="stat-label">Social shares</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.online?.referral_clicks??0}</div><div class="stat-label">Referral clicks</div></div>
+      <div class="stat-card"><div class="stat-value">${st.dashboard?.online?.referral_signups??0}</div><div class="stat-label">Referrals signed up</div></div>
+    </div>
+    <div class="card p-0 overflow-hidden mb-4"><h3 class="font-bold p-4 pb-0">Top online referrers</h3>
+      ${(st.dashboard?.online?.top_referrers||[]).length===0
+        ? html`<div class="text-sm text-gray-400 p-4">No online activity yet. When members open the check-in link, share it or bring someone in through their referral code, their numbers appear here.</div>`
+        : html`<table class="table"><thead><tr><th>Member</th><th>Code</th><th>Visits</th><th>Shares</th><th>Referral clicks</th><th>Referrals</th><th>Points</th></tr></thead>
+          <tbody>${(st.dashboard.online.top_referrers||[]).map(r => html`<tr>
+            <td>${r.member_name||'\u2014'}</td><td class="text-xs text-gray-500">${r.referral_code||'\u2014'}</td>
+            <td>${r.visits||0}</td><td>${r.shares||0}</td><td>${r.referral_clicks||0}</td><td>${r.referrals||0}</td><td>${r.online_points||0}</td>
+          </tr>`)}</tbody></table>`}
     </div>
     ${st.dashboard?.recent_scans ? html`<div class="card p-0 overflow-hidden"><h3 class="font-bold p-4 pb-0">Recent Scans</h3>
       <table class="table"><thead><tr><th>Member</th><th>Business</th><th>Points</th><th>Time</th></tr></thead>

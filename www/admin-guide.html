@@ -765,6 +765,28 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
     <code>GET /api/v1/analytics/campaigns</code> and
     <code>GET /api/v1/analytics/campaigns/&lt;slug&gt;</code>.</p>
   </div>
+  <div class="card">
+    <h3>📈 Online referral activity</h3>
+    <p>The <strong>Loyalty Dashboard</strong> keeps a second row of four numbers under the
+    businesses / scans / redemptions totals, and a <strong>Top online referrers</strong> table
+    under them. They answer “is anyone actually passing my programme around”:</p>
+    <ul>
+      <li><strong>Online visits</strong> — times a member opened the check-in link from their own
+      phone or computer and the visit was recorded.</li>
+      <li><strong>Social shares</strong> — times a member pressed a share button on that page.</li>
+      <li><strong>Referral clicks</strong> — times someone followed a member's referral link.</li>
+      <li><strong>Referrals signed up</strong> — the members your programme has brought in through
+      those links, summed across the programme.</li>
+    </ul>
+    <p>The table names the members doing the work: their code, visits, shares, referral clicks,
+    referrals and the points they earned online, biggest referrer first, up to ten rows. Until
+    somebody uses the check-in link the table says so in plain words instead of showing empty
+    numbers — a quiet programme looks quiet, it is not broken.</p>
+    <p>Everything here is read from your own programme's recorded activity and nothing else: the
+    numbers come from the same rows the member-facing check-in page writes
+    (<code>GET /api/v1/loyalty/dashboard/admin/&lt;slug&gt;</code>, the <code>online</code>
+    block), and another account asking for your programme gets “not found”.</p>
+  </div>
 </section>
 
 <section id="account-modules">
