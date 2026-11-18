@@ -395,8 +395,12 @@ const Dashboard = () => {
   if (!st._moneyLoaded && isOperatorSession()) { st._moneyLoaded = true;
     Promise.all([
       _get('/payment-providers').catch(() => null),
-      _get('/admin/plans').catch(() => null)
-    ]).then(([pv, pl]) => {
+      _get('/admin/plans').catch(() => null),
+      // Whether the operator has written HOW a customer pays them. A failed read leaves null, so
+      // the banner never claims the words are missing when it simply could not check (2026-11-18).
+      _get('/admin/billing-settings').catch(() => null)
+    ]).then(([pv, pl, paySet]) => {
+      st._paySet = paySet ? !!(paySet.payment_instructions_set) : null;
       const items = pv && Array.isArray(pv.items) ? pv.items : null;
       if (!items) { st.money = null; renderApp(); return; }
       const usable = items.filter(p => p.api_key_set && p.is_active !== false);
@@ -435,7 +439,7 @@ const Dashboard = () => {
         ? html`<p class="text-sm text-gray-700">✅ <strong>Upgrades are open.</strong> Pressing Upgrade sends a buyer to ${st.money.provider ? st.money.provider.charAt(0).toUpperCase() + st.money.provider.slice(1) : 'the connected provider'} to pay, and the provider tells this installation when the money arrived.</p>`
         : (st.money.linked
           ? html`<p class="text-sm text-gray-700">✅ <strong>Upgrades work on ${st.money.linked} paid plan${st.money.linked === 1 ? '' : 's'}.</strong> ${st.money.linkedNames.join(', ')} carr${st.money.linked === 1 ? 'ies' : 'y'} a payment link, so pressing Upgrade there opens that page and you switch the plan on once you confirm the payment. ${Math.max(0, st.money.paid - st.money.linked) === 0 ? 'Every paid plan can be bought.' : 'The other ' + Math.max(0, st.money.paid - st.money.linked) + ' paid plan' + (Math.max(0, st.money.paid - st.money.linked) === 1 ? '' : 's') + ' can only ask the team.'}</p>`
-          : html`<p class="text-sm text-gray-700">⚠️ <strong>This installation cannot take money yet.</strong> No payment provider is connected and none of the ${st.money.paid} paid plan${st.money.paid === 1 ? '' : 's'} carries a payment link, so every press on Upgrade can only ask the team. Press <strong>Provider Keys</strong> to connect Stripe, or paste a payment link on a paid plan in <strong>Plans</strong>.</p>`)}
+          : html`<p class="text-sm text-gray-700">⚠️ <strong>This installation cannot take money yet.</strong> No payment provider is connected and none of the ${st.money.paid} paid plan${st.money.paid === 1 ? '' : 's'} carries a payment link, so every press on Upgrade can only ask the team. Press <strong>Provider Keys</strong> to connect Stripe, or paste a payment link on a paid plan in <strong>Plans</strong>. ${st._paySet === false ? 'Neither of those needs an account today: the option that needs nothing at all is writing how you take payment \u2014 bank transfer, invoice, anything \u2014 in <strong>Billing</strong>. Those words appear on the customer\u2019s Upgrade screen and on the public pricing page, so a buyer who asks to buy always has something to act on.' : ''}</p>`)}
     </div>`}
     ${Array.isArray(st.plan_mix) && st.plan_mix.length > 0 && html`<div class="card mb-4" data-console="revenue-at-list">
       <h3 class="text-base font-bold text-gray-800">Revenue at list price</h3>
