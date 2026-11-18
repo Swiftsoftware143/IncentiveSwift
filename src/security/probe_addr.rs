@@ -40,17 +40,18 @@ pub const FLEET_HARNESS_DOMAINS: &[&str] = &[
 
 /// Domains that make a SIGNUP fleet machinery WITHOUT being mail-suppressed.
 ///
-/// `maxxspace.com` is the one domain served by the fleet's own disposable inbox (mail.tm): no
-/// customer can own an address there, so a workspace minted on it is a probe by construction. Its
-/// mail must still be DELIVERED, though — the credential-delivery proof reads the generated password
-/// out of that inbox, so adding it to [`FLEET_HARNESS_DOMAINS`] would delete the only end-to-end
-/// proof that a new customer's password reaches a mailbox. Hence a separate list, consulted by
-/// [`attribution_domain`] and never by the mail layer.
+/// `maxxspace.com` is the domain served by the fleet's own disposable inbox (mail.tm): no customer
+/// can own an address there, so a workspace minted on it is a probe by construction. `fldubai.com`
+/// and `euploading.com` join the same attribution-only class (2026-11-18). Their mail must still be
+/// DELIVERED, though — the credential-delivery proof reads the generated password out of the
+/// disposable inbox, so adding any of these to [`FLEET_HARNESS_DOMAINS`] would delete the only
+/// end-to-end proof that a new customer's password reaches a mailbox. Hence a separate list,
+/// consulted by [`attribution_domain`] and never by the mail layer.
 ///
 /// Measured 2026-10-24 on ADASwift: `probe-swsink165312@maxxspace.com` minted the workspace "Sink
 /// Probe swsink165312" with `probe_harness` NULL, so it sat in the operator's Tenants list until the
 /// residue sweep deleted it. Ported from ADASwift commit 96a16b2.
-pub const ATTRIBUTION_ONLY_DOMAINS: &[&str] = &["maxxspace.com"];
+pub const ATTRIBUTION_ONLY_DOMAINS: &[&str] = &["maxxspace.com", "fldubai.com", "euploading.com"];
 
 /// The domain that makes a SIGNUP a probe: the fleet-harness class of [`harness_domain`] plus the
 /// attribution-only class above. The mail layer must keep using [`harness_domain`], never this.
@@ -164,6 +165,22 @@ mod attribution_only_tests {
         // A real customer is untouched by either arm.
         assert_eq!(attribution_domain("certifiedtb143@yahoo.com"), None);
         assert_eq!(attribution_domain("x@notmaxxspace.com"), None);
+    }
+
+    #[test]
+    fn the_new_attribution_domains_classify() {
+        assert_eq!(
+            attribution_domain("x@euploading.com"),
+            Some("euploading.com")
+        );
+        assert_eq!(attribution_domain("x@fldubai.com"), Some("fldubai.com"));
+        // A subdomain is still the same class.
+        assert_eq!(attribution_domain("x@sub.fldubai.com"), Some("fldubai.com"));
+        // The mail layer's own predicate must NOT learn these domains either.
+        assert_eq!(harness_domain("x@euploading.com"), None);
+        assert_eq!(harness_domain("x@fldubai.com"), None);
+        // A lookalike is still a customer.
+        assert_eq!(attribution_domain("x@notfldubai.com"), None);
     }
 }
 

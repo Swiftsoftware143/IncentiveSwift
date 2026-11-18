@@ -902,11 +902,48 @@ pub async fn send_support_request_receipt_email(
 /// Best effort by design: the request row is already written and the operator's queue reads it, so
 /// a mail failure must never turn a recorded request into an error. Returns whether a send was
 /// attempted and accepted by the send funnel, which is what the caller logs.
+/// Is the account named by `account_id` a platform operator? `accounts.role` in `admin`/`super_admin`
+/// (the same predicate the admin surface admits — `security::auth::is_platform_admin`). A request
+/// filed BY the operator is the operator talking to themselves: the row still lands in the queue, but
+/// ringing their own inbox about it is noise, so the alert is withheld (2026-11-18).
+async fn account_is_platform_admin(pool: &sqlx::PgPool, account_id: uuid::Uuid) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT role FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .is_some_and(crate::security::auth::is_platform_admin)
+}
+
+/// Is the requester named by `email` a platform operator? The support-request door knows the filer
+/// only by their address (`accounts.email` is UNIQUE), so this is the same predicate as
+/// [`account_is_platform_admin`] resolved by email. `false` when the address names no account.
+async fn requester_is_platform_admin(pool: &sqlx::PgPool, email: &str) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT role FROM accounts WHERE email = $1")
+        .bind(email)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        .is_some_and(crate::security::auth::is_platform_admin)
+}
+
 pub async fn send_plan_request_operator_alert(
     pool: &sqlx::PgPool,
     account_id: uuid::Uuid,
     plan_name: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18). When the requester IS the platform operator (Swift
+    // Admin's Workspace, `accounts.role` = admin/super_admin), the alert would mail the operator
+    // about a request their own account filed. The row still lands in the operator's queue — only
+    // the alert to a person is withheld, exactly like the synthetic-requester arm below.
+    if account_is_platform_admin(pool, account_id).await {
+        tracing::info!(account = %account_id, "operator self-request: alert suppressed");
+        return false;
+    }
     let row: Option<serde_json::Value> =
         match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
             .fetch_optional(pool)
@@ -1004,6 +1041,13 @@ pub async fn send_support_request_operator_alert(
     subject_line: &str,
     message: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18) — same rule as the plan arm: a support request filed by
+    // the operator's own account (matched on `reply_to`; `accounts.email` is unique) must not ring
+    // the operator's inbox. The ticket row is untouched; only the alert is withheld.
+    if requester_is_platform_admin(pool, reply_to).await {
+        tracing::info!(reply_to = %reply_to, "operator self-request: alert suppressed");
+        return false;
+    }
     // A FLEET PROBE MUST NEVER RING THE OPERATOR (measured 2026-11-11). One night of harness runs
     // against the contact door arrived as 19 "A support request needs an answer: Loyalty plan
     // request: ..." messages in the operator's inbox, every one of them filed with a reserved
