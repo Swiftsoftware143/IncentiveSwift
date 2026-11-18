@@ -188,6 +188,14 @@ label.opt:hover{border-color:var(--brand)}
     if (/prize[_ ]?pool/i.test(s)) {
       return 'This campaign is not ready to play yet. Please check back soon.';
     }
+    // A PER-VISITOR daily cap is NOT the campaign being closed: the visitor has already played
+    // today and may come back tomorrow. The campaign-wide rule below used to swallow it, so a
+    // returning player was told "this campaign has reached its entry limit" — measured live
+    // 2026-11-18, the wheel refused the day's second spin and the customer read that the whole
+    // campaign was shut, which costs tomorrow's visit as well. Keep this ABOVE the generic rule.
+    if (/daily (spin|entry|play) limit/i.test(s)) {
+      return 'You have already played today. Come back tomorrow for another go.';
+    }
     if (status === 402 || /limit reached|upgrade to increase/i.test(s)) {
       return 'This campaign has reached its entry limit for now. Please check back later.';
     }

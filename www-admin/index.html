@@ -1059,6 +1059,32 @@ const MECHANIC_DEFAULT_CONFIG = {
   b2b_loyalty: {},
 };
 
+// The per-visitor daily cap the prize engine ALREADY enforces (`config.max_spins_per_day`,
+// read by src/mechanics/prize_draw.rs -> check_daily_spin_limit, counted per visitor per day in
+// `campaign_daily_limits`). It had NO control anywhere in the console, so every spin-wheel /
+// scratch-card campaign was farmable: measured live 2026-11-18, one address spun three times and
+// collected three prizes and three redemption codes, because the operator could only reach the
+// knob by hand-editing the raw Config (JSON) box and nothing told them it existed.
+// 0 / blank = unlimited (the engine's own default when the key is absent).
+const cfgMaxSpins = (json) => {
+  try {
+    const o = json && json.trim() ? JSON.parse(json) : {};
+    const n = o && o.max_spins_per_day;
+    return (n === undefined || n === null) ? '' : String(n);
+  } catch (e) { return ''; }
+};
+const setCfgMaxSpins = (cf, raw) => {
+  let o;
+  try { o = cf.config && cf.config.trim() ? JSON.parse(cf.config) : {}; } catch (e) { return; }
+  const n = parseInt(raw, 10);
+  if (!raw || isNaN(n) || n <= 0) { delete o.max_spins_per_day; } else { o.max_spins_per_day = n; }
+  cf.config = JSON.stringify(o, null, 2);
+  // Keep the raw box in step: `config` is replaced WHOLESALE on save, so the JSON box must never
+  // carry a stale copy of what this control just changed.
+  const ta = document.getElementById('cfgJson');
+  if (ta) { ta.value = cf.config; }
+};
+
 // Campaign theme (surface_config.theme) contract defaults — mirror backend src/theme.rs.
 const THEME_DEFAULTS = {
   primary_color: '#2563eb',
@@ -1696,15 +1722,20 @@ const Campaigns = () => {
               </div>
               <div><label class="text-sm font-medium block mb-1">Tag Namespace</label><input class="input" value=${cf.tag_namespace} placeholder="e.g. Summer_Giveaway" disabled=${isEdit} onInput=${e => { cf.tag_namespace = e.target.value; }} /></div>
             </div>
-            <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea class="input" rows="10" style="font-family:monospace;font-size:12px" value=${cf.config} onInput=${e => { cf.config = e.target.value; }}></textarea></div>
+            ${(cf.type === 'spin_wheel' || cf.type === 'scratch_card') && html`<div>
+              <label class="text-sm font-medium block mb-1">Spins per visitor per day</label>
+              <input class="input" id="cfgMaxSpins" type="number" min="0" step="1" placeholder="0 = unlimited" value=${cfgMaxSpins(cf.config)} onInput=${e => setCfgMaxSpins(cf, e.target.value)} />
+              <div class="text-xs text-gray-500" id="cfgMaxSpinsHint">How many times ONE visitor may play in a single day. Blank or 0 keeps it unlimited. The engine counts each visitor's plays per day and refuses the next one with “Daily spin limit reached” — without a cap a single visitor can win a prize on every spin.</div>
+            </div>`}
+            <div><label class="text-sm font-medium block mb-1">Config (JSON)</label><textarea id="cfgJson" class="input" rows="10" style="font-family:monospace;font-size:12px" value=${cf.config} onInput=${e => { cf.config = e.target.value; }}></textarea></div>
             ${cf.type === 'personality' && html`<div class="text-xs text-gray-500" id="personalityConfigHint">
               <b>Personality Quiz:</b> <code>questions</code> is a list of <code>{ "question": "…", "options": ["first", "second"] }</code> — the <b>first</b> option counts as A and the <b>second</b> as B. <code>outcomes</code> renames the four results in this order: <b>Balanced, Driver, Analyzer, Neutral</b>, each <code>{ "label": "…", "description": "…" }</code>. Leave a label empty to keep the engine's own; a quiz with no questions cannot be played.
             </div>`}
             ${cf.type === 'spin_wheel' && html`<div class="text-xs text-gray-500" id="spinConfigHint">
-              <b>Spin Wheel:</b> <code>prize_pool.prizes</code> is a list of <code>{ "id": "p1", "label": "10% off", "weight": 1, "prize_type": "discount", "color": "#0ea5e9" }</code>. <code>id</code>, <code>label</code>, <code>weight</code> and <code>prize_type</code> are required; <code>color</code>, <code>inventory</code> (how many of that prize can be won) and <code>marketing_boost</code> are optional. A <code>prize_type</code> of <b>lose</b> is the no-win slice. Weights are relative — one win at weight 1 against a no-win at weight 3 wins one spin in four. The example saved above is already playable as it stands.
+              <b>Spin Wheel:</b> <code>prize_pool.prizes</code> is a list of <code>{ "id": "p1", "label": "10% off", "weight": 1, "prize_type": "discount", "color": "#0ea5e9" }</code>. <code>id</code>, <code>label</code>, <code>weight</code> and <code>prize_type</code> are required; <code>color</code>, <code>inventory</code> (how many of that prize can be won) and <code>marketing_boost</code> are optional. A <code>prize_type</code> of <b>lose</b> is the no-win slice. Weights are relative — one win at weight 1 against a no-win at weight 3 wins one spin in four. The example saved above is already playable as it stands. <b>Spins per visitor per day</b> above writes <code>max_spins_per_day</code>: blank or 0 means a visitor can spin without limit.
             </div>`}
             ${cf.type === 'scratch_card' && html`<div class="text-xs text-gray-500" id="scratchConfigHint">
-              <b>Scratch Card:</b> <code>win_probability</code> (0 to 1) is the share of cards that win, and <code>prize_pool.prizes</code> takes the same entry shape as the Spin Wheel (<code>id</code>, <code>label</code>, <code>weight</code>, <code>prize_type</code>, plus optional <code>color</code> and <code>inventory</code>). A winning card is awarded one of the prizes at random. The example saved above is already playable as it stands.
+              <b>Scratch Card:</b> <code>win_probability</code> (0 to 1) is the share of cards that win, and <code>prize_pool.prizes</code> takes the same entry shape as the Spin Wheel (<code>id</code>, <code>label</code>, <code>weight</code>, <code>prize_type</code>, plus optional <code>color</code> and <code>inventory</code>). A winning card is awarded one of the prizes at random. The example saved above is already playable as it stands. <b>Spins per visitor per day</b> above writes <code>max_spins_per_day</code> and caps how often one visitor may play each day.
             </div>`}
             ${lfOn && html`<div class="border-t border-gray-100 pt-3 mt-3">
               <div class="flex items-center justify-between mb-2">
