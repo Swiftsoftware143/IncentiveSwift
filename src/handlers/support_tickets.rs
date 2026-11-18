@@ -813,6 +813,24 @@ pub async fn update_ticket(
     .ok_or_else(|| AppError::NotFound("Ticket not found".to_string()))?;
     let _ = existing;
 
+    // A CUSTOMER MAY NOT CLOSE THEIR OWN REQUEST (2026-11-18). The plan arm below is already
+    // operator-only, so a self-closed request applied no plan — but it still moved the row out of
+    // the operator's open queue and read back as "Resolved", i.e. a sale lost with nobody told.
+    // Measured live on this app: a customer PUT {status:"resolved"} on their own open plan request
+    // answered 200, the row turned `resolved` with `plan_applied_at` NULL, and the workspace stayed
+    // on Free while the operator's queue no longer listed it. The customer's own verb is WITHDRAW
+    // (the DELETE below); answer with that instead of quietly taking the request off the queue.
+    if !is_operator {
+        if let Some(new_status) = body.status.as_deref() {
+            if closes_request(new_status) {
+                return Err(AppError::Forbidden(
+                    "Only the team can mark a request resolved or closed. To cancel your request, withdraw it."
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
     // The state the customer last saw, so "moved" means moved: a PUT that re-sends the same status
     // must not mail the customer again.
     let before_status =
