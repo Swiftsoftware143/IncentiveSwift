@@ -113,8 +113,8 @@ async function handleSignup(e) {
   sucDiv.style.display = 'none';
 
   // NAME + EMAIL are the whole form (David's model); a workspace name is a convenience, and the
-  // server names the first workspace for the customer when it is left blank (account_mint trims and
-  // ignores an empty value, so the "My Workspace" default still applies).
+  // server names the first workspace for the customer when it is left blank: the account's own name
+  // (zz_is9zz), never a generic placeholder.
   if (!name || !email) {
     errDiv.textContent = 'Please enter your full name and work email';
     errDiv.style.display = 'block';

@@ -75,8 +75,9 @@ pub struct MintRequest<'a> {
     pub probe_harness: Option<&'a str>,
     /// The name the account's FIRST workspace carries (the signup page's "Workspace name" field,
     /// David's rule: a customer names their workspace, never a placeholder). `None` or a
-    /// whitespace-only value leaves the trigger-minted 'My Workspace' label in place (zz_is29), so
-    /// the machine door (which passes `None`) mints exactly what it always did.
+    /// whitespace-only value leaves the trigger-minted label in place; since
+    /// `zz_is9zz_workspace_name_from_account.sql` that label is the ACCOUNT's own name, so the
+    /// machine door (which passes `None`) no longer leaves a generic 'My Workspace' behind.
     pub workspace_name: Option<&'a str>,
 }
 
@@ -235,12 +236,14 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     }
 
     // ── 5b. NAME the account's first workspace (David's rule: a customer names their workspace) ──
-    // `zz_is29_workspace_on_account_insert.sql` mints the default workspace ('My Workspace') with an
-    // AFTER-INSERT trigger on `accounts` (the same rule CoreSwift ships), so this mint must never
+    // `zz_is29_workspace_on_account_insert.sql` mints the default workspace with an AFTER-INSERT
+    // trigger on `accounts` (the same rule CoreSwift ships), so this mint must never
     // INSERT a workspace itself — a second INSERT collides with `ux_workspaces_one_default` (measured
-    // live: duplicate-key 500). It only RENAMES the trigger's row when the signup supplied a
-    // "Workspace name". A blank/absent name keeps the trigger's 'My Workspace' label (the machine
-    // door passes None and is unchanged). The value is TRIMMED and clipped to `workspaces.name`
+    // live: duplicate-key 500). Since `zz_is9zz_workspace_name_from_account.sql` that trigger names
+    // the workspace after the ACCOUNT's own name, so a caller that supplies no "Workspace name"
+    // (the machine door does exactly that) no longer leaves a generic 'My Workspace' behind. This
+    // block only RENAMES the trigger's row when the signup supplied a "Workspace name" of its own.
+    // The value is TRIMMED and clipped to `workspaces.name`
     // (VARCHAR(120)); an over-long value must not turn the rename into a 22001.
     if let Some(ws_name) = req.workspace_name.map(str::trim).filter(|s| !s.is_empty()) {
         let clipped: String = ws_name.chars().take(120).collect();
