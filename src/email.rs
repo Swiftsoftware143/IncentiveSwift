@@ -863,6 +863,15 @@ pub async fn send_support_request_receipt_email(
     request: &str,
     include_payment_instructions: bool,
 ) -> Result<(), String> {
+    // OPERATOR SELF-REQUEST (2026-11-18). When the filer IS the platform operator
+    // (`accounts.role` = admin/super_admin), the receipt would mail the operator about a request
+    // their own account filed. The row still lands in the queue; only the receipt is withheld — the
+    // same rule as the operator-alert arm above. This function is the ONLY receipt sender on this
+    // app (the support-ticket door and the plan-request-at-signup door both call it).
+    if account_is_platform_admin(pool, account_id).await {
+        tracing::info!(account = %account_id, "operator self-request: receipt suppressed");
+        return Ok(());
+    }
     // How this business takes money, in the operator's own words (2026-11-16). Only a REQUEST TO
     // BUY carries it: an ordinary "I cannot sign in" ticket must not be answered with bank details.
     // Empty stays exactly as before, so an install that never sets them sends the same mail it did.
