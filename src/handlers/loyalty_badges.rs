@@ -715,6 +715,92 @@ pub async fn admin_dashboard(
     }))
     .collect();
 
+    // ── Online-referral activity (cron 2026-11-18) ───────────────────────────────────────────────
+    // The member-facing check-in page (`www-app/incentiveswift/loyalty-checkin.html`) records daily
+    // visits, social shares and referral clicks into `loyalty_online_actions`, and
+    // `GET /loyalty/online/stats/:code` exposes ONE member's numbers. The OWNER had no view of any of
+    // it — no screen read those rows, so a business running an online referral push could not see
+    // whether it worked. This block is that missing half: programme-wide totals plus the members
+    // generating them, scoped exactly like every query above (program_id comes from the
+    // ownership-checked row), so no other tenant's activity can appear here.
+    let (online_visits, online_shares, referral_clicks): (i64, i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*) FILTER (WHERE a.action_type = 'daily_visit')::bigint, \
+                COUNT(*) FILTER (WHERE a.action_type = 'social_share')::bigint, \
+                COUNT(*) FILTER (WHERE a.action_type = 'referral_click')::bigint \
+           FROM loyalty_online_actions a \
+           JOIN loyalty_members m ON m.id = a.member_id \
+          WHERE m.program_id = $1",
+    )
+    .bind(program_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0, 0, 0));
+
+    let online_points: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(a.points_earned), 0)::bigint FROM loyalty_online_actions a \
+           JOIN loyalty_members m ON m.id = a.member_id \
+          WHERE m.program_id = $1",
+    )
+    .bind(program_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let referral_signups: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(total_referrals), 0)::bigint FROM loyalty_members WHERE program_id = $1",
+    )
+    .bind(program_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    // Top referrers — only members with at least one recorded online action, so the table names the
+    // people actually driving the referral push instead of every enrolled member.
+    let top_referrers: Vec<Value> =
+        sqlx::query_as::<_, (Uuid, Option<String>, Option<String>, i64, i64, i64, i64, i32)>(
+            "SELECT m.id, \
+                    COALESCE(NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.last_name)), ''), c.email, 'Member') AS member_name, \
+                    m.referral_code, \
+                    COUNT(*) FILTER (WHERE a.action_type = 'daily_visit')::bigint AS visits, \
+                    COUNT(*) FILTER (WHERE a.action_type = 'social_share')::bigint AS shares, \
+                    COUNT(*) FILTER (WHERE a.action_type = 'referral_click')::bigint AS clicks, \
+                    COALESCE(SUM(a.points_earned), 0)::bigint AS points, \
+                    m.total_referrals \
+               FROM loyalty_members m \
+               JOIN loyalty_online_actions a ON a.member_id = m.id \
+               LEFT JOIN contacts c ON c.id = m.contact_id \
+              WHERE m.program_id = $1 \
+              GROUP BY m.id, c.first_name, c.last_name, c.email, m.referral_code, m.total_referrals \
+              ORDER BY 6 DESC, 7 DESC \
+              LIMIT 10",
+        )
+        .bind(program_id)
+        .fetch_all(&state.db)
+        .await?
+        .into_iter()
+        .map(|(id, name, code, visits, shares, clicks, points, referrals)| {
+            json!({
+                "member_id": id.to_string(),
+                "member_name": name,
+                "referral_code": code,
+                "visits": visits,
+                "shares": shares,
+                "referral_clicks": clicks,
+                "online_points": points,
+                "referrals": referrals,
+            })
+        })
+        .collect();
+
+    let online = json!({
+        "visits": online_visits,
+        "shares": online_shares,
+        "referral_clicks": referral_clicks,
+        "referral_signups": referral_signups,
+        "points_earned": online_points,
+        "top_referrers": top_referrers,
+    });
+
     Ok(Json(json!({
         "program_id": program_id.to_string(),
         "program_name": program_name,
@@ -726,5 +812,6 @@ pub async fn admin_dashboard(
         "scans_this_month": scans_this_month,
         "total_redemptions": total_redemptions,
         "recent_scans": recent,
+        "online": online,
     })))
 }
