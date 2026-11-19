@@ -478,6 +478,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/loyalty/purchase/verify",
             post(handlers::loyalty_v2::purchase_verify),
         )
+        // The counter screen shows the business its OWN PIN before a purchase is credited; the
+        // admin-gated tenant route 403s a plain owner, so the read lives here, self-scoped.
+        .route(
+            "/api/v1/loyalty/purchase/pin",
+            get(handlers::loyalty_v2::purchase_pin),
+        )
         // POST /api/v1/business/pledge and GET /api/v1/business/pledges/:business_id were RETIRED
         // here (kanban t_5e244255): the anonymous half of the never-wired MultiDirectory pledge
         // integration - 0 callers, 0 nginx hits, `business_pledges` 0 rows, and `business_id` is a

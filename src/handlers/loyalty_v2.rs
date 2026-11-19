@@ -433,6 +433,127 @@ pub async fn purchase_verify(
     };
     let deal_discount = req.amount - earnable_amount;
 
+    // ── The loyalty-member ledger (2026-11-19) ─────────────────────────────
+    // A member's points live in `loyalty_members` (the check-in engine writes them) and a member's
+    // `contact_id` is a `contacts` row — NOT an `accounts` row. Measured on live: 1 member, 0 with an
+    // `accounts` row at that id. Until this block the only ledger this route knew was
+    // `accounts.credits_balance`, so a scanned purchase for a real loyalty member answered 200 with
+    // `status:"contact_linked"`, `credits_earned:0` and "Register to earn!" — and credited NOTHING
+    // while the member's balance stayed put. Credit the member's own ledger first; the account arm
+    // below still serves a contact that really is an account.
+    let member_row: Option<(Uuid, Uuid, bool)> = sqlx::query_as(
+        "SELECT lm.id, lm.program_id, lp.tiers_enabled \
+           FROM loyalty_members lm \
+           JOIN loyalty_programs lp ON lp.id = lm.program_id \
+          WHERE lm.contact_id = $1 \
+            AND (lp.account_id = $2 \
+                 OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                 OR EXISTS (SELECT 1 FROM campaigns f WHERE f.loyalty_program_id = lp.id AND f.account_id = $2)) \
+          ORDER BY lm.member_since DESC NULLS LAST \
+          LIMIT 1",
+    )
+    .bind(req.contact_id)
+    .bind(business_account_id)
+    .fetch_optional(&s.db)
+    .await?;
+
+    if let Some((member_id, program_id, tiers_enabled)) = member_row {
+        // The same ZaarCash pool gate the account arm applies, so a member credit cannot outrun the
+        // business's plan allowance.
+        let zc_pool: i32 =
+            sqlx::query_scalar("SELECT COALESCE(zc_pool_remaining, 0) FROM accounts WHERE id = $1")
+                .bind(business_account_id)
+                .fetch_optional(&s.db)
+                .await?
+                .unwrap_or(0);
+        if zc_pool > 0 && zc_pool < credit_amount {
+            return Err(AppError::BadRequest(format!(
+                "Business ZC pool too low. Pool has {} ZC remaining — this transaction awards {} ZC.",
+                zc_pool, credit_amount
+            )));
+        }
+        if loyalty_plan_status.as_deref() == Some("active") {
+            let _ = sqlx::query(
+                "UPDATE accounts SET zc_pool_remaining = zc_pool_remaining - $1 WHERE id = $2 AND zc_pool_remaining >= $1",
+            )
+            .bind(credit_amount)
+            .bind(business_account_id)
+            .execute(&s.db)
+            .await;
+        }
+
+        let new_points: i32 = sqlx::query_scalar(
+            "UPDATE loyalty_members \
+                SET points_balance = COALESCE(points_balance, 0) + $1, \
+                    lifetime_points = COALESCE(lifetime_points, 0) + $1, \
+                    last_activity_date = now() \
+              WHERE id = $2 \
+          RETURNING COALESCE(points_balance, 0)",
+        )
+        .bind(credit_amount)
+        .bind(member_id)
+        .fetch_one(&s.db)
+        .await?;
+
+        // The member-facing audit trail: the roster and the member's own activity list read this row.
+        let description = if deal_discount > 0.01 {
+            format!(
+                "Purchase verified — {} points on ${:.2} spend (${:.2} deal excluded{})",
+                credit_amount,
+                earnable_amount,
+                deal_discount,
+                req.deal_description
+                    .as_deref()
+                    .map(|n| format!(": {}", n))
+                    .unwrap_or_default()
+            )
+        } else {
+            format!(
+                "Purchase verified — {} points on ${:.2} spend",
+                credit_amount, earnable_amount
+            )
+        };
+        crate::mechanics::loyalty_checkin::record_activity(
+            &s,
+            &member_id.to_string(),
+            "purchase",
+            &description,
+            credit_amount,
+        )
+        .await?;
+        // Keep the roster's tier column honest after the credit, by the check-in engine's own rule.
+        let _ = crate::mechanics::loyalty_checkin::sync_member_tier(
+            &s,
+            &program_id.to_string(),
+            &member_id.to_string(),
+            new_points as i64,
+            tiers_enabled,
+        )
+        .await;
+
+        let zc_value = credit_amount as f64 / ZC_PER_DOLLAR as f64;
+        return Ok(Json(json!({
+            "status": "verified",
+            "credited_to": "loyalty_member",
+            "member_id": member_id,
+            "contact_id": req.contact_id,
+            "points_earned": credit_amount,
+            "credits_earned": credit_amount,
+            "credit_rate": credit_rate,
+            "new_points_balance": new_points,
+            "purchase_amount": req.amount,
+            "earnable_amount": earnable_amount,
+            "deal_discount": deal_discount,
+            "zc_per_dollar": ZC_PER_DOLLAR,
+            "zc_value_display": format!("{} ZC = $1", ZC_PER_DOLLAR),
+            "zc_value": format!("${:.2}", zc_value),
+            "message": format!(
+                "{} points credited to the member — their balance is now {}.",
+                credit_amount, new_points
+            ),
+        })));
+    }
+
     // Update the contact's account credits
     // First check if contact has an account by same UUID
     let account_credits: Option<i32> =
@@ -603,6 +724,27 @@ pub async fn purchase_verify(
             "message": format!("Register to earn! This visit would be worth {} ZaarCash (${:.2} value)", credit_amount, zc_value)
         })))
     }
+}
+
+/// GET /api/v1/loyalty/purchase/pin — the caller's OWN counter PIN.
+///
+/// `POST /loyalty/purchase/verify` refuses a wrong PIN, and the counter screen needs to show the
+/// business the value it is meant to type. The only existing reader is
+/// `GET /admin/tenants/:id/purchase-pin`, which is admin-gated (`check_tenant_access`), so a plain
+/// business owner got a 403 and the screen was unusable for exactly the person who owns the shop.
+/// No path parameter and no role: the answer is the caller's own account row, nothing else.
+pub async fn purchase_pin(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let pin: Option<String> = sqlx::query_scalar("SELECT purchase_pin FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&s.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Account not found".into()))?;
+    Ok(Json(json!({ "pin": pin })))
 }
 
 // ── Survey Response Handler ────────────────────────────────────────────────
