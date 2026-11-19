@@ -3175,6 +3175,45 @@ const ledgerTab = html`<div>
     renderApp();
   };
 
+  /* ── Credit a purchase (2026-11-19) ─────────────────────────────────────────────────────────────
+     `POST /api/v1/loyalty/purchase/verify` is the "the customer just bought something, give them
+     their points" door, and it had NO caller anywhere: the console could create programmes, enrol
+     members and show balances, but a business had no way to credit a real purchase. The handler now
+     credits the member's OWN ledger (`loyalty_members`), and `GET /loyalty/purchase/pin` shows the
+     business the counter PIN it is meant to type — the only previous reader was admin-gated, so a
+     plain owner got a 403. No email is sent and nothing is charged. */
+  const loadPurchasePin = async () => {
+    if (st.pin && st.pin.loaded) { st.pin = null; renderApp(); return; }
+    st.pin = { loading: true };
+    try { const d = await API.get('/loyalty/purchase/pin'); st.pin = { pin: d.pin || '', loaded: true, err: '' }; }
+    catch (e) { st.pin = { pin: '', loaded: true, err: (e && e.message) || 'Could not read the PIN' }; }
+    renderApp();
+  };
+  const creditPurchase = async () => {
+    const p = st.pc || {};
+    if (!p.memberId) { alert('Pick the member this purchase belongs to.'); return; }
+    const amount = Number(p.amount);
+    if (!(amount > 0)) { alert('Enter the receipt total first.'); return; }
+    let earnable = null;
+    if (p.earnable !== '' && p.earnable != null) {
+      earnable = Number(p.earnable);
+      if (!(earnable >= 0)) { alert('The earning amount must be a number.'); return; }
+    }
+    const pin = String(p.pin || '').trim();
+    if (!pin) { alert('Enter the counter PIN — press "Show my counter PIN" if you do not know it.'); return; }
+    st.pc = { ...p, busy: true, msg: '', err: '' }; renderApp();
+    const body = { contact_id: p.memberId, amount: amount, pin: pin };
+    if (earnable !== null) body.subtotal_amount = earnable;
+    if (String(p.deal || '').trim()) body.deal_description = String(p.deal).trim();
+    try {
+      const d = await API.post('/loyalty/purchase/verify', body);
+      st.pc = { ...st.pc, busy: false, msg: d.message || 'Purchase credited.', err: '' };
+      await loadMembers(st.memberProg);
+    } catch (e) {
+      st.pc = { ...st.pc, busy: false, msg: '', err: (e && e.message) || 'Could not credit this purchase' };
+      renderApp();
+    }
+  };
   const membersTab = html`<div>
     <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
       <h2 class="text-xl font-bold">Members</h2>
@@ -3186,6 +3225,31 @@ const ledgerTab = html`<div>
       </div>
     </div>
     <div class="text-xs text-gray-500 mb-3">Everyone who has checked in at your counter for the selected programme. <b>Member card</b> shows the scannable code that customer presents, and replaces it if a card is lost or copied.</div>
+    <div class="card mb-4" data-credit-purchase>
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-2">
+        <div>
+          <h3 class="font-bold text-lg">Credit a purchase</h3>
+          <p class="text-xs text-gray-500">Pick the member, enter the receipt total and your counter PIN — the points land on that member's own balance straight away. Nothing is charged and no email is sent.</p>
+        </div>
+        <button class="btn btn-sm btn-outline" data-credit-pin onClick=${loadPurchasePin}>${(st.pin && st.pin.loaded) ? (st.pin.pin ? 'PIN: ' + st.pin.pin : (st.pin.err || 'No PIN set')) : 'Show my counter PIN'}</button>
+      </div>
+      <div class="flex gap-2 items-end flex-wrap">
+        <label class="text-sm">Member<br/>
+          <select class="input" style="width:250px" value=${(st.pc && st.pc.memberId) || ''} onChange=${e => { st.pc = { ...(st.pc || {}), memberId: e.target.value }; renderApp(); }}>
+            <option value="">— pick a member —</option>
+            ${(memberRows || []).map(m => html`<option value=${m.contact_id || ''}>${(m.name || 'Member') + (m.email ? ' · ' + m.email : '')}</option>`)}
+          </select></label>
+        <label class="text-sm">Receipt total ($)<br/>
+          <input class="input" style="width:120px" type="number" min="0" step="0.01" value=${(st.pc && st.pc.amount) || ''} onInput=${e => { st.pc = { ...(st.pc || {}), amount: e.target.value }; }} /></label>
+        <label class="text-sm">Earns on ($, optional)<br/>
+          <input class="input" style="width:140px" type="number" min="0" step="0.01" placeholder="whole receipt" value=${(st.pc && st.pc.earnable) || ''} onInput=${e => { st.pc = { ...(st.pc || {}), earnable: e.target.value }; }} /></label>
+        <label class="text-sm">Counter PIN<br/>
+          <input class="input" style="width:110px" value=${(st.pc && st.pc.pin) || ''} onInput=${e => { st.pc = { ...(st.pc || {}), pin: e.target.value }; }} /></label>
+        <button class="btn btn-sm" data-credit-submit disabled=${(st.pc && st.pc.busy) || false} onClick=${creditPurchase}>${(st.pc && st.pc.busy) ? 'Crediting…' : 'Credit this purchase'}</button>
+      </div>
+      ${(st.pc && st.pc.msg) ? html`<p class="text-sm mt-3" data-credit-ok style="color:#047857">${st.pc.msg}</p>` : ''}
+      ${(st.pc && st.pc.err) ? html`<p class="text-sm mt-3" data-credit-err style="color:#b91c1c">${st.pc.err}</p>` : ''}
+    </div>
     ${st.md ? html`<div class="card mb-4" data-member-details=${st.md.member.id}>
       <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
         <div>
