@@ -3694,6 +3694,304 @@ function downloadMyCsv(type, btn) {
   });
 })();
 </script>
+<!--B209-FEEDBACK-APP-->
+<!-- feedback from inside the customer app: posts to /api/v1/feedback -->
+<script>
+/* Feedback from inside the CUSTOMER app (kanban B209).
+ *
+ * The operator console has had a feedback button since 2026-11-11, but the console a real
+ * customer uses (app.<domain>) had none — so a customer could only write to us by finding a
+ * support address. This widget posts to the same audited endpoint the console uses
+ * (`POST /api/v1/feedback`), which records the account, the person, the app and the screen,
+ * so nothing arrives anonymous.
+ *
+ * Self-contained on purpose: it touches nothing the app defines (its own markup, styles and
+ * fetch), so it cannot collide with the app's modal/router and can be dropped into every app.
+ */
+(function () {
+  'use strict';
+
+  var TOKEN_KEYS = ['ws_fs_token', 'mc_token', 'crm_token', 'access_token', 'token'];
+  var KINDS = [
+    { id: 'idea', label: '💡 Idea' },
+    { id: 'bug', label: '🐞 Bug' },
+    { id: 'complaint', label: '⚠️ Complaint' }
+  ];
+  var kind = 'idea';
+
+  // Every app in the fleet keeps its session token under a different localStorage key
+  // (ws_fs_token, crm_token, access_token, token). Read the preferred names first and then
+  // fall back to ANY token-shaped key holding a JWT, so the same widget drops into every app
+  // without a per-app constant. Keys that are NOT the live session are skipped by name:
+  // an impersonation stash (`*_original_token`) must never be used to post as someone else.
+  function jwtish(v) { return typeof v === 'string' && v.split('.').length === 3; }
+
+  // Apps disagree on the STORE as well as the key: FunnelSwift/ADASwift/WorkflowSwift keep the
+  // session in localStorage, MissedCall keeps `mc_token` in sessionStorage. Look in both, so the
+  // same widget works everywhere without a per-app constant.
+  var STORES = ['localStorage', 'sessionStorage'];
+
+  function read(store, key) {
+    try { return window[store].getItem(key); } catch (e) { return null; }
+  }
+
+  function token() {
+    var s, i, v;
+    for (s = 0; s < STORES.length; s++) {
+      for (i = 0; i < TOKEN_KEYS.length; i++) {
+        v = read(STORES[s], TOKEN_KEYS[i]);
+        if (jwtish(v)) return v;
+      }
+    }
+    for (s = 0; s < STORES.length; s++) {
+      try {
+        var st = window[STORES[s]];
+        for (i = 0; i < st.length; i++) {
+          var k = st.key(i) || '';
+          if (!/token/i.test(k) || /original|reset|verify|csrf|refresh|impersonat/i.test(k)) continue;
+          v = st.getItem(k);
+          if (jwtish(v)) return v;
+        }
+      } catch (e) {}
+    }
+    for (s = 0; s < STORES.length; s++) {
+      for (i = 0; i < TOKEN_KEYS.length; i++) {
+        v = read(STORES[s], TOKEN_KEYS[i]);
+        if (v) return v;
+      }
+    }
+    return '';
+  }
+
+  function screenName() {
+    var s = String(location.pathname || '/');
+    if (location.hash) s += String(location.hash);
+    return s.slice(0, 120);
+  }
+
+  function el(tag, css, text) {
+    var n = document.createElement(tag);
+    if (css) n.style.cssText = css;
+    if (text) n.textContent = text;
+    return n;
+  }
+
+  var fab = el('button',
+    'position:fixed;right:20px;bottom:80px;z-index:1000;display:none;align-items:center;gap:8px;' +
+    'background:#6366f1;color:#fff;border:none;border-radius:24px;padding:11px 16px;font-size:13px;' +
+    'font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(99,102,241,.4);font-family:inherit');
+  fab.id = 'fbFab';
+  fab.type = 'button';
+  fab.setAttribute('aria-label', 'Send feedback');
+  fab.innerHTML = '💬 Feedback';
+
+  var overlay = el('div',
+    'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:none;' +
+    'align-items:center;justify-content:center;padding:16px');
+  overlay.id = 'fbOverlay';
+
+  var panel = el('div',
+    'background:#fff;color:#111827;border-radius:12px;max-width:520px;width:100%;' +
+    'box-shadow:0 18px 48px rgba(0,0,0,.35);font-family:inherit;overflow:hidden');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-modal', 'true');
+  panel.setAttribute('aria-labelledby', 'fbTitle');
+
+  var head = el('div',
+    'display:flex;align-items:center;justify-content:space-between;padding:16px 20px;' +
+    'border-bottom:1px solid #e5e7eb');
+  var title = el('h3', 'margin:0;font-size:16px;font-weight:700', 'Send feedback');
+  title.id = 'fbTitle';
+  var closeBtn = el('button',
+    'background:none;border:none;font-size:18px;line-height:1;cursor:pointer;color:#6b7280', '✕');
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close feedback');
+  head.appendChild(title);
+  head.appendChild(closeBtn);
+
+  var body = el('div', 'padding:16px 20px');
+
+  var intro = el('p', 'margin:0 0 12px;color:#6b7280;font-size:13px',
+    'Tell us what is on your mind — an idea, a bug, or a complaint. It is sent with your ' +
+    'account and the screen you are on, so we can follow up.');
+
+  var kindRow = el('div', 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px');
+  var kindBtns = KINDS.map(function (k) {
+    var b = el('button',
+      'border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:8px 12px;' +
+      'font-size:13px;font-weight:600;cursor:pointer;font-family:inherit', k.label);
+    b.type = 'button';
+    b.setAttribute('data-fb-kind', k.id);
+    b.addEventListener('click', function () { pick(k.id); });
+    kindRow.appendChild(b);
+    return b;
+  });
+
+  var screenLine = el('div', 'font-size:12px;color:#9ca3af;margin-bottom:6px',
+    'Screen: ' + screenName());
+
+  var ta = el('textarea',
+    'width:100%;box-sizing:border-box;min-height:110px;resize:vertical;padding:10px 12px;' +
+    'border:1px solid #d1d5db;border-radius:8px;font-family:inherit;font-size:14px');
+  ta.id = 'fbMessage';
+  ta.maxLength = 4000;
+  ta.placeholder = 'What happened, or what should we build?';
+
+  var msg = el('div', 'font-size:13px;margin-top:8px;min-height:18px');
+
+  body.appendChild(intro);
+  body.appendChild(kindRow);
+  body.appendChild(screenLine);
+  body.appendChild(ta);
+  body.appendChild(msg);
+
+  var foot = el('div',
+    'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 20px;' +
+    'border-top:1px solid #e5e7eb;flex-wrap:wrap');
+  var links = el('div', 'font-size:12px');
+  var up = el('a', 'color:#6366f1;text-decoration:none;margin-right:14px', "What's new");
+  up.href = 'https://swiftsoftware.net/updates';
+  up.target = '_blank';
+  up.rel = 'noopener';
+  var rm = el('a', 'color:#6366f1;text-decoration:none', 'Roadmap');
+  rm.href = 'https://swiftsoftware.net/roadmap';
+  rm.target = '_blank';
+  rm.rel = 'noopener';
+  links.appendChild(up);
+  links.appendChild(rm);
+
+  var actions = el('div', 'display:flex;gap:8px');
+  var cancel = el('button',
+    'background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:9px 14px;' +
+    'font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit', 'Cancel');
+  cancel.type = 'button';
+  var send = el('button',
+    'background:#6366f1;border:1px solid #6366f1;border-radius:8px;padding:9px 14px;' +
+    'font-size:13px;font-weight:600;cursor:pointer;color:#fff;font-family:inherit', 'Send feedback');
+  send.type = 'button';
+  send.id = 'fbSend';
+  actions.appendChild(cancel);
+  actions.appendChild(send);
+  foot.appendChild(links);
+  foot.appendChild(actions);
+
+  panel.appendChild(head);
+  panel.appendChild(body);
+  panel.appendChild(foot);
+  overlay.appendChild(panel);
+
+  function paint() {
+    kindBtns.forEach(function (b) {
+      var on = b.getAttribute('data-fb-kind') === kind;
+      b.style.background = on ? '#6366f1' : '#fff';
+      b.style.color = on ? '#fff' : '#374151';
+      b.style.borderColor = on ? '#6366f1' : '#d1d5db';
+    });
+  }
+
+  function pick(k) { kind = k; paint(); }
+
+  function say(text, ok) {
+    msg.textContent = text;
+    msg.style.color = ok ? '#059669' : '#b91c1c';
+  }
+
+  function open() {
+    if (!token()) return;
+    ensureMounted();
+    kind = 'idea';
+    paint();
+    ta.value = '';
+    send.disabled = false;
+    send.style.opacity = '1';
+    say('', true);
+    screenLine.textContent = 'Screen: ' + screenName();
+    overlay.style.display = 'flex';
+    try { ta.focus(); } catch (e) {}
+  }
+
+  function close() { overlay.style.display = 'none'; }
+
+  function submit() {
+    var text = (ta.value || '').trim();
+    if (!text) { say('Please write a message.', false); return; }
+    var t = token();
+    if (!t) { say('Please sign in again to send feedback.', false); return; }
+    send.disabled = true;
+    send.style.opacity = '.6';
+    say('Sending…', true);
+    fetch('/api/v1/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t },
+      body: JSON.stringify({ kind: kind, screen: screenName(), message: text })
+    }).then(function (r) {
+      return r.text().then(function (raw) {
+        var data = null;
+        try { data = raw ? JSON.parse(raw) : null; } catch (e) {}
+        if (!r.ok) {
+          var why = (data && (data.message || data.error)) || ('Could not send (error ' + r.status + ').');
+          throw new Error(String(why));
+        }
+        return data || {};
+      });
+    }).then(function () {
+      say('Thanks — your feedback was sent.', true);
+      setTimeout(close, 1200);
+    }).catch(function (e) {
+      send.disabled = false;
+      send.style.opacity = '1';
+      say(e && e.message ? e.message : 'Could not send. Please try again.', false);
+    });
+  }
+
+  function syncVisibility() {
+    ensureMounted();
+    // The inline guide panel (#ig-panel) docks in the SAME corner (bottom:80px right:24px), so
+    // while it is open it sits over this button — measured on app.incentiveswift.com/dashboard/,
+    // elementFromPoint at the FAB's centre returned the guide's body element. The button stands
+    // down while the guide is open and comes back the moment it closes.
+    var guideOpen = document.querySelector('#ig-panel.open');
+    fab.style.display = (token() && !guideOpen) ? 'flex' : 'none';
+  }
+
+  // Every console in this fleet re-renders `document.body` at boot (the SPA paints its shell
+  // after login), which silently REMOVES a node appended before that paint. Measured on
+  // app.adaswift.com/dashboard/: the button mounted and was then discarded with the old body,
+  // so nothing showed and nothing errored. Re-attach whenever the node is no longer in the
+  // document — appending an already-present node is a no-op, so this is safe to poll.
+  function ensureMounted() {
+    if (!document.body) return;
+    if (!document.body.contains(fab)) document.body.appendChild(fab);
+    if (!document.body.contains(overlay)) document.body.appendChild(overlay);
+  }
+
+  fab.addEventListener('click', open);
+  closeBtn.addEventListener('click', close);
+  cancel.addEventListener('click', close);
+  send.addEventListener('click', submit);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && overlay.style.display === 'flex') close();
+  });
+
+  function mount() {
+    document.body.appendChild(fab);
+    document.body.appendChild(overlay);
+    paint();
+    syncVisibility();
+    setInterval(syncVisibility, 2000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mount);
+  } else {
+    mount();
+  }
+})();
+
+</script>
+<!--/B209-FEEDBACK-APP-->
+
 <script src="/inline-guide-widget.js?v=20261106a"></script>
 
 </body>
