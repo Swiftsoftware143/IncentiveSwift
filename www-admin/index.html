@@ -3189,6 +3189,21 @@ const ledgerTab = html`<div>
     catch (e) { st.pin = { pin: '', loaded: true, err: (e && e.message) || 'Could not read the PIN' }; }
     renderApp();
   };
+  const savePin = async () => {
+    const v = String((st.pinEdit && st.pinEdit.value) || '').trim();
+    if (!/^[A-Za-z0-9]{4,8}$/.test(v)) { alert('A counter PIN is 4 to 8 letters or digits.'); return; }
+    st.pinEdit = { ...(st.pinEdit || {}), busy: true, msg: '', err: '' }; renderApp();
+    try {
+      const d = await API.put('/loyalty/purchase/pin', { pin: v });
+      st.pin = { pin: d.pin || v.toUpperCase(), loaded: true, err: '' };
+      st.pinEdit = { value: '', busy: false, msg: d.message || 'Counter PIN changed.', err: '' };
+      if (st.pc) st.pc = { ...st.pc, pin: '' };
+      renderApp();
+    } catch (e) {
+      st.pinEdit = { ...(st.pinEdit || {}), busy: false, msg: '', err: (e && e.message) || 'Could not change the PIN' };
+      renderApp();
+    }
+  };
   const creditPurchase = async () => {
     const p = st.pc || {};
     if (!p.memberId) { alert('Pick the member this purchase belongs to.'); return; }
@@ -3232,6 +3247,13 @@ const ledgerTab = html`<div>
           <p class="text-xs text-gray-500">Pick the member, enter the receipt total and your counter PIN — the points land on that member's own balance straight away. Nothing is charged and no email is sent.</p>
         </div>
         <button class="btn btn-sm btn-outline" data-credit-pin onClick=${loadPurchasePin}>${(st.pin && st.pin.loaded) ? (st.pin.pin ? 'PIN: ' + st.pin.pin : (st.pin.err || 'No PIN set')) : 'Show my counter PIN'}</button>
+      </div>
+      <div class="flex gap-2 items-end flex-wrap mb-2" data-pin-change>
+        <label class="text-sm">Change counter PIN (4&ndash;8 letters or digits)<br/>
+          <input class="input" style="width:150px" maxLength=8 autocomplete="off" value=${(st.pinEdit && st.pinEdit.value) || ''} onInput=${e => { st.pinEdit = { ...(st.pinEdit || {}), value: e.target.value }; }} /></label>
+        <button class="btn btn-sm btn-outline" data-pin-save disabled=${(st.pinEdit && st.pinEdit.busy) || false} onClick=${savePin}>${(st.pinEdit && st.pinEdit.busy) ? 'Saving&hellip;' : 'Save new PIN'}</button>
+        ${(st.pinEdit && st.pinEdit.msg) ? html`<p class="text-sm" data-pin-ok style="color:#047857;margin:0">${st.pinEdit.msg}</p>` : ''}
+        ${(st.pinEdit && st.pinEdit.err) ? html`<p class="text-sm" data-pin-err style="color:#b91c1c;margin:0">${st.pinEdit.err}</p>` : ''}
       </div>
       <div class="flex gap-2 items-end flex-wrap">
         <label class="text-sm">Member<br/>

@@ -394,10 +394,10 @@ GET  /api/v1/admin/credits    — View all tenant credits (admin)</pre>
 
   <div class="card">
     <h3>Purchase PIN Administration</h3>
-    <p>Purchase PINs are auto-generated sequentially (format <code>Z100</code>, <code>Z101</code>, etc.) when a tenant signs up. They are <strong>read-only</strong> in the tenant's UI — tenants can view but not modify their PIN.</p>
+    <p>Purchase PINs are minted at signup (format <code>Z100</code>, <code>Z101</code>, etc.). A business reads and rotates its own PIN from <strong>Loyalty → Members → Credit a purchase</strong>: <em>Show my counter PIN</em> reveals it and <em>Save new PIN</em> replaces it. A new PIN is 4 to 8 letters or digits, it is shown upper-case, and the old one stops working the moment it is saved.</p>
     <p>Admins can view any tenant's PIN:</p>
     <pre>GET /api/v1/admin/tenants/:id/purchase-pin</pre>
-    <p>If a PIN reset is required (e.g., compromised PIN), this is a <strong>manual database operation</strong> performed by a super admin. Every reset is logged in the audit trail with the admin identity, timestamp, old PIN, and new PIN.</p>
+    <p>A compromised PIN needs no support action: the business rotates it itself on that card (<code>PUT /api/v1/loyalty/purchase/pin</code>, scoped to the caller's own account). The operator view stays read-only, for support only.</p>
     <div class="callout warn"><strong>Security:</strong> PIN resets should be rare. Require written authorization from the tenant's company admin before proceeding. Verify identity through a secondary channel (phone call or verified email).</div>
   </div>
 
@@ -915,7 +915,8 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
     part that still earns), then your <strong>counter PIN</strong> &mdash; <em>Show my counter
     PIN</em> reveals it &mdash; and the points land on that member's own balance immediately, with
     a line on their activity list. Nothing is charged and no email is sent. A wrong PIN is refused
-    and nothing moves.</p>
+    and nothing moves. If you think your counter PIN is known outside your staff, type a new one under
+    <em>Change counter PIN</em> and press <em>Save new PIN</em> — the old code stops working at once.</p>
   </div>
   <div class="card">
     <h3>🔗 Integration Center</h3>
