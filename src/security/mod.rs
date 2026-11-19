@@ -23,5 +23,6 @@ pub mod path_rejection;
 pub mod probe_addr;
 pub mod provider_key_crypto;
 pub mod public_projection;
+pub mod reset_token;
 pub mod route_policy;
 pub mod webhook_security;

@@ -1753,7 +1753,9 @@ pub async fn forgot_password(
            VALUES ($1, $2, $3)"#,
     )
     .bind(account_id)
-    .bind(&token)
+    // DIGEST at rest (2026-11-19): the mailed link below carries the raw `token`; the row cannot
+    // be replayed from a database read.
+    .bind(crate::security::reset_token::hash(&token))
     .bind(expires_at)
     .execute(&state.db)
     .await?;
@@ -1793,12 +1795,17 @@ pub async fn reset_password(
     State(state): State<AppState>,
     Json(body): Json<ResetPasswordInput>,
 ) -> Result<Json<Value>, AppError> {
+    // The column holds the DIGEST (2026-11-19). Hash the presented value ONCE and use the same
+    // digest for the lookup and the consume, so the mailed raw token still matches, a stolen DB
+    // row never does, and the two statements cannot disagree.
+    let token_digest = crate::security::reset_token::hash(&body.token);
+
     // Look up the reset token
     let row = sqlx::query(
         r#"SELECT account_id, expires_at, used
            FROM password_resets WHERE token = $1"#,
     )
-    .bind(&body.token)
+    .bind(&token_digest)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid or expired reset token".to_string()))?;
@@ -1835,7 +1842,7 @@ pub async fn reset_password(
     .await?;
 
     sqlx::query("UPDATE password_resets SET used = true WHERE token = $1")
-        .bind(&body.token)
+        .bind(&token_digest)
         .execute(&state.db)
         .await?;
 
