@@ -663,7 +663,7 @@ const Plans = () => {
       <div class="font-bold text-base">${st.ready.can_sell ? 'Buyers can pay' : 'Buyers cannot pay'}</div>
       <div class="text-sm text-gray-600 mt-1">${st.ready.note || ''}</div>
       <div class="text-xs text-gray-400 mt-1">${st.ready.paid_plans || 0} paid plan(s) on sale, ${st.ready.plans_with_link || 0} with a payment page. Payment providers connected: ${st.ready.payment_providers || 0}.</div>
-      ${(st.ready.unpayable_plans || []).length ? html`<div class="text-xs text-red-600 mt-1">No payment page: ${(st.ready.unpayable_plans || []).join(', ')}</div>` : ''}
+      ${(st.ready.unpayable_plans || []).length ? html`<div class="text-xs text-red-600 mt-1">No payment page: ${(st.ready.unpayable_plans || []).map(n => { const pl = (st.list || []).find(p => p && (p.slug === n || p.name === n || p.id === n)); return pl ? html`<button class="btn btn-sm btn-outline ml-1" data-unpayable-plan=${n} title="Open this plan and paste the payment link your provider gives you" onClick=${() => { show(pl); }}>${n} — add link</button>` : html`<span class="ml-1">${n}</span>`; })}</div>` : ''}
     </div>` : ''}
     <div class="card p-0 overflow-hidden">
       <table class="table"><thead><tr><th>Name</th><th>Monthly</th><th>Yearly</th><th>Payment link</th><th>Actions</th></tr></thead>
