@@ -747,6 +747,82 @@ pub async fn purchase_pin(
     Ok(Json(json!({ "pin": pin })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SetPurchasePinRequest {
+    pub pin: String,
+}
+
+/// A counter PIN is the only thing between "anyone signed in" and crediting points onto a member's
+/// balance, so it must be short enough to type at a till and long enough not to be guessed. This
+/// accepts 4–8 ASCII letters or digits and upper-cases them, which covers both shapes the product
+/// already uses: the `Z100` an account creation mints and the `4821` an owner picks.
+fn checked_purchase_pin(raw: &str) -> Result<String, AppError> {
+    let pin = raw.trim().to_ascii_uppercase();
+    let ok = (4..=8).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_alphanumeric());
+    if !ok {
+        return Err(AppError::BadRequest(
+            "Choose a counter PIN of 4 to 8 letters or digits — it is the code your counter staff \
+             type before a purchase is credited."
+                .to_string(),
+        ));
+    }
+    Ok(pin)
+}
+
+/// PUT /api/v1/loyalty/purchase/pin — change the caller's OWN counter PIN.
+///
+/// UNTIL THIS HANDLER THE PIN WAS WRITE-ONCE. `accounts.purchase_pin` was set at account creation
+/// (`account_mint`, format `Z100`…, plus the `'0000'` column default for accounts minted before it)
+/// and the only writers anywhere were those two doors; the admin note in `admin_handler.rs` said so
+/// verbatim ("Only read endpoint is exposed") and the admin guide told a business a compromised PIN
+/// needed "a manual database operation performed by a super admin". So a business that believed its
+/// counter PIN had leaked could NOT rotate it — which makes a shared-secret worthless exactly when
+/// it matters. This closes that: the answer is the caller's own account row, nothing else, and the
+/// old PIN stops working the moment it returns.
+pub async fn set_purchase_pin(
+    State(s): State<AppState>,
+    auth: AuthenticatedUser,
+    Json(req): Json<SetPurchasePinRequest>,
+) -> Result<Json<Value>, AppError> {
+    let account_id = Uuid::parse_str(&auth.account_id)
+        .map_err(|_| AppError::BadRequest("Invalid account ID".into()))?;
+    let pin = checked_purchase_pin(&req.pin)?;
+    let updated =
+        sqlx::query("UPDATE accounts SET purchase_pin = $1, updated_at = now() WHERE id = $2")
+            .bind(&pin)
+            .bind(account_id)
+            .execute(&s.db)
+            .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound("Account not found".into()));
+    }
+    Ok(Json(json!({
+        "pin": pin,
+        "message": "Counter PIN changed. Give it to the staff who credit purchases — the old PIN no longer works."
+    })))
+}
+
+#[cfg(test)]
+mod purchase_pin_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_the_shapes_the_product_uses() {
+        assert_eq!(checked_purchase_pin("4821").unwrap(), "4821");
+        assert_eq!(checked_purchase_pin(" z100 ").unwrap(), "Z100");
+        assert_eq!(checked_purchase_pin("abc12").unwrap(), "ABC12");
+    }
+
+    #[test]
+    fn refuses_short_long_and_non_alphanumeric() {
+        assert!(checked_purchase_pin("123").is_err());
+        assert!(checked_purchase_pin("123456789").is_err());
+        assert!(checked_purchase_pin("12 34").is_err());
+        assert!(checked_purchase_pin("12-34").is_err());
+        assert!(checked_purchase_pin("").is_err());
+    }
+}
+
 // ── Survey Response Handler ────────────────────────────────────────────────
 
 // ── Account-Level Loyalty Routes (via auth) ──────────────────────────────

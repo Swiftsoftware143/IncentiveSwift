@@ -479,10 +479,12 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::loyalty_v2::purchase_verify),
         )
         // The counter screen shows the business its OWN PIN before a purchase is credited; the
-        // admin-gated tenant route 403s a plain owner, so the read lives here, self-scoped.
+        // admin-gated tenant route 403s a plain owner, so the read lives here, self-scoped. PUT is
+        // the owner's OWN rotation of a compromised PIN (`loyalty_v2::set_purchase_pin`) — before it
+        // the column was write-once at account creation and a reset was a manual DB operation.
         .route(
             "/api/v1/loyalty/purchase/pin",
-            get(handlers::loyalty_v2::purchase_pin),
+            get(handlers::loyalty_v2::purchase_pin).put(handlers::loyalty_v2::set_purchase_pin),
         )
         // POST /api/v1/business/pledge and GET /api/v1/business/pledges/:business_id were RETIRED
         // here (kanban t_5e244255): the anonymous half of the never-wired MultiDirectory pledge

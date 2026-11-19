@@ -770,6 +770,10 @@ mod tests {
             // through PUBLIC_METHOD_ROUTES and is asserted in
             // `knowledge_base_read_is_public_and_its_writes_are_not`.
             "/api/v1/knowledge-base",
+            // The counter PIN read AND its new rotation (2026-11-19): the PIN is the second check
+            // before points are credited to a member, so neither reading nor changing it may be
+            // reachable anonymously.
+            "/api/v1/loyalty/purchase/pin",
         ] {
             assert!(!is_public_route(p), "{p} must be private by default");
         }

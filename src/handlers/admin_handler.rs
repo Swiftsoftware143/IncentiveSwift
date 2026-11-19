@@ -829,7 +829,8 @@ pub async fn admin_list_all_campaigns(
     ))
 }
 
-// Note: purchase_pin is auto-generated on account creation. Only read endpoint is exposed.
+// Note: purchase_pin is minted at account creation. Read here for support; the tenant rotates its
+// own through `PUT /api/v1/loyalty/purchase/pin` (`loyalty_v2::set_purchase_pin`).
 
 /// GET /api/v1/admin/email-queue — the OPERATOR's view of the outbound email queue.
 ///
