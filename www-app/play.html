@@ -770,6 +770,33 @@ label.opt:hover{border-color:var(--brand)}
 
   if (!slug) { show('This campaign link is incomplete. Please use the link you were given.', true); return; }
 
+  // WHO IS ASKING THEM TO TAKE PART (2026-11-20). The tenant's own email brand wins; a tenant that
+  // never configured one still gets its name on the page — `organizer.name` is the company (else the
+  // workspace name) the owner typed, never a label we invented. Painted on BOTH paths below, because
+  // a campaign that cannot be played yet still belongs to a business.
+  function paintOwner(data) {
+    var brand = (data && data.brand) || null;
+    var org = (data && data.organizer) || null;
+    var label = (brand && brand.name) || (org && org.name) || '';
+    var bb = el('brandBar');
+    if (!bb || (!label && !(brand && brand.logo_url))) { return; }
+    bb.innerHTML = '';
+    if (brand && brand.logo_url) {
+      var bim = document.createElement('img');
+      bim.alt = label || 'Campaign owner';
+      bim.src = brand.logo_url;
+      bim.style.cssText = 'max-height:48px;max-width:220px;display:inline-block';
+      bb.appendChild(bim);
+    } else {
+      var bnm = document.createElement('div');
+      bnm.textContent = label;
+      bnm.style.cssText = 'font-weight:700;font-size:18px;letter-spacing:.2px;color:' +
+        (/^#[0-9a-fA-F]{3,8}$/.test((brand && brand.color) || '') ? brand.color : '#4f46e5');
+      bb.appendChild(bnm);
+    }
+    bb.style.display = 'block';
+  }
+
   fetch(api + '/play/' + encodeURIComponent(slug))
     .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
     .then(function (res) {
@@ -791,39 +818,12 @@ label.opt:hover{border-color:var(--brand)}
           document.title = campaign.name + ' — Play';
           el('campaignName').textContent = campaign.name;
         }
+        paintOwner(res.data);
         show('This campaign is not ready to play yet. Please check back soon.', true);
         return;
       }
       applyTheme(res.data.theme);
-      // The owner's own identity above the campaign title (2026-11-07): a business's campaign
-      // should look like the business, not the platform. `brand.color` is validated hex
-      // server-side (`Branding::effective_color`), and the logo URL is only ever the one this
-      // tenant uploaded — a participant sees exactly what the tenant's email header shows.
-      // A tenant with NO brand still gets its own name on the page (see `organizer` below).
-      var brand = res.data.brand || null;
-      var org = res.data.organizer || null;
-      // Fall back to the ACCOUNT'S OWN NAME (2026-11-20). `brand` is opt-in, so an unbranded
-      // tenant drew a campaign page that named no business at all. `organizer.name` is the
-      // company (or workspace name) the owner typed on their profile — their words, not ours.
-      var ownerLabel = (brand && brand.name) || (org && org.name) || '';
-      if (ownerLabel || (brand && brand.logo_url)) {
-        var bb = el('brandBar');
-        bb.innerHTML = '';
-        if (brand && brand.logo_url) {
-          var bim = document.createElement('img');
-          bim.alt = ownerLabel || 'Campaign owner';
-          bim.src = brand.logo_url;
-          bim.style.cssText = 'max-height:48px;max-width:220px;display:inline-block';
-          bb.appendChild(bim);
-        } else {
-          var bnm = document.createElement('div');
-          bnm.textContent = ownerLabel;
-          bnm.style.cssText = 'font-weight:700;font-size:18px;letter-spacing:.2px;color:' +
-            (/^#[0-9a-fA-F]{3,8}$/.test((brand && brand.color) || '') ? brand.color : '#4f46e5');
-          bb.appendChild(bnm);
-        }
-        bb.style.display = 'block';
-      }
+      paintOwner(res.data);
       config = res.data.config || {};
       customFields = Array.isArray(res.data.custom_fields) ? res.data.custom_fields : [];
       renderCustomFields();
