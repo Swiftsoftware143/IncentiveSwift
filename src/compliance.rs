@@ -436,14 +436,27 @@ async fn list_suppressions(State(state): State<AppState>, auth: AuthUser) -> Res
         )
             .into_response();
     };
-    let rows = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+    let rows = match sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
         "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
           WHERE tenant_id = ANY($1) ORDER BY created_at DESC LIMIT 1000",
     )
     .bind(&scopes)
     .fetch_all(&state.db)
     .await
-    .unwrap_or_default();
+    {
+        Ok(rows) => rows,
+        // A FAILED read must never paint as an empty list: "Nobody has opted out" is a statement
+        // about the customer's list, and `unwrap_or_default()` made a database error say it. The
+        // screen shows its own load-error arm instead.
+        Err(e) => {
+            tracing::error!("do-not-mail list read failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the do-not-mail list could not be read", "status": 500 })),
+            )
+                .into_response();
+        }
+    };
     let items: Vec<Value> = rows
         .into_iter()
         .map(|(address, mail_class, reason, source, created_at)| {
@@ -462,14 +475,25 @@ async fn suppressions_csv(State(state): State<AppState>, auth: AuthUser) -> Resp
         )
             .into_response();
     };
-    let rows = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+    let rows = match sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
         "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
           WHERE tenant_id = ANY($1) ORDER BY created_at DESC",
     )
     .bind(&scopes)
     .fetch_all(&state.db)
     .await
-    .unwrap_or_default();
+    {
+        Ok(rows) => rows,
+        // Same rule as the list above: a failed read is an ERROR, never an empty download.
+        Err(e) => {
+            tracing::error!("do-not-mail CSV read failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the do-not-mail list could not be read", "status": 500 })),
+            )
+                .into_response();
+        }
+    };
     let mut out = String::from("address,scope,reason,source,recorded_at\n");
     for (address, mail_class, reason, source, created_at) in rows {
         out.push_str(&format!(
