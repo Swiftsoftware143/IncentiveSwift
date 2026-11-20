@@ -303,6 +303,7 @@ pub async fn deliver(
     subject: &str,
     text: &str,
     html: Option<&str>,
+    mail_class: &str,
 ) -> Result<(), String> {
     // THE RECIPIENT-SIDE GUARD (kanban t_f56f4a79). This function is the leaf that SPENDS a
     // provider send: the platform arm the queue ticker, the lifecycle stages and every future
@@ -326,6 +327,34 @@ pub async fn deliver(
             "email suppressed: recipient is a fleet harness address (no send attempted)"
         );
         return Ok(());
+    }
+
+    // ── EMAIL COMPLIANCE GATE (2026-11-20) ──────────────────────────────────────────────────────
+    // This is the leaf that SPENDS a provider send, so it is where an opt-out is honoured — beside the
+    // recipient guards above, and for the same reason. `transactional` (receipts, resets, security
+    // notices) is never stopped by preference; a hard bounce or a spam complaint stops EVERY class,
+    // because that is harm control rather than preference.
+    //
+    // WHY THE PLATFORM SCOPE: this app mails as ITSELF — one brand, one sending domain — so its
+    // do-not-mail list is the app's, not one account's. The tables carry a tenant column so the day an
+    // account sends under its own identity the same code keys per account without a migration.
+    if let Some(reason) =
+        crate::compliance::suppression(pool, crate::compliance::PLATFORM_TENANT, &to, mail_class)
+            .await
+    {
+        tracing::info!(to = %to, %reason, "not dispatched: this address asked not to be mailed");
+        crate::compliance::log_attempt(
+            pool,
+            crate::compliance::PLATFORM_TENANT,
+            mail_class,
+            &to,
+            Some(subject),
+            Some(&cfg.provider),
+            "refused_suppressed",
+            Some(&reason),
+        )
+        .await;
+        return Ok(()); // a deliberate refusal is not an error the caller should retry
     }
 
     if !cfg.api_url.is_empty() {

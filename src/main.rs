@@ -53,6 +53,7 @@ pub mod account_mint;
 pub mod billing;
 mod body_deadline;
 pub mod branding;
+pub mod compliance;
 mod config;
 /// Tell the OPERATOR when a customer's first password never reached them (2026-11-16, parity with
 /// MissedCall Respondr commit 273e092). Without it a locked-out customer was only a badge on a
@@ -1505,6 +1506,17 @@ async fn main() -> anyhow::Result<()> {
         )
         // Payment provider, checkout & webhook routes (via billing module)
         .merge(billing::router(state.clone()))
+        // THE OPT-OUT ARMS, MOUNTED HERE RATHER THAN MERGED (2026-11-20). This app's route census
+        // reads `.route(..)` literals out of the named sources, so a route that arrives through a merged
+        // router is invisible to it — and an anonymous route the census cannot see is one nobody
+        // reviews. Both arms are declared here so `PUBLIC_ROUTES` and the mount are checked together.
+        .route(
+            "/api/public/unsubscribe/:token",
+            get(compliance::show_unsubscribe).post(compliance::one_click),
+        )
+        // Email compliance: the account's own do-not-mail list and its download. The PUBLIC opt-out
+        // arms are merged at the ROOT (see below) because a mail client reaching them has no session.
+        .nest("/api/compliance", compliance::router(state.clone()))
         // Campaign Integration Hub routes
         .route(
             "/api/v1/campaigns/:slug/integrations",

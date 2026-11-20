@@ -52,6 +52,7 @@ pub mod account_mint;
 pub mod billing;
 pub mod body_deadline;
 pub mod branding;
+pub mod compliance;
 pub mod config;
 pub mod db;
 pub mod delivery;

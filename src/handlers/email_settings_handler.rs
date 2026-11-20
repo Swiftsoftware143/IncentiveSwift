@@ -270,6 +270,9 @@ pub async fn test_email_settings(
         subject,
         "This is a test of the IncentiveSwift system email provider.\n\nIf you received it, sending works.\n\n- IncentiveSwift",
         None,
+        // A provider test send is transactional: it proves the transport, and it must never be blocked by
+        // an opt-out for the address the operator deliberately chose to test with.
+        crate::compliance::TRANSACTIONAL,
     )
     .await;
 

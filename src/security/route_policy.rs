@@ -212,6 +212,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // argon2 API key) inside `business_handler::verify_business_auth` — a scheme this middleware
     // cannot and must not duplicate, so the handler keeps ownership of it.
     "/api/v1/business/:business_id/stats",
+    // The email opt-out (2026-11-20). Anonymous BY NECESSITY: the person clicking a link in a message
+    // has no session, and a mailbox provider's one-click post has no human at all. The signed token in
+    // the path IS the credential — it names one account and one address, and it can only ever write a
+    // suppression for that pair. Filed HERE rather than on a credential list, because a route on the
+    // wrong list answers 401 while reading as open (the lesson CoreSwift paid for on 2026-11-19).
+    "/api/public/unsubscribe/:token",
 ];
 
 /// Routes that may be reached with NO credential, but ONLY by the listed HTTP methods.
@@ -416,6 +422,9 @@ mod tests {
     /// `merged_routers_are_censused` fails when one is missing.
     const ROUTE_SOURCES: &[(&str, &str)] = &[
         ("src/main.rs", include_str!("../main.rs")),
+        // The email opt-out arms live in their own module and are mounted from main.rs; the census reads
+        // the file so the public entry above has a mount to name.
+        ("src/compliance.rs", include_str!("../compliance.rs")),
         ("src/billing/mod.rs", include_str!("../billing/mod.rs")),
         // Routers MOUNTED BY `.nest(prefix, router)` (kanban t_f75da95f). A nested router's own
         // templates are RELATIVE to the nest prefix, so they only become real paths once the

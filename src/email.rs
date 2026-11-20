@@ -1483,7 +1483,20 @@ pub(crate) async fn send_email_request(
     // message as a delivery FAILURE (measured 2026-10-18 through the panel's test-send), which is the
     // misreport the fleet rule forbids: nothing was attempted, so nothing may read as refused mail.
     let held = recipient_is_undeliverable(to);
-    let outcome = crate::email_provider::deliver(pool, &cfg, to, subject, text_body, html).await;
+    // The CLASS decides what an opt-out may stop: a receipt is transactional and is never stopped by
+    // preference; everything else is stoppable. This generic path cannot know what it is sending, so
+    // callers that do name it through send_email_with_class; the default here is the safe reading of
+    // "a message a person asked for at this moment".
+    let outcome = crate::email_provider::deliver(
+        pool,
+        &cfg,
+        to,
+        subject,
+        text_body,
+        html,
+        crate::compliance::TRANSACTIONAL,
+    )
+    .await;
     if held {
         record_withheld(pool, to, subject, "recipient cannot receive mail").await;
     } else {
