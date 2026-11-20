@@ -20,6 +20,13 @@ use crate::state::AppState;
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub is_admin: bool,
+    /// The account this request acts for, when the credential names one.
+    ///
+    /// Email compliance needs it: an opt-out, a suppression and a delivery report all belong to ONE
+    /// account, and this app's request context previously carried only `is_admin`, so nothing in a
+    /// handler could key per-account mail state. Resolved by the same call that resolves admin, from
+    /// the same credential, so the two can never disagree.
+    pub account_id: Option<String>,
 }
 
 #[async_trait]
@@ -41,27 +48,40 @@ where
                 AppError::Unauthorized("Missing or invalid Authorization header".to_string())
             })?;
 
-        let is_admin = resolve_is_admin(&app_state, token).await?;
-        Ok(AuthUser { is_admin })
+        let (is_admin, account_id) = resolve_identity(&app_state, token).await?;
+        Ok(AuthUser {
+            is_admin,
+            account_id,
+        })
     }
 }
 
-async fn resolve_is_admin(state: &AppState, token: &str) -> Result<bool, AppError> {
+/// Who is this, and which account do they act for? One credential read, two answers, so a handler
+/// cannot be told one thing by `is_admin` and another by `account_id`.
+async fn resolve_identity(
+    state: &AppState,
+    token: &str,
+) -> Result<(bool, Option<String>), AppError> {
     // Arm 1: an issued API key. Its OWNER account's live role decides admin (an API key resolves to
     // the literal `api_key` role, so the account row is the only honest source of authority).
     if let Some(user) = crate::security::auth::validate_api_key(state, token).await? {
-        return account_is_platform_admin(&state.pool, &user.account_id).await;
+        let is_admin = account_is_platform_admin(&state.pool, &user.account_id).await?;
+        return Ok((is_admin, Some(user.account_id)));
     }
 
     // Arm 2: a session JWT.
     let claims = crate::security::jwt::verify_jwt(token, &state.config.jwt_secret)?;
     let role = claims.role.clone().unwrap_or_default();
+    let sub = claims.sub.clone();
     if !crate::security::auth::is_platform_admin(&role) {
-        return Ok(false);
+        return Ok((false, sub));
     }
-    match claims.sub.as_deref() {
-        Some(sub) => account_is_platform_admin(&state.pool, sub).await,
-        None => Ok(false),
+    match sub.as_deref() {
+        Some(sub) => {
+            let is_admin = account_is_platform_admin(&state.pool, sub).await?;
+            Ok((is_admin, Some(sub.to_string())))
+        }
+        None => Ok((false, None)),
     }
 }
 
