@@ -89,9 +89,15 @@ body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif
    clicked "Get Pro" landed on a page whose only plan word was "Free Plan" - the pick vanished.
    The CTA now carries the slug, and this page says out loud what the account starts on. */
 var TIER_NAMES = {free: 'Free', pro: 'Pro', enterprise: 'Enterprise'};
+/* The operator can ADD a plan in the console (Plans screen), and /pricing already renders it from
+   the LIVE catalogue (GET /api/v1/plans). This page kept its own three-name list, so a plan the
+   console adds showed nothing here: the visitor picked it on /pricing and this page said only
+   "Starts on Free" (measured 2026-11-20). Fill the names from the same public catalogue and paint
+   again; the static three stay as the instant answer before the fetch lands. */
 var pickedTier = (new URLSearchParams(location.search).get('plan') || '').trim().toLowerCase();
-var pickedLabel = TIER_NAMES[pickedTier];
-if (pickedLabel && pickedTier !== 'free') {
+function paintPickedTier() {
+  var pickedLabel = TIER_NAMES[pickedTier];
+  if (!pickedLabel || pickedTier === 'free') return;
   document.getElementById('signup-plan-badge').textContent = 'Starts on Free';
   var planNote = document.getElementById('signup-plan-note');
   planNote.textContent = 'You picked ' + pickedLabel + '. New accounts start on Free \u2014 no card. '
@@ -99,6 +105,16 @@ if (pickedLabel && pickedTier !== 'free') {
     + pickedLabel + '.';
   planNote.style.display = 'block';
 }
+paintPickedTier();
+fetch('/api/v1/plans').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+  var list = (d && (d.plans || d.data)) || [];
+  var changed = false;
+  list.forEach(function (p) {
+    var s = ((p && p.slug) || '').trim().toLowerCase();
+    if (s && p.name && TIER_NAMES[s] !== p.name) { TIER_NAMES[s] = p.name; changed = true; }
+  });
+  if (changed) paintPickedTier();
+}).catch(function () { /* the static three still answer */ });
 
 async function handleSignup(e) {
   e.preventDefault();
