@@ -596,27 +596,75 @@ function copyShare() {
 }
 
 // ---------- submissions ----------
+let currentSubsFunnel = '';
 async function loadSubSelect() {
   try {
     if (!funnels.length) await loadFunnels();
-    document.getElementById('subFunnelSelect').innerHTML = '<select class="input" onchange="loadSubs(this.value)"><option value="">Select a funnel…</option>' +
-      funnels.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('') + '</select>';
+    document.getElementById('subFunnelSelect').innerHTML = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<select class="input" style="max-width:420px" onchange="loadSubs(this.value)"><option value="">Select a funnel…</option>' +
+      funnels.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join('') + '</select>' +
+      '<button class="btn sm" onclick="exportSubs()">⬇ Export CSV</button></div>';
   } catch (e) { msg(e.message, 'err'); }
 }
 async function loadSubs(id) {
+  currentSubsFunnel = id || '';
   if (!id) { document.getElementById('subList').innerHTML = ''; return; }
   try {
     const d = await api('/iqs/funnels/' + id + '/submissions');
     const subs = d.data || d.submissions || [];
     document.getElementById('subList').innerHTML = !subs.length ? '<p class="muted">No submissions yet.</p>' :
-      '<table><thead><tr><th>Email</th><th>Score</th><th>Outcome</th><th>Class</th><th>Tags</th><th>Date</th></tr></thead><tbody>' +
+      '<table><thead><tr><th>Name</th><th>Email</th><th>Score</th><th>Outcome</th><th>Class</th><th>Tags</th><th>Date</th></tr></thead><tbody>' +
       subs.map(s => `<tr>
+        <td>${esc(subName(s))}</td>
         <td>${esc((s.contact && s.contact.email) || (s.email) || '')}</td>
         <td>${s.total_score!=null?s.total_score:'—'}</td>
         <td>${esc(s.outcome||'')}</td>
         <td>${s.classification?`<span class="badge ${s.classification.toLowerCase()}">${esc(s.classification)}</span>`:'—'}</td>
         <td>${(s.tags_applied||[]).map(esc).join(', ')}</td>
         <td class="muted">${(s.created_at||'').slice(0,10)}</td></tr>`).join('') + '</tbody></table>';
+  } catch (e) { msg(e.message, 'err'); }
+}
+
+// The respondent's own name, which the payload has always carried (`contact.first_name` /
+// `contact.last_name`, read by the API beside each lead) but the table painted only the address —
+// so a lead list read as anonymous email rows. One helper so the table, the CSV and any later
+// column all print the name the same way.
+function subName(s) {
+  const c = (s && s.contact) || {};
+  return String(((c.first_name || '') + ' ' + (c.last_name || '')).trim() || (s && s.name) || '');
+}
+// EXPORT: the Submissions tab could only be read on screen. A survey's leads are the point of a
+// qualifying survey — they have to come out of the app in a form a sales team can open. Built from
+// the same GET the table reads (`/iqs/funnels/<id>/submissions`), so the file can never disagree
+// with the screen. Client-side on purpose: no new public route, no extra server surface.
+function csvCell(v) {
+  const s = (v == null ? '' : String(v));
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+async function exportSubs() {
+  if (!currentSubsFunnel) { msg('Pick a survey first — the export covers one survey at a time', 'err'); return; }
+  try {
+    const d = await api('/iqs/funnels/' + currentSubsFunnel + '/submissions');
+    const subs = d.data || d.submissions || [];
+    if (!subs.length) { msg('No submissions to export yet', 'err'); return; }
+    const head = ['Name', 'Email', 'Score', 'Outcome', 'Classification', 'Tags', 'Date'];
+    const lines = [head.join(',')].concat(subs.map(s => [
+      csvCell(subName(s)),
+      csvCell((s.contact && s.contact.email) || s.email || ''),
+      csvCell(s.total_score == null ? '' : s.total_score),
+      csvCell(s.outcome || ''),
+      csvCell(s.classification || ''),
+      csvCell((s.tags_applied || []).join('; ')),
+      csvCell((s.created_at || '').slice(0, 10))
+    ].join(',')));
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const fname = (funnels.find(f => f.id === currentSubsFunnel) || {}).slug || 'survey';
+    a.download = 'survey-submissions-' + fname + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    msg('Exported ' + subs.length + ' response' + (subs.length === 1 ? '' : 's') + ' to CSV', 'ok');
   } catch (e) { msg(e.message, 'err'); }
 }
 
