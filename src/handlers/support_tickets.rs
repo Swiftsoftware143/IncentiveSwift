@@ -968,8 +968,12 @@ pub async fn update_ticket(
                         }
                     }
                 } else if let Some(move_account) = row.tenant_id {
-                    let target: Option<(Uuid, String, bool)> =
-                        sqlx::query_as("SELECT id, name, is_active FROM plans WHERE slug = $1")
+                    // The requested tier's PRICE travels with it (2026-11-19): the move below is
+                    // refused when the workspace already holds a dearer plan, compared on the
+                    // catalogue price every plan carries.
+                    let target: Option<(Uuid, String, bool, f64)> = sqlx::query_as(
+                        "SELECT id, name, is_active, COALESCE(price, 0)::float8 FROM plans WHERE slug = $1",
+                    )
                             .bind(&ticket_plan)
                             .fetch_optional(&state.db)
                             .await?;
@@ -981,7 +985,7 @@ pub async fn update_ticket(
                             );
                             plan_note = Some(format!("no plan is called '{ticket_plan}' any more"));
                         }
-                        Some((_, ref retired_name, false)) => {
+                        Some((_, ref retired_name, false, _)) => {
                             tracing::warn!(
                                 ticket = %id, plan = %ticket_plan,
                                 "plan request resolved, but the plan is retired (is_active = false) - the plan did NOT move"
@@ -990,18 +994,39 @@ pub async fn update_ticket(
                                 "{retired_name} is retired, so the workspace was not moved onto it"
                             ));
                         }
-                        Some((plan_id, plan_name, true)) => {
-                            let current: Option<String> = sqlx::query_scalar(
-                                "SELECT pt.slug FROM accounts a \
+                        Some((plan_id, plan_name, true, requested_price)) => {
+                            // The workspace's CURRENT tier: slug and catalogue price together.
+                            let current: Option<(String, f64)> = sqlx::query_as(
+                                "SELECT pt.slug, COALESCE(p.price, 0)::float8 FROM accounts a \
                                    JOIN plan_tiers pt ON pt.id = a.plan_tier_id \
+                                   LEFT JOIN plans p ON p.slug = pt.slug \
                                   WHERE a.id = $1",
                             )
                             .bind(move_account)
                             .fetch_optional(&state.db)
                             .await
                             .unwrap_or(None);
-                            if current.as_deref() == Some(ticket_plan.as_str()) {
+                            let current_slug = current.as_ref().map(|(s, _)| s.clone());
+                            let current_price = current.as_ref().map(|(_, pr)| *pr).unwrap_or(0.0);
+                            if current_slug.as_deref() == Some(ticket_plan.as_str()) {
                                 plan_note = Some(format!("already on {plan_name}"));
+                            } else if current_slug.is_some()
+                                && current_price > requested_price + 0.001
+                            {
+                                // CLOSING A REQUEST IS NOT THE SAME AS APPLYING IT (2026-11-19). The
+                                // queue keeps stale asks, so an old request for a cheaper tier can sit
+                                // beside a workspace that has since been put on a dearer one. Honouring
+                                // it would silently DOWNGRADE a paying customer because an operator
+                                // cleared a queue. A strictly cheaper ask is recorded as answered and
+                                // the plan is left where it is; an equal-price ask still goes through.
+                                let held = current_slug.clone().unwrap_or_default();
+                                tracing::info!(
+                                    ticket = %id, account = %move_account, held = %held, asked = %ticket_plan,
+                                    "plan request resolved: the workspace already holds a dearer plan - no downgrade applied"
+                                );
+                                plan_note = Some(format!(
+                                    "already on {held} which costs more - no downgrade applied"
+                                ));
                             } else {
                                 // The plan writer is SHARED with the operator's Change Plan
                                 // picker (`plans_handler::assign_plan`), so the same column is
