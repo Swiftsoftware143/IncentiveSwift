@@ -173,7 +173,24 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
   <div class="card" id="inbox-card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">📬 Your inbox</h2>
     <p style="color:#64748b;font-size:14px;margin:0 0 14px">Your own addresses on your own domain. Open the mail client to read and answer &mdash; it is the same account, so there is nothing to sign in to twice.</p>
-    <div style="margin:0 0 6px"><a class="btn" href="https://inbox.incentiveswift.com" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open the mail client</a></div>
+    <div style="margin:0 0 6px"><a class="btn" id="mail-client-link" href="https://inbox.incentiveswift.com" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Open the mail client</a></div>
+    <script>
+    /* SESSION HANDOFF TO THE MAIL CLIENT (2026-11-20). The sentence above promises "nothing to sign
+       in to twice", and the door dropped the customer on a login form on another host with a password
+       they only ever saw once, in the welcome email. The console now hands the SAME session over the
+       way the marketing signup already does: in the URL FRAGMENT (#token=...), which a browser never
+       sends to the server, so it cannot reach an nginx access log or a Referer header. The mail client
+       stores it as its own session and strips the fragment before its first render. */
+    (function () {
+      var a = document.getElementById('mail-client-link');
+      if (!a) return;
+      a.addEventListener('click', function () {
+        var t = '';
+        try { t = sessionStorage.getItem('is_token') || localStorage.getItem('ws_fs_token') || ''; } catch (e) {}
+        if (t) this.href = 'https://inbox.incentiveswift.com/#token=' + encodeURIComponent(t);
+      });
+    })();
+    </script>
     <div id="inboxMsg" role="status" style="font-size:13px;margin-top:10px"></div>
     <h3 style="font-size:15px;font-weight:600;color:#1e293b;margin:18px 0 8px">Your domains</h3>
     <p style="color:#64748b;font-size:14px;margin:0 0 10px">Add the domain you already own. We print the exact records to paste at your DNS provider, and until they verify the addresses below cannot receive mail.</p>
