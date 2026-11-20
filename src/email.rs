@@ -862,7 +862,12 @@ pub async fn send_support_request_receipt_email(
     name: &str,
     request: &str,
     include_payment_instructions: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    // ANSWERS WHETHER THE RECEIPT REALLY WENT OUT (2026-11-20). It used to answer `Ok(())` on the
+    // suppressed legs too, so `acknowledged` was TRUE for a mail that never left — the dashboard then
+    // promised the filer a copy that does not exist. (Same fix, same day, on FunnelSwift and
+    // ADASwift.) The sender states the verdict; the caller reports it.
+    //
     // OPERATOR SELF-REQUEST (2026-11-18). When the filer IS the platform operator
     // (`accounts.role` = admin/super_admin), the receipt would mail the operator about a request
     // their own account filed. The row still lands in the queue; only the receipt is withheld — the
@@ -870,7 +875,7 @@ pub async fn send_support_request_receipt_email(
     // app (the support-ticket door and the plan-request-at-signup door both call it).
     if account_is_platform_admin(pool, account_id).await {
         tracing::info!(account = %account_id, "operator self-request: receipt suppressed");
-        return Ok(());
+        return Ok(false);
     }
     // How this business takes money, in the operator's own words (2026-11-16). Only a REQUEST TO
     // BUY carries it: an ordinary "I cannot sign in" ticket must not be answered with bank details.
@@ -890,7 +895,10 @@ pub async fn send_support_request_receipt_email(
         "login_url": APP_URL,
         "app_url": APP_URL,
     });
-    send_template_email(pool, Some(account_id), to, "support_request_receipt", &vars).await
+    send_template_email(pool, Some(account_id), to, "support_request_receipt", &vars).await?;
+    // A reserved / fleet-harness recipient is a non-send: the dispatcher records it `withheld` and
+    // attempts nothing. Same predicate the dispatcher uses, so the two cannot disagree.
+    Ok(crate::security::probe_addr::harness_domain(to).is_none())
 }
 
 /// Tell the OPERATOR that a workspace asked to buy a plan (2026-11-09).

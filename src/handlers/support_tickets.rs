@@ -456,7 +456,7 @@ pub async fn create_ticket(
             .unwrap_or(None);
     let (filer_email, filer_name) = filer.clone().unwrap_or_default();
     if let Some((email, name)) = filer {
-        if let Err(e) = crate::email::send_support_request_receipt_email(
+        match crate::email::send_support_request_receipt_email(
             &state.db,
             account,
             &email,
@@ -467,13 +467,14 @@ pub async fn create_ticket(
         )
         .await
         {
-            tracing::warn!(
+            // `Ok(false)` = suppressed/withheld (operator's own request, or a reserved address):
+            // the row is on record, nothing was mailed, so do not promise a copy.
+            Ok(sent) => acknowledged = sent,
+            Err(e) => tracing::warn!(
                 ticket = %id,
                 to = %email,
                 "support-request receipt mail was not sent: {e}"
-            );
-        } else {
-            acknowledged = true;
+            ),
         }
     }
     // The OPERATOR's half of the same event (2026-11-09). The receipt above tells the FILER; this
