@@ -798,23 +798,28 @@ label.opt:hover{border-color:var(--brand)}
       // The owner's own identity above the campaign title (2026-11-07): a business's campaign
       // should look like the business, not the platform. `brand.color` is validated hex
       // server-side (`Branding::effective_color`), and the logo URL is only ever the one this
-      // tenant uploaded — a participant sees exactly what the tenant's email header shows. No
-      // brand configured => the bar stays hidden and the page is unchanged.
+      // tenant uploaded — a participant sees exactly what the tenant's email header shows.
+      // A tenant with NO brand still gets its own name on the page (see `organizer` below).
       var brand = res.data.brand || null;
-      if (brand && (brand.name || brand.logo_url)) {
+      var org = res.data.organizer || null;
+      // Fall back to the ACCOUNT'S OWN NAME (2026-11-20). `brand` is opt-in, so an unbranded
+      // tenant drew a campaign page that named no business at all. `organizer.name` is the
+      // company (or workspace name) the owner typed on their profile — their words, not ours.
+      var ownerLabel = (brand && brand.name) || (org && org.name) || '';
+      if (ownerLabel || (brand && brand.logo_url)) {
         var bb = el('brandBar');
         bb.innerHTML = '';
-        if (brand.logo_url) {
+        if (brand && brand.logo_url) {
           var bim = document.createElement('img');
-          bim.alt = brand.name || 'Campaign owner';
+          bim.alt = ownerLabel || 'Campaign owner';
           bim.src = brand.logo_url;
           bim.style.cssText = 'max-height:48px;max-width:220px;display:inline-block';
           bb.appendChild(bim);
         } else {
           var bnm = document.createElement('div');
-          bnm.textContent = brand.name;
+          bnm.textContent = ownerLabel;
           bnm.style.cssText = 'font-weight:700;font-size:18px;letter-spacing:.2px;color:' +
-            (/^#[0-9a-fA-F]{3,8}$/.test(brand.color || '') ? brand.color : '#4f46e5');
+            (/^#[0-9a-fA-F]{3,8}$/.test((brand && brand.color) || '') ? brand.color : '#4f46e5');
           bb.appendChild(bnm);
         }
         bb.style.display = 'block';

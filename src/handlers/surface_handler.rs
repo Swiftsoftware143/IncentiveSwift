@@ -705,6 +705,35 @@ pub async fn get_play_view(
                 "logo_url": b.logo_url,
             });
         }
+        // WHO IS ASKING THEM TO TAKE PART (2026-11-20). The brand above is OPT-IN: only a tenant
+        // that filled in email branding carries a name, so an unbranded campaign page named no
+        // business at all and a participant arriving from a shared link could not tell whose
+        // campaign it was. `organizer` is the account's OWN record — the company it set on its
+        // profile, else the workspace name — never a made-up label, and it is the same name the
+        // owner typed. Additive: the page still prefers `brand` when one is configured, so a
+        // branded tenant's page is unchanged. A read failure leaves the page unbranded rather
+        // than breaking the player.
+        let organizer: Option<String> = match sqlx::query_scalar::<_, Option<String>>(
+            r#"SELECT COALESCE(NULLIF(BTRIM(company), ''), NULLIF(BTRIM(name), ''))
+                 FROM accounts WHERE id = $1"#,
+        )
+        .bind(owner)
+        .fetch_optional(&state.db)
+        .await
+        {
+            Ok(row) => row.flatten(),
+            Err(e) => {
+                tracing::warn!(
+                    campaign = %cid,
+                    error = %e,
+                    "campaign owner's name could not be read — serving the player without an organizer"
+                );
+                None
+            }
+        };
+        if let Some(name) = organizer {
+            payload["organizer"] = json!({ "name": name });
+        }
     }
 
     Ok(Json(payload))
