@@ -5048,6 +5048,80 @@ const EmailTemplateModal = ({ st, show, hide, save, MERGE_FIELDS, TYPES }) => {
   </div>`;
 };
 
+// ---- DO-NOT-MAIL — the account's own opt-out list (2026-11-20) ----
+// The compliance backend shipped with `GET /api/compliance/suppressions` and its `.csv` twin, and
+// NOTHING in this console called either: the operator could not see who had asked them to stop
+// mailing. A route with no screen is a defect, not a feature. The pair sits on `/api/compliance`,
+// NOT under this console's `/api/v1` base, so it is called with its own base and the same bearer
+// the API helper holds (a bearer-carrying 401 is still caught by the one funnel above).
+const MailCompliance = () => {
+  const st = viewState('mailcompliance', { list: [], loaded: false, err: null, busy: false });
+  const cbase = window.location.origin + '/api/compliance';
+  const cHeaders = () => (API.token ? { Authorization: 'Bearer ' + API.token } : {});
+  const load = async () => {
+    st.err = null;
+    try {
+      const r = await fetch(cbase + '/suppressions', { headers: cHeaders() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || d.message || ('Request failed (' + r.status + ')'));
+      st.list = Array.isArray(d.suppressions) ? d.suppressions : [];
+    } catch (e) { st.err = (e && e.message) || String(e); st.list = []; }
+    st.busy = false; st.loaded = true; renderApp();
+  };
+  if (!st.loaded && !st.busy) { st.busy = true; load(); }
+  const when = (v) => { try { return v ? new Date(v).toLocaleString() : '\u2014'; } catch (e) { return v || '\u2014'; } };
+  const scope = (c) => (!c || c === 'all') ? 'All mail' : (c === 'transactional' ? 'Account mail' : c.charAt(0).toUpperCase() + c.slice(1));
+  const download = async () => {
+    try {
+      const r = await fetch(cbase + '/suppressions.csv', { headers: cHeaders() });
+      if (!r.ok) throw new Error('Download failed (' + r.status + ')');
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'do-not-mail.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 2000);
+    } catch (e) { alert(e.message || String(e)); }
+  };
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div style="max-width:720px">
+        <h2 class="text-xl font-bold">Do-Not-Mail</h2>
+        <p class="text-sm text-gray-500">People who asked you to stop emailing them. When someone clicks Unsubscribe in one of your emails, their address lands here and the app stops sending that kind of mail to it. Account mail they asked for \u2014 a password reset, a receipt for a purchase they just made \u2014 still goes out.</p>
+      </div>
+      <div class="flex gap-2" style="flex-shrink:0">
+        <button type="button" class="btn btn-sm btn-outline" onClick=${download} aria-label="Download the do-not-mail list as a CSV file">\u2b07 Download CSV</button>
+        <button type="button" class="btn btn-sm" onClick=${() => { st.loaded = false; st.busy = false; renderApp(); }} aria-label="Refresh the do-not-mail list">Refresh</button>
+      </div>
+    </div>
+    ${st.err ? html`<div class="card" style="border-left:4px solid #dc2626">
+      <div class="font-medium text-sm" style="color:#991b1b">This screen could not load</div>
+      <div class="text-sm text-gray-600" style="margin-top:4px">${st.err}</div>
+      <button type="button" class="btn btn-sm btn-outline" style="margin-top:10px" onClick=${() => { st.loaded = false; st.busy = false; renderApp(); }}>Try again</button>
+    </div>` : null}
+    ${!st.err && !st.loaded ? html`<div class="text-center text-gray-400 py-8">Loading\u2026</div>` : null}
+    ${!st.err && st.loaded && st.list.length ? html`<div class="card p-0" style="overflow-x:auto" data-suppression-rows=${st.list.length}>
+      <table class="table">
+        <thead><tr><th>Address</th><th>Stopped</th><th>Why</th><th>How</th><th>Recorded</th></tr></thead>
+        <tbody>
+          ${st.list.map(r => html`<tr data-suppressed=${r.address}>
+            <td style="font-weight:500">${r.address}</td>
+            <td><span class="badge badge-blue">${scope(r.mail_class)}</span></td>
+            <td>${r.reason || '\u2014'}</td>
+            <td>${r.source || '\u2014'}</td>
+            <td class="text-gray-500" style="white-space:nowrap">${when(r.created_at)}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+    </div>` : null}
+    ${!st.err && st.loaded && !st.list.length ? html`<div class="card text-center" style="padding:32px">
+      <div style="font-size:24px">\ud83d\udeab</div>
+      <div class="font-medium" style="margin-top:8px">Nobody has opted out</div>
+      <div class="text-sm text-gray-500" style="margin-top:4px">Every address on your list is still happy to hear from you. Anyone who clicks Unsubscribe in one of your emails will appear here, and no further mail of that kind goes to them.</div>
+    </div>` : null}
+  </div>`;
+};
+
 // ---- SITE CONFIG (SEO / analytics / homepage / legal) ----
 const SiteConfigView = () => {
   const st = viewState('siteConfig', { data: null, loaded: false, saving: false, status: '' });
@@ -7700,6 +7774,7 @@ const PromoCodes = () => {
     { id: 'plans', label: 'Plans', icon: '💳', adminOnly: true },
     { id: 'plan-tiers', label: 'Plan Tiers', icon: '🥇', adminOnly: true },
     { id: 'email-templates', label: 'Email Templates', icon: '📧', adminOnly: true },
+    { id: 'mail-compliance', label: 'Do-Not-Mail', icon: '🚫' },
     { id: 'support-tickets', label: 'Support Tickets', icon: '🎫' },
     { id: 'reviews', label: 'Reviews & Ratings', icon: '⭐', adminOnly: false },
     { id: 'calendar', label: 'Calendar', icon: '📅' },
@@ -7709,7 +7784,7 @@ const PromoCodes = () => {
     { id: 'offers', label: 'Offers', icon: '🎟' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
+  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'mail-compliance': MailCompliance, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.

@@ -16,7 +16,7 @@ use axum::{
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
-    Extension, Json, Router,
+    Json, Router,
 };
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
@@ -403,11 +403,33 @@ async fn tenant_of(state: &AppState, auth: &AuthUser) -> Option<Uuid> {
         .flatten()
 }
 
-async fn list_suppressions(
-    State(state): State<AppState>,
-    Extension(auth): Extension<AuthUser>,
-) -> Response {
-    let Some(tenant_id) = tenant_of(&state, &auth).await else {
+/// Which suppression rows this caller may read.
+///
+/// The SENDER consults `email_suppressions` under [`PLATFORM_TENANT`] (`email_provider.rs`), so an
+/// operator's list must include that scope or it answers an empty list for ever: the mechanism would
+/// exist while the population never matched. A tenant that is not a platform admin keeps its own rows
+/// ONLY — one customer's opt-outs are never another customer's business.
+async fn suppression_scopes(state: &AppState, auth: &AuthUser) -> Option<Vec<Uuid>> {
+    let own = tenant_of(state, auth).await;
+    if auth.is_admin {
+        let mut scopes = vec![PLATFORM_TENANT];
+        if let Some(t) = own {
+            if t != PLATFORM_TENANT {
+                scopes.push(t);
+            }
+        }
+        return Some(scopes);
+    }
+    own.map(|t| vec![t])
+}
+
+async fn list_suppressions(State(state): State<AppState>, auth: AuthUser) -> Response {
+    // `AuthUser` is an EXTRACTOR (`FromRequestParts`, src/auth/middleware.rs) — it is not inserted
+    // into the request extensions by anything, so taking it as `Extension<AuthUser>` answered
+    // `500 Missing request extension` to every authenticated caller (measured live 2026-11-20:
+    // anon 401, bearer 500). The extractor runs off the same credential the default-deny boundary
+    // already checked.
+    let Some(scopes) = suppression_scopes(&state, &auth).await else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "no account" })),
@@ -416,9 +438,9 @@ async fn list_suppressions(
     };
     let rows = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
         "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
-          WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1000",
+          WHERE tenant_id = ANY($1) ORDER BY created_at DESC LIMIT 1000",
     )
-    .bind(tenant_id)
+    .bind(&scopes)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -432,11 +454,8 @@ async fn list_suppressions(
     Json(json!({ "suppressions": items })).into_response()
 }
 
-async fn suppressions_csv(
-    State(state): State<AppState>,
-    Extension(auth): Extension<AuthUser>,
-) -> Response {
-    let Some(tenant_id) = tenant_of(&state, &auth).await else {
+async fn suppressions_csv(State(state): State<AppState>, auth: AuthUser) -> Response {
+    let Some(scopes) = suppression_scopes(&state, &auth).await else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "no account" })),
@@ -445,9 +464,9 @@ async fn suppressions_csv(
     };
     let rows = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
         "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
-          WHERE tenant_id = $1 ORDER BY created_at DESC",
+          WHERE tenant_id = ANY($1) ORDER BY created_at DESC",
     )
-    .bind(tenant_id)
+    .bind(&scopes)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
