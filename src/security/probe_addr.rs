@@ -69,6 +69,30 @@ pub fn attribution_domain(addr: &str) -> Option<&'static str> {
     })
 }
 
+/// Local parts the fleet's own audit harnesses mint when they address a FLEET BRAND domain.
+///
+/// `swiftsoftware.com` is the fleet's brand domain and it hosts a REAL mailbox, so it must stay
+/// out of [`FLEET_HARNESS_DOMAINS`] (whole-domain suppression would also swallow the owner's own
+/// mail). But the harnesses mint `realcustomer-<unix-ts>@swiftsoftware.com` for signup proofs, and
+/// that local part does not exist at the domain's mail server: measured on the fleet's Mailgun
+/// event log 2026-11-20, every such message ended `failed 550 5.7.1 XGEMAIL_0011 Command
+/// rejected`. That traffic is a direct cause of the bounce-rate alarm.
+///
+/// So the brand domain is suppressed PER LOCAL PART: an address shaped like a harness probe is
+/// withheld at the sender (no provider attempt, no bounce), while an ordinary local part — the
+/// owner's own mailbox included — is untouched.
+pub const FLEET_BRAND_DOMAINS: &[&str] = &["swiftsoftware.com"];
+
+/// The local-part shapes the fleet's harnesses mint at a [`FLEET_BRAND_DOMAINS`] address.
+pub const FLEET_BRAND_HARNESS_PREFIXES: &[&str] = &[
+    "realcustomer-",
+    "probe-",
+    "canary-",
+    "bounceproof-",
+    "bounce+",
+    "verify",
+];
+
 /// The fleet harness domain `addr` belongs to, if any. A subdomain counts
 /// (`probe@mail.swiftsoftware.dev` is still the harness class); a domain that merely CONTAINS the
 /// name does not (`x@notswiftsoftware.dev` is refused — the match is on the label boundary).
@@ -77,14 +101,27 @@ pub fn attribution_domain(addr: &str) -> Option<&'static str> {
 /// classifies like the exact form. A value with no `@`, or with an empty domain, is not an address
 /// and returns `None`.
 pub fn harness_domain(addr: &str) -> Option<&'static str> {
-    let (_, domain) = addr.rsplit_once('@')?;
+    let (local, domain) = addr.rsplit_once('@')?;
     let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
     if domain.is_empty() {
         return None;
     }
-    FLEET_HARNESS_DOMAINS.iter().copied().find(|d| {
-        domain == *d || (domain.len() > d.len() + 1 && domain.ends_with(&format!(".{d}")))
-    })
+    let matches =
+        |d: &str| domain == d || (domain.len() > d.len() + 1 && domain.ends_with(&format!(".{d}")));
+    if let Some(d) = FLEET_HARNESS_DOMAINS.iter().copied().find(|d| matches(d)) {
+        return Some(d);
+    }
+    // A HARNESS ADDRESS AT A FLEET BRAND DOMAIN (2026-11-20). Whole-domain suppression is wrong
+    // here (the brand domain carries the owner's real mailbox), so the arm is the LOCAL PART:
+    // `realcustomer-…@swiftsoftware.com` is fleet machinery by construction and must not be handed
+    // to a provider, where it hard-bounces (measured 550 5.7.1 on every one of them).
+    let brand = FLEET_BRAND_DOMAINS.iter().copied().find(|d| matches(d))?;
+    let local = local.trim().to_ascii_lowercase();
+    FLEET_BRAND_HARNESS_PREFIXES
+        .iter()
+        .copied()
+        .find(|p| local.starts_with(p))
+        .map(|_| brand)
 }
 
 #[cfg(test)]
@@ -336,7 +373,7 @@ mod synthetic_requester_tests {
     /// `probe_sweep` had always classified the same address as residue — one classification for
     /// cleanup, none for alerts.
     #[test]
-    fn the_fleet_brand_domain_never_pages_the_operator_but_still_receives_mail() {
+    fn the_fleet_brand_domain_never_pages_the_operator_and_a_harness_probe_is_withheld() {
         assert_eq!(
             synthetic_requester("realcustomer-1795025399@swiftsoftware.com", ""),
             Some("swiftsoftware.com")
@@ -351,11 +388,17 @@ mod synthetic_requester_tests {
             synthetic_requester("inbox@mail.swiftsoftware.com", ""),
             Some("swiftsoftware.com")
         );
-        // THE MAIL LAYER MUST NOT LEARN IT: the owner's proof inbox is on this domain.
+        // THE MAIL LAYER LEARNS THE *PROBE SHAPE* AND NOTHING ELSE (2026-11-20). This assertion
+        // used to read `None` for every address at the brand domain, on the reasoning that the
+        // owner's proof inbox lives there. Measured on the provider's event log: the harness
+        // address below ended `failed 550 5.7.1` — it is a local part nobody owns, and every send
+        // to it burned a hard bounce on the sending domain. The brand domain is now suppressed per
+        // local part; the owner's real address is untouched.
         assert_eq!(
             harness_domain("realcustomer-1795025399@swiftsoftware.com"),
-            None
+            Some("swiftsoftware.com")
         );
+        // The owner's proof inbox — an ordinary local part — still receives mail.
         assert_eq!(harness_domain("david@swiftsoftware.com"), None);
         // A lookalike domain is a real customer, never a match.
         assert_eq!(synthetic_requester("x@notswiftsoftware.com", ""), None);
