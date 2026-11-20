@@ -969,6 +969,25 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
     it will send. <strong>Edit</strong> opens the subject and the body, and the body can be previewed
     before it is saved.</p>
   </div>
+  <div class="card">
+    <h3>🚫 Do-Not-Mail</h3>
+    <p>The people who asked you to stop emailing them, and the reason each one gave. A row is added
+    when somebody presses the unsubscribe link in one of your messages, or when the mail provider
+    reports that an address hard-bounced or marked a message as spam. Every row shows the address,
+    which kind of mail it stops (<strong>All mail</strong>, <strong>Notification</strong> or
+    <strong>Bulk</strong>), the reason, how the opt-out arrived and when.</p>
+    <p><strong>What it changes.</strong> Mail of that kind to that address is stopped at the sender,
+    before a mail provider is called — the message is never handed over and no send is charged. It
+    is checked the same way for every message this app sends.</p>
+    <p><strong>What still goes out.</strong> Mail the person asked for and that belongs to their own
+    account — a password reset, a receipt for something they just bought — is not stopped by an
+    opt-out. Somebody who unsubscribed from marketing has not asked to be locked out of their
+    account. A hard bounce or a spam complaint is different: that address is not mailed again at
+    all, because it is harm control rather than a preference.</p>
+    <p><strong>⤓ Download CSV</strong> saves the list as a spreadsheet file (address, kind, reason,
+    how, when) for your records. A business only ever sees its own opt-outs. The operator also sees
+    the app&rsquo;s own list, because this app sends its mail under one brand.</p>
+  </div>
 </section>
 
 <section id="plan-requests">
