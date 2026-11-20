@@ -116,9 +116,52 @@ pub async fn list_feedback(
     Ok(Json(json!({ "count": items.len(), "feedback": items })))
 }
 
+/// PATCH /api/v1/feedback/:id — the operator closes the loop on one message.
+///
+/// The queue has always carried a `status` column (default `open`) and the LIST has always
+/// returned it, but nothing could write it: the console drew every row identically and no route
+/// existed, so a message the team had dealt with looked exactly like a new one. This is the
+/// missing write half — `handled` when the team has acted on it, `open` to put it back.
+/// Platform operators only, the same gate as the read.
+#[derive(Deserialize)]
+pub struct UpdateFeedbackStatus {
+    pub status: String,
+}
+
+pub async fn update_feedback_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(req): Json<UpdateFeedbackStatus>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if !crate::security::auth::is_platform_admin(&claims.role) {
+        return Err(AppError::Forbidden("Admin role required".to_string()));
+    }
+    let status = req.status.trim().to_ascii_lowercase();
+    if status != "open" && status != "handled" {
+        return Err(AppError::Validation(
+            "Status must be open or handled.".to_string(),
+        ));
+    }
+    let row = sqlx::query("UPDATE feedback SET status = $1 WHERE id = $2 RETURNING id, status")
+        .bind(&status)
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(crate::error::db_error)?
+        .ok_or_else(|| AppError::NotFound("Feedback not found".to_string()))?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "id": row.get::<Uuid, _>("id"),
+        "status": row.get::<String, _>("status"),
+    })))
+}
+
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/", routing::post(submit_feedback).get(list_feedback))
+        .route("/:id", routing::patch(update_feedback_status))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::access::claims::claims_middleware,

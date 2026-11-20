@@ -5248,16 +5248,15 @@ const SupportTickets = () => {
   const isPlanRequest = (t) => !!t && (t.source === 'plan_request' || isLoyaltyPlanRequest(t)
     || (t.category === 'billing' && / request:.* plan$/i.test(String(t.subject || ''))));
   const planCount = st.list.filter(isPlanRequest).length;
-  // FEEDBACK FROM INSIDE THE PRODUCT (David 2026-11-11, B209). The customer console now carries a
-  // Feedback button that files an ordinary ticket with category "feedback" and source
-  // "in_app_feedback"; it already names the screen it came from. This filter is how the team READS
-  // those notes: without it they sit interleaved with plan requests and ordinary questions, which is
-  // the same as not being read. `isFeedback` is one predicate, read by both the chip and the list.
-  const isFeedback = (t) => !!t && (t.category === 'feedback' || t.source === 'in_app_feedback');
-  const feedbackCount = st.list.filter(isFeedback).length;
+  // FEEDBACK FROM INSIDE THE PRODUCT (David 2026-11-11, B209). The customer console's Feedback
+  // button writes to the `feedback` table through POST /api/v1/feedback — NOT to this ticket table.
+  // This view used to offer a "Feedback (N)" chip that filtered `category='feedback'` /
+  // `source='in_app_feedback'` tickets: no writer on the box has ever produced such a row (measured
+  // 2026-11-20: the only ticket categories live are billing), so the chip read 0 for ever and the
+  // operator's real queue was the separate Feedback screen all along. The chip is now a door to that
+  // screen instead of a filter over a table nothing fills.
   const filtered = st.list.filter(t => st.filter==='all' ? true
-    : st.filter==='plan' ? isPlanRequest(t)
-    : st.filter==='feedback' ? isFeedback(t) : t.status===st.filter);
+    : st.filter==='plan' ? isPlanRequest(t) : t.status===st.filter);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4">
@@ -5267,7 +5266,7 @@ const SupportTickets = () => {
     <div class="flex gap-2 mb-4">
       ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
       <button data-plan-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='plan'?'bg-blue-600 text-white':'text-blue-700 border-blue-300'}" onClick=${() => { st.filter = st.filter==='plan' ? 'all' : 'plan'; renderApp(); }}>Plan requests (${planCount})</button>
-      <button data-feedback-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='feedback'?'bg-blue-600 text-white':'text-indigo-700 border-indigo-300'}" title="Notes a customer sent from the Feedback button inside their dashboard — an idea, a problem or a complaint, with the screen it came from" onClick=${() => { st.filter = st.filter==='feedback' ? 'all' : 'feedback'; renderApp(); }}>Feedback (${feedbackCount})</button>
+      <button data-feedback-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium text-indigo-700 border-indigo-300" title="Notes a customer sent from the Feedback button inside their dashboard — an idea, a problem or a complaint, with the screen it came from. They live on the Feedback screen, which also marks each one handled." onClick=${() => { S.view = 'feedback'; renderApp(); }}>Feedback queue →</button>
     </div>
     <div class="card overflow-hidden">
       <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
@@ -5280,7 +5279,7 @@ const SupportTickets = () => {
           <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
           <td><button class="text-red-600 text-sm mr-2" onClick=${e => { e.stopPropagation(); remove(t.id); }}>Delete</button></td>
         </tr>`)}
-        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.filter==='plan' ? 'No plan requests right now. A customer who presses "Request the plan" on their Plan & billing screen files one here.' : st.filter==='feedback' ? 'No feedback right now. A customer who presses Feedback in their dashboard files a note here, with the screen it came from.' : 'No tickets in this view'}</td></tr>` : null}
+        ${!filtered.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-8">${st.filter==='plan' ? 'No plan requests right now. A customer who presses "Request the plan" on their Plan & billing screen files one here.' : 'No tickets in this view'}</td></tr>` : null}
         </tbody></table>
     </div>
 
@@ -6530,8 +6529,13 @@ const ImpersonateAccounts = () => {
 // app and screen it came from. Admin-only in the nav AND gated server-side (403 for a non-operator),
 // so a customer never sees the queue. Reads through the RAW getter so a transient failure does not
 // paint the shell's "this screen could not load" banner (the same rule as the other operator reads).
+//
+// The queue is WORKED, not just read (the write half the row has always been missing): `status`
+// defaults to 'open' and the LIST has always returned it, but nothing could change it, so a message
+// the team had dealt with looked exactly like a new one. `PATCH /api/v1/feedback/:id` sets it, and
+// every row here prints its own state with the button that flips it.
 const Feedback = () => {
-  const st = viewState('feedback', { list: [], err: '' });
+  const st = viewState('feedback', { list: [], err: '', busy: '' });
   const load = async () => {
     try {
       const data = await _get('/feedback');
@@ -6544,21 +6548,46 @@ const Feedback = () => {
     }
   };
   if (!st._loaded) { st._loaded = true; load(); }
+  const openCount = st.list.filter(f => String(f.status || 'open') !== 'handled').length;
+  const setStatus = async (id, status) => {
+    st.busy = String(id);
+    renderApp();
+    try {
+      await _patch('/feedback/' + id, { status: status });
+      const row = st.list.find(f => String(f.id) === String(id));
+      if (row) row.status = status;
+      feedbackToast(status === 'handled' ? 'Marked handled' : 'Reopened', false);
+    } catch (e) {
+      feedbackToast('Could not update: ' + ((e && e.message) || 'please try again'), true);
+    } finally {
+      st.busy = '';
+      renderApp();
+    }
+  };
   return html`<div>
     <div class="mb-4">
       <h1 class="text-2xl font-bold text-gray-800">Feedback</h1>
-      <p class="text-sm text-gray-500">What customers told us — idea, bug or complaint, with the account, person, app and screen it came from.</p>
+      <p class="text-sm text-gray-500">What customers told us — idea, bug or complaint, with the account, person, app and screen it came from.${st.list.length ? html` <strong>${openCount} still open</strong> of ${st.list.length}.` : ''}</p>
     </div>
     ${st.err ? html`<div style="margin-bottom:12px;padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:10px;font-size:13px">Failed to load feedback: ${st.err}</div>` : ''}
     ${!st.err && !st.list.length ? html`<div class="card" style="text-align:center;padding:40px;color:#64748b">No feedback yet.</div>` : ''}
-    ${st.list.map(f => html`<div class="card" style="margin-bottom:12px">
-      <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap">
+    ${st.list.map(f => {
+      const handled = String(f.status || 'open') === 'handled';
+      return html`<div class="card" style="margin-bottom:12px;${handled ? 'opacity:.75;' : ''}">
+      <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap;align-items:center">
         <strong style="text-transform:capitalize">${f.kind}</strong>
-        <span style="color:#64748b;font-size:.75rem">${f.app} · ${f.screen} · ${f.created_at}</span>
+        <span style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:99px;${handled ? 'background:#dcfce7;color:#166534' : 'background:#fef3c7;color:#92400e'}">${handled ? '✅ Handled' : '🕓 Open'}</span>
+          <span style="color:#64748b;font-size:.75rem">${f.app} · ${f.screen} · ${f.created_at}</span>
+        </span>
       </div>
       <p style="margin:0 0 6px;white-space:pre-wrap">${f.message}</p>
-      <div style="color:#64748b;font-size:.78rem">${[f.name, f.email].filter(Boolean).join(' · ') || 'unknown'}</div>
-    </div>`)}
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <div style="color:#64748b;font-size:.78rem">${[f.name, f.email].filter(Boolean).join(' · ') || 'unknown'}</div>
+        <button type="button" class="btn btn-secondary" style="font-size:.75rem;padding:4px 10px" disabled=${st.busy === String(f.id)} onClick=${() => setStatus(f.id, handled ? 'open' : 'handled')}>${st.busy === String(f.id) ? 'Saving…' : (handled ? 'Reopen' : 'Mark handled')}</button>
+      </div>
+    </div>`;
+    })}
   </div>`;
 };
 
