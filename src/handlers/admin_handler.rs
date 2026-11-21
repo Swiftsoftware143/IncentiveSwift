@@ -388,6 +388,16 @@ pub async fn list_all_tenants(
         .get("include_probe")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+    // PORTFOLIO IS NOT A CUSTOMER LIST (David, 2026-11-20). The owner's own businesses were mixed
+    // into this list, so finding one meant scrolling past every customer, and every one of them read
+    // like a customer with only a "Protected" badge to tell them apart. They are a separate
+    // population and have their own screen (Portfolio), which now offers Open. Default: customers
+    // only. `?include_portfolio=1` brings them back for anyone who wants the whole platform in one
+    // table; every row already publishes `is_portfolio` so the two can never be confused.
+    let include_portfolio = params
+        .get("include_portfolio")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let rows = sqlx::query(
         r#"
         SELECT
@@ -471,9 +481,23 @@ pub async fn list_all_tenants(
     // a customer. Such a row is now held back exactly like a tagged harness row and published with
     // `reserved_owner: true` under `?include_probe=1` — the same rule FunnelSwift and
     // missedcallrespondr ship, so every operator list counts customers the same way.
+    let portfolio_hidden = if include_portfolio {
+        0
+    } else {
+        rows.iter()
+            .filter(|row| row.get::<bool, _>("is_portfolio"))
+            .count()
+    };
     let rows: Vec<_> = rows
         .into_iter()
         .filter(|row| {
+            // PORTFOLIO ACCOUNTS ARE HELD BACK UNLESS ASKED FOR (David, 2026-11-20) — before the
+            // probe rules, because they are a different population, not machinery: a portfolio
+            // account is a real, active business and `?include_portfolio=1` must still return it.
+            let is_portfolio: bool = row.get("is_portfolio");
+            if is_portfolio && !include_portfolio {
+                return false;
+            }
             include_probe || {
                 let email: String = row.get("email");
                 !owner_is_fleet_machinery(&email)
@@ -551,7 +575,10 @@ pub async fn list_all_tenants(
         .collect();
 
     Ok(Json(json!({
-        "tenants": tenants
+        "tenants": tenants,
+        // How many of the owner's own companies this answer held back, so the console can say so
+        // beside the toggle instead of the operator wondering where they went.
+        "portfolio_hidden": portfolio_hidden,
     })))
 }
 

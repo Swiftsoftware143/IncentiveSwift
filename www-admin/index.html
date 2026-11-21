@@ -443,9 +443,9 @@ const Dashboard = () => {
     </div>`}
     ${Array.isArray(st.plan_mix) && st.plan_mix.length > 0 && html`<div class="card mb-4" data-console="revenue-at-list">
       <h3 class="text-base font-bold text-gray-800">Revenue at list price</h3>
-      <p class="text-xs text-gray-500 mb-3">What the ${Number(st.workspaces_total) || 0} workspace${(Number(st.workspaces_total) || 0) === 1 ? ' is' : 's are'} held to, priced at each plan\u2019s own rate. This is list price, not money collected \u2014 a purchase only counts once its payment completed.</p>
+      <p class="text-xs text-gray-500 mb-3">What the ${Number(st.workspaces_total) || 0} account${(Number(st.workspaces_total) || 0) === 1 ? ' is' : 's are'} held to, priced at each plan\u2019s own rate. This is list price, not money collected \u2014 a purchase only counts once its payment completed.</p>
       <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <div class="stat-card"><div class="stat-value" data-revenue="workspaces">${Number(st.workspaces_total) || 0}</div><div class="stat-label">Workspaces</div></div>
+        <div class="stat-card"><div class="stat-value" data-revenue="workspaces">${Number(st.workspaces_total) || 0}</div><div class="stat-label">Accounts</div></div>
         <div class="stat-card"><div class="stat-value" data-revenue="monthly">${'$' + (Number(st.plan_value_monthly) || 0).toFixed(2)}</div><div class="stat-label">Plan Value / mo</div></div>
         <div class="stat-card"><div class="stat-value" data-revenue="yearly">${'$' + (Number(st.plan_value_yearly) || 0).toFixed(2)}</div><div class="stat-label">Plan Value / yr</div></div>
       </div>
@@ -476,7 +476,7 @@ const Dashboard = () => {
       <div class="stat-card"><div class="stat-value">${st.total_rewards ?? '...'}</div><div class="stat-label">Rewards</div></div>
     </div>
     ${st.usage && html`<div class="card mt-4" data-console="plan-usage">
-      <h3 class="text-base font-bold text-gray-800">What this workspace is using</h3>
+      <h3 class="text-base font-bold text-gray-800">What this account is using</h3>
       <p class="text-xs text-gray-500 mb-2">Live counts from the server, beside the allowance your plan carries.</p>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="stat-card" data-usage="leads"><div class="stat-value">${st.usage.leads ?? '...'}</div><div class="stat-label">Leads</div></div>
@@ -514,6 +514,16 @@ const Portfolio = () => {
     try { if(st.editItem) await API.put('/portfolio-companies/' + st.editItem.id, data); else await API.post('/portfolio-companies', data); st.showModal = false; load(); } catch(e){ alert(e.message); }
   };
   const remove = async (id) => { if(!confirm('Delete this portfolio company?')) return; await API.del('/portfolio-companies/' + id); load(); };
+  // OPENING A COMPANY FROM HERE (David, 2026-11-20) — the per-row way in the screen never had.
+  // It impersonates the company's OWN account (`own_account_id`, resolved by the server from the
+  // accounts row behind it). NOT `account_id` blindly: a company added by hand through this screen
+  // carries the OPERATOR's shared account there, so posting that starts a session as yourself —
+  // the dead button t_3f5aab99 removed. The server publishes `null` for exactly those rows, and
+  // this screen then says "No account" instead of offering a control that cannot work.
+  const openCompany = async (c) => {
+    if (!c.own_account_id) return;
+    await startImpersonation({ id: c.own_account_id, name: c.account_name || c.name, email: c.account_email || c.email || '' });
+  };
   // kanban t_3f5aab99 — the per-row "🔑 Impersonate" button that used to live here is GONE, and this
   // is why: it posted `company.account_id || company.id`, and `GET /portfolio-companies` selects
   // `WHERE account_id = <caller>`, so every row it could ever show belongs to the OPERATOR. The button
@@ -525,14 +535,18 @@ const Portfolio = () => {
 
   return html`<div>
     <div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><div class="flex gap-2 items-center"><input class="input" style="width:240px" placeholder="Search..." value=${st.search || ''} onInput=${e => { st.search = e.target.value; renderApp(); }} /><button id="pf-impersonate" class="btn btn-sm btn-blue" title="Start a support session as another account" onClick=${() => { st.picker = !st.picker; renderApp(); }}>🔑 Impersonate an account</button><button class="btn btn-sm btn-green" onClick=${() => { show(null); }}>+ Add Company</button></div></div>
+    <p class="text-sm text-gray-500 mb-3">Your own businesses. They are not customers and do not appear in the Tenants list. <strong>Open</strong> enters that company's own account.</p>
     ${st.picker && html`<${ImpersonateAccounts} />`}
     <div class="card p-0 overflow-hidden">
-      <table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Actions</th></tr></thead>
-        <tbody>${filtered.map(c => html`<tr>
+      <table class="table"><thead><tr><th>Company</th><th>Slug</th><th>Its own account</th><th>Actions</th></tr></thead>
+        <tbody>${filtered.map(c => html`<tr data-portfolio-row=${c.id}>
           <td class="font-medium">${c.name}</td><td class="text-gray-500">${c.slug || c.domain || '-'}</td>
-          <td><button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
+          <td class="text-gray-500">${c.own_account_id ? html`${c.account_name || c.account_email || 'account'} <span class="text-xs text-gray-400">${c.account_email || ''}</span>` : html`<span class="badge" style="background:#f3f4f6;color:#6b7280">No account</span>`}</td>
+          <td>${c.own_account_id
+            ? html`<button class="btn btn-sm btn-blue" data-portfolio-open=${c.id} onClick=${() => openCompany(c)}>Open</button>`
+            : html`<button class="btn btn-sm btn-outline" disabled=${true} data-portfolio-no-account=${c.id} title="This company has no account of its own yet, so there is nothing to open.">No account</button>`}<button class="btn btn-sm btn-outline" onClick=${() => { show(c); }}>Edit</button><button class="btn btn-sm btn-red" onClick=${() => remove(c.id)}>Delete</button></td>
         </tr>`)}
-        ${filtered.length === 0 && html`<tr><td colspan="3" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No portfolio companies yet.'}</td></tr>`}
+        ${filtered.length === 0 && html`<tr><td colspan="4" class="text-center ${S.loadError ? 'text-red-500' : 'text-gray-400'} py-8">${S.loadError ? 'Not loaded - the request failed, so this is not a count of your records. The reason is at the top of the screen.' : 'No portfolio companies yet.'}</td></tr>`}
       </tbody></table>
     </div>
     ${st.showModal && html`<div class="modal" onClick=${e => e.target === e.currentTarget && (hide())}>
@@ -681,9 +695,9 @@ const Plans = () => {
     ${st.req.length > 0 && html`<div class="card p-0 overflow-hidden mt-4">
       <div class="px-3 pt-3 pb-2">
         <h3 class="font-bold text-base">Upgrade requests</h3>
-        <p class="text-xs text-gray-500 mt-1">Workspaces that pressed Upgrade while this installation had no payment provider connected. Nothing was charged. Press "Give them …" to seat the workspace on the plan it asked for — the same writer the Tiers screen and the customer's own plan request use, so the affiliate is credited and the request closes itself. Connect a provider under Payment providers and the next attempt charges normally.</p>
+        <p class="text-xs text-gray-500 mt-1">Accounts that pressed Upgrade while this installation had no payment provider connected. Nothing was charged. Press "Give them …" to seat the account on the plan it asked for — the same writer the Tiers screen and the customer's own plan request use, so the affiliate is credited and the request closes itself. Connect a provider under Payment providers and the next attempt charges normally.</p>
       </div>
-      <table class="table"><thead><tr><th>When</th><th>Workspace</th><th>Plan they asked for</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead>
+      <table class="table"><thead><tr><th>When</th><th>Account</th><th>Plan they asked for</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>${st.req.map(q => {
           const when = q.created_at ? new Date(q.created_at).toLocaleString() : '-';
           const label = q.status === 'provider_missing' ? 'No payment provider yet'
@@ -5312,7 +5326,7 @@ const SupportTickets = () => {
           <span class="badge badge-blue">${prio(st.detail.ticket.priority)}</span>
           ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
         </div>
-        ${(st.detail.ticket.account_name || st.detail.ticket.account_email) ? html`<div class="mb-4 text-sm" data-requester="1"><span class="text-gray-500">From:</span> <strong>${st.detail.ticket.account_name || 'Unnamed workspace'}</strong>${st.detail.ticket.account_email ? html` <span class="text-gray-500">(${st.detail.ticket.account_email})</span>` : null}</div>` : null}
+        ${(st.detail.ticket.account_name || st.detail.ticket.account_email) ? html`<div class="mb-4 text-sm" data-requester="1"><span class="text-gray-500">From:</span> <strong>${st.detail.ticket.account_name || 'Unnamed account'}</strong>${st.detail.ticket.account_email ? html` <span class="text-gray-500">(${st.detail.ticket.account_email})</span>` : null}</div>` : null}
         ${(st.detail.ticket.plan_name || st.detail.ticket.plan_slug) ? html`<div class="mb-4 text-sm" data-plan-detail="1"><span class="text-gray-500">Asks for:</span> <strong>${st.detail.ticket.plan_name || st.detail.ticket.plan_slug}</strong>${st.detail.ticket.plan_applied_at ? html` <span class="badge badge-green">switched to this plan</span>` : html` <span class="badge">not switched yet — Resolve does it</span>`}</div>` : null}
         ${st.planMsg ? html`<div class="rounded-lg p-3 text-sm mb-4 ${st.planMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-plan-msg=${st.planMsg.ok ? 'applied' : 'not-applied'}>${st.planMsg.text}</div>` : null}
         ${st.detail.ticket.source === 'loyalty_plan_request' ? html`<div class="rounded-lg p-3 mb-4" style="background:#f8fafc;border:1px solid #e2e8f0" data-loyalty-activate="1">
@@ -6019,6 +6033,11 @@ const BulkTenantDelete = () => {
   // count what the ADDRESS heuristic found on a row the list was willing to show. Measured live
   // 2026-10-25: the same gap on FunnelSwift hid a harness-minted workspace completely.
   const [showProbes, setShowProbes] = useState(false);
+  // Portfolio companies are held back by the API unless asked for (David, 2026-11-20): this panel is
+  // the CUSTOMER list, and the owner's own businesses have their own screen with an Open button. The
+  // toggle asks for them back; every one then carries the "Protected" badge it always had.
+  const [showPortfolio, setShowPortfolio] = useState(false);
+  const [portfolioHidden, setPortfolioHidden] = useState(0);
   // "only never signed in" (2026-10-27): the column answered the question but could not be asked.
   // It FILTERS WHAT IS DRAWN only — the delete path still acts on the ticked ids, so a filter can
   // never widen a destructive action.
@@ -6027,13 +6046,17 @@ const BulkTenantDelete = () => {
   const load = async () => {
     setErr(null);
     try {
-      const d = await OPSAPI.get('/admin/tenants' + (showProbes ? '?include_probe=1' : ''));
+      const qs = [];
+      if (showProbes) qs.push('include_probe=1');
+      if (showPortfolio) qs.push('include_portfolio=1');
+      const d = await OPSAPI.get('/admin/tenants' + (qs.length ? '?' + qs.join('&') : ''));
       setRows((d && d.tenants) || []);
+      setPortfolioHidden((d && d.portfolio_hidden) || 0);
     } catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
     try { const p = await OPSAPI.get('/admin/plans'); setPlans((p && p.plans) || []); }
     catch (e) { setPlans([]); }
   };
-  useEffect(() => { load(); }, [showProbes]);
+  useEffect(() => { load(); }, [showProbes, showPortfolio]);
 
   const list = rows || [];
   // A NULL last_login_at is "nothing recorded", and that is exactly what an operator hunts for after
@@ -6172,11 +6195,15 @@ const BulkTenantDelete = () => {
       <span class="text-xs font-semibold text-gray-700">Mass delete (select-all)</span>
       <button class="px-2 py-0.5 rounded border text-xs" disabled=${busy} onClick=${load}>reload</button>
       <label class="inline-flex items-center gap-1 text-xs text-gray-600" data-tenants="show-probes-label"
-        title="Probe workspaces a test harness minted. Hidden by default because they are not customers; ticking this lists them so Select probes can reach them.">
+        title="Probe accounts a test harness minted. Hidden by default because they are not customers; ticking this lists them so Select probes can reach them.">
         <input type="checkbox" data-tenants="show-probes" checked=${showProbes}
-          onChange=${(e) => { setSel([]); setShowProbes(!!e.target.checked); }} /> show probe workspaces</label>
+          onChange=${(e) => { setSel([]); setShowProbes(!!e.target.checked); }} /> show probe accounts</label>
+      <label class="inline-flex items-center gap-1 text-xs text-gray-600" data-tenants="show-portfolio-label"
+        title="Your own businesses, mirrored from the portfolio. They are not customers and are held out of this list by default — they have their own Portfolio screen, with an Open button. Ticking this lists them so you can see the whole platform in one table.">
+        <input type="checkbox" data-tenants="show-portfolio" checked=${showPortfolio}
+          onChange=${(e) => { setSel([]); setShowPortfolio(!!e.target.checked); }} /> include portfolio companies${!showPortfolio && portfolioHidden > 0 ? html` (${portfolioHidden} hidden)` : ''}</label>
       <label class="inline-flex items-center gap-1 text-xs text-gray-600" data-tenants="only-never-label"
-        title="Only the workspaces where no sign-in has ever been recorded. Recording began 27 Oct 2026, so an older workspace can appear here even if its owner signed in before that date. This filters the table only; it never ticks a row for deletion.">
+        title="Only the accounts where no sign-in has ever been recorded. Recording began 27 Oct 2026, so an older account can appear here even if its owner signed in before that date. This filters the table only; it never ticks a row for deletion.">
         <input type="checkbox" data-tenants="only-never" checked=${onlyNever}
           onChange=${(e) => setOnlyNever(!!e.target.checked)} /> only never signed in (${neverCount})</label>
       <button class="px-2 py-0.5 rounded border text-xs" data-tenants="select-probes"
@@ -6233,7 +6260,7 @@ const BulkTenantDelete = () => {
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>
           </tr>`)}</tbody>
         </table></div>
-        <div class="text-xs text-gray-500 mt-1">${shown.length} of ${list.length} workspace(s) shown${onlyNever ? ' (no sign-in recorded)' : ''} — tick the rows (or the header box for all), then press Delete selected.</div>`}
+        <div class="text-xs text-gray-500 mt-1">${shown.length} of ${list.length} account(s) shown${onlyNever ? ' (no sign-in recorded)' : ''} — tick the rows (or the header box for all), then press Delete selected.</div>`}
     ${result && html`<pre class="text-xs bg-white border rounded p-2 mt-1 overflow-auto" style="max-height:180px">${JSON.stringify(result.body, null, 1)}</pre>`}
     ${confirming && html`<div class="modal">
       <div class="modal-content">
@@ -6474,7 +6501,10 @@ const ImpersonateAccounts = () => {
   const [msg, setMsg] = useState(null);
   const load = async () => {
     setErr(null);
-    try { const d = await API.get('/admin/tenants'); setRows((d && d.tenants) || []); }
+    // The picker lists ACCOUNTS, so it asks for the portfolio companies back (David, 2026-11-20):
+    // they are real accounts a support session may need to reach, and they are worth a badge here
+    // for the same reason as on the Tenants list — they are not customers.
+    try { const d = await API.get('/admin/tenants?include_portfolio=1'); setRows((d && d.tenants) || []); }
     catch (e) { setRows([]); setErr(String((e && e.message) || e)); }
   };
   useEffect(() => { load(); }, []);
@@ -6510,7 +6540,7 @@ const ImpersonateAccounts = () => {
             <th class="text-left border-b px-2 py-1 bg-gray-100">session</th>
           </tr></thead>
           <tbody>${shown.slice(0, 100).map(r => html`<tr class="imp-picker-row" data-account-id=${r.id}>
-            <td class="border-b px-2 py-1">${r.name || ''}</td>
+            <td class="border-b px-2 py-1">${r.name || ''}${r.is_portfolio ? html` <span class="px-1 rounded bg-yellow-100 text-yellow-800" style="font-size:10px" data-portfolio-badge=${r.id} title="One of your own businesses, mirrored from the portfolio. Not a customer.">portfolio</span>` : ''}</td>
             <td class="border-b px-2 py-1">${r.email || ''}${probeBadgeFor(r, r.email)}</td>
             <td class="border-b px-2 py-1">${r.plan_effective_name || r.plan_name || ''}</td>
             <td class="border-b px-2 py-1" style="font-family:monospace">${r.id}</td>

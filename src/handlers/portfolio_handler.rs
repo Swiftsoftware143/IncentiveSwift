@@ -99,15 +99,84 @@ pub async fn list_portfolio_companies(
     user: AuthenticatedUser,
 ) -> Result<Json<Value>, AppError> {
     let account_id = account_uuid(&user)?;
-    let companies = sqlx::query_as::<_, PortfolioCompany>(
-        r#"SELECT id, account_id, name, slug, settings, email, description, subdomain, domain, domain_verified, created_at, updated_at
-           FROM portfolio_companies
-           WHERE account_id = $1
-           ORDER BY name"#
+    // A PORTFOLIO COMPANY IS NOT ONE ACCOUNT'S PRIVATE ROW (David, 2026-11-20).
+    //
+    // The scoping above is right for a tenant: it may only ever see companies it owns. It made the
+    // operator's own Portfolio screen EMPTY, because the operator account owns none of the five
+    // companies the fleet mirrors in (measured live: portfolio_companies = 5, operator
+    // 54c06ed4… owns 0), so the screen David opens to reach HIS OWN businesses said "No portfolio
+    // companies yet." while five existed. A platform operator (`admin`/`super_admin`, the same
+    // predicate `security::auth::admin_surface_denied_for` uses) reads the registry unscoped; every
+    // other caller keeps the unconditional `WHERE account_id = $1` t_b7f3c191 shipped.
+    let is_platform_operator = crate::security::auth::is_platform_admin(&user.role);
+    let rows = sqlx::query(
+        r#"SELECT pc.id, pc.account_id, pc.name, pc.slug, pc.settings, pc.email, pc.description,
+                  pc.subdomain, pc.domain, pc.domain_verified, pc.created_at, pc.updated_at,
+                  a.name  AS account_name,
+                  a.email AS account_email
+           FROM portfolio_companies pc
+           LEFT JOIN accounts a ON a.id = pc.account_id
+           WHERE $2::bool OR pc.account_id = $1
+           ORDER BY pc.name"#,
     )
     .bind(account_id)
+    .bind(is_platform_operator)
     .fetch_all(&state.db)
     .await?;
+
+    // THE TRAP (David, 2026-11-20): a portfolio row can carry TWO account references, and opening
+    // the wrong one looks like a button that does nothing. Here `account_id` is the COMPANY's own
+    // account when the hub mirrored the company in — but a company added by hand through this screen
+    // (`create_portfolio_company` binds the CALLER's account) carries the OWNER's shared account.
+    // Impersonating that one starts a session as the operator themselves (role stays `admin`), which
+    // is exactly the dead button the old per-row control was. So a row is openable ONLY when its
+    // account exists AND is not the caller's own; everything else is published as "no account" so
+    // the console can say so instead of offering a control that cannot work.
+    let companies: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let id: Uuid = row.get("id");
+            let company_account: Uuid = row.get("account_id");
+            let name: String = row.get("name");
+            let slug: String = row.get("slug");
+            let settings: Value = row.get("settings");
+            let email: Option<String> = row.get("email");
+            let description: Option<String> = row.get("description");
+            let subdomain: Option<String> = row.get("subdomain");
+            let domain: Option<String> = row.get("domain");
+            let domain_verified: bool = row.get("domain_verified");
+            let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+            let updated_at: chrono::DateTime<chrono::Utc> = row.get("updated_at");
+            let account_name: Option<String> = row.get("account_name");
+            let account_email: Option<String> = row.get("account_email");
+            let is_owner_account = company_account == account_id;
+            let own_account_id = if is_owner_account || account_name.is_none() {
+                None
+            } else {
+                Some(company_account.to_string())
+            };
+            json!({
+                "id": id,
+                "account_id": company_account,
+                "name": name,
+                "slug": slug,
+                "settings": settings,
+                "email": email,
+                "description": description,
+                "subdomain": subdomain,
+                "domain": domain,
+                "domain_verified": domain_verified,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                // THE COMPANY'S OWN ACCOUNT — the only id a row's Open button may post. `null`
+                // means there is nothing to open yet (see above), never "open the owner's".
+                "own_account_id": own_account_id,
+                "account_name": account_name,
+                "account_email": account_email,
+                "is_owner_account": is_owner_account,
+            })
+        })
+        .collect();
 
     Ok(Json(json!({ "companies": companies })))
 }
