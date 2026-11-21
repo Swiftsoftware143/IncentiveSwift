@@ -1,6 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
+
+<style id="ws-theme">:root{--ink:#111827;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--accent-soft:#eef2ff;--danger:#b91c1c;--warn:#92400e;--ok:#166534;--surface-0:#f8fafc;--surface-1:#ffffff;--surface-2:#ffffff;--surface-3:#ffffff;--surface-ref:#eef0f6;--shadow-1:0 1px 3px rgba(0,0,0,.08);--shadow-2:0 12px 40px rgba(17,24,39,.22);--z-sticky:10;--z-dropdown:20;--z-modal:30;--z-toast:40}
+html[data-theme="dark"]{--ink:#e8eaed;--muted:#9aa0a6;--line:#2d3148;--accent:#818cf8;--accent-soft:#26264a;--danger:#f87171;--warn:#fbbf24;--ok:#34d399;--surface-0:#0f1117;--surface-1:#151925;--surface-2:#1a1d27;--surface-3:#222532;--surface-ref:#1a1d27;--shadow-1:0 0 0 1px rgba(255,255,255,.05);--shadow-2:0 0 0 1px rgba(255,255,255,.08),0 20px 60px rgba(0,0,0,.6);color-scheme:dark}
+.ws-theme-toggle{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 12px;box-shadow:var(--shadow-1);cursor:pointer;font:13px/1 system-ui,-apple-system,sans-serif}.ws-theme-toggle:hover{background:var(--surface-3);box-shadow:var(--shadow-2)}
+html[data-theme="light"]{color-scheme:light}html[data-theme="light"] body{background:#f6f7fb;color:#1f2937}html[data-theme="light"] a{color:#6d28d9}html[data-theme="light"] header.top{background:linear-gradient(180deg,#f6f7fb 0%,#eef1f9 100%);border-bottom-color:#dde1ea}html[data-theme="light"] .brand span{color:#111827}html[data-theme="light"] nav a{color:#374151}html[data-theme="light"] nav a:hover{color:#111827}html[data-theme="light"] nav a.cta{color:#fff}html[data-theme="light"] h1{color:#111827}html[data-theme="light"] .sub{color:#4b5563}html[data-theme="light"] .card{background:#ffffff;border-color:#dde1ea}html[data-theme="light"] .card:hover{box-shadow:0 12px 40px rgba(17,24,39,.12)}html[data-theme="light"] .card h3{color:#111827}html[data-theme="light"] .price .amt{color:#111827}html[data-theme="light"] .price .per,html[data-theme="light"] .yr{color:#6b7280}html[data-theme="light"] .card ul{color:#374151}html[data-theme="light"] .card li.head{color:#6b7280}html[data-theme="light"] .cta{background:#eef0f6;color:#111827;border-color:#dde1ea}html[data-theme="light"] .card.popular .cta{color:#08111a}html[data-theme="light"] .note{color:#4b5563}html[data-theme="light"] footer{border-top-color:#dde1ea}</style>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>IncentiveSwift — Pricing</title>
@@ -232,5 +238,11 @@ footer .links a:hover{color:#d1d5db}
   }).catch(function () { /* keep the hand-written cards */ });
 })();
 </script>
+
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+wsEnsureToggle();
+document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>
 </body>
 </html>
