@@ -2405,7 +2405,7 @@ const LoyaltyPrograms = () => {
     }
   };
 
-  const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','MCP','Settings'];
+  const tabs = ['Plans','Programs','Members','Tiers','Rewards','Pledges','Referrals','Credits','Dashboard','Ledger','Settings'];
   const setTab = (t) => { st.tab = t.toLowerCase();
     if (t==='Programs') loadRedeemSettings();
     if (t==='Plans') loadLoyaltyPlans();
@@ -2876,115 +2876,6 @@ function loadSiteConfig() {
   }).catch(() => el.innerHTML='<p class="text-red-500">Not available.</p>');
 }
 
-
-// MCP — the fleet slot directly above Settings (docs/fleet-mcp-nav-convention.md). Point any MCP
-// client at https://hooks.swiftsoftware.net/mcp with THIS workspace's API key as the Bearer token.
-// The token block reads the SAME GET /api/v1/api-keys the API Keys screen reads; Reveal/Copy/
-// Regenerate call the app's existing reveal/regenerate routes (password-gated reveal, atomic
-// regenerate). Prefix only until a Reveal, exactly like the API Keys screen. The tool list is the
-// REAL set the fleet mcp server exposes for an incentiveswift key: each /opt/swift/mcp/src/main.rs
-// AppSpec key yields <key>_summary and <key>_search (the third, <key>_list_tenants, is admin-only
-// and never offered here). There is deliberately NO audit block — the MCP audit log is a file owned
-// by the mcp service and has no read API.
-const MCP_ENDPOINT = 'https://hooks.swiftsoftware.net/mcp';
-const MCP_TOOL_SPECS = [
-  ['incentiveswift', 'entries (leads): contact name, email, phone, outcome'],
-  ['incentiveswift_contacts', 'contacts: name, email, phone, business name'],
-  ['incentiveswift_campaigns', 'campaigns: name, slug, type, status'],
-  ['incentiveswift_referrals', 'referrals: code, source, campaign, converted or pending'],
-  ['incentiveswift_tags', 'tags: name and colour'],
-  ['incentiveswift_tickets', 'support tickets: subject, category, status'],
-  ['incentiveswift_inbound_messages', 'inbound messages: from number, direction, campaign'],
-  ['incentiveswift_loyalty_programs', 'loyalty programmes: name, description, active state'],
-  ['incentiveswift_loyalty_tiers', 'loyalty tiers: name, perks, minimum points'],
-  ['incentiveswift_credit_transactions', 'credit transactions: action, description, amount'],
-  ['incentiveswift_pending_emails', 'pending emails: template type, recipient, status'],
-];
-const MCP_CONFIG_TEXT = JSON.stringify({
-  mcpServers: { incentiveswift: { url: 'https://hooks.swiftsoftware.net/mcp', headers: { Authorization: 'Bearer YOUR_API_KEY' } } },
-}, null, 2);
-const Mcp = () => {
-  const mst = viewState('mcp', { keys: [], revealed: null, revealedId: null, loaded: false });
-  const mcpCopy = (t) => {
-    const legacy = () => { try { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok; } catch (e) { return false; } };
-    const done = (ok) => { if (!ok) alert('Could not copy automatically — select the text and press Ctrl+C'); };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => done(true), () => done(legacy()));
-    else done(legacy());
-  };
-  const loadKeys = async () => {
-    try { const r = await API.get('/api-keys'); mst.keys = Array.isArray(r) ? r : ((r && r.api_keys) || []); }
-    catch (e) { mst.keys = []; }
-    mst.loaded = true; renderApp();
-  };
-  if (!mst._loaded) { mst._loaded = true; loadKeys(); }
-  const reveal = async (id, copyOnly) => {
-    const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
-    if (pw === null || pw === '') return;
-    try {
-      const r = await API.post('/api-keys/' + id + '/reveal', { password: pw });
-      if (copyOnly) { mcpCopy(r.api_key); return; }
-      mst.revealedId = id; mst.revealed = r.api_key; renderApp();
-    } catch (e) { alert('Could not show the key: ' + e.message); }
-  };
-  const regen = async (id) => {
-    if (!confirm('Regenerate this key? The old key stops working immediately, so anything already wired up with it — including any connected MCP client — stops until you paste the new one in.')) return;
-    try {
-      const r = await API.post('/api-keys/' + id + '/regenerate', {});
-      mst.revealedId = r.id; mst.revealed = r.api_key; await loadKeys();
-    } catch (e) { alert('Could not regenerate the key: ' + e.message); }
-  };
-  const k = mst.keys.find(x => x.is_active !== false) || null;
-  return html`<div class="max-w-3xl">
-    <h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>
-    <p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace's IncentiveSwift data. Read-only.</p>
-
-    <div class="card">
-      <h3 class="font-semibold text-gray-700 mb-1">Endpoint</h3>
-      <div class="flex items-center gap-2 flex-wrap">
-        <code style="background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:13px">${MCP_ENDPOINT}</code>
-        <button class="btn btn-sm btn-outline" onClick=${() => mcpCopy(MCP_ENDPOINT)}>Copy</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 class="font-semibold text-gray-700 mb-1">Your token</h3>
-      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed here by prefix only — the secret is never shown until you Reveal it, which asks for your account password. Treat it like a password: anyone holding it can read this workspace.</p>
-      ${!mst.loaded ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
-        : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the API Keys screen, then come back to connect an MCP client.</p>`
-        : html`<div>
-          <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
-            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:#6366f1">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">Created ${k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}</span></span>
-            <span style="white-space:nowrap">
-              <button class="btn btn-sm btn-outline" onClick=${() => reveal(k.id, false)}>Reveal</button>
-              <button class="btn btn-sm btn-outline" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
-              <button class="btn btn-sm btn-outline" style="margin-left:6px;color:#b45309" onClick=${() => regen(k.id)}>Regenerate</button>
-            </span>
-          </div>
-          ${(mst.revealed && mst.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
-            <input style="flex:1;min-width:220px;font-size:12px;border:1px solid #d1d5db;border-radius:6px;padding:6px 10px" class="font-mono" readonly value=${mst.revealed} onFocus=${e => e.target.select()} />
-            <button class="btn btn-sm" onClick=${() => mcpCopy(mst.revealed)}>Copy</button>
-          </div>` : null}
-        </div>`)}
-    </div>
-
-    <div class="card">
-      <h3 class="font-semibold text-gray-700 mb-1">What it can read</h3>
-      <p class="text-xs text-gray-500 mb-3">These are the read-only tools this app exposes to a workspace credential — the real tool names, each scoped to this workspace.</p>
-      <ul style="font-size:13px;color:#334155;line-height:1.9;padding-left:18px;margin:0">
-        ${MCP_TOOL_SPECS.map(([name, desc]) => html`<li><code>${name}_summary</code> / <code>${name}_search</code> — ${desc}</li>`)}
-      </ul>
-      <p class="text-xs text-gray-400" style="margin:10px 0 0">Every tool is a SELECT. There is no write tool and no free-form SQL door, and operator-wide tools are refused for a workspace credential.</p>
-    </div>
-
-    <div class="card">
-      <h3 class="font-semibold text-gray-700 mb-1">Connect</h3>
-      <p class="text-xs text-gray-500 mb-3">Paste this into your MCP client config (Claude Desktop / Cursor). Replace YOUR_API_KEY with this workspace's key.</p>
-      <pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">${MCP_CONFIG_TEXT}</pre>
-      <button class="btn btn-sm btn-outline" style="margin-top:8px" onClick=${() => mcpCopy(MCP_CONFIG_TEXT)}>Copy config</button>
-    </div>
-  </div>`;
-};
-
 const settingsTab = html`<div>
     <h2 class="text-xl font-bold mb-4">Clearinghouse Settings</h2>
 
@@ -3384,7 +3275,7 @@ const ledgerTab = html`<div>
       </div>`
     : html`<div class="text-xs text-gray-500 mb-3" data-ops="loyalty-plan-gate" data-plan-gate="included">Loyalty is included in your ${tierLabel(st.planGate.plan_tier)} plan.</div>`);
 
-  const tabContent = st.tab==='mcp' ? Mcp() : st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
+  const tabContent = st.tab==='plans' ? plansTab : st.tab==='programs' ? programsTab : st.tab==='members' ? membersTab : st.tab==='tiers' ? tiersTab : st.tab==='rewards' ? rewardsTab : st.tab==='pledges' ? pledgesTab : st.tab==='referrals' ? referralsTab : st.tab==='credits' ? creditsTab : st.tab==='dashboard' ? dashboardTab : st.tab==='ledger' ? ledgerTab : st.tab==='site-config' ? siteConfigTab : st.tab==='settings' ? settingsTab : programsTab;
 
   return html`<div>
     ${planGateBanner}
@@ -3416,6 +3307,361 @@ const ppPostureCell = (set, sealed) => !set
   ? html`<span class="text-gray-400">—</span>`
   : (sealed ? html`<span class="badge badge-green" data-pp="sealed">encrypted</span>`
             : html`<span class="badge badge-red" data-pp="plain">in the clear</span>`);
+// ── MCP — rebuilt 2026-11-21 to docs/fleet-mcp-screen-design-spec.md ─────────────────────────
+// Shape taken from the Global Control page David supplied (app.globalcontrol.io/mcp): breadcrumb,
+// big promise, client tabs, an uppercase "CONNECT" label, numbered steps with a copyable ADDRESS
+// row, a "ready to connect" strip naming the account, prompts in two columns with Copy buttons, a
+// "don't know what to ask" input, a capability list generated from the MCP service source, "what
+// it will not do", and a collapsed developer drawer.
+//
+// TWO HONEST DIFFERENCES, because the reference does things this app cannot:
+//  1. It connects "with one click" over OAuth. This service authenticates with the account's OWN
+//     API key (a Bearer token), so the steps say that instead of printing "choose OAuth".
+//  2. The fleet MCP server's database role is SELECT-only, so every example is a question and the
+//     limitations state plainly that nothing is written.
+const MCP_ENDPOINT = 'https://hooks.swiftsoftware.net/mcp';
+const MCP_ENTITY_SPECS = [
+  // GENERATED from /opt/swift/mcp/src/main.rs (AppSpec entries for app "incentiveswift").
+  ['incentiveswift', 'leads'],
+  ['incentiveswift_contacts', 'contacts'],
+  ['incentiveswift_campaigns', 'campaigns'],
+  ['incentiveswift_referrals', 'referrals'],
+  ['incentiveswift_tags', 'tags'],
+  ['incentiveswift_tickets', 'support tickets'],
+  ['incentiveswift_inbound_messages', 'inbound messages'],
+  ['incentiveswift_loyalty_programs', 'loyalty programmes'],
+  ['incentiveswift_loyalty_tiers', 'loyalty tiers'],
+  ['incentiveswift_credit_transactions', 'credit transactions'],
+  ['incentiveswift_pending_emails', 'pending emails'],
+];
+// One-line description per entity, keyed by the SAME tool prefix the MCP service uses. A key the
+// service gains later still renders (it falls back to its label), so the list never silently
+// under-reports.
+const MCP_ENTITY_DESCRIPTIONS = {
+  incentiveswift: 'Entry leads — contact name, email, phone and how many entries they hold.',
+  incentiveswift_contacts: 'Your contacts — name, email, phone, business name and entry count.',
+  incentiveswift_campaigns: 'Your campaigns — name, slug and status.',
+  incentiveswift_referrals: 'Referral codes — the code, where it came from and the campaign it belongs to.',
+  incentiveswift_tags: 'Tags — name and colour.',
+  incentiveswift_tickets: 'Support tickets — subject, category and status.',
+  incentiveswift_inbound_messages: 'Inbound messages — sending number, campaign and whether they came in or went out.',
+  incentiveswift_loyalty_programs: 'Loyalty programmes — name, description and whether each is active.',
+  incentiveswift_loyalty_tiers: 'Loyalty tiers — name, perks and the minimum points that unlock each one.',
+  incentiveswift_credit_transactions: 'Credit transactions — the action, a description and the amount.',
+  incentiveswift_pending_emails: 'Outgoing email still waiting — template type, recipient and status.',
+};
+const MCP_CONFIG_TEXT = JSON.stringify({
+  mcpServers: { incentiveswift: { url: MCP_ENDPOINT, headers: { Authorization: 'Bearer YOUR_API_KEY' } } },
+}, null, 2);
+const mcpCopy = (t) => {
+  const fallback = () => { try { const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); document.body.removeChild(ta); return ok; } catch (e) { return false; } };
+  const done = (ok) => { if (!ok) alert('Could not copy automatically — select the text and press Ctrl+C'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(() => done(true), () => done(fallback()));
+  } else { done(fallback()); }
+};
+const mcpHumanize = (label) => String(label == null ? '' : label).replace(/_/g, ' ');
+// Example questions. Every prompt is answerable by a READ tool the service actually exposes for an
+// IncentiveSwift workspace key, so a user who tries one gets real rows back.
+const MCP_EXAMPLE_GROUPS = [
+  { title: 'FIND & MANAGE', prompts: [
+    'Show me my contacts.',
+    'Find the contact with the email jane@example.com.',
+    'Which contacts have the most entries?',
+    'Show me my campaigns and which ones are active.',
+    'Which referral codes have converted?',
+    'List my loyalty programmes.',
+  ], more: [
+    'Which contacts joined in the last 30 days?',
+    'Which tags am I using?',
+  ] },
+  { title: 'LOOK AT YOUR LOYALTY PROGRAMME', prompts: [
+    'Show me my loyalty tiers and their minimum points.',
+    'What perks does each tier include?',
+    'Which programme is active right now?',
+    'Show me recent credit transactions.',
+    'Which members earned credits this week?',
+  ], more: [
+    'Which tier has the highest minimum points?',
+    'Show me the most recent credit transactions for one member.',
+  ] },
+  { title: 'READ YOUR MESSAGES & SUPPORT', prompts: [
+    'Which support tickets are open?',
+    'What did the last few customers write to us about?',
+    'Which inbound messages came in this week?',
+    'Which emails are still waiting to be sent?',
+    'Which pending emails failed to send?',
+  ], more: [
+    'Which tickets are about billing?',
+  ] },
+  { title: 'LET AI HELP', prompts: [
+    'Summarise how my loyalty programme is doing.',
+    'Which campaign brought the most entries?',
+    'Which contacts are most engaged?',
+    'Give me every contact and the business they work for.',
+    'Which leads came in from my last campaign?',
+  ], more: [
+    'Compare this month\'s entries with last month\'s.',
+  ] },
+];
+
+const Mcp = () => {
+  const st = viewState('mcp', { keys: [], revealed: null, revealedId: null, loaded: false, clientTab: 'chatgpt', more: {}, devOpen: false, devTab: 0, goal: '', ideas: null, checkMsg: null, checkBusy: false });
+  const activeKey = () => { for (const k of st.keys) if (k.is_active !== false) return k; return null; };
+  // GET /api/v1/api-keys is account-scoped: every signed-in user reads their OWN account's key here.
+  const loadKeys = async () => {
+    try { const r = await API.get('/api-keys'); st.keys = Array.isArray(r) ? r : ((r && r.api_keys) || []); }
+    catch (e) { st.keys = []; }
+    st.loaded = true; renderApp();
+  };
+  if (!st._loaded) { st._loaded = true; loadKeys(); }
+
+  const reveal = async (id, copyOnly) => {
+    const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
+    if (pw === null || pw === '') return;
+    try {
+      const r = await API.post('/api-keys/' + id + '/reveal', { password: pw });
+      if (copyOnly) { mcpCopy(r.api_key); return; }
+      st.revealedId = id; st.revealed = r.api_key; renderApp();
+    } catch (e) { alert('Could not show the key: ' + e.message); }
+  };
+  const regen = async (id) => {
+    if (!confirm('Regenerate this key? The current key stops working immediately, so anything already wired up with it — including any connected MCP client — stops until you paste the new one in.')) return;
+    try {
+      const r = await API.post('/api-keys/' + id + '/regenerate', {});
+      st.revealedId = r.id; st.revealed = r.api_key; await loadKeys();
+    } catch (e) { alert('Could not regenerate the key: ' + e.message); }
+  };
+
+  const k = activeKey();
+  const email = (S.me && S.me.email) || 'this account';
+
+  // ── render helpers ──
+  const label = (t) => html`<div style="font-size:11px;letter-spacing:.09em;color:#64748b;font-weight:700;margin-bottom:10px">${t}</div>`;
+  const card = (title, body) => html`<div class="card" style="margin-bottom:16px">${title ? html`<h3 class="font-semibold text-gray-700 mb-1">${title}</h3>` : null}${body}</div>`;
+  const promptRow = (q) => html`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:9px 11px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:7px;background:#fff">
+    <span style="font-size:13px;color:#334155">${q}</span>
+    <button class="btn btn-sm btn-outline" onClick=${() => mcpCopy(q)}>Copy</button>
+  </div>`;
+  const twoColumns = (items) => html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <div>${items.filter((_, i) => i % 2 === 0).map(promptRow)}</div>
+    <div>${items.filter((_, i) => i % 2 === 1).map(promptRow)}</div>
+  </div>`;
+  const step = (n, heading, body) => html`<div style="display:flex;gap:12px;margin-bottom:14px">
+    <div style="flex:0 0 26px;height:26px;border-radius:50%;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700">${n}</div>
+    <div style="flex:1"><div style="font-weight:600;margin-bottom:2px">${heading}</div><div style="color:#64748b;font-size:13px">${body}</div></div></div>`;
+  const addressRow = html`<div style="margin-top:6px">
+    <div style="font-size:11px;color:#64748b;letter-spacing:.08em;font-weight:700;margin-bottom:4px">ADDRESS</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <code style="padding:6px 10px;background:#f1f5f9;border-radius:8px;font-size:13px;flex:1;min-width:240px">${MCP_ENDPOINT}</code>
+      <button class="btn btn-sm btn-outline" onClick=${() => mcpCopy(MCP_ENDPOINT)}>Copy</button>
+    </div>
+    <div style="font-size:12px;color:#64748b;margin-top:6px">The whole address, nothing on the end. If your client is refused by our edge before it authenticates (a 403, not a 401), use <code>https://mcp.swiftsoftware.net/mcp</code> — same server, unfiltered name.</div>
+  </div>`;
+
+  // ChatGPT and Claude differ only in where the "add a connector" door lives; the address and the
+  // key are identical. There is NO OAuth step.
+  const stepsFor = (client) => client === 'claude'
+    ? html`
+      ${step(1, 'Open Claude on the web, on a computer', 'Settings → Connectors → Add custom connector. The Claude phone app cannot add one.')}
+      ${step(2, html`Name it <b>IncentiveSwift</b> and paste the address below`, addressRow)}
+      ${step(3, 'Choose to authenticate with a token, and paste your API key', 'The key is on the card below. Claude sends it as a bearer token on every request.')}
+      ${step(4, 'Save it, then ask a question', 'Try “Show me my contacts.” If no tools appear, the key is the thing to replace.')}`
+    : html`
+      ${step(1, 'Open chatgpt.com on a computer, not your phone', 'This cannot be set up in the ChatGPT phone app.')}
+      ${step(2, 'Switch on developer mode in ChatGPT settings', 'On a Plus or Pro account it is under Security and login. On a Business, Enterprise or Education account it is under Apps → Advanced settings, and an administrator may have to allow it first.')}
+      ${step(3, html`Open Apps and press the <b>+</b> to add one. Call it <b>IncentiveSwift</b>`, 'Some accounts call these Plugins or Connectors instead.')}
+      ${step(4, 'Paste this address into the address box', addressRow)}
+      ${step(5, 'Where it asks how to sign in, choose API key (Bearer token)', 'There is no OAuth approval here. Paste the key from the card below into the token field.')}
+      ${step(6, 'Press Create, then ask it a question', 'Try “Which referral codes have converted?” If no tools appear, the key was rejected — regenerate it and paste the new one.')}`;
+
+  // The check asks the server whether it is there, WITHOUT the key. A 401 means "reachable, and it
+  // wants a key" — exactly the state a customer is in before they paste one.
+  const checkServer = async () => {
+    st.checkBusy = true; st.checkMsg = 'Checking…'; renderApp();
+    try {
+      const r = await fetch('https://mcp.swiftsoftware.net/mcp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      });
+      st.checkMsg = (r.status === 401)
+        ? 'The server answered and asked for a key — that is the right state. Paste your key into the client.'
+        : 'The server answered with status ' + r.status + '. If your client reports nothing, regenerate the key.';
+    } catch (e) {
+      st.checkMsg = 'This browser could not reach the server (it may be blocked on your network). The service itself is up — check from the client.';
+    }
+    st.checkBusy = false; renderApp();
+  };
+
+  // Ideas come from OUR data model, never a capability we do not have: every suggestion is a
+  // question, because this connection is read-only.
+  const giveIdeas = () => {
+    const goal = String(st.goal || '').toLowerCase();
+    let ideas;
+    if (/loyal|tier|reward|point|credit/.test(goal)) ideas = ['Show me my loyalty tiers and their minimum points.', 'Which members earned credits this week?', 'Summarise how my loyalty programme is doing.'];
+    else if (/campaign|promo|draw|giveaway/.test(goal)) ideas = ['Show me my campaigns and which ones are active.', 'Which campaign brought the most entries?'];
+    else if (/referr|affiliate/.test(goal)) ideas = ['Which referral codes have converted?', 'Which campaign brought the most referrals?'];
+    else if (/contact|member|lead|customer/.test(goal)) ideas = ['Show me my contacts.', 'Which contacts have the most entries?', 'Find the contact with the email jane@example.com.'];
+    else if (/email|message|mail/.test(goal)) ideas = ['Which emails are still waiting to be sent?', 'Which inbound messages came in this week?'];
+    else if (/ticket|support|help/.test(goal)) ideas = ['Which support tickets are open?', 'What did the last few customers write to us about?'];
+    else ideas = ['Show me my contacts.', 'Which campaigns are active?', 'Which support tickets are open?'];
+    st.ideas = ideas; renderApp();
+  };
+
+  const devTabs = ['How it connects', 'Your API token', 'Claude Code', 'Claude Desktop', 'Codex', 'Cursor', 'Troubleshooting', 'FAQ'];
+  const codeBlock = (t) => html`<pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:8px 0">${t}</pre>`;
+  const devPanel = (i) => {
+    const p = (t) => html`<p style="font-size:13px;color:#475569;line-height:1.7;margin:0 0 8px">${t}</p>`;
+    switch (i) {
+      case 0: return html`
+        ${p(html`Your AI app (Claude, ChatGPT, Cursor, an agent) connects to <code>${MCP_ENDPOINT}</code> and authenticates with this account's API key. Every request is scoped to <b>your</b> account — another account's rows are refused at the database, not by instruction.`)}
+        ${p('The connection is read-only: the service can read your contacts, campaigns, referrals, tags, loyalty programmes, loyalty tiers, credit transactions, support tickets, inbound messages, pending emails and leads. It cannot change anything.')}`;
+      case 1: return html`
+        ${p('The key is this account\u2019s API key, shown by prefix on the card above. Reveal asks for your account password; Regenerate replaces the key and stops every client using the old one. Treat it like a password — anyone holding it can read this account.')}
+        ${p('If your client lists no tools at all, the key is almost always the cause: regenerate it and paste the new one.')}`;
+      case 2: return html`
+        ${p('Add the server to Claude Code, then replace the key:')}
+        ${codeBlock('claude mcp add incentiveswift --url ' + MCP_ENDPOINT + ' --header "Authorization: Bearer YOUR_API_KEY"')}`;
+      case 3: case 4: case 5: return html`
+        ${p('Paste this into the client\u2019s MCP config (' + devTabs[i] + '), replacing YOUR_API_KEY with this account\u2019s key:')}
+        ${codeBlock(MCP_CONFIG_TEXT)}`;
+      case 6: return html`
+        ${p('No tools listed → the key was rejected; regenerate it and paste the new one.')}
+        ${p('A 403 before any sign-in → the edge filtered the request; use the unfiltered address https://mcp.swiftsoftware.net/mcp.')}
+        ${p('A 401 → the client is not sending the key as a Bearer token; check the Authorization header.')}`;
+      default: return html`
+        ${p(html`<b>Is it read-only?</b> Yes — the service holds SELECT-only database access, so nothing you type can write, change or delete.`)}
+        ${p(html`<b>Can it read another account?</b> No — every query is scoped to this account's workspace.`)}
+        ${p(html`<b>What if a customer writes “ignore your instructions”?</b> Text inside a record is data, not a command.`)}`;
+    }
+  };
+
+  return html`<div class="max-w-3xl">
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">IncentiveSwift AI › Connect</div>
+    <h2 class="text-xl font-bold mb-1">Connect AI with IncentiveSwift</h2>
+    <p class="text-sm text-gray-500 mb-5">Ask Claude or ChatGPT about your loyalty programmes, contacts, campaigns and support tickets — and have it do the reading for you.</p>
+
+    ${card('', html`
+      ${label('CONNECT WITH YOUR API KEY')}
+      <p style="color:#475569;margin-bottom:14px;max-width:70ch">For ChatGPT and Claude on the web. There is no app to install: you give your AI client this account\u2019s API key so every answer is scoped to <strong>your</strong> data and nobody else\u2019s.</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <button class="btn btn-sm" onClick=${() => { st.clientTab = 'chatgpt'; renderApp(); }} style=${st.clientTab === 'chatgpt' ? '' : 'background:0 0;border:1px solid #cbd5e1;color:#475569'}>ChatGPT</button>
+        <button class="btn btn-sm" onClick=${() => { st.clientTab = 'claude'; renderApp(); }} style=${st.clientTab === 'claude' ? '' : 'background:0 0;border:1px solid #cbd5e1;color:#475569'}>Claude</button>
+      </div>
+      ${stepsFor(st.clientTab)}
+    `)}
+
+    ${card('Your API key', html`
+      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this account's API key as a Bearer token. It is listed by prefix only — the secret is never shown until you Reveal it, which asks for your account password. Treat it like a password: anyone holding it can read this account.</p>
+      ${!st.loaded ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
+        : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the API Keys screen, then come back to connect an MCP client.</p>`
+        : html`<div>
+          <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
+            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:#6366f1">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">Created ${k.created_at ? new Date(k.created_at).toLocaleDateString() : '—'}</span></span>
+            <span style="white-space:nowrap">
+              <button class="btn btn-sm btn-outline" onClick=${() => reveal(k.id, false)}>Reveal</button>
+              <button class="btn btn-sm btn-outline" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
+              <button class="btn btn-sm btn-outline" style="margin-left:6px;color:#b45309" onClick=${() => regen(k.id)}>Regenerate</button>
+            </span>
+          </div>
+          ${(st.revealed && st.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
+            <input class="input font-mono" style="flex:1;min-width:220px;font-size:12px" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
+            <button class="btn btn-sm" onClick=${() => mcpCopy(st.revealed)}>Copy</button>
+          </div>` : null}
+        </div>`)}
+    `)}
+
+    ${card('How the connection works', html`
+      <p style="color:#475569;font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have connected — your key is the connection. That means one action disconnects everything at once: regenerate the key above and every client using the old one stops working immediately.</p>
+    `)}
+
+    ${card('', html`
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc">
+        <span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block"></span>
+        <span style="font-weight:700;color:#1e293b">Ready to connect</span>
+        <span style="font-size:13px;color:#475569">Your account: <strong>${email}</strong></span>
+        <span style="flex:1"></span>
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-outline" onClick=${checkServer} disabled=${st.checkBusy}>${st.checkBusy ? 'Checking…' : 'Test connection'}</button>
+          <button class="btn btn-sm" onClick=${() => mcpCopy(MCP_CONFIG_TEXT)}>Copy setup</button>
+          <button class="btn btn-sm btn-outline" onClick=${() => { st.devOpen = true; st.devTab = 0; renderApp(); }}>Advanced setup</button>
+        </span>
+      </div>
+      ${st.checkMsg ? html`<div style="font-size:12px;color:#64748b;margin-top:8px">${st.checkMsg}</div>` : null}
+    `)}
+
+    ${card('', html`
+      ${label('WHAT CAN I ASK INCENTIVESWIFT?')}
+      <p style="color:#475569;margin-bottom:12px;max-width:70ch">Say any of these — or anything like them — to your AI app. Every one is a question, because this connection reads and never writes.</p>
+      ${MCP_EXAMPLE_GROUPS.map((g, gi) => html`<details style="border-bottom:1px solid #e2e8f0;padding:10px 0" open=${gi === 0}>
+        <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:600;color:#1e293b">${g.title}</span>
+          <span style="color:#94a3b8;font-size:12px">${g.prompts.length} questions</span>
+          <span style="flex:1"></span>
+        </summary>
+        <div style="margin-top:10px">
+          ${twoColumns(g.prompts)}
+          ${st.more[gi] && g.more && g.more.length ? html`<div style="margin-top:4px">${twoColumns(g.more)}</div>` : null}
+          <button class="btn btn-sm btn-outline" style="margin-top:6px" onClick=${() => { st.more[gi] = !st.more[gi]; renderApp(); }}>${st.more[gi] ? 'Show fewer' : 'See more examples →'}</button>
+        </div>
+      </details>`)}
+    `)}
+
+    ${card('Don\u2019t know what to ask?', html`
+      <p style="color:#475569;font-size:13px;margin-bottom:10px">Tell us what you are trying to do and we will give you things you can say.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input class="input" style="flex:1;min-width:220px" placeholder="I want to …" value=${st.goal || ''} onInput=${e => { st.goal = e.target.value; }} />
+        <button class="btn btn-sm" onClick=${giveIdeas}>Give me ideas</button>
+      </div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:6px">We will suggest the prompts that fit your goal.</div>
+      ${st.ideas && st.ideas.length ? html`<div style="margin-top:10px">${twoColumns(st.ideas)}</div>` : null}
+    `)}
+
+    ${card('', html`
+      ${label('EVERYTHING AI CAN DO WITH INCENTIVESWIFT')}
+      <p style="color:#475569;font-size:13px;margin-bottom:8px">Open a section to see what is in it — ${MCP_ENTITY_SPECS.length} kinds of record, every one read-only and every one limited to this account.</p>
+      ${MCP_ENTITY_SPECS.map(([key, lbl]) => html`<details style="border-bottom:1px solid #e2e8f0;padding:10px 0">
+        <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:600;color:#1e293b">${mcpHumanize(lbl)}</span>
+          <code style="font-size:11px;color:#6366f1">${key}</code>
+          <span style="flex:1"></span>
+          <span style="color:#64748b;font-size:12px;text-align:right">${MCP_ENTITY_DESCRIPTIONS[key] || mcpHumanize(lbl)}</span>
+        </summary>
+        <div style="color:#64748b;font-size:13px;padding:8px 0 4px 2px">Read-only via <code>${key}_summary</code> and <code>${key}_search</code>, scoped to this account.</div>
+      </details>`)}
+    `)}
+
+    ${card('', html`
+      ${label('WHAT IT WILL NOT DO')}
+      <ul style="margin:0;padding-left:20px;color:#475569;font-size:13px;line-height:1.8">
+        <li>It cannot delete anything — not a contact, a campaign, a loyalty programme or a ticket. Deleting stays in the app.</li>
+        <li>It cannot add or change anything either: it cannot create a programme, award credits or edit a tier. Reading only.</li>
+        <li>It cannot send a message or an email, and it cannot run a campaign. Sending and launching happen in the app.</li>
+      </ul>
+    `)}
+
+    ${card('', html`
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        ${label('ADVANCED / DEVELOPER SETUP')}
+        <span style="flex:1"></span>
+        <button class="btn btn-sm btn-outline" onClick=${() => { st.devOpen = !st.devOpen; renderApp(); }}>${st.devOpen ? 'Collapse' : 'Expand developer details'}</button>
+      </div>
+      <div style="color:#64748b;font-size:13px;margin-bottom:10px">Technical details for developers and advanced users. Most people never need this section.</div>
+      ${st.devOpen ? html`<div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+          ${devTabs.map((t, i) => html`<button class="btn btn-sm btn-outline" onClick=${() => { st.devTab = i; renderApp(); }} style=${st.devTab === i ? 'background:#2563eb;color:#fff;border-color:#2563eb' : ''}>${t}</button>`)}
+        </div>
+        <div>${devPanel(st.devTab)}</div>
+        <button class="btn btn-sm" style="margin-top:12px" onClick=${() => mcpCopy(MCP_CONFIG_TEXT)}>Copy my setup</button>
+      </div>` : null}
+    `)}
+
+    ${card('Need help getting connected?', html`
+      <p style="color:#475569;font-size:13px;margin:0">Copy your setup with the button above and paste it to us, or read the step-by-step in the guide. If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>
+    `)}
+  </div>`;
+};
+
 const PaymentProviders = () => {
   const st = viewState('payment_providers_view', { list: null, err: null, busy: false, msg: null, form: null, test: null, pay: null, payBusy: false, payMsg: null });
   const load = async () => {
@@ -7841,9 +8087,10 @@ const PromoCodes = () => {
     { id: 'call-logs', label: 'Call Logs', icon: '📞' },
     { id: 'deals', label: 'Deals', icon: '🤝' },
     { id: 'offers', label: 'Offers', icon: '🎟' },
+    { id: 'mcp', label: 'MCP', icon: '🤖' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'mail-compliance': MailCompliance, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback};
+  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'mail-compliance': MailCompliance, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback, mcp: Mcp};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
