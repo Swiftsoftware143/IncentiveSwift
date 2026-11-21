@@ -249,7 +249,7 @@ pub(crate) fn plan(settings: &serde_json::Value) -> (PlanTargets, PlanSkips) {
         match settings.get(key).and_then(|v| v.as_str()) {
             // Blank or absent means "no policy text configured" -> leave the published page alone.
             Some(text) if !text.trim().is_empty() => {
-                targets.push((path, legal_page(title, &escape_addresses(text), tail)));
+                targets.push((path, legal_page(slug, title, &escape_addresses(text), tail)));
             }
             _ => skipped.push((
                 path,
@@ -299,11 +299,13 @@ fn render_index(before: &str, settings: &serde_json::Value) -> String {
 /// Reconciliation note (kanban t_3fb0d3d2): the in-repo template was STALE relative to the pages that
 /// are actually served, so a verbatim port would have rewritten all three live legal pages on the
 /// first apply. The served bytes won; the template and the reconciled row both follow them.
-fn legal_page(title: &str, body: &str, tail: &str) -> String {
+fn legal_page(slug: &str, title: &str, body: &str, tail: &str) -> String {
     format!(
         r#"<!DOCTYPE html><html lang="en">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{} — IncentiveSwift</title>
+<link rel="canonical" href="https://incentiveswift.com/{}">
+<meta name="description" content="{} for IncentiveSwift.">
 <style>body{{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e5e5e5;line-height:1.7;margin:0;padding:0}}
 .container{{max-width:800px;margin:0 auto;padding:60px 24px}}
 h1{{font-size:2rem;color:#8b5cf6}}a{{color:#8b5cf6}}</style>
@@ -316,6 +318,8 @@ p,li{{color:#9ca3af;margin:10px 0}}
 <h1>{}</h1>
 {}{}"#,
         title,
+        slug,
+        escape_ampersand(title),
         escape_ampersand(title),
         body,
         tail
@@ -862,11 +866,18 @@ mod tests {
     #[test]
     fn the_legal_template_matches_the_published_wrapper() {
         let page = legal_page(
+            "refunds",
             "Refund & Cancellation Policy",
             "BODY",
             "</div></body></html>\n",
         );
         assert!(page.contains("<title>Refund & Cancellation Policy — IncentiveSwift</title>"));
+        assert!(
+            page.contains(r#"<link rel="canonical" href="https://incentiveswift.com/refunds">"#)
+        );
+        assert!(page.contains(
+            r#"<meta name="description" content="Refund &amp; Cancellation Policy for IncentiveSwift.">"#
+        ));
         assert!(
             page.contains("<h1>Refund &amp; Cancellation Policy</h1>\nBODY</div></body></html>\n")
         );
