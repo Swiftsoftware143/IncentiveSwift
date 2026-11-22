@@ -20,6 +20,11 @@
   'use strict';
 
   var TOKEN_KEY = 'is_mail_token';
+  // The day/night state this page is PAINTING (set by the boot script in index.html before the
+  // stylesheet loads). Read at render time so the rail's switch always states the truth.
+  function isDarkTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'dark';
+  }
   // This app mounts its API under /api/v1 (measured 2026-11-12: /api/auth/login answers 404 while
   // /api/v1/auth/login answers 200 through the same host). The client was ported from CoreSwift,
   // which serves /api, so every call here 404'd and the mailbox could not even be signed into.
@@ -246,13 +251,21 @@
     }
 
     return '<div class="setup">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
       + '<div><div style="font-weight:700;font-size:18px">IncentiveSwift Mail</div>'
       + '<div style="color:var(--muted);font-size:13px">Your business mail, read and answered here.</div></div>'
+      + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+      // The day/night switch sits on the header every visitor sees, signed in or not, so the skin can
+      // be changed without hunting a menu (2026-11-22). Same shared cookie as the console.
+      + '<button class="btn theme-btn" id="sThemeToggle" type="button" onclick="iswToggleTheme()" aria-pressed="' + (isDarkTheme() ? 'true' : 'false') + '" title="' + (isDarkTheme() ? 'Switch to day mode' : 'Switch to night mode') + '">'
+      + '<span data-theme-icon>' + (isDarkTheme() ? '\u2600\uFE0F' : '\uD83C\uDF19') + '</span>'
+      + '<span data-theme-label>' + (isDarkTheme() ? 'Day mode' : 'Night mode') + '</span>'
+      + '</button>'
       + (signedIn
-        ? '<div><button class="btn" id="smSignOut">Sign out</button> '
-          + (S.boxes.length ? '<button class="btn btn-primary" id="smOpen">Open my mail</button>' : '') + '</div>'
+        ? '<button class="btn" id="smSignOut">Sign out</button>'
+          + (S.boxes.length ? '<button class="btn btn-primary" id="smOpen">Open my mail</button>' : '')
         : '<button class="btn btn-primary" id="smLogin">Log In</button>')
+      + '</div>'
       + '</div>'
       + (S.err ? '<div class="card err">' + esc(S.err) + '</div>' : '')
       + '<div class="card"><h3>How your mail gets here</h3>'
@@ -570,6 +583,12 @@
 
     return '<div class="rail">'
       + '<div class="brand">IncentiveSwift Mail</div>'
+      // The day/night switch (2026-11-22). Rendered from the CURRENT data-theme so its label is true
+      // on the first paint, and it calls the global in index.html that writes the shared cookie back.
+      + '<button class="btn btn-ghost theme-btn" id="mThemeToggle" type="button" onclick="iswToggleTheme()" aria-pressed="' + (isDarkTheme() ? 'true' : 'false') + '" title="' + (isDarkTheme() ? 'Switch to day mode' : 'Switch to night mode') + '">'
+      + '<span data-theme-icon>' + (isDarkTheme() ? '\u2600\uFE0F' : '\uD83C\uDF19') + '</span>'
+      + '<span data-theme-label>' + (isDarkTheme() ? 'Day mode' : 'Night mode') + '</span>'
+      + '</button>'
       + '<button class="btn btn-primary" id="mCompose" style="width:100%">Compose</button>'
       + '<button class="btn" id="mSignature" style="width:100%;margin-top:8px">Signature</button>'
       + '<div style="margin-top:12px">' + rows + '</div>'
@@ -620,7 +639,7 @@
       + '<button class="btn btn-ghost" id="mRefresh" title="Refresh">Refresh</button>'
       + '<input id="mSearch" type="search" value="' + esc(S.q) + '" placeholder="Search subject, sender or text"'
       + ' aria-label="Search mail" autocomplete="off" style="flex:1 1 100%;box-sizing:border-box;padding:7px 10px;'
-      + 'border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff">'
+      + 'border:1px solid var(--line);border-radius:8px;font:inherit;background:var(--panel)">'
       + (S.q ? '<button class="btn btn-ghost" id="mSearchClear" title="Clear the search">Clear search</button>' : '')
       + '</div>';
     if (!msgs.length) {
@@ -679,7 +698,7 @@
     var colour = pct >= 100 ? '#b91c1c' : (pct >= 75 ? '#b45309' : (pct >= 50 ? '#1d4ed8' : '#1d4ed8'));
     var ret = (S.counts && S.counts.retention && S.counts.retention.sentence) || '';
     var paused = (st.attachments_accepted === false)
-      ? '<div style="font-size:11px;color:#991b1b;margin-top:4px">New attachments and files are paused until space is freed. Mail still arrives.</div>'
+      ? '<div style="font-size:11px;color:var(--danger);margin-top:4px">New attachments and files are paused until space is freed. Mail still arrives.</div>'
       : '';
     return '<div class="storage" style="margin-top:auto;padding-top:12px">'
       + '<div style="font-size:11px;color:var(--muted)">' + esc(st.used_human || '') + ' of '
@@ -1027,7 +1046,7 @@
       + '<label class="f">Subject</label><input id="cSubject" value="' + esc(subject) + '">'
       + '<label class="f">Message</label><textarea id="cBody" rows="8">' + esc(body) + '</textarea>'
       + '<label class="f">Signature</label>'
-      + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff;max-height:200px;overflow:auto"></div>'
+      + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel);max-height:200px;overflow:auto"></div>'
       + '<label id="cSigRow" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;line-height:1.35">'
       + '<input type="checkbox" id="cSigOn" checked style="width:auto;margin:2px 0 0">'
       + '<span>Include the signature on this message</span></label>'
@@ -1158,7 +1177,7 @@
               : 'The workspace signature and logo are set in Email Branding in the CRM. This address does not have its own wording.';
             var prev = $('sPreview');
             prev.innerHTML = (d && d.html)
-              ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">What goes under the message today</div><div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff">' + d.html + '</div>'
+              ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">What goes under the message today</div><div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel)">' + d.html + '</div>'
               : '<div style="font-size:12px;color:var(--muted)">' + esc((d && d.detail) || 'Nothing is added to messages from this address.') + '</div>';
             paint();
           } catch (e) { $('sErr').textContent = fail(e); }

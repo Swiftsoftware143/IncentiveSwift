@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- DAY/NIGHT, SHARED WITH THE CONSOLE (2026-11-22). The IncentiveSwift console and admin console
+     write `ws_theme` on domain=incentiveswift.com; this host (inbox.incentiveswift.com) is the FOURTH
+     surface on that domain and was permanently light, so an owner who chose Night mode was blinded the
+     moment they opened their inbox. Same precedence as the console's boot: the shared cookie first,
+     then this origin's localStorage, then the OS preference — and it runs BEFORE the stylesheet so
+     there is no white flash. `color-scheme:dark` below also fixes the scrollbars and native controls. -->
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(t!=='dark'&&t!=='light'){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <title>IncentiveSwift Mail</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="alternate icon" href="/favicon.ico">
@@ -80,6 +86,41 @@
   .sw.on{border-color:#111827}
   .err{color:var(--danger);font-size:13px}
   .ok{color:#166534;font-size:13px}
+  /* ── NIGHT PALETTE ─────────────────────────────────────────────────────────────────────────────
+     The same values the console's own dark rules use, so the two screens read as one product.
+     Surfaces that were hardcoded white in this stylesheet are overridden here rather than being
+     re-declared per element: the variables cover the layout, the rules below cover the components
+     that predate them. */
+  html[data-theme="dark"]{
+    --bg:#0b1220; --panel:#111a2b; --ink:#e8edf7; --muted:#9aa7bd; --line:#233248;
+    --accent:#818cf8; --accent-soft:#1c2b4a; --danger:#f87171; --warn:#fbbf24;
+    color-scheme:dark;
+  }
+  html[data-theme="dark"] .btn{background:#16213a;border-color:#2b3a55;color:var(--ink)}
+  html[data-theme="dark"] .btn:hover{background:#1d2a46}
+  html[data-theme="dark"] .btn-ghost:hover{background:#1c2740;color:var(--ink)}
+  html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{background:#121c2e;border-color:#2b3a55;color:var(--ink)}
+  html[data-theme="dark"] input::placeholder,html[data-theme="dark"] textarea::placeholder{color:#7d8ba6}
+  html[data-theme="dark"] .folder:hover{background:#1a2438}
+  html[data-theme="dark"] .folder.active{background:#1c2b4a;color:#c7d2fe}
+  html[data-theme="dark"] .row:hover{background:#141d2f}
+  html[data-theme="dark"] .row.unread{background:#16213a}
+  html[data-theme="dark"] .chip{background:#1c2b4a;color:#c7d2fe}
+  html[data-theme="dark"] .chip.ticket{background:#0f2f22;color:#86efac}
+  html[data-theme="dark"] .chip.draft{background:#3a2a07;color:#fcd34d}
+  html[data-theme="dark"] .badge.ticket{background:#0f2f22;color:#86efac}
+  html[data-theme="dark"] .badge.open{background:#3a2a07;color:#fcd34d}
+  html[data-theme="dark"] .meter{background:#233248}
+  html[data-theme="dark"] .modal{background:#111a2b}
+  html[data-theme="dark"] .modal-foot{background:#111a2b}
+  html[data-theme="dark"] .card{background:#111a2b;border-color:#233248}
+  html[data-theme="dark"] .rec code{background:#16213a}
+  html[data-theme="dark"] .sw.on{border-color:#e8edf7}
+  html[data-theme="dark"] .ok{color:#86efac}
+  /* A banner that reads as a warning keeps its colour in both themes, but a pastel fill with dark
+     text is the one surface that stays bright — dim it just enough to stop it glaring. */
+  html[data-theme="dark"] .storage-banner{filter:brightness(.82) saturate(.9)}
+  .theme-btn{margin-top:8px;width:100%;display:flex;align-items:center;justify-content:center;gap:6px}
   @media (max-width:860px){
     .mail{grid-template-columns:1fr}
     .rail{flex-direction:row;overflow:auto;border-right:0;border-bottom:1px solid var(--line);align-items:center;gap:6px;padding:8px}
@@ -94,11 +135,37 @@
     .modal-foot{position:sticky;bottom:0;background:#fff;padding-top:8px}
     #cSigWrap,#sPreview{max-height:150px}
     #cBody{min-height:110px}
+    .theme-btn{width:auto;margin-top:0}
   }
 </style>
 </head>
 <body>
 <div id="app"><div class="empty">Loading IncentiveSwift Mail…</div></div>
-<script src="/mail.js?v=20261113g"></script>
+<script>
+// The switch, and the write half of the shared choice. Same cookie the console writes
+// (domain=incentiveswift.com, one year) so the choice made here is honoured on the console and on the
+// admin console, and vice versa. Local storage is the fallback for a browser that refuses the cookie.
+function iswSetTheme(t){
+  t = (t === 'dark') ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  try{ localStorage.setItem('ws_theme', t); }catch(e){}
+  try{ document.cookie = 'ws_theme=' + t + ';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax'; }catch(e){}
+  // Both switches (the setup header's and the mail rail's) are kept in step: whichever one is on
+  // screen states the mode the page is actually painting, never a stale label.
+  var btns = document.querySelectorAll('.theme-btn');
+  for(var i = 0; i < btns.length; i++){
+    var b = btns[i];
+    b.setAttribute('aria-pressed', t === 'dark' ? 'true' : 'false');
+    b.title = (t === 'dark') ? 'Switch to day mode' : 'Switch to night mode';
+    var ic = b.querySelector('[data-theme-icon]'), lb = b.querySelector('[data-theme-label]');
+    if(ic) ic.textContent = (t === 'dark') ? '\u2600\uFE0F' : '\uD83C\uDF19';
+    if(lb) lb.textContent = (t === 'dark') ? 'Day mode' : 'Night mode';
+  }
+}
+function iswToggleTheme(){
+  iswSetTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+}
+</script>
+<script src="/mail.js?v=20261122a"></script>
 </body>
 </html>
