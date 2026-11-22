@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>IncentiveSwift — Dashboard</title>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
 <style>
 body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 .header{background:#fff;border-bottom:1px solid #e2e8f0;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
@@ -34,6 +35,54 @@ body{font-family:Inter,system-ui,sans-serif;background:#f8fafc;margin:0}
 .act .a-w{color:#64748b}
 </style>
 <link rel="stylesheet" href="/tw.css">
+<style id="ws-theme-dark">
+/* Fleet day/night branch for the tenant dashboard (kanban cron 2026-11-22).
+   Light is this page's native mode; every rule below is scoped to data-theme="dark",
+   so the light render is byte-for-byte the same. */
+html[data-theme="dark"]{color-scheme:dark}
+html[data-theme="dark"] body{background:#0f1117;color:#e8eaed}
+html[data-theme="dark"] .header{background:#151925;border-bottom-color:#2d3148}
+html[data-theme="dark"] .card,html[data-theme="dark"] .stat{background:#1a1d27;border-color:#2d3148;box-shadow:0 1px 3px rgba(0,0,0,.55)}
+html[data-theme="dark"] .badge{background:#1c2438;color:#93c5fd}
+html[data-theme="dark"] .row,html[data-theme="dark"] .act{border-bottom-color:#242838}
+html[data-theme="dark"] .row .k,html[data-theme="dark"] .stat .l,html[data-theme="dark"] .act .a-w{color:#9aa0a6}
+html[data-theme="dark"] .row .v,html[data-theme="dark"] .stat .v,html[data-theme="dark"] .act .a-c{color:#e8eaed}
+html[data-theme="dark"] .uav{background:#222532}
+html[data-theme="dark"] input,html[data-theme="dark"] select,html[data-theme="dark"] textarea{background:#1a1d27;border-color:#2d3148;color:#e8eaed}
+html[data-theme="dark"] table th{background:#151925;color:#9aa0a6;border-bottom-color:#2d3148}
+html[data-theme="dark"] table td{border-bottom-color:#242838;color:#e8eaed}
+html[data-theme="dark"] a:not(.btn):not([class*="btn"]){color:#93c5fd}
+/* inline styles the page writes itself (attribute selectors keep their authored hex) */
+html[data-theme="dark"] [style*="background:#fff"],html[data-theme="dark"] [style*="background: #fff"]{background-color:#1a1d27!important}
+html[data-theme="dark"] [style*="background:#f8fafc"]{background-color:#0f1117!important}
+html[data-theme="dark"] [style*="background:#f9fafb"],html[data-theme="dark"] [style*="background:#f3f4f6"],html[data-theme="dark"] [style*="background:#f1f5f9"],html[data-theme="dark"] [style*="background:#e2e8f0"]{background-color:#151925!important}
+html[data-theme="dark"] [style*="background:#eef2f7"],html[data-theme="dark"] [style*="background:#eef2ff"],html[data-theme="dark"] [style*="background:#eff6ff"],html[data-theme="dark"] [style*="background:#dbeafe"],html[data-theme="dark"] [style*="background:#e0e7ff"]{background-color:#1c2438!important}
+html[data-theme="dark"] [style*="background:#fffbeb"],html[data-theme="dark"] [style*="background:#fef3c7"]{background-color:#2a2413!important}
+html[data-theme="dark"] [style*="background:#fef2f2"],html[data-theme="dark"] [style*="background:#fee2e2"]{background-color:#2a1416!important}
+html[data-theme="dark"] [style*="background:#f0fdf4"],html[data-theme="dark"] [style*="background:#dcfce7"]{background-color:#12291f!important}
+html[data-theme="dark"] [style*="color:#111827"],html[data-theme="dark"] [style*="color:#0f172a"],html[data-theme="dark"] [style*="color:#1e293b"]{color:#e8eaed!important}
+html[data-theme="dark"] [style*="color:#334155"]{color:#c7cbd4!important}
+html[data-theme="dark"] [style*="color:#475569"],html[data-theme="dark"] [style*="color:#64748b"],html[data-theme="dark"] [style*="color:#94a3b8"],html[data-theme="dark"] [style*="color:#6b7280"],html[data-theme="dark"] [style*="color:#9ca3af"]{color:#9aa0a6!important}
+html[data-theme="dark"] [style*="color:#b91c1c"],html[data-theme="dark"] [style*="color:#991b1b"],html[data-theme="dark"] [style*="color:#dc2626"]{color:#f87171!important}
+html[data-theme="dark"] [style*="color:#166534"],html[data-theme="dark"] [style*="color:#065f46"],html[data-theme="dark"] [style*="color:#059669"],html[data-theme="dark"] [style*="color:#16a34a"],html[data-theme="dark"] [style*="color:#047857"]{color:#6ee7b7!important}
+html[data-theme="dark"] [style*="color:#92400e"],html[data-theme="dark"] [style*="color:#b45309"]{color:#fbbf24!important}
+html[data-theme="dark"] [style*="color:#4f46e5"],html[data-theme="dark"] [style*="color:#6366f1"]{color:#a5b4fc!important}
+html[data-theme="dark"] [style*="color:#2563eb"]{color:#93c5fd!important}
+html[data-theme="dark"] [style*="1px solid #e2e8f0"],html[data-theme="dark"] [style*="1px solid #e5e7eb"],html[data-theme="dark"] [style*="1px solid #cbd5e1"],html[data-theme="dark"] [style*="1px solid #d1d5db"]{border-color:#2d3148!important}
+/* tailwind utility classes tw.css ships */
+html[data-theme="dark"] .bg-white{background-color:#1a1d27!important}
+html[data-theme="dark"] .bg-gray-50,html[data-theme="dark"] .bg-gray-100,html[data-theme="dark"] .bg-slate-50,html[data-theme="dark"] .bg-slate-100{background-color:#151925!important}
+html[data-theme="dark"] .text-gray-900,html[data-theme="dark"] .text-gray-800,html[data-theme="dark"] .text-gray-700{color:#e8eaed!important}
+html[data-theme="dark"] .text-gray-600,html[data-theme="dark"] .text-gray-500,html[data-theme="dark"] .text-slate-500{color:#9aa0a6!important}
+html[data-theme="dark"] .border,html[data-theme="dark"] .border-b,html[data-theme="dark"] .border-gray-200,html[data-theme="dark"] .border-slate-200{border-color:#2d3148!important}
+/* the inline guide widget */
+html[data-theme="dark"] #ig-panel{background:#1a1d27!important;box-shadow:0 8px 32px rgba(0,0,0,.6)}
+html[data-theme="dark"] #ig-title{color:#fff!important}
+html[data-theme="dark"] #ig-panel p,html[data-theme="dark"] #ig-panel li,html[data-theme="dark"] #ig-actions li{color:#c7cbd4!important}
+/* the toggle pill — bottom LEFT, clear of the guide button at bottom right */
+.ws-theme-toggle{position:fixed;left:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:#fff;color:#334155;border:1px solid #e2e8f0;border-radius:999px;padding:7px 12px;box-shadow:0 1px 3px rgba(0,0,0,.08);cursor:pointer;font:13px/1 system-ui,-apple-system,sans-serif}
+html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border-color:#2d3148;box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+</style>
 </head>
 <body>
 <div class="header">
@@ -4013,5 +4062,9 @@ function downloadMyCsv(type, btn) {
 
 <script src="/inline-guide-widget.js?v=20261106a"></script>
 
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'\u2600\ufe0f':'\ud83c\udf19';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='\ud83c\udf19';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+try{wsEnsureToggle();}catch(e){}</script>
 </body>
 </html>
