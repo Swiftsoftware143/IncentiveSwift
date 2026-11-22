@@ -1,16 +1,26 @@
 <!DOCTYPE html><html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<head>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
+<style id="ws-legal-theme">
+  :root{color-scheme:light dark}
+  html[data-theme="dark"]{--bg:#0f0f0f;--ink:#e5e5e5;--strong:#ffffff;--muted:#9ca3af;--accent:#a78bfa;--line:rgba(255,255,255,.08)}
+  html[data-theme="light"],html:not([data-theme]){--bg:#f6f7fb;--ink:#374151;--strong:#111827;--muted:#4b5563;--accent:#6d28d9;--line:rgba(17,24,39,.12)}
+  body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.7;margin:0;padding:0;transition:background .18s ease,color .18s ease}
+  .container{max-width:800px;margin:0 auto;padding:60px 24px}
+  h1{font-size:2rem;color:var(--accent);margin-bottom:8px}
+  h2{font-size:1.2rem;color:var(--strong);margin:28px 0 10px}
+  p,li{color:var(--ink);margin:10px 0}
+  strong{color:var(--strong)}
+  a{color:var(--accent)}
+  .updated{color:var(--muted);font-size:13px;margin-bottom:24px}
+  .back{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);font-size:14px}
+  .ws-theme-toggle{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;
+    background:var(--bg);color:var(--strong);border:1px solid var(--line);border-radius:999px;padding:8px 12px;
+    font:600 12px system-ui,sans-serif;cursor:pointer}
+</style><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Refund & Cancellation Policy — IncentiveSwift</title>
 <link rel="canonical" href="https://incentiveswift.com/refunds">
 <meta name="description" content="Refund &amp; Cancellation Policy for IncentiveSwift.">
-<style>body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e5e5e5;line-height:1.7;margin:0;padding:0}
-.container{max-width:800px;margin:0 auto;padding:60px 24px}
-h1{font-size:2rem;color:#8b5cf6}a{color:#8b5cf6}</style>
-<style>h1{margin-bottom:8px}
-h2{font-size:1.2rem;color:#ffffff;margin:28px 0 10px}
-p,li{color:#9ca3af;margin:10px 0}
-.updated{color:#6b7280;font-size:13px;margin-bottom:24px}
-.back{margin-top:40px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08);font-size:14px}</style>
 </head><body><div class="container">
 <h1>Refund &amp; Cancellation Policy</h1>
 <p class="updated">Last Updated: September 25, 2026</p>
@@ -32,4 +42,9 @@ p,li{color:#9ca3af;margin:10px 0}
 <p>Nothing in this policy limits any refund or cancellation right you may have under the consumer law that applies to you.</p>
 
 <div class="back"><a href="/">← Back to IncentiveSwift</a> · <a href="/terms.html">Terms of Service</a> · <a href="/privacy.html">Privacy Policy</a></div>
-</div></body></html>
+</div><script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+wsEnsureToggle();
+document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>
+</body></html>
