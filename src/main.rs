@@ -54,6 +54,7 @@ pub mod billing;
 mod body_deadline;
 pub mod branding;
 pub mod compliance;
+mod compliance_events;
 mod config;
 /// Tell the OPERATOR when a customer's first password never reached them (2026-11-16, parity with
 /// MissedCall Respondr commit 273e092). Without it a locked-out customer was only a badge on a
@@ -266,6 +267,15 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/webhooks/mailgun/inbound",
             post(crate::private_email::webhook_handler::inbound_webhook)
                 .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        // The provider's DELIVERY events (2026-11-22): a hard bounce, a spam complaint and a list
+        // unsubscribe, posted with no session like every provider webhook. The credential is a
+        // secret this app generates and carries IN THE PATH (`mailgun_events_token`), compared in
+        // constant time before anything is written; a wrong token is a 403 and records nothing.
+        // Listed in `security::route_policy::PUBLIC_ROUTES` and censused there.
+        .route(
+            "/api/v1/webhooks/mailgun/events/:token",
+            post(compliance_events::events_webhook),
         )
         // SendGrid Inbound Parse — the OTHER receiver a domain can pick (measured 2026-11-14: the
         // handler and its named router existed, the console handed every SendGrid-hosted customer a
@@ -1530,6 +1540,13 @@ async fn main() -> anyhow::Result<()> {
         // Email compliance: the account's own do-not-mail list and its download. The PUBLIC opt-out
         // arms are merged at the ROOT (see below) because a mail client reaching them has no session.
         .nest("/api/compliance", compliance::router(state.clone()))
+        // The provider's delivery-events address, read by the operator's do-not-mail card so it can
+        // be pasted into the provider once. PRIVATE: it hands out a capability URL, so the boundary
+        // must refuse an anonymous caller before the handler runs.
+        .route(
+            "/api/v1/settings/do-not-mail/webhook",
+            get(compliance_events::webhook_url),
+        )
         // Campaign Integration Hub routes
         .route(
             "/api/v1/campaigns/:slug/integrations",

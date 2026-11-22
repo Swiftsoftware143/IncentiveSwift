@@ -5352,6 +5352,20 @@ const MailCompliance = () => {
     st.busy = false; st.loaded = true; renderApp();
   };
   if (!st.loaded && !st.busy) { st.busy = true; load(); }
+  /* The provider's delivery-events address (2026-11-22). A hard bounce or a spam complaint arrives
+     there and the address lands on the list below with no human in the loop; the operator only needs
+     this URL once, to paste into the provider. Read from the app, never composed in the page, so the
+     screen cannot show an address the server would refuse. */
+  const loadHook = async () => {
+    try {
+      const r = await fetch(window.location.origin + '/api/v1/settings/do-not-mail/webhook', { headers: cHeaders() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || d.message || ('Request failed (' + r.status + ')'));
+      st.hook = d.url || ''; st.hookErr = null;
+    } catch (e) { st.hookErr = (e && e.message) || String(e); st.hook = ''; }
+    renderApp();
+  };
+  if (!st.hookLoaded) { st.hookLoaded = true; loadHook(); }
   const when = (v) => { try { return v ? new Date(v).toLocaleString() : '\u2014'; } catch (e) { return v || '\u2014'; } };
   const scope = (c) => (!c || c === 'all') ? 'All mail' : (c === 'transactional' ? 'Account mail' : c.charAt(0).toUpperCase() + c.slice(1));
   const download = async () => {
@@ -5377,6 +5391,25 @@ const MailCompliance = () => {
         <button type="button" class="btn btn-sm" onClick=${() => { st.loaded = false; st.busy = false; renderApp(); }} aria-label="Refresh the do-not-mail list">Refresh</button>
       </div>
     </div>
+    ${st.hookErr ? html`<div class="card" style="border-left:4px solid #dc2626;margin-bottom:16px">
+      <div class="font-medium text-sm" style="color:#991b1b">The provider's delivery-events address could not be read</div>
+      <div class="text-sm text-gray-600" style="margin-top:4px">${st.hookErr}</div>
+      <div class="text-sm text-gray-600" style="margin-top:8px">The list below still works. Bounces and complaints cannot be recorded until this address is readable — it is read from this app, so this is a server-side fault, not a setting on the provider.</div>
+    </div>` : null}
+    ${st.hook ? html`<div class="card" data-provider-events-address=${st.hook} style="margin-bottom:16px">
+      <div class="font-medium text-sm">Where the provider reports bounces and complaints</div>
+      <div class="text-sm text-gray-600" style="margin-top:4px">
+        The mail provider tells this workspace when a message hard-bounces or is marked as spam, and
+        each of those addresses is added to the list below automatically. Paste this address into the
+        provider's webhook settings for the sending domain (events: permanent failures, complaints,
+        unsubscribes) \u2014 it is the only place that address is needed.
+      </div>
+      <div class="flex items-center gap-2" style="margin-top:8px;flex-wrap:wrap">
+        <code style="font-size:11px;word-break:break-all;color:#334155">${st.hook}</code>
+        <button type="button" class="btn btn-sm btn-outline" aria-label="Copy the provider delivery-events address" onClick=${() => { try { navigator.clipboard.writeText(st.hook); } catch (e) {} }}>Copy</button>
+      </div>
+    </div>` : null}
+    ${!st.hook && !st.hookErr ? html`<div class="card" style="margin-bottom:16px"><div class="text-sm text-gray-400">Reading the provider's delivery-events address\u2026</div></div>` : null}
     ${st.err ? html`<div class="card" style="border-left:4px solid #dc2626">
       <div class="font-medium text-sm" style="color:#991b1b">This screen could not load</div>
       <div class="text-sm text-gray-600" style="margin-top:4px">${st.err}</div>

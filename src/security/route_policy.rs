@@ -205,6 +205,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the raw body (`timestamp`+`token`+`signature`). A domain with no key configured accepts
     // nothing, so an unconfigured address is refused rather than trusted.
     "/api/v1/webhooks/mailgun/inbound",
+    // The provider's DELIVERY events (2026-11-22): a hard bounce, a spam complaint and a list
+    // unsubscribe, posted with no session like every provider webhook. The credential is a secret
+    // this app generates and carries IN THE PATH (`mailgun_events_token`), compared in constant
+    // time before anything is written; a wrong token is a 403 and records nothing.
+    "/api/v1/webhooks/mailgun/events/:token",
     // The OTHER receiver a domain can choose (kanban 2026-11-14): SendGrid Inbound Parse. It signs
     // nothing — there is no HMAC and no header — so the credential is the unguessable per-domain
     // `inbound_token` IN THE PATH, and the handler resolves the domain BY IT before writing
