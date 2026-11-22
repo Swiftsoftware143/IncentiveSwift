@@ -1227,6 +1227,19 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/plans",
             get(handlers::dashboard_handler::list_public_plans),
         )
+        // FLEET-CONSISTENT PUBLIC CATALOGUE ADDRESS (cron 2026-11-22). funnelswift, workflowswift,
+        // missedcallrespondr and coreswift serve the anonymous price list at
+        // `/api/v1/public/plans` (coreswift's own pricing page calls exactly that path); this app
+        // and ADASwift answered it 404 while serving the same handler one segment over at
+        // `/api/v1/plans`. A shared consumer — an ecosystem widget, a partner integration, a
+        // price-comparison surface — therefore worked on four apps and broke on two depending on
+        // which spelling it was written against. The alias reaches the SAME handler: no second
+        // implementation, and both paths are public for the same reason (the catalogue is read
+        // before a session exists).
+        .route(
+            "/api/v1/public/plans",
+            get(handlers::dashboard_handler::list_public_plans),
+        )
         .route(
             "/api/v1/admin/plans",
             get(crate::handlers::plans_handler::list_plans)

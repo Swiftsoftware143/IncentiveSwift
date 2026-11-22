@@ -101,6 +101,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/business/register",
     // --- public catalogues ------------------------------------------------------
     "/api/v1/plans",
+    // The SAME catalogue at the address the rest of the fleet serves it on (cron 2026-11-22):
+    // funnelswift, workflowswift, missedcallrespondr and coreswift expose
+    // `/api/v1/public/plans`, so a shared consumer written against that spelling 404s here (and on
+    // ADASwift). Both entries reach the same handler; keeping both public makes the two spellings
+    // interchangeable instead of a per-app difference a caller has to know about.
+    "/api/v1/public/plans",
     // --- the contact page's own filing arm (2026-11-06) --------------------------
     // A visitor who is NOT signed in files a help request. Every support address this product
     // printed lived on a domain publishing MX = 0, so a locked-out customer's message bounced; the
