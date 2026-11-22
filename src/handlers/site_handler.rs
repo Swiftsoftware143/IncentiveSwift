@@ -82,19 +82,19 @@ pub(crate) const LEGAL_PAGES: [(&str, &str, &str, &str); 3] = [
         "terms",
         "Terms of Service",
         "legal_tos",
-        "</div></body></html>\n",
+        "</div><script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}\nfunction wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}\nfunction wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}\nwsEnsureToggle();\ndocument.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>\n</body></html>\n",
     ),
     (
         "privacy",
         "Privacy Policy",
         "legal_privacy",
-        "</div></body></html>\n",
+        "</div><script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}\nfunction wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}\nfunction wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}\nwsEnsureToggle();\ndocument.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>\n</body></html>\n",
     ),
     (
         "refunds",
         "Refund & Cancellation Policy",
         "legal_refunds",
-        "</div></body></html>\n",
+        "</div><script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}\nfunction wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}\nfunction wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}\nwsEnsureToggle();\ndocument.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>\n</body></html>\n",
     ),
 ];
 
@@ -294,36 +294,59 @@ fn render_index(before: &str, settings: &serde_json::Value) -> String {
 
 /// One legal page, as a pure function so the applier can compare before writing.
 ///
-/// The wrapper is the PUBLISHED template — it is reproduced here byte-for-byte (including the second
-/// `<style>` block that carries `.updated`/`.back`, which the older in-repo template did not have).
-/// Reconciliation note (kanban t_3fb0d3d2): the in-repo template was STALE relative to the pages that
-/// are actually served, so a verbatim port would have rewritten all three live legal pages on the
-/// first apply. The served bytes won; the template and the reconciled row both follow them.
+/// THIS IS THE PUBLISHED WRAPPER. `apply_site_settings_mode` (driven by /opt/swift/bin/is-site-apply.sh
+/// from cron every five minutes) is the ONLY writer of these files, so the page's day/night switch has
+/// to live HERE: a hand-edit of a served legal page is overwritten by the next apply (measured
+/// 2026-11-22 — a switch added to the static files was replaced by this renderer's dark-only wrapper
+/// within five minutes, and the live page went back to black for a visitor in Day mode).
+///
+/// The switch is the site's own: the `ws_theme` cookie/localStorage the marketing pages read, applied
+/// before first paint, with BOTH palettes defined so a press always does something.
 fn legal_page(slug: &str, title: &str, body: &str, tail: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html><html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{} — IncentiveSwift</title>
-<link rel="canonical" href="https://incentiveswift.com/{}">
-<meta name="description" content="{} for IncentiveSwift.">
-<style>body{{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e5e5e5;line-height:1.7;margin:0;padding:0}}
-.container{{max-width:800px;margin:0 auto;padding:60px 24px}}
-h1{{font-size:2rem;color:#8b5cf6}}a{{color:#8b5cf6}}</style>
-<style>h1{{margin-bottom:8px}}
-h2{{font-size:1.2rem;color:#ffffff;margin:28px 0 10px}}
-p,li{{color:#9ca3af;margin:10px 0}}
-.updated{{color:#6b7280;font-size:13px;margin-bottom:24px}}
-.back{{margin-top:40px;padding-top:20px;border-top:1px solid rgba(255,255,255,.08);font-size:14px}}</style>
-</head><body><div class="container">
-<h1>{}</h1>
-{}{}"#,
-        title,
-        slug,
-        escape_ampersand(title),
-        escape_ampersand(title),
-        body,
-        tail
-    )
+    const HEAD: &str = r#"<!DOCTYPE html><html lang="en">
+<head>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
+<style id="ws-legal-theme">
+  :root{color-scheme:light dark}
+  html[data-theme="dark"]{--bg:#0f0f0f;--ink:#e5e5e5;--strong:#ffffff;--muted:#9ca3af;--accent:#a78bfa;--line:rgba(255,255,255,.08)}
+  html[data-theme="light"],html:not([data-theme]){--bg:#f6f7fb;--ink:#374151;--strong:#111827;--muted:#4b5563;--accent:#6d28d9;--line:rgba(17,24,39,.12)}
+  body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);line-height:1.7;margin:0;padding:0;transition:background .18s ease,color .18s ease}
+  .container{max-width:800px;margin:0 auto;padding:60px 24px}
+  h1{font-size:2rem;color:var(--accent);margin-bottom:8px}
+  h2{font-size:1.2rem;color:var(--strong);margin:28px 0 10px}
+  p,li{color:var(--ink);margin:10px 0}
+  strong{color:var(--strong)}
+  a{color:var(--accent)}
+  .updated{color:var(--muted);font-size:13px;margin-bottom:24px}
+  .back{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);font-size:14px}
+  .ws-theme-toggle{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;
+    background:var(--bg);color:var(--strong);border:1px solid var(--line);border-radius:999px;padding:8px 12px;
+    font:600 12px system-ui,sans-serif;cursor:pointer}
+</style>"#;
+
+    // Built with push_str rather than one format! so the CSS above never needs its braces doubled —
+    // a doubled brace in a style block is a silent typo that only shows up as a broken page.
+    let mut out = String::with_capacity(body.len() + tail.len() + 4096);
+    out.push_str(HEAD);
+    out.push_str("<meta charset=\"UTF-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n");
+    out.push_str(&format!(
+        "<title>{} \u{2014} IncentiveSwift</title>\n",
+        title
+    ));
+    out.push_str(&format!(
+        "<link rel=\"canonical\" href=\"https://incentiveswift.com/{}\">\n",
+        slug
+    ));
+    out.push_str(&format!(
+        "<meta name=\"description\" content=\"{} for IncentiveSwift.\">\n",
+        escape_ampersand(title)
+    ));
+    out.push_str("</head><body><div class=\"container\">\n<h1>");
+    out.push_str(&escape_ampersand(title));
+    out.push_str("</h1>\n");
+    out.push_str(body);
+    out.push_str(tail);
+    out
 }
 
 /// Escape `&` as `&amp;` for an HTML text node. The published legal pages carry their `<h1>` escaped
