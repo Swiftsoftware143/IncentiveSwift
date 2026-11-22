@@ -395,6 +395,12 @@ async fn fire_webhook_with_method(client: &Client, url: &str, method: &str, payl
 
 /// Send an SMS via Telnyx (reuses the existing SMS handler logic)
 async fn send_sms_via_telnyx(state: &AppState, account_id: &Uuid, to: &str, message: &str) {
+    // A reserved fiction number can never receive a text; withhold it before the
+    // credential query and before any provider request (kanban t_6b70015a).
+    if let Some(reason) = crate::security::probe_addr::undeliverable_number(to) {
+        tracing::info!(to = %to, reason = %reason, "text withheld: the number cannot receive one, so nothing was sent");
+        return;
+    }
     // Get Telnyx credentials
     let creds = sqlx::query_as::<_, (String, Option<String>, Option<Value>)>(
         r#"SELECT api_key, base_url, metadata

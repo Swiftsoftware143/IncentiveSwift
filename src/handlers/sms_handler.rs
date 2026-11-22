@@ -525,6 +525,12 @@ async fn generate_ai_reply(
 
 /// Send an SMS via Telnyx API
 async fn send_telnyx_sms(state: &AppState, to: &str, message: &str) -> Result<(), String> {
+    // A reserved fiction number can never receive a text; withhold it before the
+    // credential query and before any provider request (kanban t_6b70015a).
+    if let Some(reason) = crate::security::probe_addr::undeliverable_number(to) {
+        tracing::info!(to = %to, reason = %reason, "text withheld: the number cannot receive one, so nothing was sent");
+        return Ok(());
+    }
     // Find Telnyx SMS credentials for any account (use first active one)
     let creds = sqlx::query_as::<_, (String, Option<Value>)>(
         r#"SELECT api_key, metadata FROM provider_keys

@@ -410,3 +410,69 @@ mod synthetic_requester_tests {
         assert_eq!(synthetic_requester("someone@gmail.com", ""), None);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NANP FICTION BLOCK — a reserved number must never be handed to the text
+// provider (kanban t_499d92b7 / t_6b70015a)
+//
+// The NANP reserves exchange 555 with subscriber 0100–0199 for fiction
+// (813-555-0101, 305-555-0199). No carrier can deliver to one, so handing it
+// to Telnyx is a guaranteed failed send charged to the same account that
+// carries real customers' texts. This predicate recognises that block ONLY —
+// exchange 555 AND subscriber 0100–0199 — and answers
+// `Some("nanp-fiction-555-01xx")`; a dialable 555 number such as 813-555-1234
+// returns `None`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Why `number` can never receive a text, or `None` for a dialable number.
+///
+/// Recognises the NANP fiction block only: exchange 555 AND subscriber
+/// 0100–0199. Formatting is ignored (only digits are read) and a leading
+/// country code is dropped, so `8135550101`, `+1 (813) 555-0101` and
+/// `001-305-555-0199` all classify; `8135551234` (a real number) does not.
+pub fn undeliverable_number(number: &str) -> Option<&'static str> {
+    let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_start_matches("00");
+    if digits.len() < 10 {
+        return None;
+    }
+    let nsn = &digits[digits.len() - 10..];
+    let (exchange, line) = (&nsn[3..6], &nsn[6..10]);
+    if exchange != "555" {
+        return None;
+    }
+    match line.parse::<u32>() {
+        Ok(subscriber) if (100..=199).contains(&subscriber) => Some("nanp-fiction-555-01xx"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod undeliverable_number_tests {
+    use super::*;
+
+    #[test]
+    fn the_nanp_fiction_block_is_undeliverable() {
+        assert_eq!(
+            undeliverable_number("8135550101"),
+            Some("nanp-fiction-555-01xx")
+        );
+        assert_eq!(
+            undeliverable_number("+1 (813) 555-0101"),
+            Some("nanp-fiction-555-01xx")
+        );
+        assert_eq!(
+            undeliverable_number("001-305-555-0199"),
+            Some("nanp-fiction-555-01xx")
+        );
+    }
+
+    #[test]
+    fn dialable_numbers_are_not_undeliverable() {
+        assert_eq!(undeliverable_number("8135551234"), None);
+        assert_eq!(undeliverable_number("+1 305 555 1234"), None);
+        assert_eq!(undeliverable_number("3051234567"), None);
+        assert_eq!(undeliverable_number("5550101"), None);
+        assert_eq!(undeliverable_number(""), None);
+    }
+}
