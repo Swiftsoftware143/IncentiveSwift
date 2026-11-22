@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<script id="fleet-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(t!=='dark'&&t!=='light'){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t==='dark'?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <title>Login — IncentiveSwift</title>
 <!-- App-root favicon (kanban t_81bbc2b6): this is the page the app root's inline auth guard lands a
      logged-out visitor on, so it is the document that issued the automatic `GET /favicon.ico` and
@@ -29,9 +30,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 .lk a{color:#4f46e5}
 .sup{margin-top:12px;font-size:12px;line-height:1.55;color:#6b7280}
 .sup a{color:#4f46e5}
+/* ===== Fleet day/night switch (2026-11-22) =====
+   This /login was the last of the six app sign-in pages without the fleet switch: a customer who
+   picked Night mode in the console came back to a page that ignored the choice. Tokens are the
+   SAME palette the IncentiveSwift console uses, and the choice persists under `ws_theme` (cookie
+   + localStorage), which is exactly what the console's boot reads — so the login and the
+   dashboard agree on the first paint, with no flash. Additive: every rule below only restates a
+   colour the page already declared, now through a token. */
+:root{--page-bg:linear-gradient(135deg,#141033,#241f5c);--card-bg:#1a1d27;--heading:#e8eaed;--text-primary:#e8eaed;--text-secondary:#9aa0a6;--link:#a5b4fc;--border:#2d3148;--divider:#2d3148;--shadow:0 12px 40px rgba(0,0,0,.55);color-scheme:dark}
+html[data-theme="light"]{--page-bg:linear-gradient(135deg,#eef2ff,#e0e7ff);--card-bg:#ffffff;--heading:#1e1b4b;--text-primary:#16181d;--text-secondary:#64748b;--link:#4f46e5;--border:#d1d5db;--divider:#f1f5f9;--shadow:0 12px 40px rgba(16,24,40,.16);color-scheme:light}
+html[data-theme="dark"]{--page-bg:linear-gradient(135deg,#141033,#241f5c);--card-bg:#1a1d27;--heading:#e8eaed;--text-primary:#e8eaed;--text-secondary:#9aa0a6;--link:#a5b4fc;--border:#2d3148;--divider:#2d3148;--shadow:0 12px 40px rgba(0,0,0,.55);color-scheme:dark}
+body{background:var(--page-bg)}
+.c{background:var(--card-bg);box-shadow:var(--shadow)}
+.c h1{color:var(--heading)}
+.c p.sub{color:var(--text-secondary)}
+.c input{background:var(--card-bg);color:var(--text-primary);border-color:var(--border)}
+.lk{border-top-color:var(--divider)}
+.lk a,.sup a,.msg.i{color:var(--link)}
+.sup{color:var(--text-secondary)}
+html[data-theme="dark"] .msg.e{background:rgba(239,68,68,.15);color:#fca5a5}
+html[data-theme="dark"] .msg.n{background:rgba(245,158,11,.15);color:#fbbf24}
+.theme-toggle{position:fixed;left:16px;bottom:16px;z-index:30;display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:999px;border:1px solid var(--border);background:var(--card-bg);color:var(--text-primary);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;box-shadow:var(--shadow)}
+.theme-toggle:hover{border-color:var(--link)}
 </style>
 </head>
 <body>
+<button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle day/night mode"><span id="theme-toggle-icon" aria-hidden="true">🌙</span><span id="theme-toggle-label">Night mode</span></button>
+<script id="fleet-theme-toggle">(function(){var b=document.getElementById('theme-toggle');if(!b)return;function p(){var d=document.documentElement.getAttribute('data-theme')==='dark';var i=document.getElementById('theme-toggle-icon');var l=document.getElementById('theme-toggle-label');if(i)i.textContent=d?'☀️':'🌙';if(l)l.textContent=d?'Day mode':'Night mode';}b.addEventListener('click',function(){var n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);try{localStorage.setItem('ws_theme',n);}catch(e){}try{document.cookie='ws_theme='+n+';path=/;max-age=31536000;SameSite=Lax';}catch(e){}p();});p();})();</script>
 <div class="c">
 <h1>IncentiveSwift</h1>
 <p class="sub">Viral Campaigns &amp; Loyalty Rewards Platform</p>
