@@ -62,9 +62,9 @@ html[data-theme="dark"] [style*="background:#fef2f2"],html[data-theme="dark"] [s
 html[data-theme="dark"] [style*="background:#f0fdf4"],html[data-theme="dark"] [style*="background:#dcfce7"]{background-color:#12291f!important}
 html[data-theme="dark"] [style*="color:#111827"],html[data-theme="dark"] [style*="color:#0f172a"],html[data-theme="dark"] [style*="color:#1e293b"]{color:#e8eaed!important}
 html[data-theme="dark"] [style*="color:#334155"]{color:#c7cbd4!important}
-html[data-theme="dark"] [style*="color:#475569"],html[data-theme="dark"] [style*="color:#64748b"],html[data-theme="dark"] [style*="color:#94a3b8"],html[data-theme="dark"] [style*="color:#6b7280"],html[data-theme="dark"] [style*="color:#9ca3af"]{color:#9aa0a6!important}
+html[data-theme="dark"] [style*="color:#475569"],html[data-theme="dark"] [style*="color:#64748b"],html[data-theme="dark"] [style*="color:#64748b"],html[data-theme="dark"] [style*="color:#6b7280"],html[data-theme="dark"] [style*="color:#6b7280"]{color:#9aa0a6!important}
 html[data-theme="dark"] [style*="color:#b91c1c"],html[data-theme="dark"] [style*="color:#991b1b"],html[data-theme="dark"] [style*="color:#dc2626"]{color:#f87171!important}
-html[data-theme="dark"] [style*="color:#166534"],html[data-theme="dark"] [style*="color:#065f46"],html[data-theme="dark"] [style*="color:#059669"],html[data-theme="dark"] [style*="color:#16a34a"],html[data-theme="dark"] [style*="color:#047857"]{color:#6ee7b7!important}
+html[data-theme="dark"] [style*="color:#166534"],html[data-theme="dark"] [style*="color:#065f46"],html[data-theme="dark"] [style*="color:#047857"],html[data-theme="dark"] [style*="color:#16a34a"],html[data-theme="dark"] [style*="color:#047857"]{color:#6ee7b7!important}
 html[data-theme="dark"] [style*="color:#92400e"],html[data-theme="dark"] [style*="color:#b45309"]{color:#fbbf24!important}
 html[data-theme="dark"] [style*="color:#4f46e5"],html[data-theme="dark"] [style*="color:#6366f1"]{color:#a5b4fc!important}
 html[data-theme="dark"] [style*="color:#2563eb"]{color:#93c5fd!important}
@@ -309,7 +309,7 @@ html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border
     <div style="margin:0 0 14px">
       <div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 6px">Your token</div>
       <div id="mcp-token" style="font-size:14px;color:#64748b">Loading your key&hellip;</div>
-      <div style="font-size:12px;color:#94a3b8;margin-top:4px">This is the same key as the <strong>API keys</strong> card below. Viewing it asks for your sign-in password, and every view is recorded.</div>
+      <div style="font-size:12px;color:#64748b;margin-top:4px">This is the same key as the <strong>API keys</strong> card below. Viewing it asks for your sign-in password, and every view is recorded.</div>
     </div>
 
     <div style="margin:0 0 14px">
@@ -391,7 +391,7 @@ html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border
     <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
       <button class="btn" onclick="ebSave()">Save branding</button>
       <button class="btn" style="background:#0f766e" onclick="ebPreview()">Send me a preview</button>
-      <button class="btn" style="background:#059669" id="eb-up" onclick="ebUpload()">Upload logo</button>
+      <button class="btn" style="background:#047857" id="eb-up" onclick="ebUpload()">Upload logo</button>
       <button class="btn" id="eb-rm" style="background:#64748b;display:none" onclick="ebRemove()">Remove logo</button>
     </div>
     <!-- How a RECIPIENT sees it — the REAL mail, not a drawing of one.
@@ -407,7 +407,7 @@ html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border
         <div style="font-size:12px;color:#64748b;flex:1">How your customers see it — the email your sender really produces</div>
         <button class="btn" style="padding:4px 10px;font-size:12px" onclick="ebRender()">Refresh</button>
       </div>
-      <div id="eb-subject" style="font-size:12px;color:#94a3b8;margin:0 0 6px"></div>
+      <div id="eb-subject" style="font-size:12px;color:#64748b;margin:0 0 6px"></div>
       <iframe id="eb-frame" title="Preview of the email this workspace sends" sandbox="" style="width:100%;height:260px;border:1px solid #e2e8f0;border-radius:8px;background:#fff"></iframe>
       <div id="eb-hint" style="font-size:12px;color:#64748b;margin-top:6px">Loading the email your sender produces&hellip;</div>
     </div>
@@ -1089,7 +1089,7 @@ function mcpLoad() {
     var keys = (d && d.api_keys) || [];
     var k = keys.filter(function (x) { return x.is_active; })[0];
     if (!k) {
-      box.innerHTML = '<span style="color:#94a3b8">No active key yet &mdash; create one in the <strong>API keys</strong> card below, then come back here.</span>';
+      box.innerHTML = '<span style="color:#64748b">No active key yet &mdash; create one in the <strong>API keys</strong> card below, then come back here.</span>';
       return;
     }
     box.innerHTML = '<strong>' + esc(k.name || 'API key') + '</strong> '
@@ -1119,7 +1119,7 @@ function akRender() {
   var newRow = document.getElementById('ak-new-row');
   if (newRow) newRow.style.display = active.length ? 'none' : 'flex';
   if (!AK.keys.length) {
-    box.innerHTML = '<div style="color:#94a3b8">No key yet. Create one to let your own tools reach this workspace.</div>';
+    box.innerHTML = '<div style="color:#64748b">No key yet. Create one to let your own tools reach this workspace.</div>';
     return;
   }
   var h = '';
@@ -1130,7 +1130,7 @@ function akRender() {
       + '<code style="font-size:12px;color:#4f46e5">' + esc(k.prefix || '') + '&hellip;</code> '
       + (on ? '<span style="font-size:11px;background:#dcfce7;color:#166534;border-radius:6px;padding:1px 7px">Active</span>'
             : '<span style="font-size:11px;background:#fee2e2;color:#991b1b;border-radius:6px;padding:1px 7px">Revoked</span>')
-      + '<br><span style="color:#94a3b8;font-size:12px">Created ' + esc(akWhen(k.created_at))
+      + '<br><span style="color:#64748b;font-size:12px">Created ' + esc(akWhen(k.created_at))
       + (k.last_used_at ? ' &middot; last used ' + esc(akWhen(k.last_used_at)) : ' &middot; never used')
       + '</span></span>'
       + '<span style="white-space:nowrap;font-size:13px">'
@@ -1228,7 +1228,7 @@ function akLedger() {
       var word = { created: 'created', regenerated: 'regenerated', revoked: 'revoked',
                    revealed: 'viewed', updated: 'updated' }[e.action] || String(e.action || '');
       h += '<div style="padding:3px 0">' + esc((e.key_prefix || '') + '…') + ' ' + esc(word)
-        + ' <span style="color:#94a3b8">&middot; ' + esc(akWhen(e.created_at)) + '</span></div>';
+        + ' <span style="color:#64748b">&middot; ' + esc(akWhen(e.created_at)) + '</span></div>';
     });
     box.innerHTML = h;
   }).catch(function () { box.textContent = ''; });
@@ -2235,7 +2235,7 @@ function loyNumField(label, id, v, hint) {
   return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">' + esc(label)
     + '<input type="number" min="0" step="1" id="' + id + '" value="' + esc(String(v == null ? 0 : v)) + '"'
     + ' style="display:block;width:100%;margin-top:3px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">'
-    + (hint ? '<span style="display:block;color:#94a3b8;margin-top:2px">' + esc(hint) + '</span>' : '') + '</label>';
+    + (hint ? '<span style="display:block;color:#64748b;margin-top:2px">' + esc(hint) + '</span>' : '') + '</label>';
 }
 function loyCheck(label, id, on) {
   return '<label style="display:block;font-size:12px;color:#475569;margin:0 0 8px">'
@@ -3364,7 +3364,7 @@ function pbRender() {
     }
     var action;
     if (isCur) {
-      action = '<div style="margin-top:10px;font-size:12.5px;color:#059669;font-weight:600">This is your plan</div>';
+      action = '<div style="margin-top:10px;font-size:12.5px;color:#047857;font-weight:600">This is your plan</div>';
     } else if (price <= 0) {
       // A $0 plan is not purchasable: checkout refuses it by name ("That plan costs nothing").
       action = '<div data-pb-free-plan="' + esc(p.slug || '') + '" style="margin-top:10px;font-size:12.5px;color:#475569;font-weight:600">Free plan \u2014 nothing to pay</div>';
@@ -3636,13 +3636,13 @@ function downloadMyCsv(type, btn) {
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); if (a.parentNode) a.parentNode.removeChild(a); }, 1500);
-      say('Downloaded ' + (lines.length - 1) + ' row' + (lines.length === 2 ? '' : 's') + '.', '#059669');
+      say('Downloaded ' + (lines.length - 1) + ' row' + (lines.length === 2 ? '' : 's') + '.', '#047857');
       if (btn) btn.disabled = false;
     })
     .catch(function (e) { say(e.message || 'The export could not be prepared.', '#dc2626'); if (btn) btn.disabled = false; });
 }
 </script>
-<div style="max-width:1100px;margin:8px auto 32px;padding:0 24px;text-align:center;font-size:12px;color:#94a3b8">
+<div style="max-width:1100px;margin:8px auto 32px;padding:0 24px;text-align:center;font-size:12px;color:#64748b">
   <a href="https://incentiveswift.com/privacy" style="color:#64748b;text-decoration:none">Privacy Policy</a>
   &middot; <a href="https://incentiveswift.com/terms" style="color:#64748b;text-decoration:none">Terms of Service</a>
   &middot; <a href="/guide.html" target="_blank" rel="noopener" style="color:#64748b;text-decoration:none">User Guide</a>
@@ -3751,7 +3751,7 @@ function downloadMyCsv(type, btn) {
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
         if (!r.ok) throw new Error(d.message || d.error || ('The note could not be sent (' + r.status + ').'));
-        msg.style.color = '#059669';
+        msg.style.color = '#047857';
         msg.textContent = 'Thank you — your note is with the team. If they need to reply, their answer reaches you by email.';
         setTimeout(hide, 2200);
       });
@@ -3895,7 +3895,7 @@ function downloadMyCsv(type, btn) {
     return b;
   });
 
-  var screenLine = el('div', 'font-size:12px;color:#9ca3af;margin-bottom:6px',
+  var screenLine = el('div', 'font-size:12px;color:#6b7280;margin-bottom:6px',
     'Screen: ' + screenName());
 
   var ta = el('textarea',
@@ -3961,7 +3961,7 @@ function downloadMyCsv(type, btn) {
 
   function say(text, ok) {
     msg.textContent = text;
-    msg.style.color = ok ? '#059669' : '#b91c1c';
+    msg.style.color = ok ? '#047857' : '#b91c1c';
   }
 
   function open() {
