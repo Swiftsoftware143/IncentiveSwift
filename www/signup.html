@@ -7,7 +7,14 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0a0b12;--surface:#13151f;--surface2:#1a1d2f;--border:#2a2d45;--text:#e1e4ed;--text2:#8b8fa3;--accent:#00E5FF;--accent2:#4df0ff;--purple:#a78bfa;--green:#34d399;--red:#ef4444;--radius:12px}
-body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+body{font-family:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-wrap:wrap;align-content:center;align-items:center;justify-content:center;padding:24px}
+/* THE INJECTED BREADCRUMB AND RELATED-LINKS BLOCKS ARE FULL-WIDTH ROWS (2026-11-22).
+   They are siblings of .signup-card inside the body flex container; while the body was a
+   single row they took their share of the line and the card -- width:100% but shrinkable
+   -- came out 113px wide at a 390px viewport with 71px inputs (measured live). Full-basis
+   rows keep the card alone on its line at every width. */
+.navx-crumb,.navx-rel{flex:0 0 100%}
+@media(max-width:600px){body{align-content:flex-start}}
 .signup-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:48px;width:100%;max-width:460px;position:relative;overflow:hidden}
 .signup-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),#7c3aed)}
 .logo{display:flex;align-items:center;justify-content:center;gap:10px;font-size:22px;font-weight:800;margin-bottom:6px}
