@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loyalty Programme Rules — IncentiveSwift</title>
+<style>
+  :root { --ink:#101828; --muted:#667085; --line:#e4e7ec; --bg:#f9fafb; --brand:#7c3aed; --ok:#067647; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:760px; margin:0 auto; padding:32px 20px 64px; }
+  header { border-bottom:1px solid var(--line); padding-bottom:18px; margin-bottom:26px; }
+  h1 { margin:0 0 6px; font-size:26px; letter-spacing:-.02em; }
+  .sub { color:var(--muted); font-size:15px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-bottom:18px; }
+  .balance { display:flex; align-items:baseline; gap:12px; }
+  .balance .n { font-size:34px; font-weight:700; letter-spacing:-.02em; }
+  .balance .l { color:var(--muted); font-size:14px; }
+  ul { margin:14px 0 0; padding-left:20px; }
+  li { margin-bottom:10px; }
+  li:last-child { margin-bottom:0; }
+  .inforce { display:inline-block; background:#f4ebff; color:#6941c6; border-radius:999px;
+             padding:3px 10px; font-size:12px; font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+  .note { color:var(--muted); font-size:13px; margin-top:22px; }
+  .err { background:#fef3f2; border-color:#fecdca; color:#b42318; }
+  code { background:#f2f4f7; border-radius:5px; padding:1px 5px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Loyalty programme rules</h1>
+    <div class="sub">How rewards are funded, and what happens if the money runs low.</div>
+  </header>
+
+  <div id="body"><div class="card">Loading…</div></div>
+
+  <div class="note">
+    These rules are generated from the setting the platform is actually enforcing, so this page cannot
+    show you a rule the system does not apply.
+  </div>
+</div>
+
+<script>
+// The rules are served by the API and GENERATED FROM THE RULE ACTUALLY IN FORCE (see
+// handlers/treasury_engine_handler.rs::get_business_rules). Rendering the server's own sentences rather
+// than restating them here is the whole point: a hand-written page is a second source of truth, and the
+// two drift the first time the setting changes.
+const API = location.origin + '/api/v1';
+
+function money(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return v;
+  return n.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+(async () => {
+  const el = document.getElementById('body');
+  try {
+    const res = await fetch(API + '/treasury/rules', { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const d = await res.json();
+    const rules = Array.isArray(d.rules) ? d.rules : [];
+    el.innerHTML =
+      '<div class="card">' +
+        '<span class="inforce">Rule in force: ' + esc(d.rule_in_force || 'hold') + '</span>' +
+        '<div class="balance" style="margin-top:16px">' +
+          '<span class="n">' + esc(money(d.safety_balance)) + '</span>' +
+          '<span class="l">safety balance — the programme never pays below this</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card"><ul>' + rules.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul></div>';
+  } catch (e) {
+    el.innerHTML = '<div class="card err">Could not load the rules (' + esc(e.message) +
+                   '). Please try again in a moment.</div>';
+  }
+})();
+</script>
+</body>
+</html>

@@ -2962,6 +2962,7 @@ const ledgerTab = html`<div>
         <div class="flex gap-2">
           <button class="btn btn-primary" onClick=${() => submitTreasuryFunding()}>Record a payment in</button>
           <button class="btn" onClick=${() => saveTreasuryRule()}>Change the rule</button>
+          <a class="btn" href="/rules.html" target="_blank" rel="noopener">What the rules mean</a>
         </div>
       </div>
     </div>` : html`<p class="text-gray-500 text-sm mb-6">Float position unavailable.</p>`}

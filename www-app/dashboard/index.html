@@ -2602,7 +2602,7 @@ function loyRender() {
       pr.innerHTML = LOY.err ? '' : '<div style="color:#64748b;font-size:14px">Loading your programmes\u2026</div>';
     } else {
       var items = (list && list.programs) ? list.programs : (Array.isArray(list) ? list : []);
-      var h = '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:8px">Your programmes</div>';
+      var h = '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:8px">Your programmes' + ' <a href="/rules.html" target="_blank" rel="noopener" style="font-weight:500;font-size:12px;color:#7c3aed;margin-left:6px">Programme rules</a></div>';
       if (!items.length) {
         h += '<div style="color:#64748b;font-size:14px;margin-bottom:8px">No programme yet. Name one below and it appears here with its check-in link \u2014 no other console needed.</div>'
           + loyCreateForm();
