@@ -493,14 +493,18 @@ const Dashboard = () => {
       <div class="stat-card"><div class="stat-value">${st.total_points ?? '...'}</div><div class="stat-label">Points Awarded</div></div>
       <div class="stat-card"><div class="stat-value">${st.total_rewards ?? '...'}</div><div class="stat-label">Rewards</div></div>
     </div>
-    ${st.usage && html`<div class="card mt-4" data-console="plan-usage">
+    ${st.usage && html`<div class="card mt-4" data-console="plan-usage" data-plan-slug=${st.usage.plan ? st.usage.plan.slug : ''}>
       <h3 class="text-base font-bold text-gray-800">What this account is using</h3>
-      <p class="text-xs text-gray-500 mb-2">Live counts from the server, beside the allowance your plan carries.</p>
+      <p class="text-xs text-gray-500 mb-2" data-usage-plan>${st.usage.plan
+        ? (st.usage.plan.assigned === false
+            ? 'No plan assigned yet \u2014 the ' + st.usage.plan.name + ' limits apply until you choose one.'
+            : 'Your plan: ' + st.usage.plan.name + (Number(st.usage.plan.price_monthly) > 0 ? ' \u00b7 $' + Number(st.usage.plan.price_monthly).toFixed(2) + '/mo' : '') + '. Every figure below is shown against what your plan carries.')
+        : 'Live counts from the server, beside the allowance your plan carries.'}</p>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="stat-card" data-usage="leads"><div class="stat-value">${st.usage.leads ?? '...'}</div><div class="stat-label">Leads</div></div>
-        <div class="stat-card" data-usage="tags"><div class="stat-value">${st.usage.tags ?? '...'}</div><div class="stat-label">Tags</div></div>
-        <div class="stat-card" data-usage="entries"><div class="stat-value">${st.usage.entries_this_month ?? '...'}</div><div class="stat-label">Entries this month</div></div>
-        <div class="stat-card" data-usage="campaigns"><div class="stat-value">${st.usage.campaigns ?? '...'}</div><div class="stat-label">Campaigns</div></div>
+        <div class="stat-card" data-usage="leads"><div class="stat-value">${window._usageFig(st.usage.leads ?? '...', st.usage.plan && st.usage.plan.max_leads)}</div><div class="stat-label">Leads</div></div>
+        <div class="stat-card" data-usage="tags"><div class="stat-value">${window._usageFig(st.usage.tags ?? '...', st.usage.plan && st.usage.plan.max_tags)}</div><div class="stat-label">Tags</div></div>
+        <div class="stat-card" data-usage="entries"><div class="stat-value">${window._usageFig(st.usage.entries_this_month ?? '...', st.usage.plan && st.usage.plan.max_entries_per_month)}</div><div class="stat-label">Entries this month</div></div>
+        <div class="stat-card" data-usage="campaigns"><div class="stat-value">${window._usageFig(st.usage.campaigns ?? '...', st.usage.plan && st.usage.plan.max_campaigns)}</div><div class="stat-label">Campaigns</div></div>
       </div>
       <button type="button" class="btn mt-3" data-step="my-plan" onClick=${() => go('my-plan')}>See your plan and its limits</button>
     </div>`}
@@ -8218,6 +8222,16 @@ const renderApp = () => {
 // shell evaluates in GLOBAL scope and cannot see S/renderApp from. One window helper is the fix
 // this console already uses elsewhere (see the nav-audience note on inline module bindings).
 window._goMyPlan = () => { S.view = 'my-plan'; renderApp(); };
+// One usage figure with the allowance its plan carries: a number reads "of N", -1 (and a key the
+// tier does not configure) reads "unlimited", 0 reads "not included" \u2014 the same words the write
+// gates use, so the strip and a refusal cannot drift (kanban cron 2026-11-22).
+window._usageFig = (used, limit) => {
+  if (limit === undefined || limit === null) return used;
+  const n = Number(limit);
+  if (!isFinite(n) || n < 0) return used + ' / unlimited';
+  if (n === 0) return used + ' / not included';
+  return used + ' of ' + n;
+};
 
 /* ── kanban t_8a6160c9 — one console, two origins ───────────────────────────────────────────────
    This file is ALSO served on the customer app host now (app.incentiveswift.com/admin/, an nginx

@@ -339,6 +339,67 @@ async fn usage_or_zero(db: &PgPool, account_id: Uuid, feature_key: &str) -> i64 
     }
 }
 
+/// One numeric ceiling from the tier's own feature row (`tier_features.limit_value`) — the same
+/// column the write gates apply through [`enforce_feature_limit`], so the number the customer is
+/// shown and the number that refuses them are one row. `None` means the key is not configured on
+/// the tier, which the house convention treats as "not a cap".
+async fn tier_feature_limit(db: &PgPool, tier_id: Uuid, key: &str) -> Option<i32> {
+    sqlx::query_scalar(
+        "SELECT tf.limit_value FROM tier_features tf \
+           JOIN features f ON f.id = tf.feature_id \
+          WHERE tf.tier_id = $1 AND f.key = $2",
+    )
+    .bind(tier_id)
+    .bind(key)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// The plan the caller's ceilings actually come from — resolved through [`effective_tier_id`], the
+/// SAME tier every write gate uses (the account's own tier, else the install's free tier), so this
+/// strip cannot drift from the refusals a customer meets. `assigned: false` marks the free-tier
+/// fallback a workspace with no plan row is bounded by, so the console can say "no plan assigned"
+/// instead of inventing a subscription.
+///
+/// Today the dashboard card promised "beside the allowance your plan carries" and showed bare
+/// counts, and `GET /api/v1/me/usage` carried no allowance at all (kanban cron 2026-11-22) — the
+/// same defect WorkflowSwift's usage payload had.  `-1` is plan_tiers' own "unlimited" sentinel and
+/// `null` is "not configured"; the console renders both as words.
+async fn plan_allowances(db: &PgPool, account_id: Uuid) -> Option<serde_json::Value> {
+    let own: Option<Uuid> = sqlx::query_scalar("SELECT plan_tier_id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+    let tier_id = effective_tier_id(db, account_id).await.ok().flatten()?;
+    let row = sqlx::query_as::<_, (String, String, Option<i32>, Option<i32>, f64)>(
+        "SELECT name, slug, max_campaigns, max_entries_per_month, \
+                COALESCE(price_monthly, 0)::double precision \
+           FROM plan_tiers WHERE id = $1",
+    )
+    .bind(tier_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+    let (name, slug, max_campaigns, max_entries, price_monthly) = row;
+    let max_leads = tier_feature_limit(db, tier_id, "max_leads").await;
+    let max_tags = tier_feature_limit(db, tier_id, "max_tags").await;
+    Some(serde_json::json!({
+        "name": name,
+        "slug": slug,
+        "max_campaigns": max_campaigns,
+        "max_entries_per_month": max_entries,
+        "max_leads": max_leads,
+        "max_tags": max_tags,
+        "price_monthly": price_monthly,
+        "assigned": own.map(|t| t == tier_id).unwrap_or(false),
+    }))
+}
+
 pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value {
     let Ok(account_id) = account_uuid(account_id) else {
         tracing::error!("me/usage: the authenticated account id is not a uuid");
@@ -356,12 +417,19 @@ pub async fn get_usage_json(db: &PgPool, account_id: &str) -> serde_json::Value 
     // Enterprise -1). The window is the CALENDAR MONTH the column names, not the lifetime count
     // `count_usage("max_entries")` returns.
     let entries_this_month = entries_this_month(db, account_id).await;
-    serde_json::json!({
+    let mut out = serde_json::json!({
         "campaigns": campaigns,
         "leads": leads,
         "tags": tags,
         "entries_this_month": entries_this_month
-    })
+    });
+    // The plan's OWN ceilings, from the tier every write gate resolves (`effective_tier_id`) —
+    // so this payload answers "how much of my allowance am I using" with the same row that
+    // refuses the next write.
+    if let Some(plan) = plan_allowances(db, account_id).await {
+        out["plan"] = plan;
+    }
+    out
 }
 
 /// Entries the account's own campaigns took in the current calendar month — the window
