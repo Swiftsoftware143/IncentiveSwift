@@ -67,6 +67,7 @@ html[data-theme="dark"] [style*="color:#b91c1c"],html[data-theme="dark"] [style*
 html[data-theme="dark"] [style*="color:#166534"],html[data-theme="dark"] [style*="color:#065f46"],html[data-theme="dark"] [style*="color:#047857"],html[data-theme="dark"] [style*="color:#16a34a"],html[data-theme="dark"] [style*="color:#047857"]{color:#6ee7b7!important}
 html[data-theme="dark"] [style*="color:#92400e"],html[data-theme="dark"] [style*="color:#b45309"]{color:#fbbf24!important}
 html[data-theme="dark"] [style*="color:#4f46e5"],html[data-theme="dark"] [style*="color:#6366f1"]{color:#a5b4fc!important}
+html[data-theme="dark"] [style*="color:#7c3aed"]{color:#c4b5fd!important}
 html[data-theme="dark"] [style*="color:#2563eb"]{color:#93c5fd!important}
 html[data-theme="dark"] [style*="1px solid #e2e8f0"],html[data-theme="dark"] [style*="1px solid #e5e7eb"],html[data-theme="dark"] [style*="1px solid #cbd5e1"],html[data-theme="dark"] [style*="1px solid #d1d5db"]{border-color:#2d3148!important}
 /* tailwind utility classes tw.css ships */
@@ -427,7 +428,7 @@ html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border
     <div id="ak-list" style="color:#64748b;font-size:14px">Loading your key&hellip;</div>
     <div id="ak-shown" style="display:none;margin-top:12px"></div>
     <div id="ak-new-row" style="display:none;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
-      <input id="ak-name" placeholder="Key name (optional)" style="width:220px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
+      <input id="ak-name" aria-label="Key name" placeholder="Key name (optional)" style="width:220px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
       <button class="btn" onclick="akCreate()">Create key</button>
     </div>
     <div id="ak-ledger" style="margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:13px;color:#64748b"></div>
@@ -1094,7 +1095,7 @@ function mcpLoad() {
     }
     box.innerHTML = '<strong>' + esc(k.name || 'API key') + '</strong> '
       + '<code style="font-size:12px;color:#4f46e5">' + esc(k.prefix || '') + '&hellip;</code> '
-      + '<a href="#" onclick="akReveal(\'' + esc(k.id) + '\',true);return false;" style="color:#2563eb;margin-left:6px">View &amp; copy</a>';
+      + '<a href="#" onclick="akReveal(\'' + esc(k.id) + '\',true);return false;" style="color:#2563eb;margin-left:6px;text-decoration:underline">View &amp; copy</a>';
   }).catch(function (e) {
     box.innerHTML = '<span style="color:#b91c1c">' + esc(e.message || 'Could not read your key') + '</span>';
   });
@@ -1151,7 +1152,7 @@ function akShow(note, key, bg, bd) {
     + ';border-radius:8px;padding:10px">'
     + '<div style="font-size:12px;color:#334155;margin:0 0 6px">' + esc(note || 'Your key') + '</div>'
     + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-    + '<input id="ak-keyval" readonly value="' + esc(key) + '" onfocus="this.select()" style="flex:1;min-width:240px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px">'
+    + '<input id="ak-keyval" aria-label="Your API key" readonly value="' + esc(key) + '" onfocus="this.select()" style="flex:1;min-width:240px;padding:9px 10px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px">'
     + '<button class="btn" onclick="akClip(document.getElementById(\'ak-keyval\').value)">Copy</button>'
     + '<button class="btn" style="background:#64748b" onclick="document.getElementById(\'ak-shown\').style.display=\'none\'">Hide</button>'
     + '</div></div>';
@@ -1985,9 +1986,9 @@ function loyCreateForm() {
   return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-top:8px">'
     + '<div style="font-size:13px;font-weight:600;color:#334155;margin-bottom:6px">New programme</div>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
-    + '<input id="loy-new-name" placeholder="Programme name (what customers see)" value="' + esc(LOY.newName || '') + '"'
+    + '<input id="loy-new-name" aria-label="Programme name" placeholder="Programme name (what customers see)" value="' + esc(LOY.newName || '') + '"'
     + ' oninput="LOY.newName=this.value" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;min-width:240px">'
-    + '<input id="loy-new-ppc" type="number" min="1" step="1" placeholder="Points per check-in" value="' + esc(LOY.newPpc || '') + '"'
+    + '<input id="loy-new-ppc" type="number" min="1" step="1" aria-label="Points per check-in" placeholder="Points per check-in" value="' + esc(LOY.newPpc || '') + '"'
     + ' oninput="LOY.newPpc=this.value" style="padding:7px 9px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:170px">'
     + '<button class="btn btn-sm" onclick="loyCreate(this)">Create programme</button>'
     + '</div>'
@@ -3667,7 +3668,7 @@ function downloadMyCsv(type, btn) {
       <button type="button" class="fb-kind" data-kind="problem">Problem</button>
       <button type="button" class="fb-kind" data-kind="complaint">Complaint</button>
     </div>
-    <textarea id="fb-text" rows="5" maxlength="4000" placeholder="What happened, or what would make this better?"
+    <textarea id="fb-text" rows="5" maxlength="4000" aria-label="Your feedback" placeholder="What happened, or what would make this better?"
       style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:10px;padding:10px;font-size:14px;resize:vertical"></textarea>
     <div id="fb-where" style="font-size:12px;color:#64748b;margin:8px 0 0"></div>
     <div id="fb-msg" style="font-size:13px;margin:8px 0 0;color:#64748b"></div>
@@ -4062,7 +4063,7 @@ function downloadMyCsv(type, btn) {
 
 <script src="/inline-guide-widget.js?v=20261106a"></script>
 
-<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'\u2600\ufe0f':'\ud83c\udf19';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=incentiveswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'\u2600\ufe0f':'\ud83c\udf19';var b=document.getElementById('wsThemeToggle');if(b){b.setAttribute('aria-label',(t==='dark')?'Day mode':'Night mode');b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}}
 function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
 function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='\ud83c\udf19';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
 try{wsEnsureToggle();}catch(e){}</script>
