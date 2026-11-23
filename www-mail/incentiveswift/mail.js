@@ -786,10 +786,12 @@
       + (S.counts.ai_summary ? '<button class="btn btn-ghost" data-act="summarize">Summarise</button>' : '')
       + '<select id="mAssign" style="width:auto">' + assignOpts + '</select>'
       + '</div>'
+      // No "Turn into a ticket" button on this app: the mail-to-queue bridge was deliberately left
+      // out of this port (src/private_email/mod.rs), so the button POSTed a route the server has
+      // never served and every press answered 404. The badge still reports a ticket when one exists.
       + (m.is_ticket
         ? '<div class="badge ticket"><span>In your CRM work queue as a ticket.</span></div>'
-        : '<div class="badge open"><span>In the inbox only — nobody is working this yet.</span>'
-          + '<button class="btn" data-act="ticket">Turn into a ticket</button></div>')
+        : '<div class="badge open"><span>In the inbox only — nobody is working this yet.</span></div>')
       + '<div id="mSummary"></div>'
       + '<div style="margin:6px 0 10px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">Labels</div><div id="mLabelBox"></div></div>'
       + '<div class="body">' + esc(m.body_plain || '(no text)') + '</div>'
