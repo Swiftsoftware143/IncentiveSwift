@@ -331,6 +331,38 @@ html[data-theme="dark"] .ws-theme-toggle{background:#1a1d27;color:#e8eaed;border
       <button class="btn" style="padding:4px 10px;font-size:12px;margin-top:6px" onclick="mcpCopy(document.getElementById('mcp-config').value)">Copy config</button>
     </div>
   </div>
+  <div class="card" id="dnm-card">
+    <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Do not mail</h2>
+    <p style="color:#64748b;font-size:14px;margin:0 0 12px">The addresses this account must never mail again. A person who unsubscribes from one of your messages, a mailbox that hard-bounces, or someone who reports a message as spam is added here by the mail service itself. You can also add an address by hand if somebody asks you by phone. Sign-in and password-reset mail are never stopped, so an address on this list can still sign in.</p>
+    <div id="dnm-add" style="display:none;border-top:1px solid #e2e8f0;padding-top:14px;margin:0 0 4px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:220px">
+          <label style="display:block;font-size:13px;font-weight:600;color:#334155;margin-bottom:6px" for="dnm-address">Email address</label>
+          <input type="email" id="dnm-address" maxlength="254" placeholder="person@company.com" autocomplete="off"
+                 style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
+        </div>
+        <div style="flex:1;min-width:190px">
+          <label style="display:block;font-size:13px;font-weight:600;color:#334155;margin-bottom:6px" for="dnm-class">What to stop</label>
+          <select id="dnm-class" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;background:#fff">
+            <option value="notification">Notices about their workspace</option>
+            <option value="all">Everything, including marketing</option>
+          </select>
+        </div>
+        <div style="flex:1;min-width:180px">
+          <label style="display:block;font-size:13px;font-weight:600;color:#334155;margin-bottom:6px" for="dnm-reason">Why (optional)</label>
+          <input type="text" id="dnm-reason" maxlength="200" placeholder="Asked by phone"
+                 style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px">
+        </div>
+        <button class="btn" id="dnm-add-btn" onclick="dnmAdd()">Add to the list</button>
+      </div>
+    </div>
+    <div id="dnm-msg" role="status" aria-live="polite" style="font-size:13px;margin:6px 0 10px"></div>
+    <div id="dnm-list" style="color:#64748b;font-size:14px">Loading the list&hellip;</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;align-items:center">
+      <button class="btn btn-sm" style="background:#e2e8f0;color:#334155" onclick="dnmCsv()">Download the list (CSV)</button>
+      <span id="dnm-webhook" style="font-size:12px;color:#64748b"></span>
+    </div>
+  </div>
   <div class="card">
     <h2 style="font-size:16px;font-weight:600;color:#1e293b;margin:0 0 12px">Your account</h2>
     <!-- kanban t_4fcbe895 — this panel used to be `JSON.stringify(user)` (a raw dump of whatever the
@@ -558,6 +590,7 @@ if (!token) {
   wsLoad();
   loadWsSwitcher();
   inboxLoad();
+  dnmLoad();
 }
 
 // Paint from the server's row: name, email, company, the REAL plan name and the picture.
@@ -1684,6 +1717,182 @@ function inboxRecords(id) {
   }).catch(function (e) { inboxNote(e.message, false); });
 }
 
+// ---- Do not mail (cron 2026-11-23) -------------------------------------------------------------
+// The account's OWN do-not-mail list. GET|POST /api/compliance/suppressions, DELETE .../:id, the
+// CSV twin and GET /api/v1/settings/do-not-mail/webhook have been served since 2026-11-20/22 with
+// NO screen on this console, so a customer could not see who asked to stop, block an address that
+// asked by phone, or hand the operator the provider's delivery-events address. A backend route with
+// no UI is a defect. Reading and releasing are scoped to the caller's own workspace; ADDING an
+// address is an operator act (the server answers 403 in a sentence for anyone else), so the form
+// appears for a platform admin only.
+var DNM = { rows: null, err: false };
+function dnmAuth() { return { 'Authorization': 'Bearer ' + token }; }
+function dnmMsg(t, kind) {
+  var m = document.getElementById('dnm-msg');
+  if (!m) return;
+  m.style.color = (kind === 'e') ? '#dc2626' : (kind === 's' ? '#16a34a' : '#64748b');
+  m.textContent = t;
+}
+function dnmAdmin() {
+  var u = user || {};
+  return u.role === 'admin' || u.role === 'super_admin';
+}
+function dnmWhen(s) {
+  if (!s) return '';
+  try { var d = new Date(s); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(); } catch (e) { return ''; }
+}
+function dnmClassLabel(c) {
+  return c === 'all' ? 'Everything, including marketing' : 'Notices about their workspace';
+}
+function dnmLoad() {
+  var box = document.getElementById('dnm-list');
+  if (!box) return;
+  // `DNM` is created on first use: the boot block reaches this loader before the declaration in this
+  // script block has run (measured in real Chromium: `Cannot set properties of undefined`, which left
+  // the card on "Loading the list…" for ever). A screen that throws on its own state object never
+  // paints an answer, so the object is made self-initialising rather than moved.
+  if (typeof DNM === 'undefined') window.DNM = { rows: null, err: false };
+  var add = document.getElementById('dnm-add');
+  if (add) add.style.display = dnmAdmin() ? 'block' : 'none';
+  DNM.err = false;
+  fetch(window.location.origin + '/api/compliance/suppressions', { headers: dnmAuth(), cache: 'no-store' })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function (d) {
+      DNM.rows = Array.isArray(d.suppressions) ? d.suppressions : [];
+      dnmRender();
+    })
+    .catch(function (e) {
+      // A FAILED read must never paint as an empty list: "nobody has opted out" is a statement
+      // about the customer's list, and a failed call is not that statement.
+      DNM.err = true;
+      box.innerHTML = '<div style="color:#b91c1c;font-size:14px">The list could not be loaded' +
+        (e && e.message ? ' \u2014 ' + esc(e.message) : '') + '. Try again in a moment.</div>';
+    });
+  dnmWebhook();
+}
+function dnmRender() {
+  var box = document.getElementById('dnm-list');
+  if (!box) return;
+  var rows = DNM.rows || [];
+  if (!rows.length) {
+    box.innerHTML = '<div style="color:#64748b;font-size:14px">Nobody has asked this account to stop mailing them. A hard bounce, a spam complaint or an unsubscribe link will add an address here by itself.</div>';
+    return;
+  }
+  var h = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">' +
+    '<thead><tr style="text-align:left;color:#64748b;font-size:12px">' +
+    '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Address</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">What is stopped</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Why</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0">Added</th>' +
+    '<th style="padding:6px 8px;border-bottom:1px solid #e2e8f0"></th></tr></thead><tbody>';
+  rows.forEach(function (r) {
+    var id = String(r.id || '');
+    h += '<tr data-dnm-row="' + esc(r.address || '') + '">' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#1e293b">' + esc(r.address || '') + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;color:#334155">' + esc(dnmClassLabel(r.mail_class)) + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;color:#475569">' + esc(r.reason || '') + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;color:#64748b">' + esc(dnmWhen(r.created_at)) + '</td>' +
+      '<td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">' +
+      '<button class="btn btn-sm" style="background:#e2e8f0;color:#334155" data-dnm-allow="' + esc(id) + '" data-dnm-addr="' + esc(r.address || '') + '">Allow again</button></td></tr>';
+  });
+  h += '</tbody></table></div>';
+  box.innerHTML = h;
+  box.querySelectorAll('[data-dnm-allow]').forEach(function (b) {
+    b.onclick = function () { dnmRelease(b.getAttribute('data-dnm-allow'), b.getAttribute('data-dnm-addr')); };
+  });
+}
+function dnmAdd() {
+  var addrEl = document.getElementById('dnm-address');
+  var addr = (addrEl && addrEl.value || '').trim();
+  var cls = (document.getElementById('dnm-class') || {}).value || 'notification';
+  var reason = ((document.getElementById('dnm-reason') || {}).value || '').trim();
+  if (addr.indexOf('@') < 1 || addr.length < 5) {
+    dnmMsg('Type a full email address, for example person@company.com.', 'e');
+    return;
+  }
+  var btn = document.getElementById('dnm-add-btn');
+  if (btn) btn.disabled = true;
+  dnmMsg('Adding\u2026', 'i');
+  fetch(window.location.origin + '/api/compliance/suppressions', {
+    method: 'POST',
+    headers: (function () { var h = dnmAuth(); h['Content-Type'] = 'application/json'; return h; })(),
+    body: JSON.stringify({ address: addr, mail_class: cls, reason: reason })
+  })
+    .then(function (r) {
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        if (!r.ok) throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+        return d || {};
+      });
+    })
+    .then(function () {
+      if (addrEl) addrEl.value = '';
+      var re = document.getElementById('dnm-reason'); if (re) re.value = '';
+      dnmMsg(addr + ' is on the list \u2014 this account will not mail it again.', 's');
+      dnmLoad();
+    })
+    .catch(function (e) { dnmMsg((e && e.message) || 'That address could not be added.', 'e'); })
+    .then(function () { if (btn) btn.disabled = false; });
+}
+function dnmRelease(id, addr) {
+  if (!id) { dnmMsg('That entry has no id, so it cannot be released.', 'e'); return; }
+  if (!confirm('Allow mail to ' + (addr || 'this address') + ' again?')) return;
+  dnmMsg('Releasing\u2026', 'i');
+  fetch(window.location.origin + '/api/compliance/suppressions/' + encodeURIComponent(id), {
+    method: 'DELETE', headers: dnmAuth()
+  })
+    .then(function (r) {
+      if (r.status === 204 || r.ok) return null;
+      return r.text().then(function (t) {
+        var d = null; try { d = JSON.parse(t); } catch (e) {}
+        throw new Error((d && (d.error || d.message)) || ('Error ' + r.status));
+      });
+    })
+    .then(function () {
+      dnmMsg((addr || 'The address') + ' can receive mail again.', 's');
+      dnmLoad();
+    })
+    .catch(function (e) { dnmMsg((e && e.message) || 'The entry could not be released.', 'e'); });
+}
+function dnmCsv() {
+  dnmMsg('Preparing the file\u2026', 'i');
+  fetch(window.location.origin + '/api/compliance/suppressions.csv', { headers: dnmAuth(), cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('Error ' + r.status);
+      return r.blob();
+    })
+    .then(function (b) {
+      var url = URL.createObjectURL(b);
+      var a = document.createElement('a');
+      a.href = url; a.download = 'do-not-mail.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+      dnmMsg('The file is downloading.', 's');
+    })
+    .catch(function (e) { dnmMsg('The list could not be downloaded: ' + ((e && e.message) || 'unknown error'), 'e'); });
+}
+// The provider's delivery-events address, for the operator only (the server answers 403 in a
+// sentence to anyone else, and this line then simply stays empty). It is the address the mail
+// service posts a hard bounce, a spam complaint and an unsubscribe to, and it is what puts the
+// addresses on this list without anybody typing them.
+function dnmWebhook() {
+  var el = document.getElementById('dnm-webhook');
+  if (!el || !dnmAdmin()) return;
+  fetch(window.location.origin + '/api/v1/settings/do-not-mail/webhook', { headers: dnmAuth(), cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) {
+      if (!d || !d.url) return;
+      var last = d.last_event_at ? (' Last report: ' + dnmWhen(d.last_event_at) + '.') : ' No report has arrived yet.';
+      el.innerHTML = 'Delivery events for the mail service: <code style="font-size:12px">' + esc(d.url) + '</code>.' + esc(last);
+    })
+    .catch(function () { /* the list itself is the important half; leave this line empty */ });
+}
 function esc(s) {
   return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) {
     return ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[c];
