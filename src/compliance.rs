@@ -370,7 +370,15 @@ pub async fn one_click(State(state): State<AppState>, Path(token): Path<String>)
     } else {
         mail_class.as_str()
     };
-    match suppress(
+    // TWO rows, on purpose (2026-11-23). The first is under the tenant the token names, so the
+    // account's own do-not-mail list shows the opt-out. The second is under `PLATFORM_TENANT` — the
+    // ONLY scope `email_provider::deliver` consults when it decides whether to send — because a row
+    // written under the campaign's tenant alone is never read. Measured live before this fix: the
+    // page answered `unsubscribed: true`, the row landed under tenant 37877d8e-…, the platform
+    // scope stayed at 0 rows, and the next send to that address was NOT withheld. Honouring the
+    // click is the point of the endpoint, so a failure on either write is a 500, never a quiet
+    // "unsubscribed" for a suppression nobody will read.
+    let mut result = suppress(
         &state.db,
         tenant_id,
         &address,
@@ -378,8 +386,19 @@ pub async fn one_click(State(state): State<AppState>, Path(token): Path<String>)
         stored_class,
         "one_click",
     )
-    .await
-    {
+    .await;
+    if result.is_ok() && tenant_id != PLATFORM_TENANT {
+        result = suppress(
+            &state.db,
+            PLATFORM_TENANT,
+            &address,
+            "unsubscribed",
+            stored_class,
+            "one_click",
+        )
+        .await;
+    }
+    match result {
         Ok(()) => (
             StatusCode::OK,
             Json(json!({ "unsubscribed": true, "address": normalise(&address) })),
