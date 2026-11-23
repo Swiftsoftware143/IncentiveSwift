@@ -15,7 +15,7 @@ use axum::{
     extract::{Path, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{delete, get},
     Json, Router,
 };
 use base64::Engine as _;
@@ -442,8 +442,11 @@ async fn list_suppressions(State(state): State<AppState>, auth: AuthUser) -> Res
         )
             .into_response();
     };
-    let rows = match sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
-        "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
+    let rows = match sqlx::query_as::<
+        _,
+        (Uuid, String, String, String, Option<String>, DateTime<Utc>),
+    >(
+        "SELECT id, address, mail_class, reason, source, created_at FROM email_suppressions
           WHERE tenant_id = ANY($1) ORDER BY created_at DESC LIMIT 1000",
     )
     .bind(&scopes)
@@ -465,12 +468,72 @@ async fn list_suppressions(State(state): State<AppState>, auth: AuthUser) -> Res
     };
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(address, mail_class, reason, source, created_at)| {
-            json!({ "address": address, "mail_class": mail_class, "reason": reason,
+        .map(|(id, address, mail_class, reason, source, created_at)| {
+            // `id` addresses ONE entry: it is what the Release control sends back. Without it the
+            // screen could show a list it had no way to act on (measured live 2026-11-22: the
+            // console rendered the list and offered nothing but a CSV download).
+            json!({ "id": id, "address": address, "mail_class": mail_class, "reason": reason,
                     "source": source, "created_at": created_at })
         })
         .collect();
     Json(json!({ "suppressions": items })).into_response()
+}
+
+/// `DELETE /api/compliance/suppressions/:id` — RELEASE one entry: a wrong address, a mailbox that has
+/// been fixed, or a person who asked to hear from the business again.
+///
+/// Scoped exactly like the list (`suppression_scopes`), so a caller can only release a row they can
+/// see: a customer's own workspace, or — for the platform operator — the app-wide scope as well. An id
+/// from another workspace answers a plain **404**, never a 403, because a 403 would confirm that the
+/// row exists.
+///
+/// The suppression row is the WHOLE gate (`suppression()` reads `email_suppressions`), so removing it
+/// lets the address receive mail again with no second switch to find. The consent row written when the
+/// address opted out is left alone on purpose: it is the record of what the person once asked for, and
+/// the sender consults it separately for bulk consent.
+async fn remove_suppression(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(scopes) = suppression_scopes(&state, &auth).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "no account" })),
+        )
+            .into_response();
+    };
+    let Ok(id) = Uuid::parse_str(id.trim()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "that is not an entry id", "status": 400 })),
+        )
+            .into_response();
+    };
+    match sqlx::query("DELETE FROM email_suppressions WHERE id = $1 AND tenant_id = ANY($2)")
+        .bind(id)
+        .bind(&scopes)
+        .execute(&state.db)
+        .await
+    {
+        Ok(r) if r.rows_affected() == 1 => {
+            tracing::info!("do-not-mail entry released: {id}");
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such entry", "status": 404 })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("could not release a do-not-mail entry: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the entry could not be released", "status": 500 })),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn suppressions_csv(State(state): State<AppState>, auth: AuthUser) -> Response {
@@ -531,6 +594,7 @@ pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/suppressions", get(list_suppressions))
         .route("/suppressions.csv", get(suppressions_csv))
+        .route("/suppressions/:id", delete(remove_suppression))
         .with_state(state)
 }
 

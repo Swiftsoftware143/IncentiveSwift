@@ -5368,6 +5368,22 @@ const MailCompliance = () => {
   if (!st.hookLoaded) { st.hookLoaded = true; loadHook(); }
   const when = (v) => { try { return v ? new Date(v).toLocaleString() : '\u2014'; } catch (e) { return v || '\u2014'; } };
   const scope = (c) => (!c || c === 'all') ? 'All mail' : (c === 'transactional' ? 'Account mail' : c.charAt(0).toUpperCase() + c.slice(1));
+  /* Release one entry (2026-11-22). The list could be read and downloaded but never ACTED ON: an
+     address that was suppressed in error (a full mailbox that is now empty, a typo) had no way back,
+     while the gate that silences it reads nothing but this table. `id` comes from the server; a row
+     without one is refused rather than guessed at. */
+  const release = async (id, address) => {
+    if (!id) { alert('This entry cannot be released from this screen.'); return; }
+    if (!confirm('Let ' + address + ' receive mail again?')) return;
+    try {
+      const r = await fetch(cbase + '/suppressions/' + encodeURIComponent(id), { method: 'DELETE', headers: cHeaders() });
+      if (r.status !== 204 && !r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || ('Release failed (' + r.status + ')'));
+      }
+      st.loaded = false; st.busy = false; renderApp();
+    } catch (e) { alert(e.message || String(e)); }
+  };
   const download = async () => {
     try {
       const r = await fetch(cbase + '/suppressions.csv', { headers: cHeaders() });
@@ -5418,7 +5434,7 @@ const MailCompliance = () => {
     ${!st.err && !st.loaded ? html`<div class="text-center text-gray-400 py-8">Loading\u2026</div>` : null}
     ${!st.err && st.loaded && st.list.length ? html`<div class="card p-0" style="overflow-x:auto" data-suppression-rows=${st.list.length}>
       <table class="table">
-        <thead><tr><th>Address</th><th>Stopped</th><th>Why</th><th>How</th><th>Recorded</th></tr></thead>
+        <thead><tr><th>Address</th><th>Stopped</th><th>Why</th><th>How</th><th>Recorded</th><th>Release</th></tr></thead>
         <tbody>
           ${st.list.map(r => html`<tr data-suppressed=${r.address}>
             <td style="font-weight:500">${r.address}</td>
@@ -5426,6 +5442,7 @@ const MailCompliance = () => {
             <td>${r.reason || '\u2014'}</td>
             <td>${r.source || '\u2014'}</td>
             <td class="text-gray-500" style="white-space:nowrap">${when(r.created_at)}</td>
+            <td><button type="button" class="btn btn-sm btn-outline" data-release=${r.address} aria-label=${'Let ' + r.address + ' receive mail again'} onClick=${() => release(r.id, r.address)}>Release</button></td>
           </tr>`)}
         </tbody>
       </table>
