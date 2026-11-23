@@ -200,7 +200,35 @@ pub async fn events_webhook(
         }
     }
 
+    // The path just proved itself: the provider reached us with a real payload. Record WHEN, so the
+    // console can tell the operator the safety net is live instead of asking them to paste a URL into
+    // a provider they do not control (`webhook_url` reads this back).
+    record_receipt(pool, recorded, ignored).await;
+
     Json(json!({ "recorded": recorded, "ignored": ignored })).into_response()
+}
+
+/// The last verified delivery report this installation received (`admin_settings.mail_events_last`).
+///
+/// Written for EVERY verified POST, including one that suppresses nothing: the fact worth showing is
+/// that the provider's events reach this app at all. A write failure never fails the event.
+async fn record_receipt(pool: &PgPool, recorded: usize, ignored: usize) {
+    let payload = json!({
+        "at": chrono::Utc::now().to_rfc3339(),
+        "recorded": recorded,
+        "ignored": ignored,
+    });
+    if let Err(e) = sqlx::query(
+        "INSERT INTO admin_settings (key, value, description, updated_at)
+         VALUES ('mail_events_last', $1, 'The last delivery report the mail provider posted to this installation (written by the events receiver)', NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+    )
+    .bind(payload)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!("could not record the last mail event: {e}");
+    }
 }
 
 /// The address an event is about, in either provider shape.
@@ -270,9 +298,21 @@ pub async fn webhook_url(State(state): State<AppState>, auth: AuthUser) -> Respo
             );
         }
     };
+    // WHEN the provider last reported something. The console shows this instead of asking a customer
+    // to paste the address into a provider they do not control — the provider is ours, and the fleet
+    // registers these three event types per sending domain. A read failure answers `null`, which the
+    // screen words as "waiting for the first report" rather than as an error.
+    let last_event_at = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT value ->> 'at' FROM admin_settings WHERE key = 'mail_events_last'",
+    )
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten();
     Json(json!({
         "url": format!("{APP_URL}/api/v1/webhooks/mailgun/events/{token}"),
         "events": ["permanent_fail", "complained", "unsubscribed"],
+        "last_event_at": last_event_at,
     }))
     .into_response()
 }

@@ -5361,7 +5361,7 @@ const MailCompliance = () => {
       const r = await fetch(window.location.origin + '/api/v1/settings/do-not-mail/webhook', { headers: cHeaders() });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || d.message || ('Request failed (' + r.status + ')'));
-      st.hook = d.url || ''; st.hookErr = null;
+      st.hook = d.url || ''; st.hookAt = d.last_event_at || null; st.hookErr = null;
     } catch (e) { st.hookErr = (e && e.message) || String(e); st.hook = ''; }
     renderApp();
   };
@@ -5447,16 +5447,16 @@ const MailCompliance = () => {
       <div class="text-sm text-gray-600" style="margin-top:8px">The list below still works. Bounces and complaints cannot be recorded until this address is readable — it is read from this app, so this is a server-side fault, not a setting on the provider.</div>
     </div>` : null}
     ${st.hook ? html`<div class="card" data-provider-events-address=${st.hook} style="margin-bottom:16px">
-      <div class="font-medium text-sm">Where the provider reports bounces and complaints</div>
+      <div class="font-medium text-sm">Bounces and complaints report themselves</div>
       <div class="text-sm text-gray-600" style="margin-top:4px">
-        The mail provider tells this workspace when a message hard-bounces or is marked as spam, and
-        each of those addresses is added to the list below automatically. Paste this address into the
-        provider's webhook settings for the sending domain (events: permanent failures, complaints,
-        unsubscribes) \u2014 it is the only place that address is needed.
+        ${st.hookAt
+          ? html`<strong>Connected.</strong> The mail service sends its problem reports here \u2014 the most recent arrived ${when(st.hookAt)} \u2014 so a hard-bounced or complained address joins the list below by itself.`
+          : html`<strong>Connected, waiting for its first report.</strong> When a message hard-bounces or a recipient marks it as spam, the mail service tells this workspace and the address joins the list below. There is nothing to set up.`}
       </div>
       <div class="flex items-center gap-2" style="margin-top:8px;flex-wrap:wrap">
+        <span class="text-xs text-gray-400">For support, the address the mail service posts to is</span>
         <code style="font-size:11px;word-break:break-all;color:#334155">${st.hook}</code>
-        <button type="button" class="btn btn-sm btn-outline" aria-label="Copy the provider delivery-events address" onClick=${() => { try { navigator.clipboard.writeText(st.hook); } catch (e) {} }}>Copy</button>
+        <button type="button" class="btn btn-sm btn-outline" aria-label="Copy the delivery-events address" onClick=${() => { try { navigator.clipboard.writeText(st.hook); } catch (e) {} }}>Copy</button>
       </div>
     </div>` : null}
     ${!st.hook && !st.hookErr ? html`<div class="card" style="margin-bottom:16px"><div class="text-sm text-gray-400">Reading the provider's delivery-events address\u2026</div></div>` : null}
