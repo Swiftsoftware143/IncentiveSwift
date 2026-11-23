@@ -529,10 +529,10 @@ pub async fn admin_assign_plan(
     // their screen showed new allowances and no explanation, and an inbox that never mentioned the
     // switch. Best effort by design — the tier is already written, so a mail failure is logged and
     // the answer below stays 200 with `notified: false`.
-    let notified = if previous_tier != Some(tier_id) {
+    let notice = if previous_tier != Some(tier_id) {
         notify_plan_change(&state, account_id, &plan_name).await
     } else {
-        false
+        PlanNotice::plain(false, "unchanged")
     };
 
     Ok(Json(json!({
@@ -541,8 +541,37 @@ pub async fn admin_assign_plan(
         "account_id": account_id.to_string(),
         "plan_tier_id": tier_id.to_string(),
         "requests_closed": requests_closed,
-        "notified": notified,
+        "notified": notice.notified,
+        "notify_reason": notice.reason,
+        "notify_code": notice.code,
+        "notify_detail": notice.detail,
     })))
+}
+
+/// What the plan-change notice actually did, so the operator's screen can say which thing happened
+/// instead of reading every `Ok` as "the customer was told" (kanban t_f78ef6dd).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlanNotice {
+    /// True ONLY when a message was really handed to the provider.
+    pub notified: bool,
+    /// Machine word for the operator: `emailed` | `unchanged` | `no_recipient` | `mail_failed`
+    /// | `withheld`.
+    pub reason: &'static str,
+    /// The gate's own machine word when `reason == "withheld"` (`do_not_mail` | `suppressed`).
+    pub code: Option<&'static str>,
+    /// The gate's own sentence when `reason == "withheld"` (why nothing was sent).
+    pub detail: Option<String>,
+}
+
+impl PlanNotice {
+    fn plain(notified: bool, reason: &'static str) -> Self {
+        Self {
+            notified,
+            reason,
+            code: None,
+            detail: None,
+        }
+    }
 }
 
 /// Tell the customer their workspace now sits on a different plan (2026-11-12).
@@ -554,11 +583,20 @@ pub async fn admin_assign_plan(
 /// allowances had moved. A customer who asked to buy deserves the same confirmation a card payment
 /// sends — the plan they are on, that nothing was charged, and where to see the allowances.
 ///
-/// The mail goes through `email::send_template_email`, the app's one transactional funnel, so it
-/// inherits the account's own branding and the fleet's reserved-address gate (a probe/harness
+/// The mail goes through `email::send_template_email_outcome`, the app's one transactional funnel, so
+/// it inherits the account's own branding and the fleet's reserved-address gate (a probe/harness
 /// recipient is recorded `withheld` and never handed to a relay — no extra check needed here).
-/// Returns whether the mail was queued; a failure is logged and never fails the plan write.
-pub async fn notify_plan_change(state: &AppState, account_id: Uuid, plan_name: &str) -> bool {
+///
+/// Returns a [`PlanNotice`] so the operator's screen can say what happened instead of guessing
+/// (`emailed` | `unchanged` | `no_recipient` | `mail_failed` | `withheld` + the gate's reason).
+/// Best effort by design: the plan is already written, so a mail failure is logged and never fails
+/// the assignment — and a WITHHELD notice is not a failure either, it is a non-send the operator
+/// must know about (the customer was NOT told).
+pub(crate) async fn notify_plan_change(
+    state: &AppState,
+    account_id: Uuid,
+    plan_name: &str,
+) -> PlanNotice {
     let who = sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT COALESCE(email, ''), name FROM accounts WHERE id = $1",
     )
@@ -567,30 +605,58 @@ pub async fn notify_plan_change(state: &AppState, account_id: Uuid, plan_name: &
     .await
     .unwrap_or(None);
     let Some((email, name)) = who else {
-        return false;
+        return PlanNotice::plain(false, "no_recipient");
     };
     let to = email.trim();
     if to.is_empty() {
-        return false;
+        return PlanNotice::plain(false, "no_recipient");
     }
     let vars = json!({
         "plan": plan_name,
         "workspace": name.as_deref().unwrap_or(""),
         "requester": to,
     });
-    match crate::email::send_template_email(&state.db, Some(account_id), to, "plan_changed", &vars)
-        .await
+    // READ WHAT THE FUNNEL DID, not merely whether it errored (kanban t_f78ef6dd): a withheld
+    // notice is `Ok` too, and reporting it as `emailed` told the operator the customer knew about
+    // a plan change nobody ever queued.
+    match crate::email::send_template_email_outcome(
+        &state.db,
+        Some(account_id),
+        to,
+        "plan_changed",
+        &vars,
+    )
+    .await
     {
-        Ok(()) => {
-            tracing::info!(account = %account_id, plan = %plan_name, "plan change: the customer was told");
-            true
+        Ok(crate::email::SendOutcome::Queued) => {
+            tracing::info!(
+                account = %account_id, plan = %plan_name,
+                "plan change: the customer was told"
+            );
+            PlanNotice::plain(true, "emailed")
+        }
+        Ok(crate::email::SendOutcome::Withheld { code, reason }) => {
+            tracing::info!(
+                account = %account_id, plan = %plan_name, gate = %code, reason = %reason,
+                "plan change: the notice was WITHHELD — the customer was NOT told"
+            );
+            let detail = match code {
+                "do_not_mail" => format!("the customer is on the do-not-mail list ({reason})"),
+                _ => reason,
+            };
+            PlanNotice {
+                notified: false,
+                reason: "withheld",
+                code: Some(code),
+                detail: Some(detail),
+            }
         }
         Err(e) => {
             tracing::warn!(
                 account = %account_id, plan = %plan_name, error = %e,
                 "plan change: the customer could not be told"
             );
-            false
+            PlanNotice::plain(false, "mail_failed")
         }
     }
 }

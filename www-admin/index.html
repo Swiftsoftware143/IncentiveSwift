@@ -6445,8 +6445,15 @@ const BulkTenantDelete = () => {
     if (!confirm('Put "' + (row.name || row.email || row.id) + '" on ' + label + '?')) return;
     setAssignMsg({ ok: true, text: 'Assigning ' + label + '\u2026' });
     try {
-      await OPSAPI.post('/admin/plans/assign', { account_id: row.id, plan_id: planId, billing_cycle: 'monthly' });
-      setAssignMsg({ ok: true, text: 'Assigned ' + label + ' to ' + (row.name || row.email || row.id) });
+      const r = await OPSAPI.post('/admin/plans/assign', { account_id: row.id, plan_id: planId, billing_cycle: 'monthly' });
+      const who = row.name || row.email || row.id;
+      let text = 'Assigned ' + label + ' to ' + who;
+      // The notice is honest now (kanban t_f78ef6dd): when the plan-change mail was WITHHELD, the
+      // line must NOT say "emailed" — it says the customer was NOT told, and why.
+      if (r && r.notified === false && r.notify_reason === 'withheld') {
+        text += ' - the customer was NOT emailed: ' + (r.notify_detail || 'the notice was withheld');
+      }
+      setAssignMsg({ ok: true, text: text });
     } catch (e) {
       setAssignMsg({ ok: false, text: 'Not assigned: ' + String((e && e.message) || e) });
     }

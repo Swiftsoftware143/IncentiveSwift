@@ -90,7 +90,13 @@ pub fn unsubscribe_url(secret: &str, tenant_id: Uuid, address: &str, mail_class:
 
 fn blocking_classes(mail_class: &str) -> &'static [&'static str] {
     match mail_class {
-        TRANSACTIONAL => &["transactional"],
+        // Harm control stops EVERY class. `compliance_events` writes a hard bounce / spam
+        // complaint / provider "unsubscribed" as class `all`, and an address that proved
+        // undeliverable (or asked to be gone entirely) must silence even transactional mail —
+        // delivering at all is the harm. Fleet parity: FunnelSwift and ADASwift both read
+        // TRANSACTIONAL as `["all"]`; the previous `["transactional"]` matched NOTHING the live
+        // writer ever emits, so a hard-bounced address was still mailed transactional receipts.
+        TRANSACTIONAL => &["all"],
         NOTIFICATION => &["all", "notification"],
         _ => &["all", "bulk"],
     }

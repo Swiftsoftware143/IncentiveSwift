@@ -71,6 +71,28 @@ pub(crate) fn bind_app_fields(vars: &mut serde_json::Value) {
 /// template — kanban t_0fb81177. The selection is now `delivery::sender::load_template_by_type`,
 /// the app's single answer to "which template for this account" (see that function for the
 /// measured shapes).
+/// What the send funnel actually did, so a caller that reports to a human can say WHICH thing
+/// happened instead of reading every `Ok` as "the customer was told" (kanban t_f78ef6dd).
+///
+/// A withheld message is `Ok` too — it is a deliberate non-send the caller must not retry — so
+/// "no error" is NOT "the message went out". A caller that only cares about errors keeps using
+/// [`send_template_email`]; a caller that tells a person what happened uses
+/// [`send_template_email_outcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendOutcome {
+    /// A provider request was really made (or accepted): the message is on its way.
+    Queued,
+    /// Deliberately NOT sent and no provider request was made. `code` is the machine word for a
+    /// caller/operator (`do_not_mail`, `suppressed`); `reason` is the wording the gate recorded.
+    Withheld { code: &'static str, reason: String },
+}
+
+impl SendOutcome {
+    pub fn is_queued(&self) -> bool {
+        matches!(self, SendOutcome::Queued)
+    }
+}
+
 pub async fn send_template_email(
     pool: &sqlx::PgPool,
     account_id: Option<uuid::Uuid>,
@@ -78,8 +100,21 @@ pub async fn send_template_email(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
+    send_template_email_outcome(pool, account_id, to, template_type, vars)
+        .await
+        .map(|_| ())
+}
+
+/// [`send_template_email`] with the outcome kept, for callers that tell a human what happened.
+pub async fn send_template_email_outcome(
+    pool: &sqlx::PgPool,
+    account_id: Option<uuid::Uuid>,
+    to: &str,
+    template_type: &str,
+    vars: &serde_json::Value,
+) -> Result<SendOutcome, String> {
     let rendered = render_email(pool, account_id, to, template_type, vars).await?;
-    send_email_request(pool, to, &rendered.subject, &rendered.text, &rendered.html).await
+    send_email_request_outcome(pool, to, &rendered.subject, &rendered.text, &rendered.html).await
 }
 
 /// The rendered parts of a transactional message — the exact bytes the mail path emits, before
@@ -1439,6 +1474,19 @@ pub(crate) async fn send_email_request(
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
+    send_email_request_outcome(pool, to, subject, text_body, html_body)
+        .await
+        .map(|_| ())
+}
+
+/// [`send_email_request`] with the outcome kept, for callers that tell a human what happened.
+pub(crate) async fn send_email_request_outcome(
+    pool: &sqlx::PgPool,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> Result<SendOutcome, String> {
     // Fleet harness addresses never reach a real relay (parity with FunnelSwift, kanban t_36b55ed2).
     // A probe that signs up with a fleet-dev domain (`swiftsoftware.dev/.net`) is created normally but
     // its mail is withheld: the address is routable, so a send can only land in a fleet mailbox or
@@ -1455,8 +1503,12 @@ pub(crate) async fn send_email_request(
             subject = %subject,
             "send suppressed: recipient is a fleet harness address (fleet-dev domain)"
         );
-        record_withheld(pool, to, subject, "recipient is a fleet harness address").await;
-        return Ok(());
+        let reason = format!("recipient is a fleet harness address ({domain})");
+        record_withheld(pool, to, subject, &reason).await;
+        return Ok(SendOutcome::Withheld {
+            code: "suppressed",
+            reason,
+        });
     }
     let Some(cfg) = crate::email_provider::resolve(pool).await else {
         tracing::warn!(
@@ -1477,16 +1529,12 @@ pub(crate) async fn send_email_request(
         Some(html_body)
     };
 
-    // The RECIPIENT decides whether this was an attempt at all, not the shape of the outcome:
-    // `deliver` refuses the RFC-2606 class with `Err("recipient-refused: …")` and the fleet-harness
-    // class with `Ok(())`. Keying the withheld arm on `Ok` alone recorded a deliberately-withheld
-    // message as a delivery FAILURE (measured 2026-10-18 through the panel's test-send), which is the
-    // misreport the fleet rule forbids: nothing was attempted, so nothing may read as refused mail.
-    let held = recipient_is_undeliverable(to);
-    // The CLASS decides what an opt-out may stop: a receipt is transactional and is never stopped by
-    // preference; everything else is stoppable. This generic path cannot know what it is sending, so
-    // callers that do name it through send_email_with_class; the default here is the safe reading of
-    // "a message a person asked for at this moment".
+    // `deliver` is the leaf that SPENDS a provider send and now reports WHICH thing happened: a
+    // do-not-mail refusal and a fleet-harness refusal both come back as `Withheld` (deliberate
+    // non-sends), never as `Ok(())` that the caller could misread as "sent". The RFC-2606 class
+    // still comes back as `Err("recipient-refused: …")`, recorded `withheld` below while the Err
+    // itself is returned unchanged so `email_queue` dead-letters the row (the surface that makes a
+    // refused recipient visible).
     let outcome = crate::email_provider::deliver(
         pool,
         &cfg,
@@ -1497,21 +1545,30 @@ pub(crate) async fn send_email_request(
         crate::compliance::TRANSACTIONAL,
     )
     .await;
-    if held {
-        record_withheld(pool, to, subject, "recipient cannot receive mail").await;
-    } else {
-        match &outcome {
-            Ok(()) => record_last_send(pool, to, subject, true, "").await,
-            Err(e) => {
+
+    match outcome {
+        Ok(SendOutcome::Queued) => {
+            record_last_send(pool, to, subject, true, "").await;
+            Ok(SendOutcome::Queued)
+        }
+        Ok(withheld @ SendOutcome::Withheld { .. }) => {
+            let reason = match &withheld {
+                SendOutcome::Withheld { reason, .. } => reason.clone(),
+                _ => unreachable!("withheld is Withheld"),
+            };
+            record_withheld(pool, to, subject, &reason).await;
+            Ok(withheld)
+        }
+        Err(e) => {
+            if recipient_is_undeliverable(to) {
+                record_withheld(pool, to, subject, "recipient cannot receive mail").await;
+            } else {
                 tracing::warn!(provider = %cfg.provider, to = %to, "email send failed: {e}");
-                record_last_send(pool, to, subject, false, e).await;
+                record_last_send(pool, to, subject, false, &e).await;
             }
+            Err(e)
         }
     }
-    // The OUTCOME is returned unchanged: `email_queue` deliberately treats a refused recipient as an
-    // ordinary bounded failure (3 attempts, no provider request) and dead-letters it, which is the
-    // surface that makes such a row visible. Only the RECORDING is honest now.
-    outcome
 }
 
 #[cfg(test)]

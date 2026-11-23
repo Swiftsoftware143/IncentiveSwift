@@ -293,13 +293,23 @@ pub async fn test_email_settings(
     }
 
     match outcome {
-        Ok(()) => {
+        Ok(crate::email::SendOutcome::Queued) => {
             crate::email::record_last_send(&state.db, &to, subject, true, "").await;
             Ok(Json(json!({
                 "success": true,
                 "provider": cfg.provider,
                 "to": to,
                 "detail": format!("{} accepted the message", cfg.provider)
+            })))
+        }
+        Ok(crate::email::SendOutcome::Withheld { reason, .. }) => {
+            crate::email::record_withheld(&state.db, &to, subject, &reason).await;
+            Ok(Json(json!({
+                "success": false,
+                "withheld": true,
+                "provider": cfg.provider,
+                "to": to,
+                "detail": format!("Withheld: {reason}")
             })))
         }
         Err(e) => {

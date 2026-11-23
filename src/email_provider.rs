@@ -16,6 +16,7 @@
 //! Unconfigured resolves to `None`; every caller logs and skips (never panics, never
 //! silently falls back to a server-wide env var).
 
+use crate::email::SendOutcome;
 use crate::security::provider_key_crypto;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -304,7 +305,7 @@ pub async fn deliver(
     text: &str,
     html: Option<&str>,
     mail_class: &str,
-) -> Result<(), String> {
+) -> Result<SendOutcome, String> {
     // THE RECIPIENT-SIDE GUARD (kanban t_f56f4a79). This function is the leaf that SPENDS a
     // provider send: the platform arm the queue ticker, the lifecycle stages and every future
     // caller ride. A recipient that provably cannot receive mail is refused HERE, by name,
@@ -326,7 +327,10 @@ pub async fn deliver(
             domain = %domain,
             "email suppressed: recipient is a fleet harness address (no send attempted)"
         );
-        return Ok(());
+        return Ok(SendOutcome::Withheld {
+            code: "suppressed",
+            reason: format!("recipient is a fleet harness address ({domain})"),
+        });
     }
 
     // ── EMAIL COMPLIANCE GATE (2026-11-20) ──────────────────────────────────────────────────────
@@ -354,7 +358,12 @@ pub async fn deliver(
             Some(&reason),
         )
         .await;
-        return Ok(()); // a deliberate refusal is not an error the caller should retry
+        // A deliberate refusal is not an error the caller should retry — it is a WITHHELD non-send,
+        // so a caller that reports to a human reads "not sent (do-not-mail)", never "sent".
+        return Ok(SendOutcome::Withheld {
+            code: "do_not_mail",
+            reason,
+        });
     }
 
     if !cfg.api_url.is_empty() {
@@ -391,12 +400,20 @@ pub async fn deliver(
                     Some(cfg.smtp_encryption.clone())
                 },
             };
-            crate::smtp::send_via_smtp(&sc, &to, subject, text, html).await
+            crate::smtp::send_via_smtp(&sc, &to, subject, text, html)
+                .await
+                .map(|_| SendOutcome::Queued)
         }
-        "sendgrid" => send_sendgrid(cfg, &to, subject, text, html).await,
-        "sendiio" => send_sendiio(cfg, &to, subject, text, html).await,
+        "sendgrid" => send_sendgrid(cfg, &to, subject, text, html)
+            .await
+            .map(|_| SendOutcome::Queued),
+        "sendiio" => send_sendiio(cfg, &to, subject, text, html)
+            .await
+            .map(|_| SendOutcome::Queued),
         // "mailgun" — and any unknown value, so a pre-provider row keeps working.
-        _ => send_mailgun(cfg, &to, subject, text, html).await,
+        _ => send_mailgun(cfg, &to, subject, text, html)
+            .await
+            .map(|_| SendOutcome::Queued),
     }
 }
 
