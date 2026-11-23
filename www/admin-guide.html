@@ -993,6 +993,11 @@ sentence instead of being saved, so a typo cannot silently swallow every alert.<
     opt-out. Somebody who unsubscribed from marketing has not asked to be locked out of their
     account. A hard bounce or a spam complaint is different: that address is not mailed again at
     all, because it is harm control rather than a preference.</p>
+    <p><strong>The screen also shows the provider's delivery-events address.</strong> It is read from
+    the app rather than typed into the page, and <strong>Copy</strong> puts it on the clipboard. Paste
+    it once into the mail provider's webhook settings: from then on a hard bounce, a spam complaint or
+    a provider-reported unsubscribe arrives at the app by itself and lands the address on this list,
+    with no one watching the inbox. Until it is pasted, only the unsubscribe link records an opt-out.</p>
     <p><strong>Release</strong> beside an entry lets that address receive mail from you again — use it
     when the address was a typo, when a mailbox that was full has since been emptied, or when the
     person tells you they want to hear from you again. It removes that one entry and nothing else; the
