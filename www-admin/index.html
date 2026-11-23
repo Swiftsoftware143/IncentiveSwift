@@ -5384,6 +5384,29 @@ const MailCompliance = () => {
       st.loaded = false; st.busy = false; renderApp();
     } catch (e) { alert(e.message || String(e)); }
   };
+  /* Add an address by hand (2026-11-23). The list could be read, downloaded and released but never
+     ADDED to, so a customer who asked by phone or in a reply could only be honoured by waiting for a
+     click on an unsubscribe link. The server owns the validation and the scope; this only carries the
+     operator's words. On success the list is re-read from the server rather than patched locally, so
+     the row the screen shows is the row the sender will consult. */
+  const addAddress = async () => {
+    const address = (st.newAddr || '').trim();
+    if (!address) { st.addErr = 'Enter the email address to stop mailing.'; renderApp(); return; }
+    st.addErr = null; st.addBusy = true; renderApp();
+    try {
+      const r = await fetch(cbase + '/suppressions', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, cHeaders()),
+        body: JSON.stringify({ address: address, mail_class: st.newClass || 'notification', reason: (st.newReason || '').trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || d.message || ('Could not add the address (' + r.status + ')'));
+      st.newAddr = ''; st.newReason = ''; st.addBusy = false;
+      st.loaded = false; st.busy = false; renderApp();
+    } catch (e) {
+      st.addBusy = false; st.addErr = (e && e.message) || String(e); renderApp();
+    }
+  };
   const download = async () => {
     try {
       const r = await fetch(cbase + '/suppressions.csv', { headers: cHeaders() });
@@ -5400,12 +5423,23 @@ const MailCompliance = () => {
     <div class="flex items-center justify-between mb-4">
       <div style="max-width:720px">
         <h2 class="text-xl font-bold">Do-Not-Mail</h2>
-        <p class="text-sm text-gray-500">People who asked you to stop emailing them. When someone clicks Unsubscribe in one of your emails, their address lands here and the app stops sending that kind of mail to it. Account mail they asked for \u2014 a password reset, a receipt for a purchase they just made \u2014 still goes out.</p>
+        <p class="text-sm text-gray-500">People who asked you to stop emailing them. When someone clicks Unsubscribe in one of your emails, their address lands here and the app stops sending that kind of mail to it. Account mail they asked for \u2014 a password reset, a receipt for a purchase they just made \u2014 still goes out. You can also add an address by hand, below.</p>
       </div>
       <div class="flex gap-2" style="flex-shrink:0">
         <button type="button" class="btn btn-sm btn-outline" onClick=${download} aria-label="Download the do-not-mail list as a CSV file">\u2b07 Download CSV</button>
         <button type="button" class="btn btn-sm" onClick=${() => { st.loaded = false; st.busy = false; renderApp(); }} aria-label="Refresh the do-not-mail list">Refresh</button>
       </div>
+    </div>
+    <div class="card" data-add-suppression style="margin-bottom:16px">
+      <div class="font-medium text-sm">Add an address by hand</div>
+      <div class="text-sm text-gray-600" style="margin-top:4px">Use this when someone asks you directly \u2014 by phone, in a reply, or in person \u2014 to stop emailing them. The address is added to the list below and no further mail of the kind you pick goes to it.</div>
+      <div class="flex items-end gap-2" style="margin-top:10px;flex-wrap:wrap">
+        <div><label class="text-sm font-medium text-gray-600 block mb-1" for="dnm-address">Email address</label><input id="dnm-address" data-add-address class="input" type="email" style="width:260px" placeholder="customer@example.com" value=${st.newAddr || ''} onInput=${e => { st.newAddr = e.target.value; }} /></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1" for="dnm-class">Stop sending</label><select id="dnm-class" data-add-class class="input" style="width:190px" onChange=${e => { st.newClass = e.target.value; }}><option value="notification" selected=${(st.newClass || 'notification') === 'notification'}>Marketing and notices</option><option value="all" selected=${st.newClass === 'all'}>Everything, including account mail</option></select></div>
+        <div><label class="text-sm font-medium text-gray-600 block mb-1" for="dnm-reason">Why (optional)</label><input id="dnm-reason" data-add-reason class="input" style="width:220px" placeholder="asked by phone" value=${st.newReason || ''} onInput=${e => { st.newReason = e.target.value; }} /></div>
+        <button type="button" class="btn btn-sm btn-green" data-add-submit disabled=${st.addBusy === true} onClick=${addAddress}>${st.addBusy === true ? 'Adding\u2026' : 'Add to list'}</button>
+      </div>
+      ${st.addErr ? html`<div class="text-sm" style="margin-top:8px;color:#991b1b" data-add-error>${st.addErr}</div>` : null}
     </div>
     ${st.hookErr ? html`<div class="card" style="border-left:4px solid #dc2626;margin-bottom:16px">
       <div class="font-medium text-sm" style="color:#991b1b">The provider's delivery-events address could not be read</div>

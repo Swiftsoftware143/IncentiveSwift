@@ -429,6 +429,101 @@ async fn suppression_scopes(state: &AppState, auth: &AuthUser) -> Option<Vec<Uui
     own.map(|t| vec![t])
 }
 
+/// `POST /api/compliance/suppressions` — put an address on the do-not-mail list BY HAND
+/// (2026-11-23). The list could be read, downloaded and released but never added to, so a customer
+/// who asked by phone, by reply or over the counter could only be honoured by waiting for a click on
+/// an unsubscribe link. ADASwift and FunnelSwift have carried the control; this app did not.
+///
+/// The row goes under [`PLATFORM_TENANT`] because that is the scope the SENDER consults
+/// (`email_provider.rs:346`): this app mails as itself, so a row anywhere else would be listed and
+/// never read — the mechanism present, the population empty. Every entry this app writes is
+/// app-wide for the same reason, and the screen shows exactly those rows.
+///
+/// `source = "operator"` keeps a hand-added entry distinguishable from one a person created by
+/// unsubscribing, and the reason is the operator's own words so the screen never invents one.
+async fn add_suppression(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Response {
+    if !auth.is_admin {
+        // The list is app-wide (one sending identity), so adding to it is an operator act. A tenant
+        // session may READ its own workspace's rows; it may not silence addresses fleet-wide.
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "only an operator can add an address", "status": 403 })),
+        )
+            .into_response();
+    }
+    let address = normalise(
+        body.get("address")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim(),
+    );
+    // A full address and nothing that could smuggle a second one into the list. The DB has no
+    // CHECK on the shape, so the shape is judged here.
+    let local_ok = address
+        .split('@')
+        .next()
+        .map(|l| !l.is_empty() && !l.contains(char::is_whitespace))
+        .unwrap_or(false);
+    if address.len() < 5
+        || address.len() > 254
+        || address.matches('@').count() != 1
+        || !local_ok
+        || address.ends_with('@')
+        || address.ends_with('.')
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "a full email address is required", "status": 400 })),
+        )
+            .into_response();
+    }
+    let mail_class = match body.get("mail_class").and_then(|v| v.as_str()) {
+        Some("all") => "all",
+        Some(NOTIFICATION) | None => NOTIFICATION,
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "mail_class is 'all' or 'notification'", "status": 400 })),
+            )
+                .into_response()
+        }
+    };
+    let reason = body
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "added by the operator".to_string());
+    match suppress(
+        &state.db,
+        PLATFORM_TENANT,
+        &address,
+        &reason,
+        mail_class,
+        "operator",
+    )
+    .await
+    {
+        Ok(()) => {
+            tracing::info!("do-not-mail entry added by the operator: {address} ({mail_class})");
+            Json(json!({ "address": address, "mail_class": mail_class, "suppressed": true }))
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("could not record a do-not-mail entry: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "could not record the entry", "status": 500 })),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn list_suppressions(State(state): State<AppState>, auth: AuthUser) -> Response {
     // `AuthUser` is an EXTRACTOR (`FromRequestParts`, src/auth/middleware.rs) — it is not inserted
     // into the request extensions by anything, so taking it as `Extension<AuthUser>` answered
@@ -592,7 +687,10 @@ async fn suppressions_csv(State(state): State<AppState>, auth: AuthUser) -> Resp
 
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/suppressions", get(list_suppressions))
+        .route(
+            "/suppressions",
+            get(list_suppressions).post(add_suppression),
+        )
         .route("/suppressions.csv", get(suppressions_csv))
         .route("/suppressions/:id", delete(remove_suppression))
         .with_state(state)
