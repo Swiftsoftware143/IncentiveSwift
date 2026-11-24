@@ -1524,6 +1524,20 @@ pub struct CloseAccountInput {
     pub confirm: String,
 }
 
+/// Fleet standard §3.1 (account closure + erasure): the ONLY path in is a signed-in human session,
+/// never an issued API key. An API key resolves to the literal role `"api_key"` (see
+/// `security::auth::resolve_identity`); a session JWT always carries the account's own role. This
+/// is the discriminator that makes "session only" explicit rather than incidental — a key that
+/// happens to also hold the password must still be refused, not let through to the password check.
+fn refuse_api_key(user: &AuthenticatedUser) -> Result<(), AppError> {
+    if user.role == "api_key" {
+        return Err(AppError::Unauthorized(
+            "This action needs a signed-in session, not an API key".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// `POST /api/v1/auth/close-account` — the account's own owner closes it (2026-11-11).
 ///
 /// Before this there was no way for a customer to close their own account: the only lever was
@@ -1551,6 +1565,8 @@ pub async fn close_account(
     user: AuthenticatedUser,
     Json(body): Json<CloseAccountInput>,
 ) -> Result<Json<Value>, AppError> {
+    refuse_api_key(&user)?;
+
     if !body.confirm.trim().eq_ignore_ascii_case("CLOSE") {
         return Err(AppError::BadRequest(
             "Type CLOSE to confirm closing the account".to_string(),
@@ -1712,6 +1728,194 @@ pub async fn close_account(
     Ok(Json(json!({
         "status": "account_closed",
         "closed_at": closed_at,
+    })))
+}
+
+/// `POST /api/v1/auth/erase-data` body — the owner's own decision to erase their data.
+#[derive(Deserialize)]
+pub struct EraseDataInput {
+    pub password: String,
+    /// The word the console asks them to type. Judged HERE as well as in the browser.
+    pub confirm: String,
+}
+
+/// `POST /api/v1/auth/erase-data` — the account's own owner erases it (2026-11-24).
+///
+/// Closure (above) is a STATE — `closed_at` is set and the data is kept 30 days. Erasure is the
+/// destructive twin the fleet standard requires (GDPR/CCPA-style right to erasure): the account
+/// row is deleted and every FK to `accounts(id)` CASCADEs (campaigns, the loyalty journal, the
+/// credit ledger, …). Only what the law keeps survives:
+///
+///   * billing documents (invoices / payment receipts), copied DETACHED into
+///     `account_erasure_billing_docs` — the money facts, never the account id/email/name;
+///   * ONE audit row in `account_erasures` (actor + timestamp, never a password or token).
+///
+/// The gates are the same shape as closure and run in the same order:
+///   * session only — an issued API key is refused before anything else (`refuse_api_key`);
+///   * the literal word `DELETE`, judged server-side so a bare call cannot skip it;
+///   * a platform operator account cannot be erased from a dashboard button;
+///   * the password re-verified, so a stolen session alone is not enough.
+///
+/// Everything runs in ONE transaction: the audit row, the detached billing docs, the explicit
+/// purge of the plain-uuid ledger/compliance tables (which carry no FK and would survive the
+/// cascade), and the account DELETE itself. Either the account is gone with its audit row, or
+/// nothing changed.
+pub async fn erase_data(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(body): Json<EraseDataInput>,
+) -> Result<Json<Value>, AppError> {
+    refuse_api_key(&user)?;
+
+    if !body.confirm.trim().eq_ignore_ascii_case("DELETE") {
+        return Err(AppError::BadRequest(
+            "Type DELETE to confirm erasing your data".to_string(),
+        ));
+    }
+
+    let account_uuid = Uuid::parse_str(&user.account_id)
+        .map_err(|_| AppError::Unauthorized("Invalid account id".to_string()))?;
+
+    let row = sqlx::query("SELECT password_hash, role, tenant_id FROM accounts WHERE id = $1")
+        .bind(account_uuid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+
+    // A platform operator account is not a customer and cannot be erased from a dashboard button.
+    let role: String = row.get("role");
+    if role == "admin" || role == "super_admin" {
+        return Err(AppError::Forbidden(
+            "A platform operator account cannot be erased from this screen.".to_string(),
+        ));
+    }
+
+    let password_hash: Option<String> = row.get("password_hash");
+    match password_hash {
+        Some(ref hash) => {
+            if !verify_password(&body.password, hash) {
+                return Err(AppError::Unauthorized(
+                    "Your password is incorrect".to_string(),
+                ));
+            }
+        }
+        None => {
+            return Err(AppError::BadRequest(
+                "This account has no password set, so it cannot be erased from this screen."
+                    .to_string(),
+            ));
+        }
+    }
+
+    // `tenant_id` is the account's grouping key (`tenant_id = self` for accounts minted since
+    // migration zz_is28; some legacy rows carry a dangling value). The compliance/log tables
+    // (`email_consent`, `email_message_log`, …) key on `tenant_id` rather than on `accounts.id`,
+    // so the explicit purge below matches BOTH this account's id and its tenant_id. `tenant_id`
+    // is unique per account (measured 2026-11-24), so matching it cannot reach another customer.
+    let tenant_id: Option<Uuid> = row.get("tenant_id");
+    let tenant_key = tenant_id.unwrap_or(account_uuid);
+
+    let erased_at: chrono::DateTime<chrono::Utc> = async {
+        let mut tx = state.db.begin().await?;
+
+        // 1. The ONE audit row, written FIRST so a later failure cannot lose the record of who
+        //    erased their data and when. `account_id` is a plain uuid on this table — no FK — so
+        //    the account DELETE below cannot cascade it away.
+        let (erasure_id, erased_at): (Uuid, chrono::DateTime<chrono::Utc>) = sqlx::query_as(
+            "INSERT INTO account_erasures (account_id) VALUES ($1) RETURNING id, erased_at",
+        )
+        .bind(account_uuid)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // 2. Billing documents, DETACHED from the account (no id/email/name — money facts only).
+        //    Two source shapes feed one retained shape:
+        //      checkout_sessions         — plan checkout / invoices (numeric amount).
+        //      stripe_checkout_sessions  — payment receipts (integer cents).
+        sqlx::query(
+            r#"INSERT INTO account_erasure_billing_docs
+                   (erasure_id, provider, amount, currency, description, status, reference, charged_at)
+               SELECT $1, payment_provider, price_amount, price_currency, description, status,
+                      provider_session_id, created_at
+                 FROM checkout_sessions WHERE account_id = $2"#,
+        )
+        .bind(erasure_id)
+        .bind(account_uuid)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"INSERT INTO account_erasure_billing_docs
+                   (erasure_id, provider, amount, currency, description, status, reference, charged_at)
+               SELECT $1, 'stripe', (amount::numeric / 100.0), 'usd', 'Credit top-up', status,
+                      stripe_session_id, COALESCE(completed_at, created_at)
+                 FROM stripe_checkout_sessions WHERE account_id = $2"#,
+        )
+        .bind(erasure_id)
+        .bind(account_uuid)
+        .execute(&mut *tx)
+        .await?;
+
+        // 3. Plain-uuid account references that carry NO FK and would SURVIVE the cascade: the
+        //    key lifecycle ledger, the reveal audit, the email compliance/log tables and feedback.
+        //    They key on the account id OR its tenant_id — both spellings, for rows that predate
+        //    "tenant_id = self".
+        sqlx::query(
+            "DELETE FROM api_key_events WHERE owner_id IN ($1, $2) OR actor_user_id IN ($1, $2)",
+        )
+        .bind(account_uuid)
+        .bind(tenant_key)
+        .bind(account_uuid)
+        .bind(tenant_key)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM api_key_reveals WHERE tenant_id IN ($1, $2) OR user_id IN ($1, $2)")
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM email_consent WHERE tenant_id IN ($1, $2)")
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM email_message_log WHERE tenant_id IN ($1, $2)")
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM email_suppressions WHERE tenant_id IN ($1, $2)")
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM feedback WHERE tenant_id IN ($1, $2) OR user_id IN ($1, $2)")
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .bind(account_uuid)
+            .bind(tenant_key)
+            .execute(&mut *tx)
+            .await?;
+
+        // 4. The account row itself. Every remaining FK to `accounts(id)` CASCADEs from here
+        //    (campaigns, entries, tags, offers, workspaces, api_keys, api_credentials, …). Sessions
+        //    and keys die with the row: the boundary read refuses a token whose `sub` names a gone
+        //    account, and the CASCADE revokes every issued key.
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(account_uuid)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok::<_, AppError>(erased_at)
+    }
+    .await?;
+
+    tracing::info!("account {account_uuid} erased by its owner");
+    Ok(Json(json!({
+        "status": "account_erased",
+        "erased_at": erased_at,
     })))
 }
 

@@ -1099,6 +1099,14 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/auth/close-account",
             post(crate::handlers::auth_handler::close_account),
         )
+        // Erasing one's OWN account and data (2026-11-24, kanban t_07e3f130). The destructive twin
+        // of close-account: the account row is deleted and every FK CASCADEs, with billing
+        // documents retained (detached) and one erasure audit row. Session-only, password
+        // re-verified, the word DELETE judged server-side — never an API key.
+        .route(
+            "/api/v1/auth/erase-data",
+            post(crate::handlers::auth_handler::erase_data),
+        )
         // The way back in when signup MINTED a password and the mail carrying it did not go out
         // (2026-10-28 cron). Authenticated like every other act on the caller's own account: the
         // token the signup response already carried IS the credential, and the one-shot

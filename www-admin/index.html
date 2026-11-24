@@ -7379,6 +7379,13 @@ const ProfileView = () => {
     // but NO console screen called it, so a customer's only route out was asking support to DELETE
     // the row (which CASCADEs campaigns, the loyalty journal and the ledger). A closure is a STATE.
     clPw: '', clConfirm: '', clBusy: false, clDone: false, clMsg: '', clKind: 'info',
+    // Erase my account and data (2026-11-24): the destructive twin of close. Same gates — the
+    // password re-verified and the word DELETE — but it DELETES the account row (every FK
+    // CASCADEs) instead of setting closed_at. Billing documents are kept (detached) for tax, and
+    // one erasure audit row remains.
+    erPw: '', erConfirm: '', erBusy: false, erDone: false, erMsg: '', erKind: 'info',
+    // Danger-zone dialog open flags — one per action, never both.
+    dzClose: false, dzErase: false,
     // Download my data (2026-11-15): GET /api/v1/account/export hands the whole workspace back as
     // one JSON file. The button streams it to the browser's own download, so the console never
     // holds the document in memory.
@@ -7532,11 +7539,10 @@ const ProfileView = () => {
   };
 
   const closeAccount = async () => {
-    if (!window.confirm('Close this account? Every session and API key on it ends, and signing in is refused from then on.')) return;
     st.clBusy = true; st.clMsg = ''; st.clKind = 'info'; renderApp();
     try {
       const d = await API.post('/auth/close-account', { password: (st.clPw || ''), confirm: ((st.clConfirm || '') + '').trim() });
-      st.clDone = true; st.clBusy = false;
+      st.clDone = true; st.clBusy = false; st.dzClose = false;
       st.clMsg = (d && d.message) || 'Your account is closed.'; st.clKind = 'ok';
       renderApp();
       // The closure bumped session_epoch, so the token this tab holds is dead: leave for sign-in
@@ -7544,6 +7550,24 @@ const ProfileView = () => {
       setTimeout(() => { API.logout(); S.sessionEnded = true; S.view = 'dashboard'; renderApp(); }, 1600);
     } catch (e) {
       st.clBusy = false; st.clMsg = (e && e.message) || 'Could not close the account'; st.clKind = 'err'; renderApp();
+    }
+  };
+
+  // The destructive twin of closeAccount (2026-11-24). Same shape — the password re-verified and
+  // the word DELETE — but the account row is DELETED (every FK CASCADEs) instead of marked closed.
+  // The dialog already made them type the password and DELETE and press a disabled-until-both
+  // button, so there is no second window.confirm here; the server re-checks all of it regardless.
+  const eraseAccount = async () => {
+    st.erBusy = true; st.erMsg = ''; st.erKind = 'info'; renderApp();
+    try {
+      const d = await API.post('/auth/erase-data', { password: (st.erPw || ''), confirm: ((st.erConfirm || '') + '').trim() });
+      st.erDone = true; st.erBusy = false; st.dzErase = false;
+      st.erMsg = (d && d.message) || 'Your account and data are erased.'; st.erKind = 'ok';
+      renderApp();
+      // The account row is gone, so the token in hand is dead: leave for a plain sign-out screen.
+      setTimeout(() => { API.logout(); S.sessionEnded = true; S.view = 'dashboard'; renderApp(); }, 1600);
+    } catch (e) {
+      st.erBusy = false; st.erMsg = (e && e.message) || 'Could not erase the account'; st.erKind = 'err'; renderApp();
     }
   };
   // The NEW password and its confirmation first, the CURRENT password UNDERNEATH as the check,
@@ -7663,10 +7687,19 @@ const ProfileView = () => {
       <button class="btn" id="download-my-data-btn" onClick=${downloadMyData} disabled=${st.dlBusy}>${st.dlBusy ? 'Preparing…' : 'Download my data'}</button>
       <span id="download-my-data-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.dlKind === 'err' ? '#dc2626' : (st.dlKind === 'ok' ? '#059669' : '#64748b'))}>${st.dlMsg}</span>
     </div>
-    <div class="card" id="close-account-block">
-      <h3 class="text-base font-semibold mb-1">Close my account</h3>
-      <p class="text-sm text-gray-500 mb-3">Closing ends every session and API key on this account, and signing in is refused from then on. Your campaigns, loyalty journal and ledger are kept so support can reopen the business if you change your mind — nothing is deleted.</p>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div class="card" id="danger-zone" style="margin-top:8px;border:2px solid #dc2626;border-radius:12px;padding:20px;background:#fef2f2">
+      <h3 class="text-base font-semibold mb-1" style="color:#b91c1c">⚠️ Danger zone</h3>
+      <p class="text-sm mb-3" style="color:#7f1d1d">These actions change or end your account. Cancel keeps your data for 30 days so support can restore it. Delete removes your data now and <strong>cannot be undone</strong>.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-outline" id="cancel-plan-btn" onClick=${() => { st.dzClose = true; renderApp(); }}>Cancel plan</button>
+        <button class="btn btn-red" id="delete-account-btn" onClick=${() => { st.dzErase = true; renderApp(); }}>Delete account and data</button>
+      </div>
+    </div>
+    ${st.dzClose && html`<div class="modal" onClick=${e => { if (e.target === e.currentTarget) { st.dzClose = false; renderApp(); } }}>
+      <div class="modal-content">
+        <h3 class="text-lg font-bold mb-3">Cancel plan?</h3>
+        <p class="text-sm text-gray-600 mb-2">Closing ends every session and API key on this account, and signing in is refused from then on.</p>
+        <p class="text-sm text-gray-600 mb-3">Your campaigns, loyalty journal and ledger are <strong>kept for 30 days</strong>. You can restore this within 30 days by contacting support.</p>
         <div class="mb-3">
           <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-pw">Your password (verifies it is you)</label>
           <input class="input" id="cl-pw" type="password" autocomplete="current-password" value=${st.clPw || ''} onInput=${e => { st.clPw = e.target.value; }} />
@@ -7675,10 +7708,33 @@ const ProfileView = () => {
           <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-confirm">Type CLOSE to confirm</label>
           <input class="input" id="cl-confirm" value=${st.clConfirm || ''} placeholder="CLOSE" onInput=${e => { st.clConfirm = e.target.value; }} />
         </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="close-account-btn" onClick=${closeAccount} disabled=${st.clBusy || st.clDone || !((st.clPw || '') && ((st.clConfirm || '') + '').trim().toUpperCase() === 'CLOSE')}>${st.clBusy ? 'Closing…' : (st.clDone ? 'Account closed' : 'Cancel plan')}</button>
+          <button class="btn btn-outline" onClick=${() => { st.dzClose = false; renderApp(); }}>Cancel</button>
+          <span id="close-account-msg" style=${'font-size:12px;color:' + (st.clKind === 'err' ? '#dc2626' : (st.clKind === 'ok' ? '#059669' : '#64748b'))}>${st.clMsg}</span>
+        </div>
       </div>
-      <button class="btn" id="close-account-btn" onClick=${closeAccount} disabled=${st.clBusy || st.clDone}>${st.clBusy ? 'Closing…' : (st.clDone ? 'Account closed' : 'Close my account')}</button>
-      <span id="close-account-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.clKind === 'err' ? '#dc2626' : (st.clKind === 'ok' ? '#059669' : '#64748b'))}>${st.clMsg}</span>
-    </div>
+    </div>`}
+    ${st.dzErase && html`<div class="modal" onClick=${e => { if (e.target === e.currentTarget) { st.dzErase = false; renderApp(); } }}>
+      <div class="modal-content">
+        <h3 class="text-lg font-bold mb-3" style="color:#b91c1c">⚠️ Delete account and data?</h3>
+        <p class="text-sm text-gray-600 mb-2"><strong>This deletes</strong> your account, your campaigns and entries, loyalty programmes and members, offers, tags, contacts, credit history, reviews, support tickets, and every session and API key. <strong>This cannot be undone.</strong></p>
+        <p class="text-sm text-gray-600 mb-3"><strong>This keeps</strong> your invoices and payment receipts — the law requires us to keep them for tax, stored without your name.</p>
+        <div class="mb-3">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="er-pw">Your password (verifies it is you)</label>
+          <input class="input" id="er-pw" type="password" autocomplete="current-password" value=${st.erPw || ''} onInput=${e => { st.erPw = e.target.value; }} />
+        </div>
+        <div class="mb-3">
+          <label class="block text-sm font-medium text-gray-600 mb-1" for="er-confirm">Type DELETE to confirm</label>
+          <input class="input" id="er-confirm" value=${st.erConfirm || ''} placeholder="DELETE" onInput=${e => { st.erConfirm = e.target.value; }} />
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-red" id="delete-account-confirm-btn" onClick=${eraseAccount} disabled=${st.erBusy || st.erDone || !((st.erPw || '') && ((st.erConfirm || '') + '').trim().toUpperCase() === 'DELETE')}>${st.erBusy ? 'Deleting…' : 'Delete permanently'}</button>
+          <button class="btn btn-outline" onClick=${() => { st.dzErase = false; renderApp(); }}>Cancel</button>
+          <span id="delete-account-msg" style=${'font-size:12px;color:' + (st.erKind === 'err' ? '#dc2626' : (st.erKind === 'ok' ? '#059669' : '#64748b'))}>${st.erMsg}</span>
+        </div>
+      </div>
+    </div>`}
   </div>`;
 };
 
