@@ -174,14 +174,14 @@ window.appGuidePages = {
   wins:           { title: "Wins & Redemptions", desc: "Everyone who has won a prize in a campaign, with the redemption code they were shown and whether you have honoured it yet.", actions: ["Pick a campaign", "Read the code the winner was shown", "Mark a win redeemed when you hand the prize over"] },
   loyalty:        { title: "Loyalty Programs", desc: "Point-based loyalty for your customers \u2014 earning, tiers and check-ins.", actions: ["Set up a program", "Review earning and redemptions"] },
   integration:    { title: "Integration Center", desc: "Connect IncentiveSwift to your other tools so leads and rewards flow automatically.", actions: ["Review the available connections", "Connect one"] },
-  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account this workspace collects through, and the webhook signing secret this workspace's inbound payment events are verified with — every workspace's own secret authenticates its own deliveries. The keys are never shown back in full; the Encrypted column states whether the saved copy is encrypted at rest.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use", "Test a key before you rely on it"] },
+  "payment-providers": { title: "Payment Providers", desc: "The Stripe or PayPal account you collect through, and the webhook signing secret your account's inbound payment events are verified with — every account's own secret authenticates its own deliveries. The keys are never shown back in full; the Encrypted column states whether the saved copy is encrypted at rest.", actions: ["Add your Stripe or PayPal keys", "Replace a stored key by typing a new one", "Mark a provider inactive to take it out of use", "Test a key before you rely on it"] },
   tags:           { title: "Tags", desc: "Labels that group your contacts. A system tag can also trigger other actions, such as creating a free account in another app.", actions: ["Create a tag", "Apply a tag to contacts"] },
   leads:          { title: "Leads", desc: "The people your campaigns have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
   contacts:       { title: "Contacts", desc: "Everyone on your list, collected in one place.", actions: ["Search your contacts", "Open a contact"] },
   "api-keys":     { title: "API Keys", desc: "Keys that let other tools call IncentiveSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
-  settings:       { title: "Settings", desc: "This workspace's own settings: the mail server its outgoing mail goes through \u2014 host, port, credentials and from-address, with a Test button that sends one message \u2014 and the Email Branding card that puts your own logo, brand name and colour on the transactional email this account sends. Saving branding writes the name and colour; the logo is uploaded on its own and a new upload replaces the old one. The preview button, Send me a preview email, mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives, and a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Review the saved mail server", "Send one test message", "Upload a logo and set a brand name and colour", "Send yourself a preview, or press Show the exact email to render the real message body on the page straight from the server \u2014 nothing is mailed"] },
+  settings:       { title: "Settings", desc: "This account's own settings: the mail server its outgoing mail goes through \u2014 host, port, credentials and from-address, with a Test button that sends one message \u2014 and the Email Branding card that puts your own logo, brand name and colour on the transactional email this account sends. Saving branding writes the name and colour; the logo is uploaded on its own and a new upload replaces the old one. The preview button, Send me a preview email, mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives, and a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Review the saved mail server", "Send one test message", "Upload a logo and set a brand name and colour", "Send yourself a preview, or press Show the exact email to render the real message body on the page straight from the server \u2014 nothing is mailed"] },
   "my-plan":      { title: "Plan & Pricing", desc: "Your plan decides what is available to you. This is where you see it and upgrade.", actions: ["Compare plans", "Upgrade"] },
-  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the workspace. The Plan requests button filters the queue down to customers who asked to buy a plan (a switch your team makes by hand, since no card is taken here), and each of those rows carries a Plan request badge. The Feedback chip beside it shows the notes a customer sent from the Feedback button in their own dashboard - an idea, a problem or a complaint, stamped with the screen it came from - and you answer them like any other ticket.", actions: ["Open a ticket", "Check a reply", "Filter the queue to the notes customers sent from the Feedback button"] },
+  "support-tickets": { title: "Support Tickets", desc: "Support requests \u2014 yours to us, and any opened inside the account. The Plan requests button filters the queue down to customers who asked to buy a plan (a switch your team makes by hand, since no card is taken here), and each of those rows carries a Plan request badge. The Feedback chip beside it shows the notes a customer sent from the Feedback button in their own dashboard - an idea, a problem or a complaint, stamped with the screen it came from - and you answer them like any other ticket.", actions: ["Open a ticket", "Check a reply", "Filter the queue to the notes customers sent from the Feedback button"] },
   reviews:        { title: "Reviews & Ratings", desc: "Feedback customers have left, collected so you can see how you are doing.", actions: ["Read a review", "Respond"] },
   calendar:       { title: "Calendar", desc: "Scheduled dates for your campaigns and events, in one view.", actions: ["See what is coming up", "Add a date"] },
   "knowledge-base": { title: "Knowledge Base", desc: "Help articles you can read and, for operators, publish.", actions: ["Read an article", "Search the base"] },
@@ -198,7 +198,7 @@ window.appGuidePages = {
   entries:        { title: "Entries & Answers", desc: "The raw record of play, one row per entry: when it was made, who made it, what the result was and its delivery state. This is the row to check when an entry is disputed, rather than the summary counts.", actions: ["Find an entry", "Check its result and delivery state"] },
   offers:         { title: "Offers", desc: "The offers you can hand out \u2014 each one's name, its discount, any cap on it and whether it is active. Deactivating stops an offer being handed out without deleting its history, and reactivating brings it back.", actions: ["Add an offer", "Edit one", "Deactivate it, or reactivate it later"] },
   profile:        { title: "Profile", desc: "Your own account: change your name and company, change your password (your current one must verify first), set or remove your profile picture, and sign every OTHER device out if you think someone else is signed in. The picture is PNG, JPEG, GIF or WebP up to 2 MB, and its type is read from the file's own bytes rather than its name.", actions: ["Update your name and company", "Change your password", "Upload or remove a picture", "Press Sign out every other device to end an old session without changing your password"] },
-  "email-provider": { title: "Email Provider", desc: "The platform-wide mail server every outgoing message goes through: its host, port, credentials and the from-address, with a Test button that sends one message. Changing it here changes the sender for every workspace on this deployment.", actions: ["Review the current mail server", "Send a test message", "Save a change"] }
+  "email-provider": { title: "Email Provider", desc: "The platform-wide mail server every outgoing message goes through: its host, port, credentials and the from-address, with a Test button that sends one message. Changing it here changes the sender for every account on this deployment.", actions: ["Review the current mail server", "Send a test message", "Save a change"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261110b"></script>
@@ -477,7 +477,7 @@ const Dashboard = () => {
         <div class="text-2xl">🚀</div>
         <div>
           <h3 class="text-base font-bold text-gray-800">Get set up</h3>
-          <p class="text-sm text-gray-600 mt-1">This workspace has no campaigns yet. A campaign is the page people take part in \u2014 a quiz, a poll, a raffle or a loyalty card. Create one and its prize pool, points and entries all start filling in here.</p>
+          <p class="text-sm text-gray-600 mt-1">This account has no campaigns yet. A campaign is the page people take part in \u2014 a quiz, a poll, a raffle or a loyalty card. Create one and its prize pool, points and entries all start filling in here.</p>
           <div class="flex flex-wrap gap-2 mt-3">
             <button type="button" class="btn" data-step="campaigns" onClick=${() => go('campaigns')}>Create your first campaign</button>
             <button type="button" class="btn" data-step="prizes" onClick=${() => go('prizes')}>Set up a prize pool</button>
@@ -655,7 +655,7 @@ const Plans = () => {
       loadBuyRequests(true);
     } catch (e) {
       st.busyReq = null; renderApp();
-      alert('Could not switch that workspace: ' + (e && e.message ? e.message : e));
+      alert('Could not switch that account: ' + (e && e.message ? e.message : e));
     }
   };
   // The plan CRUD lives on /api/v1/admin/plans (+ /:id). The old `/plans` path answered live 404
@@ -865,7 +865,7 @@ const MyPlan = () => {
       const url = d && (d.url || d.checkout_url || d.session_url);
       if (r.ok && url) { st.askBusy = false; renderApp(); window.location.href = url; return; }
       if (d && d.request_recorded) {
-        st.askMsg = 'Request filed for ' + (p.name || 'this plan') + '. Nothing has been charged — the team switches your workspace over and arranges billing with you directly.';
+        st.askMsg = 'Request filed for ' + (p.name || 'this plan') + '. Nothing has been charged — the team switches your account over and arranges billing with you directly.';
       } else if (r.ok) {
         st.askMsg = (d && d.message) || 'The checkout session was created.';
       } else {
@@ -920,7 +920,7 @@ const MyPlan = () => {
     <div class="card text-sm text-gray-600">
       ${st.askMsg && html`<div class="text-green-700 bg-green-50 p-2 rounded-lg mb-2" data-plan-asked-msg="1">${st.askMsg}</div>`}
       ${st.askErr && html`<div class="text-red-600 bg-red-50 p-2 rounded-lg mb-2" data-plan-ask-err="1">${st.askErr}</div>`}
-      Ready for a bigger plan? Press <strong>Choose</strong> on a plan above and we start the upgrade: a connected payment provider takes you to a secure checkout, and when none is connected the press files your request so we can switch your workspace over — billing is arranged with you directly. You can also <span class="text-blue-600 cursor-pointer font-medium" onClick=${() => { S.view = 'support-tickets'; renderApp(); }}>open a support ticket</span>.
+      Ready for a bigger plan? Press <strong>Choose</strong> on a plan above and we start the upgrade: a connected payment provider takes you to a secure checkout, and when none is connected the press files your request so we can switch your account over — billing is arranged with you directly. You can also <span class="text-blue-600 cursor-pointer font-medium" onClick=${() => { S.view = 'support-tickets'; renderApp(); }}>open a support ticket</span>.
     </div>
   </div>`;
 };
@@ -3554,7 +3554,7 @@ const Mcp = () => {
         ${p('A 401 → the client is not sending the key as a Bearer token; check the Authorization header.')}`;
       default: return html`
         ${p(html`<b>Is it read-only?</b> Yes — the service holds SELECT-only database access, so nothing you type can write, change or delete.`)}
-        ${p(html`<b>Can it read another account?</b> No — every query is scoped to this account's workspace.`)}
+        ${p(html`<b>Can it read another account?</b> No — every query is scoped to this account.`)}
         ${p(html`<b>What if a customer writes “ignore your instructions”?</b> Text inside a record is data, not a command.`)}`;
     }
   };
@@ -3762,7 +3762,7 @@ const PaymentProviders = () => {
     catch (e) { f.busy = false; f.err = (e && e.message) || 'Could not save that provider'; renderApp(); }
   };
   const remove = async (row) => {
-    if (!confirm('Delete this workspace\'s ' + row.provider_type + ' configuration? Only your own account\'s configuration is removed.')) return;
+    if (!confirm('Delete this account\'s ' + row.provider_type + ' configuration? Only your own account\'s configuration is removed.')) return;
     st.busy = true; st.msg = null; renderApp();
     try { await API.del('/payment-providers/' + encodeURIComponent(row.provider_type)); st.msg = 'Removed ' + row.provider_type + '.'; }
     catch (e) { st.msg = 'Not removed: ' + ((e && e.message) || e); }
@@ -3799,7 +3799,7 @@ const PaymentProviders = () => {
   return html`<div>
     <div class="flex items-center justify-between mb-4">
       <div><h2 class="text-xl font-bold">Payment Providers</h2>
-        <p class="text-sm text-gray-500">The Stripe or PayPal account this workspace collects with. The secret key and the webhook signing secret are never shown back in full, and the Encrypted column states whether the saved copy is encrypted at rest; the webhook signing secret authenticates this workspace's own inbound payment events. Point <strong>one</strong> Stripe webhook endpoint at <code>/api/v1/webhooks/stripe</code> &mdash; that single address delivers every Stripe event for you, a plan purchase and a loyalty-plan purchase alike, and it is the only one this app can verify.</p></div>
+        <p class="text-sm text-gray-500">The Stripe or PayPal account you collect with. The secret key and the webhook signing secret are never shown back in full, and the Encrypted column states whether the saved copy is encrypted at rest; the webhook signing secret authenticates your account's own inbound payment events. Point <strong>one</strong> Stripe webhook endpoint at <code>/api/v1/webhooks/stripe</code> &mdash; that single address delivers every Stripe event for you, a plan purchase and a loyalty-plan purchase alike, and it is the only one this app can verify.</p></div>
       <button class="btn btn-sm btn-green" disabled=${st.busy} onClick=${() => openForm(null)}>+ Add provider</button>
     </div>
     ${st.msg ? html`<div class="text-sm mb-3 text-gray-700">${st.msg}</div>` : null}
@@ -3820,7 +3820,7 @@ const PaymentProviders = () => {
       <h3 class="font-bold mb-1">How a customer pays you</h3>
       <p class="text-sm text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request the plan&rdquo; and a request is filed here for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words reach the customer on their Plan &amp; billing screen and in the receipt email they get the moment they ask. Leave it empty and nothing is shown; nothing here ever charges anyone.</p>
       ${st._payErr ? html`<div class="text-sm mb-2 text-red-700" data-pay-readerr="1">The saved words could not be read (${st._payErr}), so this box may not show what is published. Reload before saving.</div>` : null}
-      <textarea id="pp-pay-instructions" data-pay-field="1" class="border rounded px-3 py-2 w-full text-sm" rows="4" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as it lands." value=${st.pay || ''} onInput=${(e) => { st.pay = e.target.value; }}></textarea>
+      <textarea id="pp-pay-instructions" data-pay-field="1" class="border rounded px-3 py-2 w-full text-sm" rows="4" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your account name as the reference. A person on our team switches your plan on as soon as it lands." value=${st.pay || ''} onInput=${(e) => { st.pay = e.target.value; }}></textarea>
       <div class="flex items-center gap-3 mt-2">
         <button class="btn btn-sm btn-green" disabled=${st.payBusy} onClick=${savePay}>Save</button>
         <span class=${'text-sm ' + ((st.payMsg || '').indexOf('Not saved') === 0 ? 'text-red-700' : 'text-gray-700')} data-pay-msg="1">${st.payMsg || (st._paySet ? 'Published to customers who ask to buy.' : 'Nothing written yet — nothing is shown to customers.')}</span>
@@ -3861,13 +3861,13 @@ const PaymentProviderModal = ({ st, closeForm, submit, testKey }) => {
           <input class=${inp} type="password" autocomplete="new-password" value=${f.api_key} onInput=${e => { f.api_key = e.target.value; }} /></div>
         <div><label class="block text-xs font-medium mb-1">Webhook signing secret${f.edit ? ' (leave blank to keep the stored one)' : ''}</label>
           <input class=${inp} type="password" autocomplete="new-password" value=${f.webhook_secret} onInput=${e => { f.webhook_secret = e.target.value; }} />
-          <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the address is shared, every workspace's secret is checked, and an event can only ever act on the session it names. In Stripe, add <strong>one</strong> webhook endpoint pointed at <code>/api/v1/webhooks/stripe</code> and paste its signing secret here: Stripe issues a different secret per endpoint, and this field holds one, so a second endpoint could never be verified.</div></div>
+          <div class="text-xs text-gray-400 mt-1">The key your own inbound payment events are verified against — the address is shared, every account's secret is checked, and an event can only ever act on the session it names. In Stripe, add <strong>one</strong> webhook endpoint pointed at <code>/api/v1/webhooks/stripe</code> and paste its signing secret here: Stripe issues a different secret per endpoint, and this field holds one, so a second endpoint could never be verified.</div></div>
         <div><label class="block text-xs font-medium mb-1">Base URL (optional)</label>
           <input class=${inp} placeholder="https://api.stripe.com" value=${f.base_url} onInput=${e => { f.base_url = e.target.value; }} /></div>
         <div><label class="block text-xs font-medium mb-1">PayPal webhook ID (PayPal only)</label>
           <input class=${inp} placeholder="e.g. 1JE25837SA3087940" value=${f.webhook_id} onInput=${e => { f.webhook_id = e.target.value; }} />
           <div class="text-xs text-gray-400 mt-1">PayPal issues this when you register the webhook URL. PayPal's inbound events are authenticated by asking PayPal whether a delivery's signature is real, and that question needs this id, so without it an inbound PayPal event is <strong>refused</strong> (424) rather than acted on — an unverified event must never complete a payment or create an account. Also put the REST credentials in Secret key as <code>client_id:client_secret</code>.</div></div>
-        <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — this workspace's own row is the one your checkout and inbound payment events use</label>
+        <label class="flex items-center gap-2 text-sm"><input type="checkbox" checked=${f.is_active} onChange=${e => { f.is_active = e.target.checked; }} /> Active — this account's own row is the one your checkout and inbound payment events use</label>
         ${f.err ? html`<div class="text-sm text-red-700">${f.err}</div>` : null}
       </div>
       ${st.test ? html`<div class=${'text-sm mt-3 ' + (st.test.ok === false ? 'text-red-700' : (st.test.ok ? 'text-green-700' : 'text-gray-600'))}>${st.test.msg}</div>` : null}
@@ -5452,7 +5452,7 @@ const MailCompliance = () => {
       <div class="text-sm text-gray-600" style="margin-top:4px">
         ${st.hookAt
           ? html`<strong>Connected.</strong> The mail service sends its problem reports here \u2014 the most recent arrived ${when(st.hookAt)} \u2014 so a hard-bounced or complained address joins the list below by itself.`
-          : html`<strong>Connected, waiting for its first report.</strong> When a message hard-bounces or a recipient marks it as spam, the mail service tells this workspace and the address joins the list below. There is nothing to set up.`}
+          : html`<strong>Connected, waiting for its first report.</strong> When a message hard-bounces or a recipient marks it as spam, the mail service tells this account and the address joins the list below. There is nothing to set up.`}
       </div>
       ${st.hook ? html`<div class="flex items-center gap-2" style="margin-top:8px;flex-wrap:wrap">
         <span class="text-xs text-gray-400">For support, the address the mail service posts to is</span>
@@ -5565,8 +5565,8 @@ const SupportTickets = () => {
       const note = d && d.plan_note;
       st.planMsg = note
         ? { ok: !!(d && d.plan_applied), text: (d && d.plan_applied)
-            ? ('Workspace switched to ' + note + '.')
-            : ('The workspace was NOT switched: ' + note) }
+            ? ('Account switched to ' + note + '.')
+            : ('The account was NOT switched: ' + note) }
         : null;
       openDetail(id); load();
     } catch(e){ alert(e.message); }
@@ -5637,9 +5637,9 @@ const SupportTickets = () => {
       <button data-feedback-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium text-indigo-700 border-indigo-300" title="Notes a customer sent from the Feedback button inside their dashboard — an idea, a problem or a complaint, with the screen it came from. They live on the Feedback screen, which also marks each one handled." onClick=${() => { S.view = 'feedback'; renderApp(); }}>Feedback queue →</button>
     </div>
     <div class="card overflow-hidden">
-      <table class="table"><thead><tr><th>Subject</th><th>Workspace</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
+      <table class="table"><thead><tr><th>Subject</th><th>Account</th><th>Status</th><th>Priority</th><th>Category</th><th>Updated</th><th></th></tr></thead>
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
-          <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}${(t.plan_name || t.plan_slug) ? html` <span class="badge" data-plan-asked=${t.plan_slug || t.plan_name} title=${t.plan_applied_at ? 'the workspace was moved onto this plan' : 'the workspace is NOT on this plan yet'}>${t.plan_name || t.plan_slug}${t.plan_applied_at ? ' · switched' : ''}</span>` : null}</td>
+          <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}${(t.plan_name || t.plan_slug) ? html` <span class="badge" data-plan-asked=${t.plan_slug || t.plan_name} title=${t.plan_applied_at ? 'the account was moved onto this plan' : 'the account is NOT on this plan yet'}>${t.plan_name || t.plan_slug}${t.plan_applied_at ? ' · switched' : ''}</span>` : null}</td>
           <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}${isProbeOwner(t.account_email) ? html` <span class="badge badge-yellow" data-probe-row="1" title="filed by a fleet test harness — a probe, not a customer waiting to buy">probe</span>` : null}</td>
           <td><span class=${badge(t.status)}>${t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
@@ -5685,7 +5685,7 @@ const SupportTickets = () => {
         ${st.planMsg ? html`<div class="rounded-lg p-3 text-sm mb-4 ${st.planMsg.ok ? 'bg-green-50 text-green-800' : 'bg-yellow-50 text-yellow-800'}" data-plan-msg=${st.planMsg.ok ? 'applied' : 'not-applied'}>${st.planMsg.text}</div>` : null}
         ${st.detail.ticket.source === 'loyalty_plan_request' ? html`<div class="rounded-lg p-3 mb-4" style="background:#f8fafc;border:1px solid #e2e8f0" data-loyalty-activate="1">
           <div class="text-sm font-semibold mb-1">Switch this loyalty plan on</div>
-          <p class="text-xs text-gray-500 mb-2">A loyalty plan is not a workspace plan, so Resolve above cannot move it. Pick the plan this workspace asked for — the plan and its credit pool go live on their dashboard straight away.</p>
+          <p class="text-xs text-gray-500 mb-2">A loyalty plan is not an account plan, so Resolve above cannot move it. Pick the plan this account asked for — the plan and its credit pool go live on their dashboard straight away.</p>
           <div class="flex gap-2">
             <select id="loyalty-plan-pick" class="border rounded px-3 py-2 text-sm flex-1">${(st.loyaltyPlans||[]).map(p => html`<option value=${p.slug}>${p.name}${p.monthly_price ? ' — $' + p.monthly_price + '/mo' : ''}</option>`)}</select>
             <button class="px-3 py-2 text-sm rounded bg-blue-600 text-white" data-loyalty-activate-btn="1" onClick=${activateLoyalty}>Switch it on</button>
@@ -6532,7 +6532,7 @@ const BulkTenantDelete = () => {
     await load();
   };
   const planCell = (r) => html`<select class="input plan-pick" data-tenant-plan=${r.id || ''}
-      style="min-width:130px;font-size:11px" title="This workspace's plan. Changing it assigns the plan — the customer's limits and mail follow."
+      style="min-width:130px;font-size:11px" title="This account's plan. Changing it assigns the plan — the customer's limits and mail follow."
       value=${r.catalog_plan_id || ''}
       onChange=${e => assignPlan(r, e.target.value)}>
       ${!r.catalog_plan_id ? html`<option value="" disabled selected>\u2014 no plan \u00b7 ${r.plan_effective_name || 'Free'} limits</option>` : ''}
@@ -7683,7 +7683,7 @@ const ProfileView = () => {
     </div>`}
     <div class="card" id="download-my-data-card">
       <h3 class="text-base font-semibold mb-1">Download my data</h3>
-      <p class="text-sm text-gray-500 mb-3">Get your own copy of everything this workspace holds — your account details, team, campaigns, loyalty programmes, members and their entries, offers, tags, credit history, reviews, support tickets and API key names — in one file you keep. Nothing that could be used to sign in as anyone is included: no passwords, no key secrets, no mail-server passwords.</p>
+      <p class="text-sm text-gray-500 mb-3">Get your own copy of everything your account holds — your account details, team, campaigns, loyalty programmes, members and their entries, offers, tags, credit history, reviews, support tickets and API key names — in one file you keep. Nothing that could be used to sign in as anyone is included: no passwords, no key secrets, no mail-server passwords.</p>
       <button class="btn" id="download-my-data-btn" onClick=${downloadMyData} disabled=${st.dlBusy}>${st.dlBusy ? 'Preparing…' : 'Download my data'}</button>
       <span id="download-my-data-msg" style=${'margin-left:8px;font-size:12px;color:' + (st.dlKind === 'err' ? '#dc2626' : (st.dlKind === 'ok' ? '#059669' : '#64748b'))}>${st.dlMsg}</span>
     </div>
