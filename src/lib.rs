@@ -70,6 +70,9 @@ pub mod integration_schema;
 pub mod iqs_validation;
 mod lifecycle_emails;
 mod login_throttle;
+/// The MCP door (10 read-only tools over the customer's own data, scoped to the account that owns
+/// the key). Declared here as well as in `main.rs` so the lib and bin carry the same module tree.
+pub mod mcp;
 pub mod mechanics;
 // Attribution for a workspace a test harness mints through the public signup
 // (`X-Swift-Harness`, kanban t_4a744754). Declared here as well as in `main.rs` because the

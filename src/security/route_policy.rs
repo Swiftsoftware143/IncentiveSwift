@@ -86,6 +86,12 @@ use axum::response::Response;
 pub const PUBLIC_ROUTES: &[&str] = &[
     // --- liveness ---------------------------------------------------------------
     "/api/v1/health",
+    // The MCP door (kanban t_bfdfdd25). PUBLIC by necessity, not by accident: the door IS its own
+    // credential boundary — `crate::mcp::ApiKeyResolver` resolves the bearer on every call and the
+    // transport answers 401 with the JSON-RPC unauthorized code. If `default_deny` saw it first,
+    // a missing/bogus key would get the app's own 401 JSON instead of the protocol's -32001 shape,
+    // and a valid key would be checked twice. Read tools only; no write arm exists to leak.
+    "/mcp",
     // --- account entry points ---------------------------------------------------
     "/api/v1/auth/register",
     "/api/v1/auth/login",

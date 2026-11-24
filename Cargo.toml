@@ -55,6 +55,10 @@ regex-lite = "0.1.9"
 # SVG only, exactly the shape FunnelSwift ships its counter codes with; the crate is already in the
 # box's cargo registry cache at this version.
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# The shared MCP door (JSON-RPC transport, credential contract, tenancy, audit, tool registry).
+# Pinned to a rev, never a branch: a door that changes under the app between builds is not a
+# contract (see /opt/swift/mcp-door/README.md).
+mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "15aef65e324c804dc1f3cc6ebe112c0e537aaede" }
 
 [dev-dependencies]
 tokio-test = "0.4"

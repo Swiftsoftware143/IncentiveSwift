@@ -72,6 +72,9 @@ pub mod handlers;
 pub mod image_store;
 pub mod integration_schema;
 pub mod iqs_validation;
+/// The MCP door (10 read-only tools over the customer's own data, scoped to the account that owns
+/// the key). Declared here as well as in `lib.rs` so the lib and bin carry the same module tree.
+mod mcp;
 pub mod mechanics;
 /// Plan resolution for the ported private-inbox module — IncentiveSwift sells through
 /// `plan_tiers`/`tier_features`, not CoreSwift's module registry.
@@ -293,6 +296,14 @@ async fn main() -> anyhow::Result<()> {
         )
         // Public routes
         .route("/api/v1/health", get(handlers::health::health_check))
+        // MCP door (kanban t_bfdfdd25). Mounted PUBLIC: the door is its OWN credential boundary —
+        // it answers 401 with the JSON-RPC unauthorized code on a missing/bogus/revoked key, and a
+        // valid api key is resolved to its owning account by `crate::mcp`. `default_deny` must not
+        // intercept it, or the protocol's 401 shape would be replaced by the app's own 401 JSON.
+        .route(
+            "/mcp",
+            post(crate::mcp::handle).layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)),
+        )
         // Account email-branding logo, PUBLIC by design (kanban t_feab8aff): a mail client renders
         // `<img src>` with no credential, so a token-gated logo would never appear.
         .route(

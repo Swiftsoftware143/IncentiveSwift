@@ -1104,6 +1104,7 @@ dependencies = [
  "http-body",
  "jsonwebtoken",
  "lettre",
+ "mcp-door",
  "md-5",
  "qrcode",
  "rand 0.8.7",
@@ -1302,6 +1303,22 @@ name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
+
+[[package]]
+name = "mcp-door"
+version = "0.1.0"
+source = "git+https://github.com/Swiftsoftware143/mcp-door?rev=15aef65e324c804dc1f3cc6ebe112c0e537aaede#15aef65e324c804dc1f3cc6ebe112c0e537aaede"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "md-5"

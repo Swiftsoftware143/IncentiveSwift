@@ -14,6 +14,8 @@ pub struct AppState {
     pub http_client: reqwest::Client,
     /// Failed-sign-in counter, keyed by client address (`crate::login_throttle`).
     pub login_throttle: crate::login_throttle::LoginThrottle,
+    /// The MCP door (built here so the pool is available; mounted in `main.rs` at `POST /mcp`).
+    pub mcp_door: std::sync::Arc<mcp_door::Door>,
 }
 
 impl AppState {
@@ -49,12 +51,18 @@ impl AppState {
             .user_agent("IncentiveSwift/0.1.0")
             .build()?;
 
+        let mcp_door = std::sync::Arc::new(
+            crate::mcp::build_door(pool.clone())
+                .map_err(|e| anyhow::anyhow!("mcp door refused to start: {e}"))?,
+        );
+
         Ok(Self {
             db: pool.clone(),
             pool,
             config: Arc::clone(config),
             http_client,
             login_throttle: crate::login_throttle::LoginThrottle::new(),
+            mcp_door,
         })
     }
 }
