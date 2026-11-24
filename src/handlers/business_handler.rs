@@ -17,6 +17,7 @@ use tracing;
 use uuid::Uuid;
 
 use crate::error::AppError;
+use crate::security::auth::ct_eq;
 use crate::state::AppState;
 
 // Types
@@ -697,7 +698,7 @@ async fn verify_business_auth(
     // "internal-sync-key-placeholder" fallback to guess.
     if !internal_key.is_empty() {
         if let Some(key) = headers.get("X-Internal-Key").and_then(|v| v.to_str().ok()) {
-            if key == internal_key {
+            if ct_eq(key, internal_key) {
                 return Ok(());
             }
         }

@@ -426,6 +426,19 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Length-independent constant-time compare of the shared internal key. Mirrors the `ct_eq`
+/// helper in FunnelSwift / WorkflowSwift: a wrong key is indistinguishable from a right one by
+/// how long it took to be refused.
+pub(crate) fn ct_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut diff = a.len() ^ b.len();
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= (x ^ y) as usize;
+    }
+    diff == 0
+}
+
 /// Legacy store: `api_credentials.key_identifier` + bcrypt hash. Unchanged
 /// behaviour — kept so any credential seeded outside `api_keys` keeps working.
 async fn verify_legacy_api_credential(
@@ -595,8 +608,10 @@ pub async fn admin_guard(
             .headers()
             .get("X-Internal-Sync-Key")
             .and_then(|v| v.to_str().ok());
-        if presented == Some(sync_key.as_str()) {
-            return Ok(next.run(req).await);
+        if let Some(presented) = presented {
+            if ct_eq(presented, sync_key.as_str()) {
+                return Ok(next.run(req).await);
+            }
         }
     }
 
