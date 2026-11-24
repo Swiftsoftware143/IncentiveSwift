@@ -5361,6 +5361,7 @@ const MailCompliance = () => {
       const r = await fetch(window.location.origin + '/api/v1/settings/do-not-mail/webhook', { headers: cHeaders() });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || d.message || ('Request failed (' + r.status + ')'));
+      st.operator = d.operator === true;
       st.hook = d.url || ''; st.hookAt = d.last_event_at || null; st.hookErr = null;
     } catch (e) { st.hookErr = (e && e.message) || String(e); st.hook = ''; }
     renderApp();
@@ -5446,20 +5447,20 @@ const MailCompliance = () => {
       <div class="text-sm text-gray-600" style="margin-top:4px">${st.hookErr}</div>
       <div class="text-sm text-gray-600" style="margin-top:8px">The list below still works. Bounces and complaints cannot be recorded until this address is readable — it is read from this app, so this is a server-side fault, not a setting on the provider.</div>
     </div>` : null}
-    ${st.hook ? html`<div class="card" data-provider-events-address=${st.hook} style="margin-bottom:16px">
+    ${(st.hook || st.operator === false) ? html`<div class="card" data-provider-events-address=${st.hook || ''} style="margin-bottom:16px">
       <div class="font-medium text-sm">Bounces and complaints report themselves</div>
       <div class="text-sm text-gray-600" style="margin-top:4px">
         ${st.hookAt
           ? html`<strong>Connected.</strong> The mail service sends its problem reports here \u2014 the most recent arrived ${when(st.hookAt)} \u2014 so a hard-bounced or complained address joins the list below by itself.`
           : html`<strong>Connected, waiting for its first report.</strong> When a message hard-bounces or a recipient marks it as spam, the mail service tells this workspace and the address joins the list below. There is nothing to set up.`}
       </div>
-      <div class="flex items-center gap-2" style="margin-top:8px;flex-wrap:wrap">
+      ${st.hook ? html`<div class="flex items-center gap-2" style="margin-top:8px;flex-wrap:wrap">
         <span class="text-xs text-gray-400">For support, the address the mail service posts to is</span>
         <code style="font-size:11px;word-break:break-all;color:#334155">${st.hook}</code>
         <button type="button" class="btn btn-sm btn-outline" aria-label="Copy the delivery-events address" onClick=${() => { try { navigator.clipboard.writeText(st.hook); } catch (e) {} }}>Copy</button>
-      </div>
+      </div>` : null}
     </div>` : null}
-    ${!st.hook && !st.hookErr ? html`<div class="card" style="margin-bottom:16px"><div class="text-sm text-gray-400">Reading the provider's delivery-events address\u2026</div></div>` : null}
+    ${!st.hook && !st.hookErr && st.operator !== false ? html`<div class="card" style="margin-bottom:16px"><div class="text-sm text-gray-400">Reading the provider's delivery-events address\u2026</div></div>` : null}
     ${st.err ? html`<div class="card" style="border-left:4px solid #dc2626">
       <div class="font-medium text-sm" style="color:#991b1b">This screen could not load</div>
       <div class="text-sm text-gray-600" style="margin-top:4px">${st.err}</div>
