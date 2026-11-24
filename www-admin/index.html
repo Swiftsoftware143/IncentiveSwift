@@ -7702,11 +7702,11 @@ const ProfileView = () => {
         <p class="text-sm text-gray-600 mb-3">Your campaigns, loyalty journal and ledger are <strong>kept for 30 days</strong>. You can restore this within 30 days by contacting support.</p>
         <div class="mb-3">
           <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-pw">Your password (verifies it is you)</label>
-          <input class="input" id="cl-pw" type="password" autocomplete="current-password" value=${st.clPw || ''} onInput=${e => { st.clPw = e.target.value; }} />
+          <input class="input" id="cl-pw" type="password" autocomplete="current-password" value=${st.clPw || ''} onInput=${e => { st.clPw = e.target.value; renderApp(); }} />
         </div>
         <div class="mb-3">
           <label class="block text-sm font-medium text-gray-600 mb-1" for="cl-confirm">Type CLOSE to confirm</label>
-          <input class="input" id="cl-confirm" value=${st.clConfirm || ''} placeholder="CLOSE" onInput=${e => { st.clConfirm = e.target.value; }} />
+          <input class="input" id="cl-confirm" value=${st.clConfirm || ''} placeholder="CLOSE" onInput=${e => { st.clConfirm = e.target.value; renderApp(); }} />
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn" id="close-account-btn" onClick=${closeAccount} disabled=${st.clBusy || st.clDone || !((st.clPw || '') && ((st.clConfirm || '') + '').trim().toUpperCase() === 'CLOSE')}>${st.clBusy ? 'Closing…' : (st.clDone ? 'Account closed' : 'Cancel plan')}</button>
@@ -7722,11 +7722,11 @@ const ProfileView = () => {
         <p class="text-sm text-gray-600 mb-3"><strong>This keeps</strong> your invoices and payment receipts — the law requires us to keep them for tax, stored without your name.</p>
         <div class="mb-3">
           <label class="block text-sm font-medium text-gray-600 mb-1" for="er-pw">Your password (verifies it is you)</label>
-          <input class="input" id="er-pw" type="password" autocomplete="current-password" value=${st.erPw || ''} onInput=${e => { st.erPw = e.target.value; }} />
+          <input class="input" id="er-pw" type="password" autocomplete="current-password" value=${st.erPw || ''} onInput=${e => { st.erPw = e.target.value; renderApp(); }} />
         </div>
         <div class="mb-3">
           <label class="block text-sm font-medium text-gray-600 mb-1" for="er-confirm">Type DELETE to confirm</label>
-          <input class="input" id="er-confirm" value=${st.erConfirm || ''} placeholder="DELETE" onInput=${e => { st.erConfirm = e.target.value; }} />
+          <input class="input" id="er-confirm" value=${st.erConfirm || ''} placeholder="DELETE" onInput=${e => { st.erConfirm = e.target.value; renderApp(); }} />
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn btn-red" id="delete-account-confirm-btn" onClick=${eraseAccount} disabled=${st.erBusy || st.erDone || !((st.erPw || '') && ((st.erConfirm || '') + '').trim().toUpperCase() === 'DELETE')}>${st.erBusy ? 'Deleting…' : 'Delete permanently'}</button>
