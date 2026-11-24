@@ -76,6 +76,17 @@ def post(path, body, token=None, headers=None):
         return r.status_code, {}
 
 
+def get(path, token=None):
+    h = {}
+    if token:
+        h["Authorization"] = "Bearer " + token
+    r = requests.get(BASE + path, headers=h, timeout=30)
+    try:
+        return r.status_code, r.json()
+    except Exception:
+        return r.status_code, {}
+
+
 def check(name, ok, detail=""):
     mark = "PASS" if ok else "FAIL"
     print(f"[{mark}] {name}" + (f"  ({detail})" if detail else ""))
@@ -100,13 +111,20 @@ def main():
     session_token = reg["token"]
     account_id = reg["user"]["id"]
 
-    # An issued API key for this account, to prove a key cannot reach the doors.
-    status, key = post("/api-keys", {"name": "erasure-guard"}, token=session_token)
-    if status != 200 or not key.get("full_key"):
-        # Clean up the account if the fixture could not be completed.
+    # The account is provisioned with ONE issued API key at mint (account_mint::mint_account), so
+    # reveal that key instead of trying to create a second one (which 409s). The reveal is
+    # password-gated exactly like the doors it will be used against.
+    status, keys = get("/api-keys", token=session_token)
+    if status != 200 or not keys.get("api_keys"):
         psql(f"DELETE FROM accounts WHERE id = '{account_id}'")
-        return check("fixture: mint an issued API key", False, f"status {status}: {key}")
-    api_key = key["full_key"]
+        return check("fixture: list the provisioned API key", False, f"status {status}: {keys}")
+    key_id = keys["api_keys"][0]["id"]
+    status, revealed = post(f"/api-keys/{key_id}/reveal", {"password": password},
+                            token=session_token)
+    if status != 200 or not revealed.get("api_key"):
+        psql(f"DELETE FROM accounts WHERE id = '{account_id}'")
+        return check("fixture: reveal the provisioned API key", False, f"status {status}: {revealed}")
+    api_key = revealed["api_key"]
 
     # Seed two billing rows so check 6 can prove they are RETAINED (detached).
     psql(
@@ -140,9 +158,15 @@ def main():
           f"private={private} refuse_guard={refuse_guard}")
 
     # ── Check 4: no MCP tool names close / erase / delete_account ─────────────────────────────
-    mcp = open(MCP_SRC).read()
-    bad = [w for w in ("close", "erase", "delete_account", "delete-account") if w in mcp]
-    check("4. no MCP tool names close/erase/delete_account", not bad, f"found {bad}")
+    # The fleet MCP server is read-only; a tool NAME must not name the destructive doors. Extract
+    # the literal tool names (`"name": "..."`) and check them, not the whole file — the word
+    # "close" legitimately appears in a comment ("whether a prefix is close").
+    import re
+    tool_names = re.findall(r'"name"\s*:\s*"([^"]+)"', open(MCP_SRC).read())
+    bad = [n for n in tool_names
+           if any(w in n.lower() for w in ("close", "erase", "delete_account", "delete-account"))]
+    check("4. no MCP tool names close/erase/delete_account", not bad,
+          f"tools={len(tool_names)}, bad={bad}")
 
     # ── Check 5: session + wrong password -> 401, rows survive ────────────────────────────────
     status, _ = post("/auth/erase-data",
