@@ -1,4 +1,4 @@
-//! IncentiveSwift's MCP door: ten read-only tools over a customer's own data.
+//! IncentiveSwift's MCP door: read + write tools over a customer's own data.
 //!
 //! Credential: `api_keys` (`prefix`, `is_active`, `expires_at`). The trap this door resolves is
 //! that the key table's `tenant_id` column is an `accounts.id` (FK `tenant_id -> accounts(id)`)
@@ -7,12 +7,13 @@
 //! BOTH hold the account id in this app. The resolver maps the key row to `accounts.id` via its
 //! `tenant_id` (FK-backed) and every tool filters on that single id.
 //!
-//! Read tools only: no write, destructive or cross-workspace tool is exposed (phase 2 is a
-//! separate card). `treasury_holds` / `treasury_funding` are empty fleet-wide and are reported as
-//! zero — never invented.
+//! Read tools plus create/update/archive write tools, all scoped to the key's own account (a
+//! foreign id answers `not_found`; nothing is ever hard-deleted without an explicit flag). No
+//! cross-workspace or platform-admin tool is exposed — those actions stay on the admin surface.
 //!
-//! A key maps to exactly ONE account, so every read is a fully parameterized `= $1` on that id —
-//! no SQL string is ever assembled from caller input or a scope clause (the fleet gate forbids it).
+//! A key maps to exactly ONE account, so every read and write is a fully parameterized `= $1` on
+//! that id — no SQL string is ever assembled from caller input or a scope clause (the fleet gate
+//! forbids it).
 
 use std::sync::Arc;
 
@@ -144,6 +145,66 @@ fn account_id(ctx: &Ctx) -> Result<Uuid, ToolError> {
         .first()
         .copied()
         .ok_or_else(|| ToolError::Invalid("no workspace bound to this credential".into()))
+}
+
+/// The slug for a campaign or funnel created through the door: a slugified name plus a short
+/// random suffix, so two same-named rows never collide on their unique slug column.
+fn slugify(name: &str) -> String {
+    let base: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let base = base.trim_matches('-').to_string();
+    let suffix = &Uuid::new_v4().to_string()[..6];
+    if base.is_empty() {
+        format!("campaign-{suffix}")
+    } else {
+        format!("{base}-{suffix}")
+    }
+}
+
+/// `args[key]` when it is a string, otherwise `None`.
+fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(|v| v.as_str())
+}
+
+/// `args[key]` as a bool, defaulting to `false`.
+fn opt_bool(args: &Value, key: &str) -> bool {
+    args.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// `args[key]` as an RFC3339 timestamp, or `None` when absent.
+fn opt_ts(args: &Value, key: &str) -> Result<Option<DateTime<Utc>>, ToolError> {
+    match opt_str(args, key) {
+        None => Ok(None),
+        Some(s) => DateTime::parse_from_rfc3339(s)
+            .map(|d| Some(d.with_timezone(&Utc)))
+            .map_err(|e| ToolError::Invalid(format!("{key} must be an RFC3339 timestamp: {e}"))),
+    }
+}
+
+/// A scoped ownership probe used on the CREATE path for a sub-entity: the SQL must return the
+/// parent's id only when `$1` (the parent id) names a row the caller's `$2` account owns. A hit
+/// means "owned"; a miss means the parent is foreign or absent — both answer `not_found`.
+async fn scoped_owned(
+    pool: &PgPool,
+    probe: &str,
+    id: Uuid,
+    account: Uuid,
+) -> Result<bool, ToolError> {
+    let hit: Option<Uuid> = sqlx::query_scalar(probe)
+        .bind(id)
+        .bind(account)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+    Ok(hit.is_some())
 }
 
 fn excerpt(text: Option<&str>) -> Option<String> {
@@ -1567,6 +1628,2249 @@ fn registry(pool: PgPool) -> Registry {
         );
     }
 
+    // ── W1 campaigns: create / update / archive ────────────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_campaign",
+                "Create a new campaign in this workspace. Requires name, type and tag_namespace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "type": {"type": "string"},
+                    "tag_namespace": {"type": "string"},
+                    "config": {"type": "object"},
+                    "delivery_method": {"type": "string"}
+                },
+                "required": ["name", "type", "tag_namespace"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    let ctype = ctx.str_arg(&args, "type")?.trim().to_string();
+                    let namespace = ctx.str_arg(&args, "tag_namespace")?.trim().to_string();
+                    if name.is_empty() {
+                        return Err(ToolError::Invalid("name is required".into()));
+                    }
+                    if namespace.is_empty() {
+                        return Err(ToolError::Invalid("tag_namespace is required".into()));
+                    }
+                    if !crate::db::campaigns::VALID_MECHANIC_TYPES.contains(&ctype.as_str()) {
+                        return Err(ToolError::Invalid(format!(
+                            "unknown campaign type '{ctype}'"
+                        )));
+                    }
+                    let config = args.get("config").cloned().unwrap_or_else(|| json!({}));
+                    let delivery_method = opt_str(&args, "delivery_method")
+                        .unwrap_or("webhook")
+                        .to_string();
+                    let id = Uuid::new_v4();
+                    let slug = slugify(&name);
+                    sqlx::query(
+                        "INSERT INTO campaigns (id, account_id, name, slug, type, status, config, \
+                         tag_namespace, outcome_tags, delivery_method, delivery_config) \
+                         VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&name)
+                    .bind(&slug)
+                    .bind(&ctype)
+                    .bind(&config)
+                    .bind(&namespace)
+                    .bind(json!({}))
+                    .bind(&delivery_method)
+                    .bind(json!({}))
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "name": name, "slug": slug, "type": ctype, "status": "draft" }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_campaign",
+                "Update a campaign's name, status, config or delivery method by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "status": {"type": "string"},
+                    "config": {"type": "object"},
+                    "delivery_method": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let config = args.get("config").cloned();
+                    let delivery_method = opt_str(&args, "delivery_method").map(|s| s.to_string());
+                    let res = sqlx::query(
+                        "UPDATE campaigns SET name = COALESCE($2, name), status = COALESCE($3, status), \
+                         config = COALESCE($4, config), delivery_method = COALESCE($5, delivery_method) \
+                         WHERE id = $1 AND account_id = $6",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(status)
+                    .bind(config)
+                    .bind(delivery_method)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_campaign",
+                "Archive a campaign by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "hard_delete": {"type": "boolean"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM campaigns WHERE id = $1 AND account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE campaigns SET status = 'archived' WHERE id = $1 AND account_id = $2",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W2 offers: create / update / archive ───────────────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_offer",
+                "Create a promotional offer (name, discount percent, dollar cap) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "discount_percent": {"type": "integer"},
+                    "cap_dollars": {"type": "integer"}
+                },
+                "required": ["name", "discount_percent", "cap_dollars"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    if name.is_empty() {
+                        return Err(ToolError::Invalid("name is required".into()));
+                    }
+                    let discount = args
+                        .get("discount_percent")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .ok_or_else(|| ToolError::Invalid("discount_percent must be an integer".into()))?;
+                    let cap = args
+                        .get("cap_dollars")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .ok_or_else(|| ToolError::Invalid("cap_dollars must be an integer".into()))?;
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO offers (id, tenant_id, name, discount_percent, cap_dollars) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&name)
+                    .bind(discount)
+                    .bind(cap)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "name": name, "discount_percent": discount, "cap_dollars": cap }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_offer",
+                "Update an offer's name, discount, cap or active flag by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "discount_percent": {"type": "integer"},
+                    "cap_dollars": {"type": "integer"},
+                    "active": {"type": "boolean"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let discount = args.get("discount_percent").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let cap = args.get("cap_dollars").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let active = args.get("active").and_then(|v| v.as_bool());
+                    let res = sqlx::query(
+                        "UPDATE offers SET name = COALESCE($2, name), \
+                         discount_percent = COALESCE($3, discount_percent), \
+                         cap_dollars = COALESCE($4, cap_dollars), active = COALESCE($5, active) \
+                         WHERE id = $1 AND tenant_id = $6",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(discount)
+                    .bind(cap)
+                    .bind(active)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_offer",
+                "Archive an offer by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM offers WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE offers SET active = false WHERE id = $1 AND tenant_id = $2",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W3 loyalty_programs: create / update / archive ────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_loyalty_program",
+                "Create a loyalty program (name, optional currency name and points-per-checkin).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "currency_name": {"type": "string"},
+                    "points_per_checkin": {"type": "integer"}
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    if name.is_empty() {
+                        return Err(ToolError::Invalid("name is required".into()));
+                    }
+                    let currency = opt_str(&args, "currency_name")
+                        .unwrap_or("Points")
+                        .to_string();
+                    let points = args
+                        .get("points_per_checkin")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .unwrap_or(10);
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO loyalty_programs (id, account_id, name, currency_name, points_per_checkin) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&name)
+                    .bind(&currency)
+                    .bind(points)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "name": name, "currency_name": currency, "is_active": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_loyalty_program",
+                "Update a loyalty program's name, currency or points-per-checkin by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "currency_name": {"type": "string"},
+                    "points_per_checkin": {"type": "integer"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let currency = opt_str(&args, "currency_name").map(|s| s.to_string());
+                    let points = args.get("points_per_checkin").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let res = sqlx::query(
+                        "UPDATE loyalty_programs lp SET name = COALESCE($2, lp.name), \
+                         currency_name = COALESCE($3, lp.currency_name), \
+                         points_per_checkin = COALESCE($4, lp.points_per_checkin) \
+                         WHERE lp.id = $1 AND (lp.account_id = $5 \
+                            OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $5) \
+                            OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $5))",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(currency)
+                    .bind(points)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_loyalty_program",
+                "Archive a loyalty program by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query(
+                            "DELETE FROM loyalty_programs lp WHERE lp.id = $1 AND \
+                             (lp.account_id = $2 \
+                              OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                              OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE loyalty_programs lp SET is_active = false WHERE lp.id = $1 AND \
+                             (lp.account_id = $2 \
+                              OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                              OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W4 loyalty_reward_tiers: create / update / archive ────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_reward_tier",
+                "Create a reward tier on a loyalty program this workspace owns (name, points, reward tag).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "program_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "points_required": {"type": "integer"},
+                    "reward_tag": {"type": "string"}
+                },
+                "required": ["program_id", "name", "points_required", "reward_tag"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let program_id = ctx.uuid_arg(&args, "program_id")?;
+                    let owned = scoped_owned(
+                        &pool,
+                        "SELECT lp.id FROM loyalty_programs lp WHERE lp.id = $1 AND \
+                         (lp.account_id = $2 OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                          OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+                        program_id,
+                        account,
+                    )
+                    .await?;
+                    if !owned {
+                        return Err(ToolError::NotFound);
+                    }
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    let points = args
+                        .get("points_required")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .ok_or_else(|| ToolError::Invalid("points_required must be an integer".into()))?;
+                    let tag = ctx.str_arg(&args, "reward_tag")?.trim().to_string();
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO loyalty_reward_tiers (id, program_id, name, points_required, reward_tag) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind(id)
+                    .bind(program_id)
+                    .bind(&name)
+                    .bind(points)
+                    .bind(&tag)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "program_id": program_id, "name": name, "points_required": points }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_reward_tier",
+                "Update a reward tier's name, points, tag or approval flag by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "points_required": {"type": "integer"},
+                    "reward_tag": {"type": "string"},
+                    "requires_approval": {"type": "boolean"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let points = args.get("points_required").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let tag = opt_str(&args, "reward_tag").map(|s| s.trim().to_string());
+                    let approval = args.get("requires_approval").and_then(|v| v.as_bool());
+                    let res = sqlx::query(
+                        "UPDATE loyalty_reward_tiers rt SET name = COALESCE($2, rt.name), \
+                         points_required = COALESCE($3, rt.points_required), \
+                         reward_tag = COALESCE($4, rt.reward_tag), \
+                         requires_approval = COALESCE($5, rt.requires_approval) \
+                         WHERE rt.id = $1 AND rt.program_id IN (SELECT lp.id FROM loyalty_programs lp \
+                            WHERE lp.account_id = $6 OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $6) \
+                            OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $6))",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(points)
+                    .bind(tag)
+                    .bind(approval)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_reward_tier",
+                "Hard-delete a reward tier by id (tiers have no archive state, so the flag is required).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id", "hard_delete"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    if !opt_bool(&args, "hard_delete") {
+                        return Err(ToolError::Invalid(
+                            "a reward tier has no archive state; pass hard_delete = true to delete it".into(),
+                        ));
+                    }
+                    let res = sqlx::query(
+                        "DELETE FROM loyalty_reward_tiers rt WHERE rt.id = $1 AND rt.program_id IN \
+                         (SELECT lp.id FROM loyalty_programs lp WHERE lp.account_id = $2 \
+                            OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                            OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "deleted": true }))
+                })
+            },
+        );
+    }
+
+    // ── W5 campaign_milestones: create / update / archive ─────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_milestone",
+                "Create a milestone on a campaign this workspace owns (name and points required).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "points_required": {"type": "integer"},
+                    "action_type": {"type": "string"}
+                },
+                "required": ["campaign_id", "name"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let campaign_id = ctx.uuid_arg(&args, "campaign_id")?;
+                    let owned = scoped_owned(
+                        &pool,
+                        "SELECT id FROM campaigns WHERE id = $1 AND account_id = $2",
+                        campaign_id,
+                        account,
+                    )
+                    .await?;
+                    if !owned {
+                        return Err(ToolError::NotFound);
+                    }
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    if name.is_empty() {
+                        return Err(ToolError::Invalid("name is required".into()));
+                    }
+                    let points = args
+                        .get("points_required")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .unwrap_or(0);
+                    let action = opt_str(&args, "action_type").unwrap_or("fire_webhook").to_string();
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO campaign_milestones (id, campaign_id, name, points_required, action_type) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind(id)
+                    .bind(campaign_id)
+                    .bind(&name)
+                    .bind(points)
+                    .bind(&action)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "campaign_id": campaign_id, "name": name }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_milestone",
+                "Update a milestone's name, points or action by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "points_required": {"type": "integer"},
+                    "action_type": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let points = args.get("points_required").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let action = opt_str(&args, "action_type").map(|s| s.to_string());
+                    let res = sqlx::query(
+                        "UPDATE campaign_milestones m SET name = COALESCE($2, m.name), \
+                         points_required = COALESCE($3, m.points_required), \
+                         action_type = COALESCE($4, m.action_type) \
+                         WHERE m.id = $1 AND m.campaign_id IN (SELECT id FROM campaigns WHERE account_id = $5)",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(points)
+                    .bind(action)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_milestone",
+                "Archive a milestone by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query(
+                            "DELETE FROM campaign_milestones m WHERE m.id = $1 AND m.campaign_id IN \
+                             (SELECT id FROM campaigns WHERE account_id = $2)",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE campaign_milestones m SET is_active = false WHERE m.id = $1 AND m.campaign_id IN \
+                             (SELECT id FROM campaigns WHERE account_id = $2)",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W6 campaign_secret_codes: create / update / archive ───────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_secret_code",
+                "Create a secret code on a campaign this workspace owns (code and points).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "string"},
+                    "code": {"type": "string"},
+                    "points": {"type": "integer"},
+                    "max_uses": {"type": "integer"}
+                },
+                "required": ["campaign_id", "code"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let campaign_id = ctx.uuid_arg(&args, "campaign_id")?;
+                    let owned = scoped_owned(
+                        &pool,
+                        "SELECT id FROM campaigns WHERE id = $1 AND account_id = $2",
+                        campaign_id,
+                        account,
+                    )
+                    .await?;
+                    if !owned {
+                        return Err(ToolError::NotFound);
+                    }
+                    let code = ctx.str_arg(&args, "code")?.trim().to_string();
+                    if code.is_empty() {
+                        return Err(ToolError::Invalid("code is required".into()));
+                    }
+                    let points = args
+                        .get("points")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .unwrap_or(100);
+                    let max_uses = args.get("max_uses").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO campaign_secret_codes (id, campaign_id, code, points, max_uses) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind(id)
+                    .bind(campaign_id)
+                    .bind(&code)
+                    .bind(points)
+                    .bind(max_uses)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "campaign_id": campaign_id, "code": code, "points": points }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_secret_code",
+                "Update a secret code's code, points or max uses by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "code": {"type": "string"},
+                    "points": {"type": "integer"},
+                    "max_uses": {"type": "integer"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let code = opt_str(&args, "code").map(|s| s.trim().to_string());
+                    let points = args.get("points").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let max_uses = args.get("max_uses").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let res = sqlx::query(
+                        "UPDATE campaign_secret_codes sc SET code = COALESCE($2, sc.code), \
+                         points = COALESCE($3, sc.points), max_uses = COALESCE($4, sc.max_uses) \
+                         WHERE sc.id = $1 AND sc.campaign_id IN (SELECT id FROM campaigns WHERE account_id = $5)",
+                    )
+                    .bind(id)
+                    .bind(code)
+                    .bind(points)
+                    .bind(max_uses)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_secret_code",
+                "Archive a secret code by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query(
+                            "DELETE FROM campaign_secret_codes sc WHERE sc.id = $1 AND sc.campaign_id IN \
+                             (SELECT id FROM campaigns WHERE account_id = $2)",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE campaign_secret_codes sc SET is_active = false WHERE sc.id = $1 AND sc.campaign_id IN \
+                             (SELECT id FROM campaigns WHERE account_id = $2)",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W7 earn_channels: create / update / archive ───────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_earn_channel",
+                "Create an earn channel on a campaign this workspace owns (channel_code and label).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "campaign_id": {"type": "string"},
+                    "channel_code": {"type": "string"},
+                    "label": {"type": "string"},
+                    "points_per_click": {"type": "integer"}
+                },
+                "required": ["campaign_id", "channel_code"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let campaign_id = ctx.uuid_arg(&args, "campaign_id")?;
+                    let owned = scoped_owned(
+                        &pool,
+                        "SELECT id FROM campaigns WHERE id = $1 AND account_id = $2",
+                        campaign_id,
+                        account,
+                    )
+                    .await?;
+                    if !owned {
+                        return Err(ToolError::NotFound);
+                    }
+                    let code = ctx.str_arg(&args, "channel_code")?.trim().to_string();
+                    if code.is_empty() {
+                        return Err(ToolError::Invalid("channel_code is required".into()));
+                    }
+                    let label = opt_str(&args, "label").unwrap_or("").to_string();
+                    let points = args
+                        .get("points_per_click")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .unwrap_or(0);
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO earn_channels (id, account_id, campaign_id, channel_code, label, points_per_click) \
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(campaign_id)
+                    .bind(&code)
+                    .bind(&label)
+                    .bind(points)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "campaign_id": campaign_id, "channel_code": code }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_earn_channel",
+                "Update an earn channel's code, label or points-per-click by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "channel_code": {"type": "string"},
+                    "label": {"type": "string"},
+                    "points_per_click": {"type": "integer"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let code = opt_str(&args, "channel_code").map(|s| s.trim().to_string());
+                    let label = opt_str(&args, "label").map(|s| s.to_string());
+                    let points = args.get("points_per_click").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let res = sqlx::query(
+                        "UPDATE earn_channels ec SET channel_code = COALESCE($2, ec.channel_code), \
+                         label = COALESCE($3, ec.label), points_per_click = COALESCE($4, ec.points_per_click) \
+                         WHERE ec.id = $1 AND ec.account_id = $5",
+                    )
+                    .bind(id)
+                    .bind(code)
+                    .bind(label)
+                    .bind(points)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_earn_channel",
+                "Archive an earn channel by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM earn_channels WHERE id = $1 AND account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE earn_channels SET is_active = false WHERE id = $1 AND account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W8 email_templates: create / update / archive ─────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_email_template",
+                "Create an email template (type, name, subject and optional bodies) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "template_type": {"type": "string"},
+                    "name": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                    "html_body": {"type": "string"}
+                },
+                "required": ["template_type", "name", "subject"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let ttype = ctx.str_arg(&args, "template_type")?.trim().to_string();
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    let subject = ctx.str_arg(&args, "subject")?.trim().to_string();
+                    if name.is_empty() || subject.is_empty() {
+                        return Err(ToolError::Invalid("name and subject are required".into()));
+                    }
+                    let body = opt_str(&args, "body");
+                    let html = opt_str(&args, "html_body");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO email_templates (id, template_type, name, subject, body, html_body, aid) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    )
+                    .bind(id)
+                    .bind(&ttype)
+                    .bind(&name)
+                    .bind(&subject)
+                    .bind(body)
+                    .bind(html)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "template_type": ttype, "name": name, "subject": subject }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_email_template",
+                "Update an email template's name, subject or bodies by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string"},
+                    "html_body": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let subject = opt_str(&args, "subject").map(|s| s.trim().to_string());
+                    let body = opt_str(&args, "body").map(|s| s.to_string());
+                    let html = opt_str(&args, "html_body").map(|s| s.to_string());
+                    let res = sqlx::query(
+                        "UPDATE email_templates SET name = COALESCE($2, name), \
+                         subject = COALESCE($3, subject), body = COALESCE($4, body), \
+                         html_body = COALESCE($5, html_body) \
+                         WHERE id = $1 AND aid = $6",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(subject)
+                    .bind(body)
+                    .bind(html)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_email_template",
+                "Hard-delete an email template by id (templates have no archive state, so the flag is required).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id", "hard_delete"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    if !opt_bool(&args, "hard_delete") {
+                        return Err(ToolError::Invalid(
+                            "an email template has no archive state; pass hard_delete = true to delete it".into(),
+                        ));
+                    }
+                    let res = sqlx::query("DELETE FROM email_templates WHERE id = $1 AND aid = $2")
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "deleted": true }))
+                })
+            },
+        );
+    }
+
+    // ── W9 iqs_funnels: create / update / archive ─────────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_iqs_funnel",
+                "Create an IQS lead-qualification funnel (name, optional funnel type and slug).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "funnel_type": {"type": "string"},
+                    "slug": {"type": "string"},
+                    "description": {"type": "string"}
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let name = ctx.str_arg(&args, "name")?.trim().to_string();
+                    if name.is_empty() {
+                        return Err(ToolError::Invalid("name is required".into()));
+                    }
+                    let slug = opt_str(&args, "slug")
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| slugify(&name));
+                    let ftype = opt_str(&args, "funnel_type").unwrap_or("survey").to_string();
+                    let description = opt_str(&args, "description");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO iqs_funnels (id, account_id, name, funnel_type, status, slug, description) \
+                         VALUES ($1, $2, $3, $4, 'draft', $5, $6)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&name)
+                    .bind(&ftype)
+                    .bind(&slug)
+                    .bind(description)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "name": name, "slug": slug, "status": "draft" }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_iqs_funnel",
+                "Update an IQS funnel's name, status or description by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "status": {"type": "string"},
+                    "description": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.trim().to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let description = opt_str(&args, "description").map(|s| s.to_string());
+                    let res = sqlx::query(
+                        "UPDATE iqs_funnels SET name = COALESCE($2, name), \
+                         status = COALESCE($3, status), description = COALESCE($4, description) \
+                         WHERE id = $1 AND account_id = $5",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(status)
+                    .bind(description)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_iqs_funnel",
+                "Archive an IQS funnel by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM iqs_funnels WHERE id = $1 AND account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE iqs_funnels SET status = 'archived' WHERE id = $1 AND account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W10 business_loyalty_deals: create / update / archive ─────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_business_deal",
+                "Create a business loyalty deal (business, program, deal type and value) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "business_id": {"type": "string"},
+                    "business_name": {"type": "string"},
+                    "program_id": {"type": "string"},
+                    "deal_type": {"type": "string"},
+                    "deal_value": {"type": "string"},
+                    "points_required": {"type": "integer"}
+                },
+                "required": ["business_id", "business_name", "program_id", "deal_type", "deal_value"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let business_id = ctx.uuid_arg(&args, "business_id")?;
+                    let program_id = ctx.uuid_arg(&args, "program_id")?;
+                    let owned = scoped_owned(
+                        &pool,
+                        "SELECT lp.id FROM loyalty_programs lp WHERE lp.id = $1 AND \
+                         (lp.account_id = $2 OR EXISTS (SELECT 1 FROM campaigns c WHERE c.id = lp.campaign_id AND c.account_id = $2) \
+                          OR EXISTS (SELECT 1 FROM campaigns fwd WHERE fwd.loyalty_program_id = lp.id AND fwd.account_id = $2))",
+                        program_id,
+                        account,
+                    )
+                    .await?;
+                    if !owned {
+                        return Err(ToolError::NotFound);
+                    }
+                    let business_name = ctx.str_arg(&args, "business_name")?.trim().to_string();
+                    let deal_type = ctx.str_arg(&args, "deal_type")?.trim().to_string();
+                    let deal_value = ctx.str_arg(&args, "deal_value")?.trim().to_string();
+                    let points = args
+                        .get("points_required")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .unwrap_or(0);
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO business_loyalty_deals (id, business_id, business_name, program_id, \
+                         deal_type, deal_value, points_required, owner_account_id) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    )
+                    .bind(id)
+                    .bind(business_id)
+                    .bind(&business_name)
+                    .bind(program_id)
+                    .bind(&deal_type)
+                    .bind(&deal_value)
+                    .bind(points)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "business_name": business_name, "deal_type": deal_type }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_business_deal",
+                "Update a business deal's type, value, points or active flag by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "deal_type": {"type": "string"},
+                    "deal_value": {"type": "string"},
+                    "points_required": {"type": "integer"},
+                    "is_active": {"type": "boolean"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let deal_type = opt_str(&args, "deal_type").map(|s| s.trim().to_string());
+                    let deal_value = opt_str(&args, "deal_value").map(|s| s.trim().to_string());
+                    let points = args.get("points_required").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let active = args.get("is_active").and_then(|v| v.as_bool());
+                    let res = sqlx::query(
+                        "UPDATE business_loyalty_deals SET deal_type = COALESCE($2, deal_type), \
+                         deal_value = COALESCE($3, deal_value), \
+                         points_required = COALESCE($4, points_required), is_active = COALESCE($5, is_active) \
+                         WHERE id = $1 AND owner_account_id = $6",
+                    )
+                    .bind(id)
+                    .bind(deal_type)
+                    .bind(deal_value)
+                    .bind(points)
+                    .bind(active)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_business_deal",
+                "Archive a business deal by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM business_loyalty_deals WHERE id = $1 AND owner_account_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE business_loyalty_deals SET is_active = false WHERE id = $1 AND owner_account_id = $2",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W11 calendar_events: create / update / archive ────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_calendar_event",
+                "Create a calendar event (title and RFC3339 starts_at) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "starts_at": {"type": "string"},
+                    "ends_at": {"type": "string"},
+                    "description": {"type": "string"},
+                    "location": {"type": "string"},
+                    "all_day": {"type": "boolean"}
+                },
+                "required": ["title", "starts_at"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let title = ctx.str_arg(&args, "title")?.trim().to_string();
+                    if title.is_empty() {
+                        return Err(ToolError::Invalid("title is required".into()));
+                    }
+                    let starts_at = opt_ts(&args, "starts_at")?
+                        .ok_or_else(|| ToolError::Invalid("starts_at is required".into()))?;
+                    let ends_at = opt_ts(&args, "ends_at")?;
+                    let description = opt_str(&args, "description");
+                    let location = opt_str(&args, "location");
+                    let all_day = opt_bool(&args, "all_day");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO calendar_events (id, tenant_id, title, description, location, starts_at, ends_at, all_day) \
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&title)
+                    .bind(description)
+                    .bind(location)
+                    .bind(starts_at)
+                    .bind(ends_at)
+                    .bind(all_day)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "title": title, "starts_at": starts_at.to_rfc3339() }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_calendar_event",
+                "Update a calendar event's title, times, description or status by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "starts_at": {"type": "string"},
+                    "ends_at": {"type": "string"},
+                    "description": {"type": "string"},
+                    "status": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let title = opt_str(&args, "title").map(|s| s.trim().to_string());
+                    let starts_at = opt_ts(&args, "starts_at")?;
+                    let ends_at = opt_ts(&args, "ends_at")?;
+                    let description = opt_str(&args, "description").map(|s| s.to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let res = sqlx::query(
+                        "UPDATE calendar_events SET title = COALESCE($2, title), \
+                         starts_at = COALESCE($3, starts_at), ends_at = COALESCE($4, ends_at), \
+                         description = COALESCE($5, description), status = COALESCE($6, status) \
+                         WHERE id = $1 AND tenant_id = $7",
+                    )
+                    .bind(id)
+                    .bind(title)
+                    .bind(starts_at)
+                    .bind(ends_at)
+                    .bind(description)
+                    .bind(status)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_calendar_event",
+                "Archive a calendar event by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM calendar_events WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE calendar_events SET status = 'cancelled' WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W12 reviews: create / update / archive ────────────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_review",
+                "Create a review (rating plus optional title, body and reviewer name) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "rating": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "reviewer_name": {"type": "string"}
+                },
+                "required": ["rating"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let rating = args
+                        .get("rating")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32)
+                        .ok_or_else(|| ToolError::Invalid("rating must be an integer".into()))?;
+                    let title = opt_str(&args, "title");
+                    let body = opt_str(&args, "body");
+                    let reviewer = opt_str(&args, "reviewer_name");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO reviews (id, tenant_id, rating, title, body, reviewer_name) \
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(rating)
+                    .bind(title)
+                    .bind(body)
+                    .bind(reviewer)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "rating": rating, "status": "pending" }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_review",
+                "Update a review's rating, title, body or status by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "rating": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                    "status": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let rating = args.get("rating").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let title = opt_str(&args, "title").map(|s| s.to_string());
+                    let body = opt_str(&args, "body").map(|s| s.to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let res = sqlx::query(
+                        "UPDATE reviews SET rating = COALESCE($2, rating), title = COALESCE($3, title), \
+                         body = COALESCE($4, body), status = COALESCE($5, status) \
+                         WHERE id = $1 AND tenant_id = $6",
+                    )
+                    .bind(id)
+                    .bind(rating)
+                    .bind(title)
+                    .bind(body)
+                    .bind(status)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_review",
+                "Archive a review by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM reviews WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE reviews SET status = 'archived' WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W13 support_tickets: create / update / archive ────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_support_ticket",
+                "Create a support ticket (subject plus optional description, priority and category).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string"},
+                    "description": {"type": "string"},
+                    "priority": {"type": "string"},
+                    "category": {"type": "string"}
+                },
+                "required": ["subject"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let subject = ctx.str_arg(&args, "subject")?.trim().to_string();
+                    if subject.is_empty() {
+                        return Err(ToolError::Invalid("subject is required".into()));
+                    }
+                    let description = opt_str(&args, "description");
+                    let priority = opt_str(&args, "priority").unwrap_or("normal").to_string();
+                    let category = opt_str(&args, "category");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO support_tickets (id, tenant_id, subject, description, priority, category) \
+                         VALUES ($1, $2, $3, $4, $5, $6)",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&subject)
+                    .bind(description)
+                    .bind(&priority)
+                    .bind(category)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "subject": subject, "status": "open" }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_support_ticket",
+                "Update a support ticket's subject, description, status or priority by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "description": {"type": "string"},
+                    "status": {"type": "string"},
+                    "priority": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let subject = opt_str(&args, "subject").map(|s| s.trim().to_string());
+                    let description = opt_str(&args, "description").map(|s| s.to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let priority = opt_str(&args, "priority").map(|s| s.trim().to_string());
+                    let res = sqlx::query(
+                        "UPDATE support_tickets SET subject = COALESCE($2, subject), \
+                         description = COALESCE($3, description), status = COALESCE($4, status), \
+                         priority = COALESCE($5, priority) \
+                         WHERE id = $1 AND tenant_id = $6",
+                    )
+                    .bind(id)
+                    .bind(subject)
+                    .bind(description)
+                    .bind(status)
+                    .bind(priority)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_support_ticket",
+                "Archive a support ticket by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM support_tickets WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE support_tickets SET status = 'closed' WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W14 custom_domains: create / update / archive ─────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_domain",
+                "Create a sending domain for this workspace (the domain is unverified until DNS proves ownership).",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string"},
+                    "target_type": {"type": "string"}
+                },
+                "required": ["domain"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let domain = ctx.str_arg(&args, "domain")?.trim().to_lowercase();
+                    if domain.is_empty() {
+                        return Err(ToolError::Invalid("domain is required".into()));
+                    }
+                    let target = opt_str(&args, "target_type")
+                        .unwrap_or("incentiveswift")
+                        .to_string();
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO custom_domains (id, tenant_id, domain, target_type) \
+                         VALUES ($1, $2, $3, $4) \
+                         RETURNING verification_token",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(&domain)
+                    .bind(&target)
+                    .fetch_one(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "domain": domain, "is_active": false }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_domain",
+                "Update a domain's hostname or target type by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "domain": {"type": "string"},
+                    "target_type": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let domain = opt_str(&args, "domain").map(|s| s.trim().to_lowercase());
+                    let target = opt_str(&args, "target_type").map(|s| s.to_string());
+                    let res = sqlx::query(
+                        "UPDATE custom_domains SET domain = COALESCE($2, domain), \
+                         target_type = COALESCE($3, target_type) \
+                         WHERE id = $1 AND tenant_id = $4",
+                    )
+                    .bind(id)
+                    .bind(domain)
+                    .bind(target)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_domain",
+                "Archive a sending domain by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM custom_domains WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query("UPDATE custom_domains SET is_active = false WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
+    // ── W15 leads: create / update / archive ──────────────────────────────────
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_create_lead",
+                "Create a lead (optional name, email and phone) for this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "email": {"type": "string"},
+                    "phone": {"type": "string"}
+                },
+                "required": [],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let name = opt_str(&args, "name");
+                    let email = opt_str(&args, "email");
+                    let phone = opt_str(&args, "phone");
+                    let id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT INTO leads (id, tenant_id, name, email, phone, status) \
+                         VALUES ($1, $2, $3, $4, $5, 'new')",
+                    )
+                    .bind(id)
+                    .bind(account)
+                    .bind(name)
+                    .bind(email)
+                    .bind(phone)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    Ok(json!({ "id": id, "status": "new" }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_update_lead",
+                "Update a lead's name, email, phone or status by id, scoped to this workspace.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "email": {"type": "string"},
+                    "phone": {"type": "string"},
+                    "status": {"type": "string"}
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let name = opt_str(&args, "name").map(|s| s.to_string());
+                    let email = opt_str(&args, "email").map(|s| s.to_string());
+                    let phone = opt_str(&args, "phone").map(|s| s.to_string());
+                    let status = opt_str(&args, "status").map(|s| s.trim().to_string());
+                    let res = sqlx::query(
+                        "UPDATE leads SET name = COALESCE($2, name), email = COALESCE($3, email), \
+                         phone = COALESCE($4, phone), status = COALESCE($5, status) \
+                         WHERE id = $1 AND tenant_id = $6",
+                    )
+                    .bind(id)
+                    .bind(name)
+                    .bind(email)
+                    .bind(phone)
+                    .bind(status)
+                    .bind(account)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| ToolError::Unavailable(e.to_string()))?;
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "updated": true }))
+                })
+            },
+        );
+    }
+    {
+        let pool = pool.clone();
+        reg = reg.with_fn(
+            ToolSpec::write(
+                "incentiveswift_archive_lead",
+                "Archive a lead by id (soft) or hard-delete it with the hard_delete flag.",
+            )
+            .schema(json!({
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "hard_delete": {"type": "boolean"}},
+                "required": ["id"],
+                "additionalProperties": false
+            })),
+            move |ctx, args| {
+                let pool = pool.clone();
+                Box::pin(async move {
+                    let account = account_id(&ctx)?;
+                    let id = ctx.uuid_arg(&args, "id")?;
+                    let res = if opt_bool(&args, "hard_delete") {
+                        sqlx::query("DELETE FROM leads WHERE id = $1 AND tenant_id = $2")
+                            .bind(id)
+                            .bind(account)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    } else {
+                        sqlx::query(
+                            "UPDATE leads SET status = 'archived' WHERE id = $1 AND tenant_id = $2",
+                        )
+                        .bind(id)
+                        .bind(account)
+                        .execute(&pool)
+                        .await
+                        .map_err(|e| ToolError::Unavailable(e.to_string()))?
+                    };
+                    if res.rows_affected() == 0 {
+                        return Err(ToolError::NotFound);
+                    }
+                    Ok(json!({ "id": id, "archived": true }))
+                })
+            },
+        );
+    }
+
     reg
 }
 
@@ -1584,7 +3888,7 @@ pub fn build_door(pool: PgPool) -> Result<Door, mcp_door::transport::DoorError> 
     )
     .audit(AUDIT_PATH)
     .instructions(
-        "Read-only access to your IncentiveSwift data: campaigns, participants, loyalty, points, \
+        "Read and write access to your IncentiveSwift data: campaigns, participants, loyalty, points, \
          offers, messages and tickets. Scoped to the account that owns the API key.",
     )
     .build()
