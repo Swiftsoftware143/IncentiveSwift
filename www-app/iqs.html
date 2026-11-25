@@ -394,9 +394,15 @@ function questionHtml(q, i) {
 }
 
 function optionEditor(q, i, opts) {
+  const isImg = q.question_type === 'image_choice';
   return `<div style="margin-top:12px">
-    <label>Options <span class="muted">(value · score · tag)</span></label>
+    <label>Options <span class="muted">(value · score · tag${isImg ? ' · image' : ''})</span></label>
     <div id="opts-${i}">${(opts.length?opts:[{}]).map((o,oi) => `<div class="opt-row">
+      ${isImg ? `<div style="flex:0 0 auto;width:56px;text-align:center">
+        ${o.image_url ? `<img src="${esc(o.image_url)}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px;display:block">` : `<div style="width:56px;height:56px;border:1px dashed #cbd5e1;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8">📷</div>`}
+        <label class="btn gray sm" style="cursor:pointer;margin-top:4px;display:inline-block">${o.image_url?'Change':'Upload'}<input type="file" accept="image/*" style="display:none" onchange="uploadOptImage(${i},${oi},this)"></label>
+        ${o.image_url ? `<button class="btn red sm" style="margin-top:4px" type="button" onclick="clearOptImage(${i},${oi})">×</button>` : ''}
+      </div>` : ''}
       <input class="input" placeholder="label" value="${esc(o.label||'')}" data-q="${i}" data-o="${oi}" data-k="label">
       <input class="input" placeholder="value" value="${esc(o.value||'')}" data-q="${i}" data-o="${oi}" data-k="value">
       <input class="input pts" type="number" placeholder="pts" value="${o.score!=null?o.score:''}" data-q="${i}" data-o="${oi}" data-k="score" title="Score (ISQ2)">
@@ -419,6 +425,37 @@ function moveQ(i, d) {
 }
 function addOption(i) { if (!Array.isArray(questions[i].options)) questions[i].options = []; questions[i].options.push({label:'',value:'',score:0,tag:''}); renderEditor(); }
 function rmOption(i, oi) { questions[i].options.splice(oi, 1); renderEditor(); }
+
+// kanban t_8b0e44e5 — the builder could not attach an image to an image_choice option even though
+// the backend carried POST /api/v1/iqs/upload and the play page renders `o.image_url`. The upload is
+// multipart (FormData), so it must NOT carry the JSON Content-Type header: the browser sets the
+// boundary itself. The returned URL is stored on the option and flows through `options` (jsonb) to
+// the respondent untouched.
+async function uploadOptImage(i, oi, input) {
+  const f = input && input.files && input.files[0];
+  if (!f) return;
+  if (!Array.isArray(questions[i].options)) questions[i].options = [];
+  if (!questions[i].options[oi]) questions[i].options[oi] = {label:'',value:'',score:0,tag:''};
+  const fd = new FormData();
+  fd.append('file', f);
+  msg('Uploading ' + f.name + '…', 'ok');
+  try {
+    const r = await fetch(API + '/iqs/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + TOKEN }, body: fd });
+    let d = null; try { d = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error((d && (d.error || d.message)) || ('HTTP ' + r.status));
+    const u = (d && d.data && d.data.url) || null;
+    if (!u) throw new Error('Upload returned no URL');
+    questions[i].options[oi].image_url = u;
+    msg('Image attached to this option.', 'ok');
+  } catch (e) {
+    msg('Upload failed: ' + e.message, 'err');
+  }
+  renderEditor();
+}
+function clearOptImage(i, oi) {
+  if (questions[i].options && questions[i].options[oi]) questions[i].options[oi].image_url = null;
+  renderEditor();
+}
 function typeChanged(i) { renderEditor(); }
 function addRange() { renderEditor(); }
 function delRange(i) { renderEditor(); }

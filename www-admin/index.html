@@ -8231,6 +8231,104 @@ const PromoCodes = () => {
   </div>`;
 };
 
+// ---- LOYALTY SECRET CODES (program-level, redeemable on the check-in page) ----
+// The check-in page (www-app/loyalty-checkin.html) redeems PROGRAM-level secret codes via
+// POST /api/v1/loyalty/secret-code/verify; these are the `loyalty_secret_codes` rows, distinct from
+// the campaign-scoped Promo Codes screen above. The backend has carried GET|POST
+// /api/v1/loyalty/secret-codes, DELETE /:id and POST /:id/toggle with no screen reading them — a
+// route with no UI is a defect, and an operator who is not reading API hints could not issue a
+// check-in code. Fields are the columns the handler writes (src/handlers/secret_codes_handler.rs):
+// code (upper-cased by the server), description, points_reward (default 25), max_uses (blank =
+// unlimited), expires_at (blank = never). Operator-only: the handler is admin-level and its list is
+// not account-scoped, so only operators may see it.
+const LoyaltySecretCodes = () => {
+  const blank = () => ({ code: '', description: '', points: 25, max_uses: '', expires_at: '' });
+  const st = viewState('loyalty-secret-codes', { list: [], msg: null, form: blank() });
+  if (!st.form) st.form = blank();
+
+  const loadCodes = async () => {
+    try {
+      const d = await API.get('/loyalty/secret-codes');
+      const payload = (d && d.data) || d || {};
+      st.list = payload.codes || [];
+      renderApp();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  if (!st._loaded) { st._loaded = true; loadCodes(); }
+
+  const create = async () => {
+    const f = st.form;
+    const code = String(f.code || '').trim().toUpperCase();
+    if (!code) { st.msg = { kind: 'err', text: 'Type the code a member will enter on the check-in page.' }; renderApp(); return; }
+    const body = { code: code, points_reward: Number(f.points) || 25 };
+    if (String(f.description || '').trim() !== '') body.description = String(f.description).trim();
+    if (String(f.max_uses).trim() !== '') body.max_uses = Number(f.max_uses);
+    if (f.expires_at) body.expires_at = new Date(f.expires_at + 'T23:59:59Z').toISOString();
+    try {
+      await API.post('/loyalty/secret-codes', body);
+      st.form = blank();
+      st.msg = { kind: 'ok', text: 'Code ' + code + ' is live: a member who types it on the check-in page earns its points.' };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const toggle = async (c) => {
+    try {
+      await API.post('/loyalty/secret-codes/' + c.id + '/toggle');
+      st.msg = { kind: 'ok', text: c.is_active ? ('Code ' + c.code + ' is paused: typing it no longer earns anything.') : ('Code ' + c.code + ' is live again.') };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const remove = async (c) => {
+    if (!confirm('Delete the code ' + c.code + '? It can no longer be redeemed.')) return;
+    try {
+      await API.del('/loyalty/secret-codes/' + c.id);
+      st.msg = { kind: 'ok', text: 'Code ' + c.code + ' deleted.' };
+      loadCodes();
+    } catch (e) { st.msg = { kind: 'err', text: e.message }; renderApp(); }
+  };
+  const fmtDate = (s) => { try { return new Date(s).toLocaleDateString(); } catch (e) { return '—'; } };
+
+  return html`<div>
+    <div class="flex items-center justify-between mb-4">
+      <div><h2 class="text-xl font-bold">Loyalty Secret Codes</h2><p class="text-sm text-gray-500">Codes a member types on the check-in page to earn loyalty points — program-level, not tied to one campaign</p></div>
+    </div>
+    <div>
+      <div class="card mb-4">
+        <h3 class="font-semibold text-sm mb-3">New secret code</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div><label class="block text-xs font-medium mb-1">Code</label><input class="input text-sm" placeholder="FBGROUP2026" value=${st.form.code} onInput=${e => { st.form.code = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Points</label><input class="input text-sm" type="number" min="1" value=${st.form.points} onInput=${e => { st.form.points = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Max uses (blank = unlimited)</label><input class="input text-sm" type="number" min="1" placeholder="unlimited" value=${st.form.max_uses} onInput=${e => { st.form.max_uses = e.target.value; renderApp(); }} /></div>
+          <div><label class="block text-xs font-medium mb-1">Expires (blank = never)</label><input class="input text-sm" type="date" value=${st.form.expires_at} onInput=${e => { st.form.expires_at = e.target.value; renderApp(); }} /></div>
+          <div class="col-span-2 md:col-span-4"><label class="block text-xs font-medium mb-1">Description (shown to the member)</label><input class="input text-sm" placeholder="e.g. Facebook group bonus" value=${st.form.description} onInput=${e => { st.form.description = e.target.value; renderApp(); }} /></div>
+        </div>
+        <button class="btn btn-sm mt-3" onClick=${create}>Create code</button>
+        ${st.msg ? html`<div class="text-sm mt-2" style="color:${st.msg.kind === 'err' ? '#b91c1c' : '#15803d'}">${st.msg.text}</div>` : null}
+      </div>
+      <div class="card overflow-hidden">
+        <table class="table w-full">
+          <thead><tr><th>Code</th><th>Points</th><th>Description</th><th>Uses</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            ${st.list.map(c => html`<tr>
+              <td class="font-medium text-sm">${c.code}</td>
+              <td class="text-sm">${c.points_reward}</td>
+              <td class="text-sm text-gray-500">${c.description || ''}</td>
+              <td class="text-sm">${c.uses_so_far}${c.max_uses ? ' of ' + c.max_uses : ''}</td>
+              <td class="text-sm text-gray-500">${c.expires_at ? fmtDate(c.expires_at) : 'never'}</td>
+              <td>${c.is_active ? html`<span class="badge badge-green">Live</span>` : html`<span class="badge badge-yellow">Paused</span>`}</td>
+              <td class="text-right whitespace-nowrap">
+                <button class="text-blue-600 text-xs mr-2" onClick=${() => toggle(c)}>${c.is_active ? 'Pause' : 'Resume'}</button>
+                <button class="text-red-600 text-xs" onClick=${() => remove(c)}>Delete</button>
+              </td>
+            </tr>`)}
+            ${!st.list.length ? html`<tr><td colspan="7" class="text-center text-gray-400 py-6">No loyalty secret codes yet — create one above and members can redeem it on the check-in page.</td></tr>` : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+};
+
   const nav = [
     { id: 'ops', label: 'Operator Console', icon: '🛠', adminOnly: true },
     { id: 'provisioning', label: 'Provisioning', icon: '🏷', adminOnly: true },
@@ -8241,6 +8339,7 @@ const PromoCodes = () => {
     { id: 'profile', label: 'Profile', icon: '👤' },
     { id: 'campaigns', label: 'Campaigns', icon: '📢' },
     { id: 'promo-codes', label: 'Promo Codes', icon: '🎟' },
+    { id: 'loyalty-secret-codes', label: 'Loyalty Secret Codes', icon: '💎', adminOnly: true },
     { id: 'prizes', label: 'Prize Pools', icon: '🎁' },
     { id: 'wins', label: 'Wins & Redemptions', icon: '🏆' },
     { id: 'entries', label: 'Entries & Answers', icon: '📝' },
@@ -8270,7 +8369,7 @@ const PromoCodes = () => {
     { id: 'mcp', label: 'MCP', icon: '🤖' },
   ].filter(item => !item.adminOnly || isAdmin);
 
-  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'mail-compliance': MailCompliance, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback, mcp: Mcp};
+  const views = { workspaces: Workspaces, offers: Offers, dashboard: Dashboard, analytics: AnalyticsView, profile: ProfileView, 'call-logs': CallLogs, deals: Deals, 'knowledge-base': KnowledgeBase, portfolio: Portfolio, 'my-plan': MyPlan, plans: Plans, 'plan-tiers': PlanTiers, campaigns: Campaigns, 'promo-codes': PromoCodes, 'loyalty-secret-codes': LoyaltySecretCodes, prizes: PrizePools, wins: WinsRedemptions, entries: EntriesAnswers, loyalty: LoyaltyPrograms, integration: IntegrationCenter, 'payment-providers': PaymentProviders, 'email-provider': EmailProvider, tags: Tags, leads: LeadsView, contacts: ContactsView, 'api-keys': ApiKeysView, 'site-config': SiteConfigView, settings: SettingsView, 'email-templates': EmailTemplates, 'mail-compliance': MailCompliance, 'support-tickets': SupportTickets, reviews: Reviews, calendar: CalendarEvents, 'ops': OpsConsole, provisioning: ProvisioningView, feedback: Feedback, mcp: Mcp};
   const CurrentView = views[S.view] || Dashboard;
 
   // kanban t_4fcbe895 — the account's own face and TIER, where the FunnelSwift console shows them.
