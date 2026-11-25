@@ -261,11 +261,20 @@ pub async fn mint_account(db: &PgPool, req: MintRequest<'_>) -> Result<MintedAcc
     // workspace and its API key are now ONE unit of work (kanban t_7863696b): the commit lands only
     // when all five are complete, so a rolled-back signup leaves no key row and a committed signup
     // never ends without one.
+    //
+    // Labelled `MCP — <account>` (David 2026-11-25, plan §6 rule 5): the account's own name, in the
+    // SAME transaction as the account row, so no account is ever keyless and the auto-minted key is
+    // indistinguishable from a provisioned one. `api_keys.name` is varchar(255) while
+    // `normalize_name` caps `name` at 255 chars, so the label is clipped to the column's width or a
+    // max-length account name would fail the whole signup with a 22001.
+    let mut key_label = format!("MCP — {}", name);
+    if key_label.chars().count() > 255 {
+        key_label = key_label.chars().take(255).collect();
+    }
     let api_key = crate::handlers::api_keys::mint_on(
         &mut tx,
         account_id, // tenant_id = self (standalone workspace), exactly as the accounts row
-        account_id,
-        "auto-provisioned",
+        account_id, &key_label,
     )
     .await?;
 

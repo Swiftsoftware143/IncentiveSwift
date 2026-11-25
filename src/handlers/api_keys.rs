@@ -560,18 +560,40 @@ pub async fn mint_on(
 
 #[derive(Debug, Deserialize)]
 pub struct RevealApiKeyInput {
-    /// The caller's CURRENT password — a stolen session token must not be enough to read a live
-    /// credential.
-    pub password: String,
+    /// Legacy field: older clients sent the caller's password here. It is no longer required and is
+    /// no longer read — a valid console session is enough (plan §6.2 / §8). Accepted and ignored so
+    /// an older client does not break.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
-/// POST /api/v1/api-keys/:id/reveal — show the key again (repeatable).
+/// POST /api/v1/api-keys/:id/reveal — show the key again (repeatable, session-only, audited).
+///
+/// David's ruling (2026-11-25, plan §6.2 / §8 in docs/fleet-per-account-keys-and-mcp-2026-11-25.md):
+/// **View is one click.** A valid console session is enough — no password re-prompt, the same
+/// friction model as Stripe — because the key is already private by default (masked on load) and
+/// every reveal is recorded. A body is no longer required; a legacy `{"password":"…"}` body is
+/// accepted and ignored.
+///
+/// SESSION ONLY. The route-layer `AuthenticatedUser` also accepts an issued API key as the bearer,
+/// and that credential must never obtain the account's read+write key — an escalation the key model
+/// forbids. A key bearer is refused 403 (the same rule that keeps a read-only key off every write
+/// tool).
 pub async fn reveal_api_key(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path(id): Path<Uuid>,
-    Json(body): Json<RevealApiKeyInput>,
+    _body: Option<Json<RevealApiKeyInput>>,
 ) -> Result<Json<Value>, AppError> {
+    // ── session only (plan §8): a read-only key must not reveal the account's key ────────────────
+    if user.role == "api_key" {
+        return Err(AppError::Forbidden(
+            "This needs a console session. An API key cannot view keys — sign in to the console \
+             and press View."
+                .to_string(),
+        ));
+    }
+
     let user_id = Uuid::parse_str(&user.account_id)
         .map_err(|_| AppError::BadRequest("Invalid user ID".to_string()))?;
 
@@ -589,19 +611,6 @@ pub async fn reveal_api_key(
     // \d api_keys before this query was written.
     let prefix: String = row.get("prefix");
     let sealed: Option<String> = row.get("key_sealed");
-
-    // ── re-authenticate ───────────────────────────────────────────────────────────────────────
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM accounts WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await?;
-    let stored = stored.ok_or_else(|| AppError::Unauthorized("Account not found".to_string()))?;
-    if !crate::handlers::auth_handler::verify_password(&body.password, &stored) {
-        return Err(AppError::Unauthorized(
-            "Current password is incorrect".to_string(),
-        ));
-    }
 
     let sealed = sealed.ok_or_else(|| {
         AppError::Conflict(
