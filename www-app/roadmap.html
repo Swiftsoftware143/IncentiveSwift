@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IncentiveSwift — Roadmap</title>
+<meta name="description" content="What is planned, in progress and already shipped in IncentiveSwift.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/logo.png">
+<style>
+  :root{--indigo:#4f46e5;--indigo-light:#a5b4fc;--bg-dark:#0E0F12;--bg-card:#16181D;--bg-elevated:#1E2028;--border:#2A2D38;--text-primary:#F1F5F9;--text-secondary:#CBD5E1;--text-muted:#94A3B8;--success:#22C55E;--warning:#F59E0B;--info:#3B82F6}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg-dark);color:var(--text-primary);line-height:1.6;min-height:100vh}
+  a{color:var(--indigo-light)}
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 24px 72px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+  .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:var(--text-primary)}
+  .brand .icon{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--indigo),#8B5CF6);display:flex;align-items:center;justify-content:center;font-size:20px}
+  .brand b{font-size:17px}
+  .top nav{display:flex;gap:18px;font-size:14px}
+  .top nav a{color:var(--text-secondary);text-decoration:none}
+  .top nav a:hover,.top nav a.on{color:var(--indigo-light)}
+  h1{font-size:2rem;font-weight:700;margin-bottom:6px}
+  .sub{color:var(--text-muted);font-size:15px;margin-bottom:30px;max-width:720px}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .col{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:22px 22px 8px}
+  .col h2{font-size:15px;font-weight:700;margin-bottom:2px}
+  .col .tag{font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+  .col ul{list-style:none}
+  .col li{padding:12px 0;border-top:1px solid var(--border);font-size:14px;color:var(--text-secondary)}
+  .col li:first-child{border-top:none}
+  .col li strong{color:var(--text-primary);display:block;font-size:14px;margin-bottom:2px}
+  .col.planned h2{color:var(--warning)}
+  .col.progress h2{color:var(--info)}
+  .col.done h2{color:var(--success)}
+  .vote{margin-top:36px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:14px;padding:20px 22px;font-size:14px;color:var(--text-secondary)}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted);display:flex;gap:18px;flex-wrap:wrap}
+  footer a{color:var(--text-muted);text-decoration:none}
+  footer a:hover{color:var(--indigo-light)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="brand" href="/"><span class="icon">🎁</span><b>IncentiveSwift</b></a>
+    <nav>
+      <a href="/dashboard/">Dashboard</a>
+      <a class="on" href="/roadmap.html">Roadmap</a>
+      <a href="/updates.html">What&rsquo;s new</a>
+      <a href="/guide.html">Guide</a>
+    </nav>
+  </div>
+
+  <h1>Roadmap</h1>
+  <p class="sub">What we are building next, what is being built right now, and what is already live in your programme. Nothing here is a promise of a date.</p>
+
+  <div class="cols">
+    <div class="col planned">
+      <h2>Planned</h2>
+      <p class="tag">On the list, not started.</p>
+      <ul>
+        <li><strong>Self-serve checkout</strong>Buy a plan on the site instead of sending a request.</li>
+        <li><strong>Richer inbox</strong>Folders, starring, drafts and archive in the private email client.</li>
+        <li><strong>Storage meter</strong>A clear usage meter with warnings before you run out.</li>
+        <li><strong>More email providers</strong>Send and receive through another provider as well as Mailgun.</li>
+      </ul>
+    </div>
+
+    <div class="col progress">
+      <h2>In progress</h2>
+      <p class="tag">Being built right now.</p>
+      <ul>
+        <li><strong>Private mail on its own address</strong>A dedicated mail client for each business, with ticketing beside it.</li>
+        <li><strong>Team members</strong>Give each teammate their own login and the right limits.</li>
+      </ul>
+    </div>
+
+    <div class="col done">
+      <h2>Live today</h2>
+      <p class="tag">In your console now.</p>
+      <ul>
+        <li><strong>Opt-out that works</strong>One click in any message stops it; the address is kept on a do-not-mail list the operator can see.</li>
+        <li><strong>Workspace switcher</strong>Switch, add and rename workspaces without signing in again.</li>
+        <li><strong>Submit feedback</strong>Send an idea, a bug or a complaint from inside the console.</li>
+        <li><strong>Email branding</strong>Upload your logo and set a signature once; it rides every message you send.</li>
+        <li><strong>AI assistant access</strong>Read this workspace from your own assistant with an API key &mdash; read-only by design.</li>
+        <li><strong>Plans and pricing</strong>Clear plans, and a purchase request that reaches us directly.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="vote">
+    Want to move something up? Vote on the full roadmap at
+    <a href="https://swiftsoftware.net/incentiveswift-roadmap">swiftsoftware.net/incentiveswift-roadmap</a>,
+    or press <strong>Send feedback</strong> in the console and tell us which one matters to you.
+  </div>
+
+  <footer>
+    <a href="/">Home</a>
+    <a href="/guide.html">Guide</a>
+    <a href="/updates.html">What&rsquo;s new</a>
+    <a href="https://swiftsoftware.net/incentiveswift-roadmap">Vote on the roadmap</a>
+    <span>&copy; 2026 IncentiveSwift</span>
+  </footer>
+</div>
+</body>
+</html>
