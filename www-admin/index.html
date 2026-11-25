@@ -3449,7 +3449,7 @@ const Mcp = () => {
   };
   // Copy = fetch the sealed value (the SAME session-only reveal View uses) and write it to the
   // clipboard WITHOUT rendering it — the secret never reaches st.revealed or the DOM (plan §6 rule 2).
-  // Replacing the key happens on the API Keys screen, not here (plan §6 rule 4: no rotate on MCP).
+  // Replacing the key happens on the API Keys screen, not here (plan §6 rule 4).
   const copyKey = async (id) => {
     try { const r = await API.post('/api-keys/' + id + '/reveal', {}); mcpCopy(r.api_key); }
     catch (e) { alert('Could not copy the key: ' + e.message); }
