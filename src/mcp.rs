@@ -38,6 +38,13 @@ pub const DOOR_NAME: &str = "incentiveswift";
 /// The audit file. Lives inside the container (WORKDIR `/app`, owned by the `incentiveswift`
 /// user) and is created `0600` on the first audited call.
 pub const AUDIT_PATH: &str = "/app/mcp-audit.log";
+/// `tools/list` page size: the WHOLE inventory in one answer. The transport default is 50, which
+/// splits this door's 111 tools across three pages — invisible to any client that does not follow
+/// `nextCursor`, and a one-page reading then sees 50 of 111 and files a false "61 tools declared
+/// but never served" (the same trap t_8d54e37e fixed on MissedCall). A page big enough for the
+/// inventory removes the trap; `one_page_lists_every_tool` fails the build the moment the
+/// inventory outgrows it.
+pub const TOOLS_PAGE_SIZE: usize = 200;
 
 const KEY_MARKER: &str = "is_key_";
 const KEY_PREFIX_LEN: usize = 8;
@@ -5909,6 +5916,7 @@ pub fn build_door(pool: PgPool) -> Result<Door, mcp_door::transport::DoorError> 
         Arc::new(ApiKeyResolver { pool }),
     )
     .audit(AUDIT_PATH)
+    .page_size(TOOLS_PAGE_SIZE)
     .instructions(
         "Read and write access to your IncentiveSwift data: campaigns, participants, loyalty, points, \
          offers, messages and tickets. Scoped to the account that owns the API key.",
@@ -5920,4 +5928,47 @@ pub fn build_door(pool: PgPool) -> Result<Door, mcp_door::transport::DoorError> 
 /// 401 with the JSON-RPC unauthorized code), so it is mounted as a PUBLIC route.
 pub async fn handle(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     state.mcp_door.dispatch(&headers, &body).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    /// The whole inventory must arrive in ONE `tools/list` page at the size the door is built with.
+    /// A door that paginates its own tools hides the tail from every client that does not follow
+    /// `nextCursor` — the transport default of 50 put 61 of these 111 tools on pages 2 and 3, so a
+    /// one-page reading called them "declared but never served" (t_1e521dc1). This fails the build
+    /// the moment the inventory outgrows `TOOLS_PAGE_SIZE`.
+    #[tokio::test]
+    async fn one_page_lists_every_tool() {
+        // The registry only clones the pool into each tool's closure — nothing connects during
+        // construction or pagination. A lazy pool with a well-formed URL is enough, but
+        // `connect_lazy` still needs a Tokio runtime to exist.
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://incentiveswift@localhost/incentiveswift")
+            .expect("lazy pool");
+        let reg = registry(pool);
+
+        let (tools, next) = reg.page(None, TOOLS_PAGE_SIZE).expect("page");
+        assert!(
+            next.is_none(),
+            "one page at {TOOLS_PAGE_SIZE} must hold the whole inventory, got {} tools and a cursor",
+            tools.len()
+        );
+        assert_eq!(
+            tools.len(),
+            reg.len(),
+            "the first page must carry every tool"
+        );
+
+        // The first tool that used to spill onto page 2 (0-based index 50) must be on the first
+        // page — it is the one a default-page-size reading would have reported missing.
+        assert!(
+            tools
+                .iter()
+                .any(|t| t["name"] == "incentiveswift_archive_email_template"),
+            "incentiveswift_archive_email_template must be served on the first page"
+        );
+    }
 }
