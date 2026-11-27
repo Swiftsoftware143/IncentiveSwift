@@ -5559,8 +5559,8 @@ const SiteConfigView = () => {
 const SupportTickets = () => {
   // `planMsg` is the answer to "did the workspace actually move?" (cron 2026-10-20). A green
   // "resolved" chip over a workspace still on Free is the dead end this screen now closes.
-  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all', planMsg: null, loyaltyPlans: [], loyaltyMsg: null });
-  const load = async () => { try { const d = await API.get('/support-tickets'); st.list = Array.isArray(d.tickets) ? d.tickets : []; renderApp(); } catch(e) { console.error(e); } };
+  const st = viewState('tickets', { list: [], showModal: false, detail: null, form: { subject:'', description:'', priority:'normal', category:'' }, newMsg:'', filter:'all', planState:'all', planMsg: null, loyaltyPlans: [], loyaltyMsg: null });
+  const load = async () => { try { const d = await API.get(st.filter==='plan' ? '/support-tickets?plan_only=1' : '/support-tickets'); st.list = Array.isArray(d.tickets) ? d.tickets : []; renderApp(); } catch(e) { console.error(e); } };
   if (!st._loaded) { st._loaded = true; load(); }
   const openNew = () => { st.form = { subject:'', description:'', priority:'normal', category:'' }; st.showModal = true; renderApp(); };
   const create = async () => { if(!st.form.subject) return alert('Subject required'); try { await API.post('/support-tickets', st.form); st.showModal = false; load(); } catch(e){ alert('Error: ' + e.message); } };
@@ -5625,6 +5625,12 @@ const SupportTickets = () => {
   const isPlanRequest = (t) => !!t && (t.source === 'plan_request' || isLoyaltyPlanRequest(t)
     || (t.category === 'billing' && / request:.* plan$/i.test(String(t.subject || ''))));
   const planCount = st.list.filter(isPlanRequest).length;
+  // THE OPERATOR QUEUE SPEAKS THREE STATES (contract 2026-11-27): open → contacted → closed.
+  // The server's plan-only list carries `queue_status`; the detail read returns the STORED value,
+  // so `canonStatus` mirrors the server's one-way mapping for the detail's three-state controls.
+  const canonStatus = (s) => s==='open' ? 'open' : (s==='in_progress'||s==='pending'||s==='contacted') ? 'contacted' : (s==='resolved'||s==='closed'||s==='done'||s==='solved'||s==='declined'||s==='withdrawn') ? 'closed' : 'open';
+  const planLabel = (t) => t.queue_status || canonStatus(t.status);
+  const planBadge = (s) => s==='open' ? 'badge badge-yellow' : s==='contacted' ? 'badge badge-blue' : 'badge badge-green';
   // FEEDBACK FROM INSIDE THE PRODUCT (David 2026-11-11, B209). The customer console's Feedback
   // button writes to the `feedback` table through POST /api/v1/feedback — NOT to this ticket table.
   // This view used to offer a "Feedback (N)" chip that filtered `category='feedback'` /
@@ -5633,7 +5639,7 @@ const SupportTickets = () => {
   // operator's real queue was the separate Feedback screen all along. The chip is now a door to that
   // screen instead of a filter over a table nothing fills.
   const filtered = st.list.filter(t => st.filter==='all' ? true
-    : st.filter==='plan' ? isPlanRequest(t) : t.status===st.filter);
+    : st.filter==='plan' ? (st.planState==='all' ? true : planLabel(t)===st.planState) : t.status===st.filter);
 
   return html`<div>
     <div class="flex items-center justify-between mb-4">
@@ -5641,8 +5647,9 @@ const SupportTickets = () => {
       <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm" onClick=${openNew}>+ New Ticket</button>
     </div>
     <div class="flex gap-2 mb-4">
-      ${['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
-      <button data-plan-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='plan'?'bg-blue-600 text-white':'text-blue-700 border-blue-300'}" onClick=${() => { st.filter = st.filter==='plan' ? 'all' : 'plan'; renderApp(); }}>Plan requests (${planCount})</button>
+      ${st.filter==='plan' ? ['open','contacted','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.planState===s?'bg-blue-600 text-white':''}" onClick=${() => { st.planState = st.planState===s ? 'all' : s; renderApp(); }}>${s==='open'?'Open':s==='contacted'?'Contacted':'Closed'}</button>`)
+        : ['all','open','in_progress','resolved','closed'].map(s => html`<button class="px-3 py-1 text-xs rounded-full border ${st.filter===s?'bg-blue-600 text-white':''}" onClick=${() => { st.filter=s; renderApp(); }}>${s==='in_progress'?'In Progress':s}</button>`)}
+      <button data-plan-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium ${st.filter==='plan'?'bg-blue-600 text-white':'text-blue-700 border-blue-300'}" onClick=${() => { st.filter = st.filter==='plan' ? 'all' : 'plan'; st.planState='all'; load(); }}>Plan requests (${planCount})</button>
       <button data-feedback-filter="1" class="px-3 py-1 text-xs rounded-full border font-medium text-indigo-700 border-indigo-300" title="Notes a customer sent from the Feedback button inside their dashboard — an idea, a problem or a complaint, with the screen it came from. They live on the Feedback screen, which also marks each one handled." onClick=${() => { S.view = 'feedback'; renderApp(); }}>Feedback queue →</button>
     </div>
     <div class="card overflow-hidden">
@@ -5650,7 +5657,7 @@ const SupportTickets = () => {
         <tbody>${filtered.map(t => html`<tr class="cursor-pointer" onClick=${() => openDetail(t.id)}>
           <td class="font-medium text-sm">${t.subject}${isPlanRequest(t) ? html` <span class="badge badge-blue" data-plan-request="1">Plan request</span>` : null}${(t.plan_name || t.plan_slug) ? html` <span class="badge" data-plan-asked=${t.plan_slug || t.plan_name} title=${t.plan_applied_at ? 'the account was moved onto this plan' : 'the account is NOT on this plan yet'}>${t.plan_name || t.plan_slug}${t.plan_applied_at ? ' · switched' : ''}</span>` : null}</td>
           <td class="text-xs text-gray-500" data-ticket-workspace=${t.account_email || ''}>${t.account_email || '—'}${isProbeOwner(t.account_email) ? html` <span class="badge badge-yellow" data-probe-row="1" title="filed by a fleet test harness — a probe, not a customer waiting to buy">probe</span>` : null}</td>
-          <td><span class=${badge(t.status)}>${t.status}</span></td>
+          <td><span class=${st.filter==='plan' ? planBadge(planLabel(t)) : badge(t.status)}>${st.filter==='plan' ? planLabel(t) : t.status}</span></td>
           <td class="text-sm">${prio(t.priority)}</td>
           <td class="text-sm text-gray-500">${t.category||'—'}</td>
           <td class="text-sm text-gray-500">${t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
@@ -5685,7 +5692,7 @@ const SupportTickets = () => {
           <button class="text-gray-500 text-xl" aria-label="Close details" onClick=${closeDetail}>×</button>
         </div>
         <div class="flex gap-3 mb-4">
-          <span class=${badge(st.detail.ticket.status)}>${st.detail.ticket.status}</span>
+          <span class=${st.filter==='plan' ? planBadge(planLabel(st.detail.ticket)) : badge(st.detail.ticket.status)}>${st.filter==='plan' ? planLabel(st.detail.ticket) : st.detail.ticket.status}</span>
           <span class="badge badge-blue">${prio(st.detail.ticket.priority)}</span>
           ${st.detail.ticket.category ? html`<span class="badge">${st.detail.ticket.category}</span>` : null}
         </div>
@@ -5709,7 +5716,8 @@ const SupportTickets = () => {
           <button class="px-3 py-2 text-sm rounded bg-gray-200" data-ticket-reply="internal" onClick=${() => sendMsg(true)}>Internal note</button>
         </div>
         <div class="flex gap-2">
-          ${['open','in_progress','resolved','closed'].filter(s => s!==st.detail.ticket.status).map(s => html`<button class="px-3 py-1.5 text-xs rounded border" onClick=${() => updateStatus(st.detail.ticket.id, s)}>Set ${s==='in_progress'?'In Progress':s}</button>`)}
+          ${st.filter==='plan' ? ['open','contacted','closed'].filter(s => s!==planLabel(st.detail.ticket)).map(s => html`<button class="px-3 py-1.5 text-xs rounded border" onClick=${() => updateStatus(st.detail.ticket.id, s)}>Set ${s==='open'?'Open':s==='contacted'?'Contacted':'Closed'}</button>`)
+            : ['open','in_progress','resolved','closed'].filter(s => s!==st.detail.ticket.status).map(s => html`<button class="px-3 py-1.5 text-xs rounded border" onClick=${() => updateStatus(st.detail.ticket.id, s)}>Set ${s==='in_progress'?'In Progress':s}</button>`)}
         </div>
       </div>
     </div>` : null}

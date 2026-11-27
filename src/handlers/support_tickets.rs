@@ -3,7 +3,7 @@ use crate::error::AppError;
 use crate::security::auth::AuthenticatedUser;
 use crate::state::AppState;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -204,6 +204,43 @@ fn closes_request(status: &str) -> bool {
     matches!(status, "resolved" | "closed")
 }
 
+/// The operator queue speaks THREE states (contract 2026-11-27): `open` → `contacted` → `closed`.
+/// This app's stored vocabulary is older and richer (`in_progress`, `resolved`, …), so the
+/// operator's READ maps it one-way and total. Unknown legacy values read `open` so nothing hides
+/// from the queue.
+fn queue_status(stored: &str) -> &'static str {
+    match stored {
+        "open" => "open",
+        "in_progress" | "pending" | "contacted" => "contacted",
+        "resolved" | "closed" | "done" | "solved" | "declined" | "withdrawn" => "closed",
+        _ => "open",
+    }
+}
+
+/// The operator WRITES the same three states; `contacted` is this app's stored `in_progress`
+/// (contract 2026-11-27), so the write maps it. `open` / `closed` store themselves, and every
+/// legacy value passes through untouched so existing console and API writes keep working.
+fn store_status(input: &str) -> &str {
+    if input == "contacted" {
+        "in_progress"
+    } else {
+        input
+    }
+}
+
+/// Serialise a ticket with the canonical `queue_status` the operator queue speaks (contract
+/// 2026-11-27). The customer arm keeps the raw stored `status` and never gets this field.
+fn operator_ticket(t: &SupportTicket) -> Value {
+    let mut v = serde_json::to_value(t).unwrap_or(Value::Null);
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert(
+            "queue_status".to_string(),
+            Value::String(queue_status(&t.status).to_string()),
+        );
+    }
+    v
+}
+
 /// The caller's platform role, read from the database rather than the JWT claim: a token minted
 /// before a promotion carries the old role, and this decides who may see a customer's private notes.
 async fn caller_is_operator(state: &AppState, account: Uuid) -> bool {
@@ -222,29 +259,61 @@ async fn caller_is_operator(state: &AppState, account: Uuid) -> bool {
 pub async fn list_tickets(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, AppError> {
     let scope = tenant_scope(&state, &user.account_id).await?;
+    // `plan_only=1` narrows the OPERATOR's list to the plan-request sources (contract 2026-11-27).
+    // The flag only ever selects between two const SQL literals below — caller input is never
+    // interpolated — and the customer arm ignores it entirely.
+    let plan_only = params
+        .get("plan_only")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let is_operator = caller_is_operator(&state, scope).await;
     // An OPERATOR reads the whole queue — otherwise a customer's plan request is invisible to the
     // only people who can answer it (measured: an admin's GET on a customer's ticket was a 404).
     // A customer keeps the strict workspace scope.
-    let tickets = if caller_is_operator(&state, scope).await {
-        sqlx::query_as::<_, SupportTicket>(
-            r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
-                      t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
-                      t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
-                      COALESCE(p.name, t.plan_slug) AS plan_name,
-                      COALESCE(a.email, t.requested_by) AS account_email,
-                      a.name AS account_name
-               FROM support_tickets t
-               LEFT JOIN accounts a ON a.id = t.tenant_id
-               LEFT JOIN plans p ON p.slug = t.plan_slug
-               ORDER BY t.updated_at DESC
-               LIMIT 500"#,
-        )
-        .fetch_all(&state.db)
-        .await?
+    let tickets: Vec<Value> = if is_operator {
+        let rows: Vec<SupportTicket> = if plan_only {
+            // SERVER-SIDE PLAN FILTER. The console used to pull up to 500 rows and filter them
+            // client-side; this narrows the operator's Plan requests view to the three sources a
+            // buying request can carry.
+            sqlx::query_as::<_, SupportTicket>(
+                r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
+                          t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
+                          t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                          COALESCE(p.name, t.plan_slug) AS plan_name,
+                          COALESCE(a.email, t.requested_by) AS account_email,
+                          a.name AS account_name
+                   FROM support_tickets t
+                   LEFT JOIN accounts a ON a.id = t.tenant_id
+                   LEFT JOIN plans p ON p.slug = t.plan_slug
+                   WHERE t.source IN ('plan_request','loyalty_plan_request','billing')
+                   ORDER BY t.updated_at DESC
+                   LIMIT 500"#,
+            )
+            .fetch_all(&state.db)
+            .await?
+        } else {
+            sqlx::query_as::<_, SupportTicket>(
+                r#"SELECT t.id, t.tenant_id, t.campaign_id, t.contact_id, t.subject, t.description,
+                          t.status, t.priority, t.category, t.source, t.assignee_id, t.created_by, t.created_at,
+                          t.updated_at, t.resolved_at, t.plan_slug, t.plan_applied_at,
+                          COALESCE(p.name, t.plan_slug) AS plan_name,
+                          COALESCE(a.email, t.requested_by) AS account_email,
+                          a.name AS account_name
+                   FROM support_tickets t
+                   LEFT JOIN accounts a ON a.id = t.tenant_id
+                   LEFT JOIN plans p ON p.slug = t.plan_slug
+                   ORDER BY t.updated_at DESC
+                   LIMIT 500"#,
+            )
+            .fetch_all(&state.db)
+            .await?
+        };
+        rows.iter().map(operator_ticket).collect()
     } else {
-        sqlx::query_as::<_, SupportTicket>(
+        let rows: Vec<SupportTicket> = sqlx::query_as::<_, SupportTicket>(
             // THE CUSTOMER'S OWN LIST CARRIES THE PLAN'S NAME (cron 2026-10-20). The row it read
             // before selected `plan_slug` alone, so a request filed from the dashboard came back
             // with `plan_name: null` and the console had to re-derive the display name from a local
@@ -263,7 +332,10 @@ pub async fn list_tickets(
         )
         .bind(scope)
         .fetch_all(&state.db)
-        .await?
+        .await?;
+        rows.iter()
+            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+            .collect()
     };
     Ok(Json(json!({ "tickets": tickets })))
 }
@@ -846,6 +918,11 @@ pub async fn update_ticket(
         _ => None,
     };
 
+    // THE CANONICAL THREE-STATE INPUT (contract 2026-11-27). The operator writes `contacted`;
+    // this app's stored vocabulary spells that same state `in_progress`, so the write maps it.
+    // `open` / `closed` store themselves, and every legacy value passes through unchanged.
+    let stored_status: Option<String> = body.status.as_deref().map(|s| store_status(s).to_string());
+
     sqlx::query(
         r#"UPDATE support_tickets SET
              status = COALESCE($2, status),
@@ -858,7 +935,7 @@ pub async fn update_ticket(
            WHERE id = $1"#,
     )
     .bind(id)
-    .bind(&body.status)
+    .bind(&stored_status)
     .bind(&body.priority)
     .bind(&body.category)
     .bind(body.assignee_id)
